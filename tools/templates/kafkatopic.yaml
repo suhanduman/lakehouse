@@ -1,0 +1,10 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: "{{TOPIC_NAME}}"
+  namespace: example
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: 6
+  replicas: 3
+  config: {retention.ms: "604800000", cleanup.policy: delete}

@@ -1,0 +1,349 @@
+# Trino HA — Coordinator + N Worker + OIDC + internal-communication auth.
+# Only parameterized + made namespace-aware. Gated by
+# `.Values.components.trino`.
+#
+# İç iletişim: internal-communication.shared-secret pod'lar arası kimlik
+# doğrulama için zorunlu (HMAC). Bulk data şifrelemesi için iki seçenek:
+#   (a) Trino native internal TLS — ConfigMap'te yorum satırları aktif
+#       edilir + cert-manager Certificate CR ile keystore.p12 üretilir.
+#   (b) OpenShift Service Mesh (Istio) — namespace'e PeerAuthentication
+#       {mode: STRICT} uygulanır; uygulama kodunda değişiklik gerekmez.
+#
+# Service wiring (spec §3.1/§8 — never hardcode a cross-component name):
+#   - Trino coordinator's own Service NAME is `lakehouse.svc.trino` (helper,
+#     resolves to `trino-coordinator` — matches the Strimzi/CNPG-style
+#     canonical name convention in _helpers.tpl).
+#   - Trino's Iceberg/Nessie REST catalog URI resolves the Nessie Service
+#     via `lakehouse.svc.nessie` + `lakehouse.fqdn` — the SAME helper Nessie
+#     itself is rendered under (04-nessie-ha.yaml). Path stays the exact
+#     `/iceberg/` prefix the source uses (no `/v1`).
+#   - S3 + OIDC credentials come from `.Values.storage.s3.
+#     secretName` / `.Values.oidc.secretName` (name-reference-only Secrets,
+#     see chart/templates/01-storage.yaml).
+{{- if .Values.components.trino }}
+{{- if .Values.trino.internalSharedSecret }}
+# Inline stringData Secret -- rendered ONLY when a real value is explicitly
+# supplied via `.Values.trino.internalSharedSecret` (dev/test convenience).
+# Default is empty (see chart/values.yaml's own comment on this field): in
+# that case this Secret is NOT rendered at all, and the SAME name/key
+# (`trino-internal-secret` / `shared-secret`, referenced by the worker
+# Deployment's `secretKeyRef` below regardless of which path created it)
+# must be provisioned out-of-band -- an ExternalSecret/Vault backend, or
+# `oc create secret generic trino-internal-secret
+# --from-literal=shared-secret=...` -- per `.Values.secrets.mode` (external
+# vs. manual), BEFORE `helm install`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-internal-secret
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  shared-secret: {{ .Values.trino.internalSharedSecret | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-config
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  jvm.config: |
+    -server
+    # Xmx 6G (worker pod limit 8Gi) — JVM overhead + Iceberg memory-mapped
+    # file okuma için 2 GB tampon bırakır. OOM crash riskini düşürür.
+    -Xmx{{ .Values.trino.memory.jvmXmx }}
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize={{ .Values.trino.jvm.g1HeapRegionSize }}
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+UnlockDiagnosticVMOptions
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/tmp/heap-dump.hprof
+    {{- $s3jvm := include "lakehouse.s3TrustJvmProps" . | trim }}
+    {{- if $s3jvm }}
+    # S3 internal-CA truststore — s3-trust-init container kurar
+    # (prod hardening; global.security.s3TrustBundle.enabled).
+    {{- $s3jvm | nindent 4 }}
+    {{- end }}
+  coordinator.config.properties: |
+    coordinator=true
+    # HA prod: false (dedicated workers execute). Single-node/memory-minimal
+    # (worker.replicas=0) needs true, else there are ZERO execution nodes and
+    # every query hangs/fails. Default false; the microk8s-ingest overlay
+    # flips it true.
+    node-scheduler.include-coordinator={{ .Values.trino.includeCoordinator }}
+    http-server.http.port=8080
+    discovery.uri=http://{{ include "lakehouse.svc.trino" . }}:8080
+    query.max-memory={{ .Values.trino.memory.queryMaxMemory }}
+    # coord sadece planner; küçük tut
+    query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeCoordinator }}
+    memory.heap-headroom-per-node={{ .Values.trino.memory.heapHeadroomPerNode }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.trino.enabled }}
+    # OpenMetrics endpoint: Trino serves it AUTOMATICALLY at `/metrics` on the
+    # HTTP port — there is NO enable flag; an unknown property here (e.g. a
+    # nonexistent `openmetrics.jmx.enabled`) makes the coordinator CRASH-LOOP
+    # at startup, since Trino rejects unrecognized config properties (see
+    # Trino docs admin/openmetrics.html). The endpoint is protected by the
+    # SAME authentication as the Web UI/client API: with OIDC on (prod) it
+    # needs HTTPS + a system-information-permitted user; the trino
+    # ServiceMonitor's scrape auth must be wired accordingly on the cluster
+    # (see docs/POC-DOGRULA-cluster-checklist.md). An optional
+    # `openmetrics.jmx-object-names` (valid property) can filter exposed MBeans.
+{{- end }}
+{{- if .Values.auth.oidc.enabled }}
+    # OIDC (TLS Route'ta sonlanır). Trino yalnızca `etc/config.properties`'i
+    # (bu dosya) otomatik yükler — ayrı bir `oauth2.properties` dosyası
+    # OTOMATİK OKUNMAZ, bu yüzden OIDC satırları doğrudan buraya inline
+    # edilmiştir. Gated by `.Values.auth.oidc.enabled` (default true — see
+    # values.yaml's `auth:` comment); Trino's OAuth2 authenticator does EAGER
+    # discovery at startup, so with no reachable issuer this config MUST be
+    # omitted entirely rather than pointed at a dummy URL, or the coordinator
+    # crash-loops forever.
+    http-server.authentication.type=oauth2
+    web-ui.authentication.type=oauth2
+    http-server.authentication.oauth2.issuer=${ENV:OIDC_ISSUER}
+    http-server.authentication.oauth2.client-id=${ENV:OIDC_CLIENT_ID}
+    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
+    http-server.authentication.oauth2.principal-field=preferred_username
+    http-server.authentication.oauth2.scopes=openid,email,profile
+{{- else }}
+    # auth.oidc.enabled=false — DEV/SMOKE-TEST ONLY (see values.yaml's
+    # `auth:` comment). No http-server.authentication.type set at all =
+    # Trino runs in no-auth mode; web UI + client connections are
+    # unauthenticated. NEVER use this in prod.
+{{- end }}
+    # Pod'lar arası iletişim auth zorunlu (shared-secret Secret'tan)
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+    # Faz-2: cluster içi trafik şifreleme. Aşağıdaki satırları aktif ederek
+    # coordinator↔worker arası TLS açılır. Gerekli: cert-manager Certificate
+    # CR ile trino-internal-tls Secret üretmek (keystore.p12 + passphrase).
+    # internal-communication.https.required=true
+    # internal-communication.https.keystore.path=/etc/trino/certs/keystore.p12
+    # internal-communication.https.keystore.key=${ENV:KEYSTORE_PASS}
+    # discovery.uri=https://trino-coordinator:8443
+    # http-server.https.enabled=true
+    # http-server.https.port=8443
+    # http-server.https.keystore.path=/etc/trino/certs/keystore.p12
+    # http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
+    # Alternatif: OpenShift Service Mesh (Istio) PeerAuthentication CR ile
+    # namespace-seviye mTLS; uygulama konfigürasyonu değişmez.
+  worker.config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://{{ include "lakehouse.svc.trino" . }}:8080
+    # 4GB → 3GB: JVM + IO tamponu
+    query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeWorker }}
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+  node.properties: |
+    node.environment=prod
+    node.data-dir=/data/trino
+  lakehouse.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
+    iceberg.rest-catalog.warehouse={{ .Values.nessie.catalog.warehouse.location }}
+    iceberg.register-table-procedure.enabled=false
+    fs.native-s3.enabled=true
+    s3.endpoint=${ENV:S3_ENDPOINT}
+    s3.path-style-access=true
+    s3.region=${ENV:S3_REGION}
+    s3.aws-access-key=${ENV:S3_ACCESS_KEY}
+    s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+  rawlake.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
+    iceberg.rest-catalog.warehouse=rawdata
+    iceberg.register-table-procedure.enabled=true
+    fs.native-s3.enabled=true
+    s3.endpoint=${ENV:S3_ENDPOINT}
+    s3.path-style-access=true
+    s3.region=${ENV:S3_REGION}
+    s3.aws-access-key=${ENV:S3_ACCESS_KEY}
+    s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+  access-control.properties: |
+    access-control.name=file
+    security.config-file=etc/rules.json
+  rules.json: |
+    {
+      "catalogs": [
+        {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
+        {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
+        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lakehouse.svc.trino" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: trino, role: coordinator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: trino, role: coordinator}
+  template:
+    metadata:
+      labels: {app: trino, role: coordinator}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      {{- $it := include "lakehouse.s3TrustInitContainer" (dict "context" . "image" .Values.versions.trinoImage) | trim }}
+      {{- if $it }}
+      initContainers:
+        {{- $it | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: trino
+        image: {{ .Values.versions.trinoImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: S3_ENDPOINT,        valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: S3_REGION,          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
+        - {name: S3_ACCESS_KEY,      valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: S3_SECRET_KEY,      valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+{{- if .Values.auth.oidc.enabled }}
+        - {name: OIDC_ISSUER,        valueFrom: {secretKeyRef: {name: {{ required "auth.oidc.enabled=true but oidc.secretName is empty — provision the OIDC credentials secret (issuer-url/client-id/...) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: OIDC_CLIENT_ID,     valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: trino-client-id}}}
+        - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: trino-client-secret}}}
+{{- end }}
+        # Coordinator↔worker internal-communication auth (see
+        # coordinator.config.properties' `internal-communication.shared-
+        # secret=${ENV:TRINO_INTERNAL_SECRET}` above) — both the coordinator
+        # and worker Deployments must define this env var, or the missing
+        # side crash-loops on 'unset environment variable
+        # TRINO_INTERNAL_SECRET'.
+        - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+        resources:
+          requests:
+            memory: {{ .Values.trino.coordinator.resources.requests.memory | quote }}
+            cpu: {{ .Values.trino.coordinator.resources.requests.cpu | quote }}
+          limits:
+            memory: {{ .Values.trino.coordinator.resources.limits.memory | quote }}
+            cpu: {{ .Values.trino.coordinator.resources.limits.cpu | quote }}
+        volumeMounts:
+        {{- include "lakehouse.s3TrustStoreMount" . | nindent 8 }}
+        - {name: config, mountPath: /etc/trino/jvm.config,                subPath: jvm.config}
+        - {name: config, mountPath: /etc/trino/config.properties,         subPath: coordinator.config.properties}
+        - {name: config, mountPath: /etc/trino/node.properties,           subPath: node.properties}
+        - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+        - {name: config, mountPath: /etc/trino/rules.json,                subPath: rules.json}
+        - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
+        - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+      volumes:
+      {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
+      - name: config
+        configMap: {name: trino-config}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-worker
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: trino, role: worker}
+spec:
+  replicas: {{ .Values.trino.worker.replicas }}
+  selector:
+    matchLabels: {app: trino, role: worker}
+  template:
+    metadata:
+      labels: {app: trino, role: worker}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector: {matchLabels: {app: trino, role: worker}}
+              topologyKey: kubernetes.io/hostname
+      {{- $it := include "lakehouse.s3TrustInitContainer" (dict "context" . "image" .Values.versions.trinoImage) | trim }}
+      {{- if $it }}
+      initContainers:
+        {{- $it | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: trino
+        image: {{ .Values.versions.trinoImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: S3_ENDPOINT,   valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: S3_REGION,     valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
+        - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+        resources:
+          requests:
+            memory: {{ .Values.trino.worker.resources.requests.memory | quote }}
+            cpu: {{ .Values.trino.worker.resources.requests.cpu | quote }}
+          limits:
+            memory: {{ .Values.trino.worker.resources.limits.memory | quote }}
+            cpu: {{ .Values.trino.worker.resources.limits.cpu | quote }}
+        volumeMounts:
+        - {name: config, mountPath: /etc/trino/jvm.config,                   subPath: jvm.config}
+        - {name: config, mountPath: /etc/trino/config.properties,            subPath: worker.config.properties}
+        - {name: config, mountPath: /etc/trino/node.properties,              subPath: node.properties}
+        - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
+        - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+      volumes:
+      {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
+      - name: config
+        configMap: {name: trino-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.trino" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.trino.enabled }}
+  # ServiceMonitor selector target labels (chart/templates/monitoring/
+  # servicemonitors.yaml `trino` selector.matchLabels) — a ServiceMonitor
+  # selects Services by THEIR metadata.labels, not by spec.selector (pods).
+  labels:
+    app: trino
+    role: coordinator
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+{{- end }}
+spec:
+  selector: {app: trino, role: coordinator}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trino-worker
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: trino-worker
+  minReplicas: {{ .Values.trino.worker.hpa.minReplicas }}
+  maxReplicas: {{ .Values.trino.worker.hpa.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: {type: Utilization, averageUtilization: {{ .Values.trino.worker.hpa.targetCPUUtilizationPercentage }}}
+{{- end }}

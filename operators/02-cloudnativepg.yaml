@@ -1,0 +1,47 @@
+# CloudNativePG (CNPG) — cluster-scoped OLM bootstrap. Provides the
+# `postgresql.cnpg.io/v1` `Cluster` CRD this
+# chart's pg-nessie / pg-apicurio / pg-keycloak Clusters depend on
+# (chart/templates/02-postgres-ha.yaml, 10-keycloak.yaml, 11-apicurio-registry.yaml).
+#
+# Namespace per tools/README.md "Ön koşullar" table: `cnpg-system`.
+#
+# POC-DOĞRULA: package/channel/source below are the current (at time of
+# writing) values for the "cloudnative-pg" package as commonly published on
+# OperatorHub's `certified-operators` catalog (EDB's certified build); a
+# `community-operators` listing under the same or a similar package name may
+# also exist depending on the cluster's configured CatalogSources. Confirm
+# with `oc get packagemanifests -n openshift-marketplace | grep -i cloudnative`
+# before applying.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cnpg-operatorgroup
+  namespace: cnpg-system
+# Empty spec => AllNamespaces install mode. POC-DOĞRULA: CNPG's OLM bundle
+# is commonly published as AllNamespaces-only (the operator must watch
+# `Cluster` CRs in every namespace that runs a Postgres cluster, here:
+# `example` for pg-nessie/pg-apicurio/pg-keycloak) — confirm your catalog
+# entry's supported install modes with
+# `oc get packagemanifest cloudnative-pg -n openshift-marketplace -o yaml`
+# before applying; if only SingleNamespace/MultiNamespace is supported,
+# set `targetNamespaces: [cnpg-system, example]` instead.
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cloudnative-pg
+  namespace: cnpg-system
+spec:
+  channel: stable  # POC-DOĞRULA
+  name: cloudnative-pg
+  source: certified-operators  # POC-DOĞRULA (community-operators alternatifi olabilir)
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

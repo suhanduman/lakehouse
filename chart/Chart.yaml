@@ -1,0 +1,19 @@
+apiVersion: v2
+name: lakehouse
+description: >-
+  Lakehouse — unified Helm chart packaging the production
+  data platform (Kafka/Strimzi, Nessie, Trino, Iceberg, CNPG Postgres,
+  Apicurio Registry, Keycloak, Kafka Connect + CDC connectors, and the
+  self-service Lakehouse Console) into a single, namespace-parametric
+  release.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - lakehouse
+  - kafka
+  - iceberg
+  - trino
+  - nessie
+maintainers:
+  - name: Lakehouse Platform

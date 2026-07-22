@@ -1,0 +1,1332 @@
+# Lakehouse — default Helm values.
+#
+# This is the chart's skeleton default configuration. It intentionally has NO
+# component templates behind it yet — those land component-by-component in
+# later tasks. The keys below define the stable interface that later tasks
+# parametrize against:
+#   - `namespace` / `.Release.Namespace` (see chart/templates/_helpers.tpl)
+#   - `global.domain` / `global.imageRegistry` (routes + image refs)
+#   - per-component `enabled` flags (placeholder — expanded as templates land)
+#
+# See `values-prod.example.yaml` for a filled-in example configuration.
+
+# Namespace the release is intended for. Templates do NOT read this value —
+# they always use `.Release.Namespace` via the `lakehouse.namespace` helper,
+# so the chart works correctly no matter what `-n <namespace>` is passed to
+# `helm install/upgrade`. This key exists for documentation/tooling only
+# (e.g. so `values-prod.example.yaml` can self-describe its target namespace).
+namespace: example
+
+# Platform switch — SINGLE SOURCE for which platform-specific rendering path
+# this chart takes (chart/templates/_helpers.tpl `lakehouse.isOpenShift`
+# helper reads this; every `kind: Route` template + its
+# chart/templates/08b-ingress-tls.yaml Ingress equivalent gate on it). Exactly
+# two valid values:
+#   - "openshift" : `route.openshift.io/v1` Route objects render for every
+#                    public endpoint (chart/templates/08-routes-tls.yaml,
+#                    the Keycloak Route in 10-keycloak.yaml, and the console/
+#                    kafka-ui Routes under chart/templates/console/) — SCC/
+#                    OLM conventions apply.
+#   - "vanilla"   : plain `networking.k8s.io/v1` Ingress objects render for
+#                    the SAME logical endpoint set instead
+#                    (chart/templates/08b-ingress-tls.yaml), using
+#                    `ingress.className` below; operators are Helm-installed
+#                    rather than OLM-managed.
+# "vanilla" is the product default (this file); an OpenShift install's
+# overlay sets `platform: openshift` (see values-prod.example.yaml). Any
+# other value `fail`s the render loudly (see the helper).
+#
+# NOTE: this switch ONLY controls Route-vs-Ingress rendering (its scope in
+# this task). It is platform-CORRELATED with, but does NOT itself flip, a few
+# independently-controlled knobs an OpenShift overlay typically also sets:
+#   - global.security.restrictedSecurityContext (OpenShift restricted-v2 SCC)
+#   - global.security.s3TrustBundle.openshiftInject
+#   - kafkaConnect's build path (`spec.build`, see 12-kafka-connect.yaml)
+# Set those explicitly per-environment; `platform` does not imply them.
+platform: vanilla
+
+global:
+  # Base public domain for OpenShift Routes (e.g. trino.<domain>, console.<domain>).
+  domain: apps.example.com
+  # Registry prefix used for internally-built images (console backend/frontend,
+  # streaming jobs, etc.). Overridden per-environment.
+  imageRegistry: image-registry.openshift-image-registry.svc:5000/lakehouse
+
+  # --- Prod hardening (OpenShift) — VARSAYILAN KAPALI. -------------------------
+  # microk8s'te KAPALI kalır (restricted-v2 SCC yok; runAsNonRoot bazı imajları
+  # kırabilir). Prod values (values-prod.example.yaml) AÇAR. Detay + S3-CA
+  # per-bileşen JVM truststore runbook: gitops/README.md "Prod hardening".
+  security:
+    # OpenShift restricted-v2 SCC / PSA-restricted uyumlu pod+container
+    # securityContext'i (runAsNonRoot, drop ALL caps, seccomp RuntimeDefault,
+    # allowPrivilegeEscalation:false). runAsUser SET EDİLMEZ — OpenShift SCC
+    # rastgele UID atar. Helper: _helpers.tpl lakehouse.podSecurityContext /
+    # lakehouse.containerSecurityContext.
+    restrictedSecurityContext: false
+    # S3 Internal-CA truststore. Etkinse chart, OpenShift'in
+    # "trusted CA bundle" injection'ı için etiketli bir ConfigMap üretir
+    # (00-s3-trust-bundle.yaml); JVM S3 istemcileri (Trino/Nessie/Connect/Spark)
+    # bunu mount edip truststore'a ekler — bkz. gitops/README runbook.
+    s3TrustBundle:
+      enabled: false
+      # OpenShift trusted-CA-bundle injection: boş bir ConfigMap'e
+      # `config.openshift.io/inject-trusted-cabundle: "true"` etiketi konur;
+      # OpenShift `ca-bundle.crt`'yi (sistem + cluster-additional CA'lar) doldurur.
+      # false ise `configMapName` mevcut (elle sağlanan) bir CA ConfigMap olmalı.
+      openshiftInject: true
+      configMapName: s3-trust-bundle
+      key: ca-bundle.crt
+
+# Component enable/disable flags. Every component gets its own template +
+# values block; this map is expanded (not replaced) as each one lands.
+# Keeping the full expected key set here
+# now avoids `nil` surprises in later `.Values.components.X` lookups.
+components:
+  # DEFAULT false — storage neutrality (Product Foundation task 6.5): the
+  # two vendor CSI StorageClasses this chart can optionally create
+  # (`storage.classes.*`, chart/templates/01-storage.yaml) are opt-in, not
+  # assumed. Most customers already have a cluster-scoped StorageClass (or
+  # rely on the cluster's default one) and simply point
+  # `postgres.*.storage(.walStorage).storageClass` / `zeppelin.
+  # storageClassName` / `kafka.nodePools.*.storage.class` at it — every one
+  # of those fields defaults to `""` (empty = cluster default StorageClass).
+  # Flip this to `true` only when the chart itself should create the two
+  # StorageClasses (set `storage.classes.*.provisioner`/`backend` to match
+  # your CSI driver first).
+  storage: false
+  # DEFAULT false — MinIO is DEV/PoC/e2e-ONLY (Product Foundation Task 8):
+  # chart/templates/17-minio.yaml's single-replica, single-PVC, no-HA
+  # in-cluster S3-compatible object store. Real customers ALWAYS bring
+  # their OWN S3-compatible object store (Pure Storage FlashBlade, AWS S3,
+  # Ceph RGW, ...) and point `storage.s3.secretName`'s Secret material at
+  # it instead — see chart/templates/01-storage.yaml. Flip this to `true`
+  # ONLY for a throwaway dev/PoC/e2e cluster with no real S3 endpoint
+  # available. NEVER set this to `true` in a real/prod values-<env>.yaml.
+  minio: false
+  postgres: true
+  kafka: true
+  nessie: true
+  sparkOperator: true
+  trino: true
+  routesTls: true
+  zeppelin: true
+  keycloak: true
+  # Optional independent override for the `pg-keycloak` CNPG Cluster (see
+  # chart/templates/10-keycloak.yaml). Left UNSET here on purpose: the
+  # template treats "unset" as "same as `keycloak` above" (dynamic default,
+  # not a static true/false), so pg-keycloak automatically tracks whether
+  # Keycloak itself is enabled. Only set this explicitly if you want to
+  # pre-provision the Keycloak DB ahead of turning Keycloak on (or keep it
+  # around after turning Keycloak off) — e.g. `keycloakDb: true` with
+  # `keycloak: false`.
+  # keycloakDb: true
+  apicurio: true
+  kafkaConnect: true
+  # Two independent switches (see chart/templates/13-connectors.yaml header):
+  # `enabled` gates the whole file, including the core `iceberg-sink-cdc`
+  # fan-out sink (always-on ingest infrastructure — not an example, nothing
+  # else generates a replacement for it); `examples.enabled` additionally
+  # gates the three demo per-source connectors (dbz-mssql-students,
+  # jdbc-mssql-scheduled, dbz-mongo-lms) — off by default because real
+  # per-source CRs are generated at runtime by scaffold-source.sh or the
+  # Console's add-source wizard, not by this chart.
+  connectors:
+    enabled: true
+    examples:
+      enabled: false
+  nginxIngest: true
+  console: true
+  kafkaUi: true
+  consoleRoutesOidc: true
+  # AI/demo workloads are prod-off by default (per plan: "ai.enabled: false").
+  ai: false
+  # Superset BI + JupyterHub are follow-up components (sub-project D) — their
+  # Deployment/Service are NOT shipped by this chart yet, only their
+  # OpenShift Routes exist in chart/templates/08-routes-tls.yaml. Both gated
+  # OFF by default so prod never renders a Route pointing at a backing
+  # Service the chart doesn't produce (Route-reference-closure gate).
+  # Flip to true (and add the backing Service) once each lands in the chart.
+  superset: false
+  jupyter: false
+  # İzleme (D1): ServiceMonitor/PodMonitor/PrometheusRule CR'ları + Grafana.
+  # OpenShift user-workload-monitoring (UWM) HEDEFLİ — bu chart UWM'i KURMAZ,
+  # yalnızca CR'ları ve Grafana'yı ekler (spec 2026-07-19-monitoring-design §2).
+  # Kapalıyken (false) chart/templates/monitoring/* ve tüm metrik-hook
+  # eklentileri render'dan tümüyle çıkar; mevcut render birebir korunur.
+  monitoring: true
+  # Gates chart/templates/15-external-secrets.yaml's `ExternalSecret` CRs
+  # (rendered only when ALSO `secrets.mode: external`, see that key's own
+  # doc comment below) — an escape hatch for a cluster that runs
+  # `secrets.mode: external` but hasn't installed the External Secrets
+  # Operator CRD (external-secrets.io/v1beta1) yet, so flipping
+  # `secrets.mode` alone never hard-fails a render. Default true (the
+  # common case: ESO IS installed whenever `mode: external` is chosen).
+  externalSecrets: true
+
+# Namespace-level policy: ResourceQuota + LimitRange sizing for the release
+# namespace. Same numbers as before, now parametric so a values-<env>.yaml
+# can resize per-cluster without touching the template. This block always
+# renders (no `enabled` flag): a namespace without a quota/limit policy is
+# not a supported install shape.
+namespaceConfig:
+  # Namespaces the platform's cluster-scoped OPERATORS run in — sources for
+  # the `allow-from-operator-namespaces` NetworkPolicy
+  # (chart/templates/00-namespace.yaml): CloudNativePG must poll instance
+  # pods' status (:8000) and Strimzi must reach the Kafka pods' KafkaAgent
+  # from outside the release namespace, which the default-deny ingress
+  # policy would otherwise block on any CNI that enforces NetworkPolicy
+  # (Calico, Cilium, kind >= 0.24). Defaults cover BOTH install paths: the
+  # vanilla bootstrap's helm-installed operator namespaces
+  # (bootstrap/operators.env) and OpenShift's OLM `openshift-operators`;
+  # entries for namespaces that don't exist on a given cluster match
+  # nothing. Extend/replace per environment if operators live elsewhere.
+  operatorNamespaces:
+    - strimzi
+    - cnpg-system
+    - spark-operator
+    - keycloak-system
+    - openshift-operators
+  quota:
+    requestsCpu: "16"
+    requestsMemory: 64Gi
+    limitsCpu: "32"
+    limitsMemory: 128Gi
+    persistentVolumeClaims: "50"
+    requestsStorage: 2Ti
+    pods: "100"
+    # Prod has no NodePort; Routes are used instead (`kafka.externalListenerType:
+    # route`, below). COUPLING: if you flip
+    # `kafka.externalListenerType` to `nodeport` (e.g. for a non-OpenShift env),
+    # Strimzi creates ONE NodePort Service per broker PLUS the shared
+    # bootstrap Service (`kafka.nodePools.broker.replicas + 1` total) —
+    # this quota MUST be raised to at least that count, or Strimzi's own
+    # Service creation is rejected by this SAME quota
+    # ("exceeded quota: lakehouse-quota, requested: services.nodeports=1,
+    # limited: 0") and the Kafka CR sits permanently NotReady. `route` (the
+    # default) needs 0 NodePort Services, so this stays "0" for prod.
+    serviceNodePorts: "0"
+    countDeployments: "30"
+  limitRange:
+    container:
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+      max:
+        cpu: "8"
+        memory: 16Gi
+    pvc:
+      max:
+        storage: 500Gi
+      min:
+        storage: 1Gi
+
+# Storage: opt-in vendor CSI StorageClasses (`components.storage`, default
+# false — see that flag's comment above) + the name of the S3 credential
+# Secret for ANY S3-compatible object store (Pure Storage, MinIO,
+# AWS S3, Ceph RGW, ...). The Secret's material is NEVER defined here — it is
+# provisioned out-of-band (ExternalSecret/Vault or `oc create secret`, see
+# `secrets.mode`) under the name below; this chart only
+# references that name from consuming templates (Trino/Spark/Nessie S3 env).
+storage:
+  classes:
+    # Neutral default names (NOT vendor-specific) — only rendered at all
+    # when `components.storage: true`. `provisioner`/`backend` are LEFT
+    # EMPTY on purpose: they are cluster/vendor-specific and MUST be set
+    # before enabling this component (e.g. `pure-csi` + `backend: block`/
+    # `file` for Pure Storage's PSO CSI driver — any
+    # other CSI driver's own provisioner name + StorageClass parameters work
+    # the same way; see chart/values-prod.example.yaml for a worked example).
+    block:
+      name: lakehouse-block
+      provisioner: ""
+      backend: ""
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+    fileRwx:
+      name: lakehouse-file-rwx
+      provisioner: ""
+      backend: ""
+      reclaimPolicy: Retain
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+  s3:
+    # Name only — no access-key/secret-key/endpoint material in this chart.
+    secretName: s3-credentials
+  # Vendor-generic S3 bucket-init Job (Task 8, chart/templates/
+  # 18-bucket-init.yaml) — gated by `createBuckets`, NOT by
+  # `components.minio`: it runs `mc mb --ignore-existing` against WHATEVER
+  # S3 endpoint `storage.s3.secretName`'s Secret points at (the dev MinIO
+  # below, or any real customer S3 — nothing MinIO-specific in the Job
+  # itself). DEFAULT true — a fresh install has somewhere for first ingest
+  # to land immediately. Disable when the customer pre-provisions buckets
+  # out-of-band, or when the install credentials deliberately lack
+  # bucket-create rights (least-privilege S3 policies).
+  createBuckets: true
+  # Explicit bucket-list override. Empty (default, `[]`) — in that case the
+  # Job COMPUTES the list from the `s3://` locations already embedded
+  # elsewhere in this file (`nessie.catalog.warehouse.location` → "depo",
+  # `nessie.catalog.rawdata.location` → "ham-veri",
+  # `nginx.streaming.checkpointBucket` → "nginx-web",
+  # `postgres.nessie.backup.destinationPath`'s bucket → "backups" — see the
+  # `lakehouse.s3BucketFromUri` helper, _helpers.tpl), so this list and
+  # those `s3://...` values can never silently drift apart. Set this
+  # explicitly only to add buckets beyond those four, or to fully replace
+  # the computed list for a non-default warehouse layout.
+  buckets: []
+
+# Dev-grade in-cluster MinIO (Product Foundation Task 8, chart/templates/
+# 17-minio.yaml). Gated by `components.minio` (DEFAULT FALSE — see that
+# flag's own doc comment above). *** DEV/PoC/e2e ONLY — NEVER production.
+# *** Root credentials are the SAME `storage.s3.secretName` Secret every
+# other S3 consumer in this chart already reads
+# (access-key-id/secret-access-key become MINIO_ROOT_USER/
+# MINIO_ROOT_PASSWORD) — no second secret to keep in sync; bootstrap's
+# `generated`-mode Secret (bootstrap/lib/secrets.sh) works here unchanged.
+minio:
+  storage:
+    size: 20Gi
+    # Empty (default) = cluster's default StorageClass (same omit-when-empty
+    # convention as `zeppelin.storageClassName` / `kafka.nodePools.*.storage.
+    # class` — chart/tests/storage-neutrality_test.yaml).
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Secret provisioning mode (spec §4). By default this chart
+# carries NO real secret material — templates only reference Secret NAMES
+# (e.g. `storage.s3.secretName`, `oidc.secretName`, plus the
+# Strimzi/CNPG-operator-generated Secrets `pg-*-app`, `connect`,
+# `kafka-cluster-ca-cert`, `mssql`/`mongo`/`debezium-src`, etc.).
+#
+# Four fields are the one exception, and support BOTH external/manual
+# provisioning AND an opt-in inline-dev-convenience path:
+# `trino.internalSharedSecret`, `zeppelin.ad.bindPassword`,
+# `keycloak.adminPassword`, `kafkaUi.oidc.clientSecret`. Each defaults to an
+# EMPTY string, in which case the corresponding template (06-trino-ha.yaml /
+# 09-zeppelin.yaml / 10-keycloak.yaml / console/routes-oidc.yaml) does NOT
+# render that Secret at all — the same name/keys must instead be provisioned
+# out-of-band per the mode below, same as every other named Secret in this
+# chart. Only if a real value is explicitly set (e.g. in a local/dev
+# values-<env>.yaml) does the template render an inline `stringData` Secret
+# from it — a convenience for quick local installs, never the shipped
+# default, so no real secret material is committed to this chart's own
+# values files.
+#
+# `secrets.mode` is a DECLARATION of how every named Secret (including these
+# four, when left empty) gets created out-of-band, surfaced in NOTES.txt so
+# an operator follows the right pre-install step. THREE valid values — any
+# other value FAILS the render loudly (`lakehouse.secretsMode` helper,
+# _helpers.tpl — same fail-loud style as `.Values.platform`):
+#   generated (DEFAULT): the `bootstrap` script (Task 7) generates strong
+#     random secrets and creates them as Kubernetes Secrets out-of-band,
+#     BEFORE `helm install` — the zero-manual-step path for a fresh product
+#     install. This chart renders NOTHING for them (same as `manual`,
+#     rendering-wise): if the chart rendered even an empty placeholder
+#     Secret, Helm/ArgoCD would OWN it and overwrite/prune bootstrap's
+#     seeded material on the very next sync — so the chart must stay
+#     hands-off in this mode.
+#   external : an ExternalSecrets Operator (ESO) + Vault/AD/whatever backend
+#     materializes each named Secret from a remote store — RECOMMENDED for
+#     prod (no secret ever touches git). Unlike `generated`/`manual`, this
+#     chart DOES render something for this mode:
+#     chart/templates/15-external-secrets.yaml renders one `ExternalSecret`
+#     (external-secrets.io/v1beta1) per named platform Secret, referencing
+#     the SecretStore/ClusterSecretStore configured under `secrets.external.*`
+#     below. The store itself stays out-of-band — customer/vault-specific
+#     config this chart never sees. Also gated by `components.externalSecrets`
+#     (default true, see `components:` above).
+#   manual   : an operator pre-creates each named Secret by hand
+#     (`oc create secret generic <name> ...`) BEFORE `helm install`. Chart
+#     renders nothing; NOTES.txt prints the manual steps.
+# Rendered manifests are otherwise identical across all three modes for
+# every Secret EXCEPT the four dev-convenience fields above (whose rendering
+# is conditional on a value being supplied, independent of `secrets.mode`).
+secrets:
+  mode: generated
+
+  # SecretStore/ClusterSecretStore the ExternalSecrets reference — ONLY
+  # consumed when `mode: external` (chart/templates/15-external-secrets.yaml).
+  # The store itself is customer/vault-specific and created out-of-band, NOT
+  # by this chart, before install.
+  external:
+    secretStoreName: lakehouse-vault
+    secretStoreKind: ClusterSecretStore
+    # Remote key prefix: each named Secret's data is read WHOLE from
+    # <remoteKeyPrefix>/<secret-name> in the backing store (`dataFrom.extract`
+    # — not per-key `data:` entries), keeping this chart agnostic to each
+    # Secret's internal key layout (see each Secret's own doc comment
+    # elsewhere in this chart for its exact key list).
+    remoteKeyPrefix: lakehouse
+    refreshInterval: 1h
+
+# İzleme (D1 — spec 2026-07-19-monitoring-design). Tümü `components.monitoring`
+# arkasında. Metrik toplama motoru OpenShift UWM'dir; bu blok yalnızca CR'ları
+# ve Grafana'yı yapılandırır.
+monitoring:
+  # ServiceMonitor scrape aralığı (tüm hedefler için ortak varsayılan).
+  serviceMonitorInterval: 30s
+
+  # Namespace the vanilla-Kubernetes Prometheus Operator (kube-prometheus-
+  # stack convention) runs in. Consumed ONLY by chart/templates/
+  # 00-namespace.yaml's `allow-from-ingress-and-monitoring` NetworkPolicy's
+  # `platform: vanilla` branch — a `kubernetes.io/metadata.name`
+  # namespaceSelector (see `ingress.controllerNamespace` above for why:
+  # same reasoning, OpenShift's `network.openshift.io/policy-group:
+  # monitoring` label doesn't exist on vanilla clusters). Ignored on
+  # `platform: openshift`.
+  prometheusNamespace: monitoring
+
+  # Hedef-başına açma/kapama. Her biri AYRICA `components.monitoring`'e bağlı:
+  # bir hedefin ServiceMonitor/PodMonitor'ı ancak ikisi de true ise render edilir.
+  targets:
+    kafka:    {enabled: true}   # Strimzi Kafka broker JMX-Prometheus exporter
+    connect:  {enabled: true}   # Kafka Connect JMX exporter (connect-metrics zaten var)
+    trino:    {enabled: true}   # Trino OpenMetrics endpoint
+    nessie:   {enabled: true}   # Nessie/Quarkus micrometer (/q/metrics)
+    apicurio: {enabled: true}   # Apicurio micrometer (/metrics)
+    console:  {enabled: true}   # Lakehouse Console FastAPI /metrics
+    spark:    {enabled: true}   # Spark PrometheusServlet (PodMonitor)
+    postgres: {enabled: true}   # CNPG PodMonitor (operatör üretir; sadece gate)
+
+  # Grafana'nın okuyacağı UWM Thanos-querier endpoint'i. OpenShift'te sabit
+  # platform namespace'i `openshift-monitoring`'tedir (cross-namespace,
+  # kasıtlı — helm-check bunu "recognized external" olarak tanır).
+  # Port :9091 = tenancy-aware Thanos (namespace-scoped okuma).
+  datasource:
+    thanosUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+
+  grafana:
+    image: docker.io/grafana/grafana:11.3.0
+    replicas: 1
+    route:
+      host: grafana            # -> grafana.<global.domain> (lakehouse.routeHost)
+    oidc:
+      # Keycloak OIDC login. microk8s testinde false (anonim/admin login yeterli),
+      # prod'da values-prod.example.yaml'da true.
+      enabled: false
+      clientId: grafana
+      # Client secret'ın DURDUĞU Secret adı (materyal burada DEĞİL — secrets.mode).
+      secretName: grafana-oidc
+      # Confidential client secret DEĞERİ. Varsayılan boş (secrets.mode): materyal
+      # burada DEĞİL — `grafana-oidc` Secret'ı ExternalSecret/Vault ya da elle
+      # `oc create secret` ile sağlanır. Dolu verilirse (yalnız dev/test) hem
+      # 10-keycloak.yaml grafana client `secret:` alanını hem de monitoring/
+      # grafana.yaml'ın render ettiği `grafana-oidc` Secret'ını AYNI kaynaktan
+      # tohumlar (kafkaUi.oidc.clientSecret ile birebir aynı desen — tek kaynak,
+      # drift yok).
+      clientSecret: ""
+    # Grafana admin kimlik bilgisinin durduğu Secret adı (materyal burada DEĞİL).
+    adminSecretName: grafana-admin
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits:   {cpu: 500m, memory: 512Mi}
+
+  # PrometheusRule alert eşikleri. Değerler values ile ayarlanabilir.
+  alerts:
+    connectorFailedFor: 5m           # KafkaConnector FAILED bu süre boyunca
+    consumerLagThreshold: 100000     # toplam consumer lag (mesaj)
+    dlqRatePerSec: 1                 # DLQ topic'ine yazım hızı (msg/s)
+    cnpgReplicationLagSeconds: 30    # CNPG streaming replication gecikmesi
+    trinoErrorRatePerSec: 5          # Trino başarısız sorgu hızı (query/s)
+    podRestartThreshold: 5           # 1 saatte pod restart sayısı
+
+  # Dashboard-as-code toggle'ları (ConfigMap'ler koşullu).
+  dashboards:
+    kafka: true
+    cnpg: true
+    trino: true
+    iceberg: true
+    console: true
+    platform: true
+
+# Component version/image pins. Single place per pinned image so
+# environments override one line instead of hunting through templates.
+versions:
+  # Used by BOTH `pg-nessie` and `pg-apicurio` CNPG Clusters
+  # (chart/templates/02-postgres-ha.yaml, 11-apicurio-registry.yaml) — one
+  # value so the two clusters can never drift apart on Postgres version.
+  cnpgPostgresImage: ghcr.io/cloudnative-pg/postgresql:16.4
+  apicurioImage: quay.io/apicurio/apicurio-registry:3.0.6
+  # *****************************************************************
+  # *** COHERENT STRIMZI VERSION TRIPLE — `strimziApi` / `kafka` /   ***
+  # *** `kafkaMetadata` MOVE TOGETHER AND MUST MATCH THE STRIMZI     ***
+  # *** OPERATOR ACTUALLY INSTALLED ON THE TARGET CLUSTER.           ***
+  # *****************************************************************
+  # This chart's customer target is UPSTREAM COMMUNITY Strimzi (via OLM's
+  # `community-operators` catalog package `strimzi-kafka-operator` — see
+  # `operators/03-strimzi.yaml` — NOT Red Hat's certified "Streams for Apache
+  # Kafka"/AMQ Streams). Upstream Strimzi >=1.1.0 serves the `Kafka`/
+  # `KafkaNodePool`/`KafkaTopic`/`KafkaUser`/`KafkaConnect`/`KafkaConnector`
+  # CRDs ONLY as `kafka.strimzi.io/v1` — `v1beta2` is gone entirely on that
+  # build. Since this project's actual target is upstream (not Red Hat's
+  # paid product), the default below is `v1`, not `v1beta2`.
+  #
+  # The three values below are a SINGLE compatible combination (Strimzi
+  # operator 0.51.0 — which, usefully, serves BOTH `v1` and `v1beta2` from
+  # the same CRD in this transition window — on microk8s/k8s 1.33):
+  # `strimziApi: v1` + `kafka: 4.2.0` + `kafkaMetadata: 4.2-IV1` reconciles
+  # the `Kafka` CR to `Ready=True` under `apiVersion: kafka.strimzi.io/v1`.
+  #
+  # DO NOT treat this triple as fire-and-forget on a different cluster/
+  # operator build. Before every install/upgrade against a NEW target
+  # (e.g. a real OpenShift cluster), re-verify all three against the
+  # operator ACTUALLY installed there:
+  #   oc get crd kafkas.kafka.strimzi.io -o jsonpath='{.spec.versions[*].name}'
+  #   # -> confirm it lists `v1` (and whether `v1beta2` is still also served,
+  #   #    for a safe rollback path) — then set `versions.strimziApi`
+  #   #    to whichever the CRD actually serves.
+  #   oc logs deploy/strimzi-cluster-operator -n <ns> | grep -i "supported"
+  #   # or consult that operator build's release notes for its supported
+  #   # Kafka version list, then pin `versions.kafka` to one it accepts and
+  #   # `versions.kafkaMetadata` to the matching KRaft metadata log format.
+  #
+  # `kafka.strimzi.io/v1beta2` + Kafka `3.7.0` + metadataVersion `3.7-IV2`
+  # remains a valid, supported combination ONLY on Red Hat's certified
+  # "Streams for Apache Kafka" (paid, OpenShift-only) operator channel —
+  # that is explicitly NOT this project's target. An environment that is
+  # genuinely pinned to that Red Hat product should override all three back:
+  # `strimziApi: v1beta2`, `kafka: "3.7.0"`, `kafkaMetadata: "3.7-IV2"`.
+  #
+  # `versions.strimziApi` parameterizes `apiVersion: kafka.strimzi.io/<...>`
+  # across EVERY Strimzi CR this chart renders: `Kafka`/`KafkaNodePool`/
+  # `KafkaTopic`/`KafkaUser` (03-kafka-strimzi.yaml), `KafkaUser` `spark-nginx`
+  # (14-nginx-ingest.yaml), `KafkaConnect` (12-kafka-connect.yaml),
+  # `KafkaConnector` (13-connectors.yaml), and `KafkaUser` `kafka-ui`
+  # (console/kafka-ui.yaml) — one switch, no template edits needed to flip
+  # between `v1`/`v1beta2`. `chart/templates/_prereq-check.tpl`'s
+  # `.Capabilities.APIVersions.Has` check reads this same value.
+  strimziApi: v1
+  # Strimzi `Kafka` CR `spec.kafka.version` (chart/templates/03-kafka-strimzi.yaml).
+  # Part of the coherent version triple above — see that comment block before
+  # changing this value in isolation. With Strimzi operator 0.51.0, 3.7.0
+  # (paired with the Red Hat-certified-only v1beta2 combination) is rejected
+  # by every upstream Strimzi build (0.45.0 wants 3.8.x/3.9.x; 1.1.0 and
+  # 0.51.0 both want 4.x) — 4.2.0 is the version this chart's Kafka backbone
+  # reconciles Ready with.
+  kafka: "4.2.0"
+  # Strimzi `Kafka` CR `spec.kafka.metadataVersion` (KRaft metadata log
+  # format version, chart/templates/03-kafka-strimzi.yaml). Part of the
+  # coherent version triple above — MUST move in lockstep with `kafka` (and,
+  # transitively, with whatever `strimziApi` the installed operator actually
+  # serves). Pinned explicitly so a future `versions.kafka` bump never
+  # silently drags the KRaft metadata log format along with it (a one-way
+  # upgrade). "4.2-IV1" is the matching metadataVersion for Strimzi 0.51.0 +
+  # Kafka 4.2.0 (`kubectl get kafka -o
+  # jsonpath='{.status.kafkaMetadataVersion}'` on a reconciled cluster) —
+  # re-verify against the target operator build's own supported
+  # metadataVersion list if `kafka` above is ever re-pinned.
+  kafkaMetadata: "4.2-IV1"
+  # Used by chart/templates/04-nessie-ha.yaml / 06-trino-ha.yaml.
+  nessieImage: ghcr.io/projectnessie/nessie:0.104.3
+  trinoImage: trinodb/trino:439
+  # chart/templates/05-spark-operator.yaml: driver/executor image + the
+  # `spark.jars.packages` pins baked into `spark-defaults` (Spark-side
+  # Iceberg support — an independent artifact/release cadence from Kafka
+  # Connect's `icebergKafkaConnect` below; the two do NOT need to match).
+  sparkImageTag: "1.0"
+  # Also reused for `org.apache.spark:spark-sql-kafka-0-10_2.12` below AND
+  # `ScheduledSparkApplication.spec.sparkVersion` — single source, same
+  # Spark minor release (parity hardening, same convention as
+  # `cnpgPostgresImage` above).
+  sparkVersion: "3.5.1"
+  icebergSparkRuntime: "1.5.2"      # org.apache.iceberg:iceberg-spark-runtime-3.5_2.12
+  awsSdkBundle: "2.25.11"           # software.amazon.awssdk:bundle + :url-connection-client
+  hadoopAws: "3.3.4"                # org.apache.hadoop:hadoop-aws
+  # chart/templates/12-kafka-connect.yaml: custom Connect image tag + the
+  # `spec.build.plugins` version pins (single source per plugin, so an
+  # environment overrides one line instead of hunting through the template).
+  connectImageTag: "1.0"
+  debezium: "2.7.3"                 # io.debezium debezium-connector-{sqlserver,mongodb} (".Final" suffix appended in template)
+  aivenJdbc: "6.10.0"               # Aiven JDBC source connector
+  mssqlJdbc: "12.8.1.jre11"         # com.microsoft.sqlserver:mssql-jdbc (bundled into the aiven-jdbc plugin dir)
+  postgresqlJdbc: "42.7.4"          # org.postgresql:postgresql (bundled into the aiven-jdbc plugin dir)
+  icebergKafkaConnect: "1.6.1"      # org.apache.iceberg:iceberg-kafka-connect-runtime (sink plugin)
+  apicurioConverter: "2.6.5"        # io.apicurio apicurio-registry-distro-connect-converter (".Final" suffix appended in template)
+  # chart/templates/09-zeppelin.yaml: custom image (apache/zeppelin + Spark
+  # binary baked in at build time — see that template's header comment for
+  # the Dockerfile). Independent release cadence from `sparkImageTag` above
+  # (Zeppelin is an interactive notebook, not a submitted SparkApplication).
+  zeppelinImage: registry.apps.ocp.example.com/lakehouse/zeppelin:1.0
+  # chart/templates/10-keycloak.yaml: OPTIONAL override for the Keycloak
+  # Operator CR's `spec.image`. Empty string (default) means the field is
+  # OMITTED from the rendered CR entirely — matching prod-manifests/
+  # 10-keycloak.yaml exactly, which never sets `spec.image` and lets the
+  # Keycloak Operator pick its own bundled default image. Set a real value
+  # here only if a specific Keycloak build/version needs to be pinned.
+  keycloakImage: ""
+  # chart/templates/console/console.yaml: internally-built console
+  # backend/frontend images (same `.Values.global.imageRegistry` + tag
+  # convention as `connectImageTag`/`sparkImageTag` above).
+  consoleBackendImageTag: "1.0"
+  consoleFrontendImageTag: "1.0"
+  # chart/templates/console/kafka-ui.yaml: external (community) image, same
+  # full-string-pin convention as `zeppelinImage` above (not built via
+  # `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
+  kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
+  # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
+  # (components.minio, default false — see that flag's comment). MinIO has
+  # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
+  # against a real cluster (`docker pull` + smoke-test first).
+  minioImage: "quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z"
+  # chart/templates/18-bucket-init.yaml: vendor-generic `mc` (MinIO Client)
+  # image used ONLY to run `mc alias set` + `mc mb` against WHATEVER S3
+  # endpoint `storage.s3.secretName` points at — works against any
+  # S3-compatible store (not just the dev MinIO above). POC-VERIFY before
+  # bumping.
+  mcImage: "quay.io/minio/mc:RELEASE.2024-01-13T08-44-48Z"
+
+# CNPG (CloudNativePG) HA Postgres clusters: pg-nessie and pg-apicurio
+# (pg-apicurio gated separately from the Apicurio app itself — see
+# chart/templates/11-apicurio-registry.yaml). Both clusters' Service DNS
+# names are resolved by consumers ONLY via the `lakehouse.svc.pgNessieRw` /
+# `lakehouse.svc.pgApicurioRw` helpers in _helpers.tpl — never hardcoded.
+# `walStorage`/`resources`/`monitoring`/backup `compression: gzip` are
+# present on BOTH clusters, even though the two clusters are sized
+# differently for their workloads.
+postgres:
+  nessie:
+    instances: 3
+    primaryUpdateStrategy: unsupervised
+    database: nessie
+    owner: nessie
+    storage:
+      # Empty (default) = the cluster's default StorageClass (CNPG omits the
+      # field entirely when unset — chart/templates/02-postgres-ha.yaml).
+      # Set a real StorageClass name here if the cluster has no default one,
+      # or `components.storage: true` + `storage.classes.block.name` to use
+      # this chart's own opt-in StorageClass.
+      storageClass: ""
+      size: 50Gi
+    walStorage:
+      storageClass: ""
+      size: 20Gi
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: "2"
+    monitoring:
+      enablePodMonitor: true
+    backup:
+      destinationPath: s3://backups/nessie-pg
+      # S3 endpoint — pre-Helm placeholder token, same
+      # `{{TOKEN}}` convention used throughout prod-manifests/ (see e.g.
+      # 01-storage.yaml's S3 Secret); NOT Helm template syntax —
+      # this is plain values-file string data, so Helm's template engine
+      # never parses it. Override in a real values-<env>.yaml.
+      endpointURL: "{{S3_ENDPOINT}}"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+  apicurio:
+    instances: 3
+    database: apicurio
+    owner: apicurio
+    storage:
+      storageClass: ""
+      size: 10Gi
+    walStorage:
+      storageClass: ""
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    monitoring:
+      enablePodMonitor: true
+    backup:
+      destinationPath: s3://backups/pg-apicurio
+      endpointURL: "{{S3_ENDPOINT}}"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+  # Keycloak's own CNPG cluster (`pg-keycloak`). Gated by the SAME
+  # `.Values.components.postgres` toggle as
+  # pg-nessie/pg-apicurio above (one "postgres subsystem" switch, see
+  # chart/templates/02-postgres-ha.yaml header) — the app itself
+  # (Keycloak CR/RealmImport/Route) is gated separately by
+  # `.Values.components.keycloak` in chart/templates/10-keycloak.yaml.
+  # NOTE: unlike pg-nessie/pg-apicurio, pg-keycloak has NO
+  # `postgresql.parameters` block, NO `monitoring.enablePodMonitor` block,
+  # uses `zstd` (not `gzip`) backup compression, and has NO ScheduledBackup
+  # CR at all.
+  keycloak:
+    instances: 3
+    primaryUpdateStrategy: unsupervised
+    database: keycloak
+    owner: keycloak
+    storage:
+      storageClass: ""
+      size: 20Gi
+    walStorage:
+      storageClass: ""
+      size: 10Gi
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 200m
+      limits:
+        memory: 1Gi
+        cpu: "1"
+    backup:
+      destinationPath: s3://backups/keycloak-pg
+      endpointURL: "{{S3_ENDPOINT}}"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+
+# Apicurio Registry application (Deployment/Service/PodDisruptionBudget).
+# Datasource host is built from the
+# `lakehouse.svc.pgApicurioRw` helper in the template — never hardcoded.
+apicurio:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Strimzi Kafka (KRaft) backbone. The Kafka cluster NAME itself is
+# NOT parametrized here (stays hardcoded `kafka` in the template) — Strimzi
+# derives the bootstrap Service name from it (`kafka-kafka-bootstrap`),
+# which MUST match `lakehouse.svc.kafkaBootstrap` in _helpers.tpl. Only
+# sizing/version/topic counts/external listener type are values-driven;
+# listener auth types (plain / tls+scram-sha-512 / external+scram-sha-512)
+# and every KafkaUser ACL are preserved verbatim in the template (not
+# values — they are the load-bearing security model from sub-project A/B).
+kafka:
+  # `storage.class` empty (default) = the cluster's default StorageClass —
+  # chart/templates/03-kafka-strimzi.yaml omits `storage.class` entirely
+  # when unset (same storage-neutrality convention as
+  # `postgres.*.storage.storageClass` / `zeppelin.storageClassName` above).
+  nodePools:
+    controller:
+      replicas: 3
+      storage:
+        size: 10Gi
+        class: ""
+      resources:
+        requests: {memory: 512Mi, cpu: 250m}
+        limits: {memory: 1Gi, cpu: 500m}
+    broker:
+      replicas: 3
+      storage:
+        size: 100Gi
+        class: ""
+      resources:
+        requests: {memory: 1Gi, cpu: 500m}
+        limits: {memory: 4Gi, cpu: "2"}
+  # External (route) listener type — `route` on OpenShift w/ Strimzi's
+  # Route-based external listener. Kept overridable for non-OpenShift envs
+  # (e.g. `loadbalancer`/`nodeport`) without touching the template.
+  # COUPLING: switching this to `nodeport` requires raising
+  # `namespaceConfig.quota.serviceNodePorts` to at least
+  # `nodePools.broker.replicas + 1` (see that key's comment above) —
+  # Strimzi's per-broker + bootstrap NodePort Services get rejected by this
+  # chart's OWN default quota otherwise. `route` needs no NodePort quota at all.
+  externalListenerType: route
+  topics:
+    nginxAccess: {partitions: 12, replicas: 3}
+    lmsEvents: {partitions: 6, replicas: 3}
+    connectConfigs: {partitions: 1, replicas: 3}
+    connectOffsets: {partitions: 25, replicas: 3}
+    connectStatus: {partitions: 5, replicas: 3}
+  # Kafka iç-topic replication ayarları. Prod default = 3/3/2/3/2 (3+ broker
+  # gerektirir). Tek-broker ortam (microk8s-ingest) hepsini 1'e çeker.
+  replication:
+    offsetsTopic: 3
+    txnStateLog: 3
+    txnStateLogMinIsr: 2
+    default: 3
+    minInsync: 2
+
+# Core-slice/Keycloak decoupling switch (feat/oidc-optional). Trino's OAuth2
+# authenticator does *eager* OIDC-discovery at startup and crash-loops
+# forever if the issuer isn't reachable, meaning Trino has a hard,
+# undocumented install-order dependency on Keycloak being up FIRST — even
+# though `components.keycloak` implies Keycloak is independently optional.
+# This switch decouples Nessie (04-nessie-ha.yaml) and Trino
+# (06-trino-ha.yaml) from the `oidc-credentials` Secret entirely when set to
+# `false`.
+#
+#   auth.oidc.enabled: true  (DEFAULT) — unchanged prod behavior. Trino
+#     renders `http-server.authentication.type=oauth2` + the oauth2
+#     issuer/client-id/client-secret lines; Nessie renders
+#     `QUARKUS_OIDC_ENABLED=true` + the OIDC auth-server-url/client-id env
+#     vars. Keycloak MUST be up and its realm/OIDC discovery endpoint
+#     reachable BEFORE Trino's coordinator can start at all (see NOTES.txt
+#     install-ordering section) — this is a hard prod requirement, not a bug.
+#
+#   auth.oidc.enabled: false — DEV/SMOKE-TEST ONLY. Trino renders with NO
+#     authentication.type at all (no-auth mode: web UI + client connections
+#     are unauthenticated) and omits the oauth2 issuer/client lines
+#     entirely; Nessie omits `QUARKUS_OIDC_*`/`NESSIE_SERVER_AUTHENTICATION_
+#     ENABLED` and runs unauthenticated too. This decouples the whole core
+#     ingest slice (Postgres/Kafka/Nessie/Apicurio/Trino/S3) from Keycloak
+#     entirely, so it can be smoke-tested (or run in a throwaway dev
+#     namespace) without ever standing up an IdP. NEVER set this to `false`
+#     in a real/prod values-<env>.yaml — there is no authentication on
+#     Trino's HTTP/JDBC endpoints or Nessie's REST API in this mode.
+auth:
+  oidc:
+    enabled: true
+
+# OIDC credentials Secret NAME reference only. Material
+# (issuer-url, per-client id/secret) is NEVER defined here — provisioned
+# out-of-band under this name (same "name reference only" convention as
+# `storage.s3.secretName`, see chart/templates/01-storage.yaml).
+# Consumed by Nessie (04-nessie-ha.yaml, `QUARKUS_OIDC_AUTH_SERVER_URL`) and
+# Trino (06-trino-ha.yaml, `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`);
+# Keycloak/Console (later tasks) reuse the same Secret name. Only actually
+# referenced by the templates when `auth.oidc.enabled` is true (see above);
+# when false, neither template reads this Secret at all, so it does not even
+# need to exist on the cluster.
+oidc:
+  secretName: oidc-credentials
+
+# Nessie HA. Replicas/resources/HPA-PDB thresholds and the two Iceberg warehouse S3
+# locations are values-driven; the warehouse NAMES themselves
+# ("warehouse"/"rawdata") stay fixed literals in the template env var KEYS
+# (`NESSIE_CATALOG_WAREHOUSES_<NAME>_LOCATION`) — same convention as Kafka
+# topic names in 03-kafka-strimzi.yaml, since Trino's `lakehouse`/`rawlake`
+# catalogs (06-trino-ha.yaml) are coupled to them by name, not by value.
+# Image pinned under `versions.nessieImage` (single source, see that key).
+nessie:
+  replicas: 2
+  # QUARKUS_OIDC_CLIENT_ID literal from prod-manifests/04-nessie-ha.yaml.
+  oidcClientId: nessie
+  catalog:
+    defaultWarehouse: warehouse
+    warehouse:
+      # Also read directly by Trino's `lakehouse` catalog
+      # (`trino.catalogs.lakehouse.warehouse` in 06-trino-ha.yaml, single
+      # source — MUST match `NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION`).
+      location: s3://depo/warehouse
+    rawdata:
+      location: s3://ham-veri/warehouse
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+  pdb:
+    minAvailable: 1
+  hpa:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+# Trino HA: coordinator + worker, OIDC, internal shared-secret,
+# Iceberg/Nessie catalogs. Coordinator/worker counts, memory tuning, and image are values-driven;
+# JVM flags/OIDC wiring/access-control rules/S3 catalog config are
+# preserved verbatim in the template (load-bearing, not values). Image
+# pinned under `versions.trinoImage`.
+trino:
+  # 32+ char random string for `internal-communication.shared-secret`
+  # (pod-to-pod auth, HMAC). Empty by default: chart/templates/06-trino-ha.yaml
+  # then does NOT render the `trino-internal-secret` Secret at all, following
+  # the SAME "name reference only" contract as `storage.s3.secretName`
+  # — an ExternalSecrets Operator/Vault backend or a manual
+  # `oc create secret generic trino-internal-secret ...` must provision it
+  # out-of-band before install (per `.Values.secrets.mode`). Set a real value
+  # here only for local/dev convenience — that renders the Secret inline.
+  internalSharedSecret: ""
+  # node-scheduler.include-coordinator (06-trino-ha.yaml). HA prod = false
+  # (dedicated workers). Single-node (worker.replicas=0) MUST be true, else
+  # queries have no execution node.
+  includeCoordinator: false
+  coordinator:
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 500m
+      limits:
+        memory: 6Gi
+        cpu: "4"
+  worker:
+    replicas: 3
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: "1"
+      limits:
+        memory: 8Gi
+        cpu: "4"
+    hpa:
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+  # JVM heap + Trino query-memory tuning (prod-manifests/06-trino-ha.yaml
+  # ConfigMap: jvm.config shared by coordinator+worker; coordinator plans
+  # only (small per-node budget), worker executes (larger per-node budget).
+  memory:
+    jvmXmx: 6G
+    queryMaxMemory: 10GB
+    queryMaxMemoryPerNodeCoordinator: 1.5GB
+    heapHeadroomPerNode: 1GB
+    queryMaxMemoryPerNodeWorker: 3GB
+  jvm:
+    # `-XX:G1HeapRegionSize` (jvm.config, shared ConfigMap key for both
+    # coordinator + worker — see `memory:` comment above). Default `32M` is
+    # prod-preserving (this chart's HA prod worker/coordinator heaps are
+    # sized well above 32GB, where G1's own heuristic would also land near
+    # 32M). 32M is inefficient when a node's heap is well UNDER 32GB (fewer,
+    # oversized regions -> coarser GC granularity) — use a smaller value like
+    # "16M" in that case (e.g. a memory-minimal single-node overlay; see
+    # values-microk8s-ingest.yaml).
+    g1HeapRegionSize: "32M"
+
+# Spark Operator RBAC + SparkApplication templates. Only the
+# `iceberg-maintenance` ScheduledSparkApplication's schedule/concurrency/driver+executor sizing
+# and the shared `spark-defaults` image/package pins (see `versions.*`
+# above) are values-driven; the Iceberg/S3/shuffle-tracking config in
+# `spark-defaults.conf` and the RBAC rules are preserved verbatim in the
+# template (load-bearing, not values). Jobs (prod-manifests/jobs/*.py) are
+# baked into the `spark-py` image and referenced by `local://` path — they
+# are NOT chart templates, only referenced by name/image here.
+sparkOperator:
+  maintenance:
+    schedule: "0 * * * *"          # hourly; expire/orphan-cleanup cadence lives in the job script itself
+    concurrencyPolicy: Forbid
+    # Bronze retention TTL: jobs/iceberg_maintenance.py issues a
+    # partition-aligned metadata DELETE (WHERE __ts_ms < date_sub(current_date(), N))
+    # against every rawlake `<ns>_raw` Bronze table before rewrite_data_files/
+    # expire_snapshots — expire_snapshots then physically reclaims the TTL'd files.
+    bronzeRetentionDays: 30
+    driver:
+      cores: 1
+      memory: 2G
+    executor:
+      cores: 2
+      instances: 4
+      memory: 4G
+  silverMerge:
+    enabled: true
+    schedule: "*/15 * * * *"          # every 15 min (values-driven; Silver freshness SLO)
+    concurrencyPolicy: Forbid          # never overlap runs
+    driver: {cores: 1, memory: "1g"}
+    executor: {cores: 1, memory: "1g"}
+    maxExecutors: 4                    # Dynamic Allocation ceiling (minExecutors=0)
+
+# Kafka Connect — single ingest plane, custom-built image. Replicas/resources are
+# values-driven; `spec.build.plugins` version pins live under `versions.*`
+# above (single source per plugin); `config.providers`/converters/topic
+# names/authentication are preserved verbatim in the template (load-bearing
+# — every `${directory:...}` reference in `connectors.*` below depends on
+# these exact volume names).
+kafkaConnect:
+  replicas: 2
+  # Pre-built Connect image (prod-grade, RECOMMENDED). When set, the KafkaConnect
+  # CR uses `spec.image` (Strimzi just runs it — no in-cluster build) instead of
+  # `spec.build`. The image (images/connect/Dockerfile) bakes in every plugin,
+  # incl. the Apache Iceberg sink runtime built from source (Apache publishes no
+  # downloadable binary). Empty default keeps the `spec.build` path (downloads
+  # plugins at cluster build time). Prod: image-registry.../connect-lakehouse:<tag>; F test:
+  # 192.168.2.5:32000/connect-lakehouse:<tag> (see values-microk8s-ingest.yaml).
+  image: ""
+  # Connect'in iç config/offset/status topic'lerinin replication factor'ü.
+  # Prod default = 3 (3+ broker gerektirir). Tek-broker ortam
+  # (microk8s-ingest) 1'e çeker — aksi halde Connect RF=3 auto-create'i,
+  # Topic Operator'ın RF=1 KafkaTopic CR'larını reconcile etmesiyle yarışır.
+  internalTopicReplicationFactor: 3
+  # Strimzi `spec.build.output` push ayarları. Prod default = OpenShift iç
+  # registry (pushSecret'li). microk8s'te insecure yerel registry
+  # (container-registry addon) için: pushSecret boş (auth yok) +
+  # additionalPushOptions ile builder'a insecure push söylenir. Bu değerler
+  # yalnız `spec.build.output` push davranışını etkiler; prod byte-unchanged.
+  # NOT: Strimzi v1 (0.51 default builder = Buildah) `additionalPushOptions`
+  # kullanır — v1beta2/Kaniko'nun `additionalKanikoOptions` alanı v1'de
+  # kaldırıldı (kafka.strimzi.io/v1 `unknown field` hatası verir).
+  build:
+    pushSecret: connect-build-push-secret
+    # v1 böldü: additionalBuildOptions = build komutu (Kaniko executor bayrakları
+    # burada — Strimzi 0.51 default builder KANIKO); additionalPushOptions = push
+    # komutu (Buildah). İnsecure yerel registry'ye push için Kaniko: --insecure
+    # --skip-tls-verify (additionalBuildOptions'a konur).
+    additionalBuildOptions: []
+    additionalPushOptions: []
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# Kafka Connectors. Gating: see `components.connectors` above. `{{MSSQL_HOST}}` / `{{MONGO_HOST}}`
+# / `{{S3_ENDPOINT}}` are the SAME plain-placeholder-token
+# convention as `postgres.nessie.backup.endpointURL` (values-file string
+# data — NOT Helm template syntax, never parsed by Helm's template engine;
+# this is required here specifically because a literal `{{MSSQL_HOST}}`
+# inside chart/templates/13-connectors.yaml itself would be mis-parsed as
+# an (invalid) Helm template action).
+connectors:
+  # Apicurio schema auto-register for every Avro (`*.converter.apicurio.
+  # registry.auto-register`) source connector this chart renders
+  # (chart/templates/13-connectors.yaml's example connectors). PROD DEFAULT
+  # IS `false` (this key): uncontrolled schema auto-registration is an
+  # anti-pattern in prod — an unreviewed producer-side schema change would
+  # silently register a new/incompatible schema version and can break
+  # downstream consumers. Prod schemas are instead deployed via CI/CD with
+  # backward-compat checks run against Apicurio BEFORE rollout, so an
+  # unknown/unregistered schema at connector-start time should fail fast
+  # (auto-register=false) rather than silently register itself. dev/test
+  # environments (e.g. values-microk8s-ingest.yaml) override this to `true`
+  # for fast iteration without a separate schema-publish step.
+  schemaAutoRegister: false
+  examples:
+    mssqlHost: "{{MSSQL_HOST}}"
+    mongoHost: "{{MONGO_HOST}}"
+    # Single source for both dbz-mssql-students (`database.names`) and
+    # jdbc-mssql-scheduled (`connection.url` databaseName=) — parity
+    # hardening, same convention as `versions.cnpgPostgresImage`.
+    mssqlDatabase: OgrenciDB
+  icebergSink:
+    s3Endpoint: "{{S3_ENDPOINT}}"
+    # Iceberg sink commit koordinasyonu (13-connectors.yaml). Prod varsayılanları
+    # Iceberg default'larıyla aynı; kaynak-kısıtlı overlay'ler (values-microk8s-
+    # ingest.yaml) commitTimeoutMs'i büyütür: tek-worker Connect'te
+    # control-consumer flap'i 30s commit penceresini kaçırıp "0 table(s) committed"
+    # üretebiliyor.
+    commitIntervalMs: "60000"
+    commitTimeoutMs: "30000"
+    # Bronze changelog warehouse (Nessie multi-warehouse). CDC lands append-only
+    # in rawdata; the silver-merge Spark job MERGEs into the `warehouse` (Silver).
+    warehouse: rawdata
+    # Bronze namespace suffix — Bronze ContentKey (<ns>_raw.<t>) MUST differ from
+    # Silver (<ns>.<t>); Nessie has one content-tree per branch. See spec §2.
+    bronzeNamespaceSuffix: _raw
+    # Sink task count. Default 1: on a constrained single-worker Connect, >1 task
+    # stalls the sink's commit coordinator (6-of-12-partition wait). Prod may raise.
+    tasksMax: 1
+    # iceberg.kafka.* passes through to ALL of the sink's internal Kafka clients
+    # (data consumer, producer, admin, AND the 2-phase-commit control consumer).
+    # Empty by default — prod Kafka client defaults are fine. On a constrained
+    # single-broker cluster the control consumer (cg-control-*) can hit
+    # "socket connection setup timeout" against the default 10s
+    # socket.connection.setup.timeout.ms and fail to join its group (=> commits
+    # stall at "committed to 0 table(s)"). The microk8s-ingest overlay raises the
+    # client socket/session/request timeouts here.
+    kafkaClientOverrides: {}
+
+# nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
+# values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is
+# baked into the `spark-py` image (same `local://` convention as
+# `sparkOperator.maintenance` — see chart/templates/05-spark-operator.yaml) —
+# its Kafka SASL_SSL/SCRAM wiring, S3 checkpoint location, and IP-hash logic
+# are NOT chart-templated and stay verbatim (load-bearing, see
+# chart/templates/14-nginx-ingest.yaml header comment).
+nginx:
+  streaming:
+    driver:
+      cores: 1
+      memory: "1G"
+    executor:
+      cores: 1
+      instances: 2
+      memory: "2G"
+    restartPolicy:
+      onFailureRetries: 5
+    # NOT read by the running job (baked into the image, see above) — this
+    # mirrors the identical constant hardcoded in the job's
+    # `checkpointLocation` (`s3://nginx-web/_checkpoints/access_log`) and the
+    # `lakehouse.web` namespace location from
+    # prod-manifests/14-nginx-ingest/README.md's Trino setup step. Kept here
+    # so chart/templates/NOTES.txt's operator instructions and the job's
+    # baked-in constant can be kept in sync across environments (same
+    # "values mirrors a job-baked constant" convention as
+    # `sparkOperator.maintenance.schedule`).
+    checkpointBucket: nginx-web
+  # FluentBit VM-agent (installed on external nginx hosts, NOT in-cluster —
+  # see chart/templates/14-nginx-ingest.yaml's ConfigMap + NOTES.txt). Same
+  # `{{TOKEN}}` plain-placeholder convention as
+  # `postgres.nessie.backup.endpointURL` (values-file string data, NEVER
+  # Helm-template-parsed) — required here specifically because a literal
+  # `{{KAFKA_EXTERNAL_BOOTSTRAP}}` inside the ConfigMap's `fluent-bit.conf`
+  # template body would be parsed (and fail) as a Helm template action.
+  fluentbit:
+    kafkaExternalBootstrap: "{{KAFKA_EXTERNAL_BOOTSTRAP}}"
+    kafkaPassword: "{{FLUENTBIT_KAFKA_PASSWORD}}"
+
+# Apache Zeppelin. Gated by `.Values.components.zeppelin`. Image pinned under
+# `versions.zeppelinImage` (single source, same convention as
+# `versions.nessieImage`/`versions.trinoImage`). AD/LDAPS bind DN/search-base
+# fields follow the SAME `{{TOKEN}}` plain-placeholder convention as
+# `postgres.nessie.backup.endpointURL` — override with real values in a
+# values-<env>.yaml. `bindPassword` (the actual secret material) is
+# different: it defaults EMPTY, in which case
+# chart/templates/09-zeppelin.yaml does NOT render the `ad-bind-credentials`
+# Secret at all (name-reference-only contract, ExternalSecret/Vault or
+# manual `oc create secret` provisions it out-of-band); set a real value
+# here only for local/dev convenience (renders the Secret inline).
+zeppelin:
+  replicas: 1
+  notebooks:
+    storage: 20Gi
+  # Empty (default) = the cluster's default StorageClass —
+  # chart/templates/09-zeppelin.yaml omits `storageClassName` entirely when
+  # unset (same storage-neutrality convention as `postgres.*.storage.
+  # storageClass` above; no longer coupled to the opt-in `storage.classes.
+  # fileRwx` SC-creation block, `components.storage`). Set a real
+  # StorageClass name here, or (if `components.storage: true`) `storage.
+  # classes.fileRwx.name` to use this chart's own opt-in RWX StorageClass.
+  storageClassName: ""
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 6Gi
+      cpu: "2"
+  ad:
+    url: "ldaps://ad.example.com:636"
+    principalSuffix: "@example.com"
+    bindDn: "{{AD_BIND_DN}}"
+    bindPassword: ""
+    userSearchBase: "{{AD_USER_SEARCH_BASE}}"
+    groupSearchBase: "{{AD_GROUP_SEARCH_BASE}}"
+    # AD group DN -> Zeppelin role eşlemesi.
+    groups:
+      admin: "CN=lakehouse-admins,OU=Groups,DC=example,DC=com"
+      analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
+      student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
+    sessionTimeoutMs: 28800000   # 8 saat
+
+# Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
+# 10-keycloak.yaml KeycloakRealmImport
+# `components["org.keycloak.storage.UserStorageProvider"]` + its
+# `group-ldap-mapper`). Same corporate AD service account as
+# `zeppelin.ad.*` above (SAME real bind DN/password/search bases), but kept
+# as an INDEPENDENT values block rather than reusing `zeppelin.ad.*` — the
+# two integration surfaces (Zeppelin's Shiro realm vs. Keycloak's
+# KeycloakRealmImport) are configured separately. Same plain `{{TOKEN}}`
+# placeholder convention as `postgres.nessie.backup.endpointURL` /
+# `zeppelin.ad.bindPassword` (values-file string data, NEVER Helm-template
+# -parsed) for the credential fields — override with real values in a
+# values-<env>.yaml (Vault/SealedSecret in prod). `url` is not secret
+# material (just an LDAPS endpoint) so, like `zeppelin.ad.url`, it defaults
+# to the real value verbatim.
+ad:
+  url: "ldaps://ad.example.com:636"
+  bindDn: "{{AD_BIND_DN}}"
+  bindPassword: "{{AD_BIND_PASSWORD}}"
+  userSearchBase: "{{AD_USER_SEARCH_BASE}}"
+  groupSearchBase: "{{AD_GROUP_SEARCH_BASE}}"
+
+# OpenShift Routes + cert-manager TLS. Gated by `.Values.components.routesTls`
+# (flag already reserved in the `components` map above). Every
+# Route's `spec.host` in chart/templates/08-routes-tls.yaml AND the Keycloak
+# Route/OIDC-client redirect hosts in chart/templates/10-keycloak.yaml all
+# resolve through the SAME `lakehouse.routeHost` helper (_helpers.tpl) from
+# `global.domain` — a route host and its client's redirect host can never
+# drift apart (task brief acceptance criterion).
+routes:
+  # cert-manager ClusterIssuer name (source placeholder `{{CERT_ISSUER}}`,
+  # e.g. `letsencrypt-prod` or a corporate CA issuer — see
+  # prod-manifests/08-routes-tls.yaml header comment). Single source for
+  # every Route's `cert-manager.io/cluster-issuer` annotation AND the
+  # Keycloak `Certificate`'s `issuerRef.name` (10-keycloak.yaml) — AND (since
+  # this task) every Ingress's SAME annotation in chart/templates/
+  # 08b-ingress-tls.yaml (`platform: vanilla` path).
+  certIssuer: letsencrypt-prod
+
+# Ingress — vanilla Kubernetes only (see top-level `platform`). Mirrors
+# `routes:` above for the Route-less path: chart/templates/
+# 08b-ingress-tls.yaml renders one `networking.k8s.io/v1` Ingress per Route
+# in 08-routes-tls.yaml / 10-keycloak.yaml / console/console.yaml / console/
+# kafka-ui.yaml, gated on the SAME `.Values.components.*` flags, using the
+# SAME `lakehouse.routeHost` helper for `spec.rules[].host` and the SAME
+# `.Values.routes.certIssuer` for the cert-manager annotation.
+ingress:
+  # IngressClass name (nginx-ingress-controller convention). Ignored entirely
+  # on `platform: openshift` (no Ingress renders there at all).
+  className: nginx
+  # Namespace the ingress-nginx controller itself runs in. Consumed by the
+  # vanilla branch of chart/templates/00-namespace.yaml's
+  # `allow-from-ingress-and-monitoring` NetworkPolicy AND chart/templates/
+  # console/console.yaml's `console-frontend-ingress` NetworkPolicy — both
+  # allow inbound traffic FROM this namespace via a `kubernetes.io/
+  # metadata.name` namespaceSelector (k8s-standard label, always present on
+  # every namespace, unlike OpenShift's `network.openshift.io/policy-group`
+  # which vanilla clusters never set). On `platform: openshift` this value
+  # is ignored — those NetworkPolicies use the OpenShift policy-group
+  # selector instead (see `lakehouse.isOpenShift`, _helpers.tpl).
+  controllerNamespace: ingress-nginx
+
+# Keycloak — OIDC provider + AD LDAP federation. Gated by `.Values.components.keycloak`
+# (also gates the `pg-keycloak` app-facing Secret/Certificate/CR/RealmImport
+# /Route — the `pg-keycloak` CNPG *Cluster* itself is gated separately by
+# `.Values.components.postgres`, see `postgres.keycloak` above). DB host is
+# resolved via the `lakehouse.svc.pgKeycloakRw` helper (_helpers.tpl) —
+# never hardcoded.
+keycloak:
+  # Keycloak Operator CR `spec.instances` (HA replica count).
+  instances: 2
+  adminUsername: admin
+  # Empty by default: chart/templates/10-keycloak.yaml then does NOT render
+  # the `keycloak-admin-credentials` Secret at all, following the SAME "name
+  # reference only" contract as `storage.s3.secretName` — an
+  # ExternalSecrets Operator/Vault backend or a manual
+  # `oc create secret generic keycloak-admin-credentials ...` must provision
+  # it out-of-band before install (per `.Values.secrets.mode`). Set a real
+  # value here only for local/dev convenience (renders the Secret inline).
+  adminPassword: ""
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: "2"
+  realm:
+    # Realm/KeycloakRealmImport-CR-name identifier. Uses `lakehouse` rather
+    # than the cluster's actual `example` namespace because this chart's
+    # bundled `values.yaml` / `values-prod.example.yaml` are BOTH exercised
+    # against multiple release namespaces (`example` AND `lakehouse-test`) by
+    # this project's own test harness (chart/scripts/helm-check.py
+    # `--no-stray example`), so a literal `example` default here would fail that
+    # portability check the moment either values file renders under a
+    # namespace other than `example`. A real deployment that wants the realm
+    # id `example` can override `keycloak.realm.name: example` in its own
+    # (non-bundled) values-<env>.yaml.
+    name: lakehouse
+    # Display name only (free text, no namespace-portability concern).
+    displayName: "Lakehouse"
+
+# Self-Service Lakehouse Console. Gated by `.Values.components.console`
+# (flag already reserved in the `components` map above).
+# Backend/frontend images built under `.Values.global.imageRegistry` (single
+# source, `versions.consoleBackendImageTag`/`consoleFrontendImageTag` above).
+# Backend Service name/DNS, frontend Service name/Route target, and every
+# Trino/Connect/Apicurio reference resolve through the `lakehouse.svc.*`
+# helpers in _helpers.tpl (namespace-portable, service-closure-clean) — never
+# hardcoded, so the render always matches `console/frontend/nginx.conf`'s
+# `/api` proxy target contract regardless of `-n <namespace>`.
+# The built `console-frontend` image's `nginx.conf` proxies `/api/*` to the
+# bare same-namespace service name `console-backend:8080` (baked in at
+# Docker-build time — see console/frontend/nginx.conf) rather than a
+# namespace-qualified FQDN, so it resolves correctly under any release
+# namespace as long as frontend and backend are co-located in the same
+# namespace (which this chart always does).
+console:
+  backend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  frontend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  oidc:
+    # Must match the `lakehouse-console` OIDC client's `clientId` in
+    # chart/templates/10-keycloak.yaml (literal there too — both sides kept
+    # in sync by convention, same as `console/backend/app/config.py`'s
+    # `oidc_audience` default). `OIDC_ISSUER` itself is NOT set here — the
+    # backend env var is sourced from the SAME `.Values.oidc.secretName`
+    # Secret (key `issuer-url`) that Trino/Nessie already consume (see
+    # `oidc:` block above), so every OIDC consumer in this chart shares one
+    # issuer-URL source of truth (must match `keycloak.realm.name`
+    # = `lakehouse`).
+    audience: lakehouse-console
+  networkPolicy:
+    # S3 endpoint CIDR/IP block (egress allow-list) — same plain
+    # `{{TOKEN}}` placeholder convention as `postgres.nessie.backup.endpointURL`
+    # (values-file string data, NEVER Helm-template-parsed; a real
+    # values-<env>.yaml supplies the actual CIDR).
+    s3Cidr: "{{S3_CIDR}}"
+    # Namespace CoreDNS/kube-dns runs in — consumed ONLY by
+    # `console-backend-egress`'s DNS egress rule (chart/templates/console/
+    # console.yaml) on its `platform: vanilla` branch (`lakehouse.
+    # isOpenShift`, _helpers.tpl): a `kubernetes.io/metadata.name`
+    # namespaceSelector, same reasoning + same k8s-standard-label pattern as
+    # `ingress.controllerNamespace` / `monitoring.prometheusNamespace`
+    # above (OpenShift's `network.openshift.io/policy-group: dns` label
+    # doesn't exist on vanilla clusters). Reused this EXISTING
+    # `console.networkPolicy` block (already home to `s3Cidr`,
+    # another console-backend-egress knob) instead of a new top-level block
+    # — this is a console-backend-egress-scoped setting, not chart-wide.
+    # "kube-system" is the k8s-standard CoreDNS home on vanilla
+    # distributions (kubeadm, k3s, kind, minikube, EKS, GKE, AKS all agree).
+    # Ignored entirely on `platform: openshift`.
+    dnsNamespace: kube-system
+
+# Kafka UI (kafbat-ui). Gated by `.Values.components.kafkaUi`. Image pinned under
+# `versions.kafkaUiImage` (single source). Kafka bootstrap/Connect/Apicurio
+# references resolve through the `lakehouse.svc.*` helpers — never hardcoded.
+# The `kafka-ui` KafkaUser's SCRAM password Secret and `kafka-cluster-ca-cert`
+# are Strimzi-managed (fixed naming convention, same as `connect`'s own
+# credentials in chart/templates/12-kafka-connect.yaml) — not values-driven,
+# nothing to parametrize there.
+kafkaUi:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  oidc:
+    # Confidential client secret for the `kafka-ui` OIDC client
+    # (chart/templates/10-keycloak.yaml) — same client both sides must
+    # agree on. Referenced verbatim by 10-keycloak.yaml's `clients[].secret`
+    # field (single source, so the two can never drift apart). Empty by
+    # default: in that case chart/templates/console/routes-oidc.yaml does NOT
+    # render the `kafka-ui-oidc-credentials` Secret at all, following the
+    # SAME "name reference only" contract as `storage.s3.secretName`
+    # — an ExternalSecrets Operator/Vault backend or a manual
+    # `oc create secret generic kafka-ui-oidc-credentials ...` must
+    # provision it out-of-band before install (per `.Values.secrets.mode`).
+    # Set a real value here only for local/dev convenience (renders the
+    # Secret inline).
+    clientSecret: ""
+
+# Chart prereq-check. Verifies the
+# cluster-scoped OLM operator prerequisites (Strimzi, CloudNativePG, Spark
+# Operator, Keycloak Operator, ExternalSecrets Operator, cert-manager — see
+# operators/README.md) are installed BEFORE this chart submits CRs that
+# depend on their CRDs. Two independent, cluster-verified mechanisms, both
+# gated by this ONE flag — see chart/templates/_prereq-check.tpl (template-time
+# `.Capabilities.APIVersions.Has` check) and chart/templates/prereq-check-job.yaml
+# (pre-install/pre-upgrade hook Job that runs `kubectl get crd` for real).
+#
+# DEFAULT `false`: `.Capabilities.APIVersions.Has` can NEVER distinguish "not
+# connected to any cluster" (e.g. `helm template`, this chart's own CI via
+# prod-manifests/validate.sh --helm) from "connected, CRD genuinely missing"
+# — both look identical (`false`) to the template engine, verified
+# empirically. A default of `true` would therefore hard-fail `helm template`
+# in CI on every run, even against a correctly-provisioned cluster. Real
+# installs turn this on explicitly once operators/ has been applied and every
+# CSV shows `Succeeded` (see operators/README.md "Doğrulama"):
+#   helm install lakehouse chart/ -f values-<env>.yaml -n example \
+#     --set prereqCheck.enabled=true
+prereqCheck:
+  enabled: false

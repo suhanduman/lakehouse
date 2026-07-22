@@ -1,0 +1,20 @@
+# Scheduled Mongo batch — bir delta alanı ({{TIMESTAMP_COL}}) ile periyodik.
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: "mongo-batch-{{SOURCE}}-{{TABLE}}", namespace: example}
+spec:
+  schedule: "{{CRON}}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: spark-driver
+          restartPolicy: Never
+          containers:
+            - name: submit
+              image: image-registry.openshift-image-registry.svc:5000/example/spark-py:1.0
+              command: ["/opt/spark/bin/spark-submit", "--master", "k8s://https://kubernetes.default.svc",
+                        "--deploy-mode", "cluster", "--name", "mongo-batch-{{SOURCE}}-{{TABLE}}",
+                        "local:///opt/spark/jobs/mongo_scheduled_batch.py",
+                        "--uri", "{{MONGO_URI}}", "--db", "{{DB}}", "--collection", "{{TABLE}}",
+                        "--delta-field", "{{TIMESTAMP_COL}}", "--target", "{{TARGET_NS}}.{{TARGET_TABLE}}"]

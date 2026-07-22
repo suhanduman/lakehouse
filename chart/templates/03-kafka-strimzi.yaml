@@ -1,0 +1,318 @@
+# Strimzi Kafka (KRaft mode, node pools) — Kafka omurgası (backbone). Only
+# parameterized (version/replicas/storage sizing/topic partition+RF/external
+# listener type) + made namespace-aware. Gated by `.Values.components.kafka`.
+#
+# Strimzi Operator OperatorHub'dan önceden kurulu olmalı. KRaft = ZooKeeper yok.
+#
+# LOAD-BEARING (do NOT change without re-reading spec §10 + sub-project A/B):
+#   - listener `tls` (9093): tls: true + authentication.type: scram-sha-512
+#     (the "SCRAM+TLS" unified auth model).
+#   - listener `external` (9094): OpenShift Route + tls: true +
+#     authentication.type: scram-sha-512 (type itself is values-driven for
+#     non-OpenShift envs; auth stays scram-sha-512 always).
+#   - every KafkaUser ACL below: `connect`'s ingest-namespace ACLs
+#     (cdc./jdbc./mongo./control/iceberg + connect-cluster- + `connect` group prefix;
+#     bkz. connect KafkaUser notu), `debezium-src`'s
+#     `schema-history.` prefix, `fluentbit`'s write-only `nginx-access`,
+#     `lakehouse-ingest`'s nginx-access/lms-events + `spark-` group prefix.
+#   - `default.replication.factor: 3` / `min.insync.replicas: 2` cluster
+#     config, and RF=3 on every KafkaTopic below.
+#
+# Kafka cluster adı SABİT "kafka" kalır (parametreleştirilmez) — Strimzi
+# operatörü bu isimden `kafka-kafka-bootstrap` Service'ini üretir; bu isim
+# `_helpers.tpl`'deki `lakehouse.svc.kafkaBootstrap` helper'ının ürettiği
+# değerle birebir eşleşmek ZORUNDA (bkz. helper dosyasının header yorumu +
+# chart/scripts/helm-check.py'nin Kafka-farkında servis-kapanış kontrolü).
+#
+# KAPSAM NOTU: `KafkaUser/spark-nginx` bu dosyada DEĞİL — o
+# prod-manifests/14-nginx-ingest/spark-nginx-streaming.yaml'da tanımlı ve
+# 14-nginx-ingest.yaml kapsamında migrate edilecek.
+{{- if .Values.components.kafka }}
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaNodePool
+metadata:
+  name: controller
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  replicas: {{ .Values.kafka.nodePools.controller.replicas }}
+  roles: [controller]
+  # storage.class empty (default) = the cluster's default StorageClass —
+  # Strimzi only omits storageClassName on the PVC when the field is left
+  # out entirely (storage-neutrality convention, Product Foundation task 6.5).
+  storage:
+    type: persistent-claim
+    size: {{ .Values.kafka.nodePools.controller.storage.size | quote }}
+    deleteClaim: false
+{{- with .Values.kafka.nodePools.controller.storage.class }}
+    class: {{ . }}
+{{- end }}
+  resources:
+    requests: {memory: {{ .Values.kafka.nodePools.controller.resources.requests.memory | quote }}, cpu: {{ .Values.kafka.nodePools.controller.resources.requests.cpu | quote }}}
+    limits:   {memory: {{ .Values.kafka.nodePools.controller.resources.limits.memory | quote }},   cpu: {{ .Values.kafka.nodePools.controller.resources.limits.cpu | quote }}}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaNodePool
+metadata:
+  name: broker
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  replicas: {{ .Values.kafka.nodePools.broker.replicas }}
+  roles: [broker]
+  # storage.class empty (default) = the cluster's default StorageClass (same
+  # convention as the controller pool above).
+  storage:
+    type: jbod
+    volumes:
+    - id: 0
+      type: persistent-claim
+      size: {{ .Values.kafka.nodePools.broker.storage.size | quote }}
+      deleteClaim: false
+{{- with .Values.kafka.nodePools.broker.storage.class }}
+      class: {{ . }}
+{{- end }}
+  resources:
+    requests: {memory: {{ .Values.kafka.nodePools.broker.resources.requests.memory | quote }}, cpu: {{ .Values.kafka.nodePools.broker.resources.requests.cpu | quote }}}
+    limits:   {memory: {{ .Values.kafka.nodePools.broker.resources.limits.memory | quote }}, cpu: {{ .Values.kafka.nodePools.broker.resources.limits.cpu | quote }}}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ .Values.versions.kafka | quote }}
+    # metadataVersion is pinned explicitly so a future `versions.kafka` bump
+    # never silently drags the KRaft metadata log format along with it (a
+    # one-way upgrade). This chart's apiVersion above is parametrized
+    # (`.Values.versions.strimziApi`, default `v1`) — the customer target is
+    # upstream community Strimzi, where >=1.1.0 serves the Kafka CRD ONLY as
+    # `v1` (`v1beta2` is gone). See `values.yaml`'s "COHERENT STRIMZI VERSION
+    # TRIPLE" comment for the full strimziApi/kafka/kafkaMetadata
+    # compatibility contract.
+    metadataVersion: {{ .Values.versions.kafkaMetadata | quote }}
+    listeners:
+    - name: plain                    # iç plaintext (cluster içi)
+      port: 9092
+      type: internal
+      tls: false
+    - name: tls                      # iç TLS + SCRAM auth (spec §10: SCRAM+TLS)
+      port: 9093
+      type: internal
+      tls: true
+      authentication:
+        type: scram-sha-512
+    - name: external                 # dış erişim — OpenShift Route + SCRAM
+      port: 9094
+      type: {{ .Values.kafka.externalListenerType }}
+      tls: true
+      authentication:
+        type: scram-sha-512
+    config:
+      offsets.topic.replication.factor: {{ .Values.kafka.replication.offsetsTopic }}
+      transaction.state.log.replication.factor: {{ .Values.kafka.replication.txnStateLog }}
+      transaction.state.log.min.isr: {{ .Values.kafka.replication.txnStateLogMinIsr }}
+      default.replication.factor: {{ .Values.kafka.replication.default }}
+      min.insync.replicas: {{ .Values.kafka.replication.minInsync }}
+      log.retention.hours: 168
+      log.segment.bytes: 1073741824
+    authorization:
+      type: simple
+{{- if and .Values.components.monitoring .Values.monitoring.targets.kafka.enabled }}
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+{{- end }}
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.kafka.enabled }}
+  # Consumer-group lag source. The broker JMX-Prometheus exporter (metricsConfig
+  # above) does NOT expose per-consumer-group lag; Strimzi's built-in
+  # kafka-exporter does. Enabling it makes Strimzi run a
+  # `kafka-kafka-exporter` Deployment that exports `kafka_consumergroup_lag` /
+  # `kafka_consumergroup_current_offset` on its `tcp-prometheus` port — which the
+  # kafka PodMonitor (podmonitors.yaml, selector strimzi.io/cluster=kafka +
+  # strimzi.io/kind=Kafka, port tcp-prometheus) already scrapes, because the
+  # exporter pod carries those SAME labels + port name. This is what backs the
+  # `KafkaConsumerLagHigh` PrometheusRule alert; without it that alert can
+  # never fire. Gated by the SAME switch as the broker metricsConfig so lag
+  # scraping tracks monitoring on/off exactly.
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaUser
+metadata:
+  name: lakehouse-ingest
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+    - resource: {type: topic, name: "nginx-access", patternType: literal}
+      operations: [Read, Write, Describe]
+    - resource: {type: topic, name: "lms-events", patternType: literal}
+      operations: [Read, Write, Describe]
+    - resource: {type: group, name: "spark-", patternType: prefix}
+      operations: [Read]
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: nginx-access
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: {{ .Values.kafka.topics.nginxAccess.partitions }}
+  replicas: {{ .Values.kafka.topics.nginxAccess.replicas }}
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: lms-events
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: {{ .Values.kafka.topics.lmsEvents.partitions }}
+  replicas: {{ .Values.kafka.topics.lmsEvents.replicas }}
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
+# Kafka Connect internal topic'leri (config/offset/status) — RF=3.
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-configs
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: {{ .Values.kafka.topics.connectConfigs.partitions }}
+  replicas: {{ .Values.kafka.topics.connectConfigs.replicas }}
+  config: {cleanup.policy: compact}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-offsets
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: {{ .Values.kafka.topics.connectOffsets.partitions }}
+  replicas: {{ .Values.kafka.topics.connectOffsets.replicas }}
+  config: {cleanup.policy: compact}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-status
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: {{ .Values.kafka.topics.connectStatus.partitions }}
+  replicas: {{ .Values.kafka.topics.connectStatus.replicas }}
+  config: {cleanup.policy: compact}
+---
+# Ingest omurgası KafkaUser'ları (SCRAM-SHA-512 + ACL).
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaUser
+metadata: {name: connect, namespace: {{ include "lakehouse.namespace" . }}, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      # NOT: boş kaynak adı (`name: "" patternType: prefix`) Kafka ACL API'since
+      # reddedilir (InvalidRequestException: Invalid empty resource name), bu yüzden
+      # ACL'ler ingest topic namespace'lerine daraltılmış haldedir. POC-DOĞRULA:
+      # Iceberg sink control topic/consumer-group ve DLQ adları sürüme bağlı —
+      # OpenShift'te connector'lar çalışınca teyit/genişlet.
+      - {resource: {type: group, name: connect, patternType: prefix}, operations: [Read]}          # connect-cluster + sink consumer group'ları
+      # Iceberg sink control consumer group (cg-control-<uuid>) — separate from
+      # the `connect` prefix. Without this the sink fails with
+      # GroupAuthorizationException. (POC-DOĞRULA Iceberg-sink control-group item.)
+      - {resource: {type: group, name: cg-control-, patternType: prefix}, operations: [Read, Describe]}
+      - {resource: {type: topic, name: connect-cluster-, patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Connect internal topic'leri
+      - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
+      - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
+      - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
+      - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
+      - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
+      # Iceberg sink exactly-once: coordinator/worker transactional producers
+      # (transactional.id = coordinator-txn-*/worker-txn-*). Without these the
+      # sink task dies with TransactionalIdAuthorizationException. (POC-DOĞRULA
+      # Iceberg-sink ACL item.)
+      - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
+      - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaUser
+metadata: {name: debezium-src, namespace: {{ include "lakehouse.namespace" . }}, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - {resource: {type: topic, name: schema-history., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+---
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaUser
+metadata: {name: fluentbit, namespace: {{ include "lakehouse.namespace" . }}, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - {resource: {type: topic, name: nginx-access, patternType: literal}, operations: [Write, Describe]}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.kafka.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # Broker/topic başına mesaj & bayt hızı, consumer lag, request süreleri.
+      - pattern: kafka.server<type=(.+), name=(.+)PerSec\w*, topic=(.+)><>Count
+        name: kafka_server_$1_$2_total
+        type: COUNTER
+        labels: {topic: "$3"}
+      - pattern: kafka.server<type=(.+), name=(.+)PerSec\w*><>Count
+        name: kafka_server_$1_$2_total
+        type: COUNTER
+      - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value
+        name: kafka_server_$1_$2
+        type: GAUGE
+        labels: {clientId: "$3", topic: "$4", partition: "$5"}
+      - pattern: kafka.(\w+)<type=(.+), name=(.+)><>Value
+        name: kafka_$1_$2_$3
+        type: GAUGE
+{{- end }}
+{{- end }}

@@ -1,0 +1,114 @@
+# MinIO — DEV/PoC/e2e-ONLY in-cluster S3-compatible object store (Product
+# Foundation Task 8). Gated by `.Values.components.minio` (DEFAULT FALSE).
+#
+# *** THIS IS NOT FOR PRODUCTION. *** A real install brings its OWN
+# S3-compatible object store (Pure Storage FlashBlade, AWS S3, Ceph RGW,
+# ...) and points `storage.s3.secretName`'s Secret material at it instead
+# (see chart/templates/01-storage.yaml) — this component exists ONLY so a
+# throwaway dev/PoC/e2e cluster (no real S3 endpoint available) has
+# somewhere for first ingest to land. Single replica, ONE PVC, no HA/
+# erasure-coding — a MinIO outage on this Deployment loses no customer
+# data, because no real customer install ever points production traffic
+# at it.
+#
+# Root credentials are the SAME `storage.s3.secretName` Secret every other
+# S3 consumer in this chart already reads (Trino/Nessie/Spark/CNPG
+# backups, see e.g. 06-trino-ha.yaml) — MinIO's root user/password ARE
+# that Secret's `access-key-id`/`secret-access-key` keys, so bootstrap's
+# `generated`-mode credentials (bootstrap/lib/secrets.sh) work here with NO
+# second secret to keep in sync. Service name is `minio`
+# (`lakehouse.svc.minio` helper, _helpers.tpl) on port 9000 — this MUST
+# match bootstrap's default `s3-credentials.endpoint`
+# (`http://minio.<namespace>.svc:9000`) when no `--s3-endpoint` is given.
+{{- if .Values.components.minio }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lakehouse.svc.minio" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: minio}
+  template:
+    metadata:
+      labels: {app: minio}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: minio
+        image: {{ .Values.versions.minioImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["minio", "server", "/data", "--console-address", ":9001"]
+        env:
+        - {name: MINIO_ROOT_USER,     valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: MINIO_ROOT_PASSWORD, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        ports:
+        - {name: api,     containerPort: 9000}
+        - {name: console, containerPort: 9001}
+        readinessProbe:
+          httpGet: {path: /minio/health/ready, port: 9000}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /minio/health/live, port: 9000}
+          initialDelaySeconds: 10
+          periodSeconds: 20
+        resources:
+          requests:
+            cpu: {{ .Values.minio.resources.requests.cpu | quote }}
+            memory: {{ .Values.minio.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.minio.resources.limits.cpu | quote }}
+            memory: {{ .Values.minio.resources.limits.memory | quote }}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: minio-data}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: {{ .Values.minio.storage.size | quote }}}
+  # storageClassName empty (default, `minio.storage.storageClassName`) = the
+  # cluster's default StorageClass — same omit-when-empty convention as
+  # `zeppelin.storageClassName` / `kafka.nodePools.*.storage.class`
+  # (storage-neutrality, Product Foundation task 6.5; see
+  # chart/tests/storage-neutrality_test.yaml).
+{{- with .Values.minio.storage.storageClassName }}
+  storageClassName: {{ . }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.minio" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    app: minio
+spec:
+  selector: {app: minio}
+  ports:
+  - {name: api, port: 9000, targetPort: 9000}
+  - {name: console, port: 9001, targetPort: 9001}
+{{- end }}

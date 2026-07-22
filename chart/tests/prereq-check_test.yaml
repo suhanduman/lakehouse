@@ -1,0 +1,82 @@
+# chart/tests/prereq-check_test.yaml — helm-unittest suite for
+# chart/templates/_prereq-check.tpl's `lakehouse.prereqCheck` template-time
+# CRD check (included once from chart/templates/00-namespace.yaml).
+#
+# Coordinator-review follow-up (Product Foundation Phase 2 Task 6): the
+# ExternalSecrets Operator (`external-secrets.io/v1beta1`) prereq check must
+# be gated on `.Values.secrets.mode == "external"` — a `generated`-mode
+# install (this task's zero-manual-step / zero-ESO product default) must
+# NOT be hard-blocked by a prereq for an operator it never touches. Verified
+# failing case before this fix: `helm template chart --set
+# prereqCheck.enabled=true --set secrets.mode=generated` errored on the
+# missing ExternalSecrets Operator CRD even though `generated` mode never
+# renders an ExternalSecret. This suite exercises that gating directly via
+# helm-unittest's per-test `capabilities.apiVersions` (simulating a cluster
+# that has every OTHER required operator CRD installed EXCEPT ESO), so the
+# assertions isolate the ESO-specific gating logic from the other six
+# (unconditional) CRD checks in the same function.
+suite: prereq-check ExternalSecrets Operator CRD requirement is gated on secrets.mode==external
+templates:
+  - 00-namespace.yaml
+tests:
+  - it: secrets.mode=generated + prereqCheck.enabled — does NOT require the ExternalSecrets Operator CRD (every other required CRD present)
+    set:
+      prereqCheck.enabled: true
+      secrets.mode: generated
+    capabilities:
+      apiVersions:
+        - kafka.strimzi.io/v1
+        - postgresql.cnpg.io/v1
+        - sparkoperator.k8s.io/v1beta2
+        - k8s.keycloak.org/v2alpha1
+        - cert-manager.io/v1
+        - monitoring.coreos.com/v1
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: secrets.mode=manual + prereqCheck.enabled — same as generated, ESO CRD not required
+    set:
+      prereqCheck.enabled: true
+      secrets.mode: manual
+    capabilities:
+      apiVersions:
+        - kafka.strimzi.io/v1
+        - postgresql.cnpg.io/v1
+        - sparkoperator.k8s.io/v1beta2
+        - k8s.keycloak.org/v2alpha1
+        - cert-manager.io/v1
+        - monitoring.coreos.com/v1
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: secrets.mode=external + prereqCheck.enabled — STILL fails when the ExternalSecrets Operator CRD is missing (every other required CRD present)
+    set:
+      prereqCheck.enabled: true
+      secrets.mode: external
+    capabilities:
+      apiVersions:
+        - kafka.strimzi.io/v1
+        - postgresql.cnpg.io/v1
+        - sparkoperator.k8s.io/v1beta2
+        - k8s.keycloak.org/v2alpha1
+        - cert-manager.io/v1
+        - monitoring.coreos.com/v1
+    asserts:
+      - failedTemplate:
+          errorPattern: "ExternalSecrets Operator -> external-secrets\\.io/v1beta1"
+
+  - it: secrets.mode=external + prereqCheck.enabled — renders clean once the ExternalSecrets Operator CRD is ALSO present
+    set:
+      prereqCheck.enabled: true
+      secrets.mode: external
+    capabilities:
+      apiVersions:
+        - kafka.strimzi.io/v1
+        - postgresql.cnpg.io/v1
+        - sparkoperator.k8s.io/v1beta2
+        - k8s.keycloak.org/v2alpha1
+        - cert-manager.io/v1
+        - monitoring.coreos.com/v1
+        - external-secrets.io/v1beta1
+    asserts:
+      - notFailedTemplate: {}

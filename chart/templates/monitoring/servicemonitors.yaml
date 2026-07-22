@@ -1,0 +1,109 @@
+# chart/templates/monitoring/servicemonitors.yaml — D1 (İzleme/Monitoring).
+#
+# ServiceMonitors ONLY for targets that expose HTTP metrics via a real
+# in-cluster `kind: Service` — trino, nessie, apicurio, console. Kafka and
+# Kafka Connect are NOT here: Strimzi's JMX-Prometheus exporter runs on the
+# Pod (port `tcp-prometheus` / 9404) with no owning Service, so they are
+# scraped via PodMonitor instead (chart/templates/monitoring/podmonitors.yaml).
+#
+# Every `selector.matchLabels` / `endpoints[].port` (or `targetPort`) value
+# below is copied verbatim from the target's owning Service template — not
+# invented:
+#   - trino    -> chart/templates/06-trino-ha.yaml:266-278
+#                 (`trino-coordinator` Service; `spec.selector: {app: trino,
+#                 role: coordinator}`; `ports: [{name: http, port: 8080}]`).
+#   - nessie   -> chart/templates/04-nessie-ha.yaml:136-144
+#                 (`nessie` Service; `spec.selector: {app: nessie}`;
+#                 `ports: [{name: http, ...}, {name: mgmt, port: 9000}]`).
+#   - apicurio -> chart/templates/11-apicurio-registry.yaml:142-151
+#                 (`apicurio-registry` Service; `spec.selector:
+#                 {app: apicurio-registry}`; `ports: [{port: 8080}]` —
+#                 UNNAMED port, hence `targetPort: 8080` below instead of a
+#                 port name).
+#   - console  -> chart/templates/console/console.yaml:149-155
+#                 (`console-backend` Service; `spec.selector:
+#                 {app: console-backend}`; `ports: [{name: http,
+#                 port: 8080}]`).
+{{- if and .Values.components.monitoring .Values.monitoring.targets.trino.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: trino
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      app: trino
+      role: coordinator
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.nessie.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nessie
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      app: nessie
+  endpoints:
+    - port: mgmt
+      path: /q/metrics
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.apicurio.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: apicurio
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      app: apicurio-registry
+  endpoints:
+    # Service port is UNNAMED (`ports: [{port: 8080}]`) — target by
+    # targetPort, not a port name.
+    - targetPort: 8080
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.console.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: console
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      app: console-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}

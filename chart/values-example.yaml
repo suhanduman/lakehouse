@@ -1,0 +1,99 @@
+# chart/values-example.yaml — anonymized reference overlay for a NEW
+# customer/environment to copy and adapt.
+#
+# This is intentionally small: only the knobs most installs actually need to
+# touch on day one. For a fully filled-in, every-key-visible production
+# reference, see `chart/values-prod.example.yaml` instead — that file is
+# exercised by this repo's own CI (`chart/tests/integrity.sh`) and stays in
+# lock-step with every component as it lands; THIS file is the "start here"
+# onboarding copy, layered with a sizing tier:
+#
+#   helm install lakehouse chart/ \
+#     -f chart/values-<dev|medium|large>.yaml \
+#     -f chart/values-example.yaml \
+#     -n <your-namespace> --create-namespace
+#
+# Layer this file with -f chart/values-<tier>.yaml BEFORE this file (sizing
+# tier first, this file second — last -f wins per-key, so environment-
+# specific overrides here take precedence over the tier's own numbers).
+#
+# Every uncommented key below already exists in chart/values.yaml — this
+# file only sets values, it introduces no new keys.
+
+# Namespace this release targets. Templates never read this directly (see
+# chart/values.yaml's own `namespace` comment) — it's documentation only,
+# so this file can self-describe its intended target.
+namespace: lakehouse
+
+# Platform switch — exactly one of the two. Uncomment the one that matches
+# your cluster; leaving neither uncommented keeps the chart default
+# (`vanilla`, set in chart/values.yaml).
+# platform: vanilla     # plain Kubernetes — Ingress + Helm-installed operators
+# platform: openshift   # OpenShift — Route + OLM-managed operators
+
+global:
+  # Base public domain for every Route/Ingress hostname this chart renders
+  # (e.g. trino.<domain>, console.<domain>). Replace with your own domain.
+  domain: lakehouse.example.com
+
+# Secret provisioning mode — exactly one of the three. Uncomment the one
+# that matches how you manage secrets; the chart default (chart/values.yaml)
+# is `generated`.
+# secrets:
+#   mode: generated   # bootstrap script pre-provisions every Secret out-of-band (zero manual steps)
+#   mode: external    # ExternalSecrets Operator + Vault/AD materializes every Secret automatically
+#   mode: manual      # you create every Secret yourself before install (see NOTES.txt for the exact list)
+
+storage:
+  # Real S3-compatible object store credentials Secret (name only — no key
+  # material lives in this chart or this file). Point this at whatever
+  # Secret your out-of-band process (bootstrap/ExternalSecret/manual
+  # `oc create secret`) provisions.
+  s3:
+    secretName: s3-credentials
+  # Opt-in vendor CSI StorageClasses this chart can create for you
+  # (components.storage: true below). Most installs instead leave
+  # components.storage: false and point the per-component storageClass
+  # fields (postgres.*.storage.storageClass, zeppelin.storageClassName,
+  # kafka.nodePools.*.storage.class) at a StorageClass that already exists
+  # on the cluster. Uncomment + fill in only if you want THIS chart to
+  # create the StorageClasses itself:
+  # classes:
+  #   block:
+  #     name: lakehouse-block
+  #     provisioner: <your-csi-driver>       # e.g. pure-csi, ebs.csi.aws.com
+  #     backend: block
+  #   fileRwx:
+  #     name: lakehouse-file-rwx
+  #     provisioner: <your-csi-driver>
+  #     backend: file
+
+# Component toggles most installs actually touch. Everything not listed
+# here keeps the chart/values.yaml default — see that file's `components:`
+# block for the full set and what each one gates.
+components:
+  # Create the two vendor CSI StorageClasses above (storage.classes.*).
+  # Leave false if you already have a StorageClass (see storage: comment).
+  storage: false
+  # In-cluster single-replica MinIO — dev/PoC/e2e ONLY. NEVER true in a
+  # real install; bring your own S3-compatible endpoint instead
+  # (storage.s3.secretName above).
+  minio: false
+  # Demo per-source CDC connectors (dbz-mssql, jdbc-mssql, dbz-mongo).
+  # Real per-source connectors are generated at runtime by the Console's
+  # add-source wizard, not by this chart — leave this off outside a demo.
+  connectors:
+    examples:
+      enabled: false
+
+# Routes/Ingress TLS issuer + IngressClass — used depending on `platform`
+# above (Route on openshift, Ingress on vanilla).
+routes:
+  # cert-manager ClusterIssuer name — replace with your own issuer
+  # (a corporate CA issuer, or letsencrypt-prod for a public-facing domain).
+  certIssuer: letsencrypt-prod
+
+ingress:
+  # IngressClass name (nginx-ingress-controller convention). Ignored
+  # entirely on platform: openshift.
+  className: nginx

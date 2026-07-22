@@ -1,0 +1,571 @@
+# Example production values for the Lakehouse chart.
+#
+# This is a fully filled-in, every-key-visible OpenShift production worked
+# example — exercised by this repo's own CI (`chart/tests/integrity.sh`) so
+# it stays in lock-step with every component as it lands. For a smaller
+# "start here" onboarding copy (only the knobs most installs actually need
+# to touch on day one), see `chart/values-example.yaml` instead.
+#
+# Copy/adapt this file per-environment; do NOT commit real secret material —
+# secrets are referenced by name only (see `values.secrets.mode`). This file
+# mirrors `values.yaml`'s current skeleton shape; it is extended alongside
+# every later migration task as real component values land.
+#
+# Usage:
+#   helm template chart/ -f chart/values-prod.example.yaml -n example
+#   helm install lakehouse chart/ -f chart/values-prod.example.yaml -n example --create-namespace
+
+namespace: example
+
+# This example represents an OpenShift prod install — see chart/values.yaml's
+# `platform` doc comment for the two valid values + what this switch does
+# and does NOT control.
+platform: openshift
+
+global:
+  domain: lakehouse.example.com
+  # A dedicated image-build OpenShift project ("lakehouse-images"), not the
+  # runtime release namespace ("example") — a real cluster typically builds
+  # internally-built images (spark-py, connect-lakehouse, console
+  # backend/frontend) in their own project, separate from wherever the
+  # chart itself is installed (`-n example` / `-n lakehouse-test`/...). This
+  # also keeps this EXAMPLE values file genuinely namespace-portable: the
+  # same `-f values-prod.example.yaml` render is exercised against both
+  # `-n example` and `-n lakehouse-test`, so a literal release-namespace name
+  # baked into a values-file field that a template renders would fail the
+  # chart's `--no-stray example` portability check the moment any component
+  # starts consuming it.
+  imageRegistry: image-registry.openshift-image-registry.svc:5000/lakehouse-images
+
+  # Prod hardening AÇIK (OpenShift). restricted-v2 SCC + PSA-restricted uyumlu
+  # securityContext + S3 Internal-CA trust bundle (OpenShift
+  # trusted-CA injection). microk8s overlay'lerinde KAPALI kalır. Ayrıntı +
+  # per-bileşen JVM truststore runbook: gitops/README.md "Prod hardening".
+  security:
+    restrictedSecurityContext: true
+    s3TrustBundle:
+      enabled: true
+      openshiftInject: true
+      configMapName: s3-trust-bundle
+      key: ca-bundle.crt
+
+components:
+  storage: true
+  postgres: true
+  kafka: true
+  nessie: true
+  sparkOperator: true
+  trino: true
+  routesTls: true
+  zeppelin: true
+  keycloak: true
+  apicurio: true
+  kafkaConnect: true
+  connectors:
+    enabled: true
+    examples:
+      enabled: false
+  nginxIngest: true
+  console: true
+  kafkaUi: true
+  consoleRoutesOidc: true
+  ai: false
+  # Follow-up components (sub-project D) — Route-only today, no backing
+  # Service in this chart yet; kept OFF so prod render stays Route-reference-
+  # closed (see chart/values.yaml `components.superset`/`jupyter` comment).
+  superset: false
+  jupyter: false
+
+# Namespace ResourceQuota/LimitRange sizing — same defaults as values.yaml;
+# override here per-cluster (e.g. a smaller staging cluster) if needed.
+namespaceConfig:
+  quota:
+    requestsCpu: "16"
+    requestsMemory: 64Gi
+    limitsCpu: "32"
+    limitsMemory: 128Gi
+    persistentVolumeClaims: "50"
+    requestsStorage: 2Ti
+    pods: "100"
+    serviceNodePorts: "0"
+    countDeployments: "30"
+  limitRange:
+    container:
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+      max:
+        cpu: "8"
+        memory: 16Gi
+    pvc:
+      max:
+        storage: 500Gi
+      min:
+        storage: 1Gi
+
+# components.storage: true (above) — this example enables the chart's
+# opt-in vendor CSI StorageClasses (chart/values.yaml `components.storage`
+# comment); most installs instead leave it `false` and set a pre-existing
+# StorageClass name directly on `postgres.*.storage(.walStorage).
+# storageClass` / `zeppelin.storageClassName` / `kafka.nodePools.*.storage.
+# class` below. Worked example here: Pure Storage's PSO CSI driver
+# (`pure-csi`) — swap `provisioner`/`backend` for your own
+# CSI driver. S3 credential Secret name (material provisioned out-of-band —
+# see chart/templates/01-storage.yaml) is vendor-neutral by default; a
+# customer with an existing vault-managed Secret name can override it, e.g.:
+#   s3:
+#     secretName: acme-corp-vault-s3-creds
+storage:
+  classes:
+    block:
+      name: fast-block
+      provisioner: pure-csi
+      backend: block
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+    fileRwx:
+      name: fast-file-rwx
+      provisioner: pure-csi
+      backend: file
+      reclaimPolicy: Retain
+      allowVolumeExpansion: true
+      volumeBindingMode: WaitForFirstConsumer
+  s3:
+    secretName: s3-credentials
+
+# Secret provisioning mode (see chart/values.yaml `secrets:` comment for the
+# full contract). `external` = ExternalSecrets Operator + Vault/AD materializes
+# every named Secret from the remote store; no secret material lives in git or
+# in this file. A cluster that provisions secrets by hand instead would set
+# `mode: manual` and run the `oc create secret ...` steps NOTES.txt prints.
+secrets:
+  mode: external
+
+versions:
+  cnpgPostgresImage: ghcr.io/cloudnative-pg/postgresql:16.4
+  apicurioImage: quay.io/apicurio/apicurio-registry:3.0.6
+  # `strimziApi`/`kafka`/`kafkaMetadata` are DELIBERATELY not overridden here
+  # — this file inherits the chart's own coherent version-triple default
+  # (`v1` + `4.2.0` + `4.2-IV1`, see chart/values.yaml's "COHERENT STRIMZI
+  # VERSION TRIPLE" comment). Overriding just one of the three (e.g. `kafka`
+  # alone, with no matching `kafkaMetadata`) can silently produce an
+  # INCOHERENT pair that does not reconcile. Re-verify the whole triple
+  # against the operator ACTUALLY installed on your target cluster (see that
+  # values.yaml comment) before overriding any one of the three in a real
+  # per-cluster values-<env>.yaml copied from this file.
+  nessieImage: ghcr.io/projectnessie/nessie:0.104.3
+  trinoImage: trinodb/trino:439
+  sparkImageTag: "1.0"
+  sparkVersion: "3.5.1"
+  icebergSparkRuntime: "1.5.2"
+  awsSdkBundle: "2.25.11"
+  hadoopAws: "3.3.4"
+  connectImageTag: "1.0"
+  debezium: "2.7.3"
+  aivenJdbc: "6.10.0"
+  mssqlJdbc: "12.8.1.jre11"
+  postgresqlJdbc: "42.7.4"
+  icebergKafkaConnect: "1.6.1"
+  apicurioConverter: "2.6.5"
+  zeppelinImage: registry.apps.ocp.example.com/lakehouse/zeppelin:1.0
+  keycloakImage: ""
+  consoleBackendImageTag: "1.0"
+  consoleFrontendImageTag: "1.0"
+  kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
+
+# CNPG HA Postgres clusters (pg-nessie, pg-apicurio) — see
+# chart/templates/02-postgres-ha.yaml + 11-apicurio-registry.yaml.
+postgres:
+  nessie:
+    instances: 3
+    primaryUpdateStrategy: unsupervised
+    database: nessie
+    owner: nessie
+    storage:
+      storageClass: fast-block
+      size: 50Gi
+    walStorage:
+      storageClass: fast-block
+      size: 20Gi
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: "2"
+    monitoring:
+      enablePodMonitor: true
+    backup:
+      destinationPath: s3://backups/nessie-pg
+      endpointURL: "https://s3.example.com"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+  apicurio:
+    instances: 3
+    database: apicurio
+    owner: apicurio
+    storage:
+      storageClass: fast-block
+      size: 10Gi
+    walStorage:
+      storageClass: fast-block
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    monitoring:
+      enablePodMonitor: true
+    backup:
+      destinationPath: s3://backups/pg-apicurio
+      endpointURL: "https://s3.example.com"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+  keycloak:
+    instances: 3
+    primaryUpdateStrategy: unsupervised
+    database: keycloak
+    owner: keycloak
+    storage:
+      storageClass: fast-block
+      size: 20Gi
+    walStorage:
+      storageClass: fast-block
+      size: 10Gi
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 200m
+      limits:
+        memory: 1Gi
+        cpu: "1"
+    backup:
+      destinationPath: s3://backups/keycloak-pg
+      endpointURL: "https://s3.example.com"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+
+apicurio:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Strimzi Kafka (KRaft) backbone — see chart/templates/03-kafka-strimzi.yaml.
+kafka:
+  nodePools:
+    controller:
+      replicas: 3
+      storage:
+        size: 10Gi
+        class: fast-block
+      resources:
+        requests: {memory: 512Mi, cpu: 250m}
+        limits: {memory: 1Gi, cpu: 500m}
+    broker:
+      replicas: 3
+      storage:
+        size: 100Gi
+        class: fast-block
+      resources:
+        requests: {memory: 1Gi, cpu: 500m}
+        limits: {memory: 4Gi, cpu: "2"}
+  externalListenerType: route
+  topics:
+    nginxAccess: {partitions: 12, replicas: 3}
+    lmsEvents: {partitions: 6, replicas: 3}
+    connectConfigs: {partitions: 1, replicas: 3}
+    connectOffsets: {partitions: 25, replicas: 3}
+    connectStatus: {partitions: 5, replicas: 3}
+
+# OIDC credentials Secret name reference (material provisioned out-of-band —
+# see chart/templates/01-storage.yaml for the same pattern with the S3 Secret).
+oidc:
+  secretName: oidc-credentials
+
+# Nessie HA — see chart/templates/04-nessie-ha.yaml.
+nessie:
+  replicas: 2
+  oidcClientId: nessie
+  catalog:
+    defaultWarehouse: warehouse
+    warehouse:
+      location: s3://depo/warehouse
+    rawdata:
+      location: s3://ham-veri/warehouse
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+  pdb:
+    minAvailable: 1
+  hpa:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+# Trino HA — see chart/templates/06-trino-ha.yaml.
+trino:
+  # Left EMPTY on purpose (see chart/values.yaml's `secrets:` comment): the
+  # `trino-internal-secret` Secret is provisioned out-of-band (ExternalSecret/
+  # Vault or manual `oc create secret`) per this file's own header ("do NOT
+  # commit real secret material"). Only set a real 32+ char value here for a
+  # local/dev install that wants this chart to render the Secret inline.
+  internalSharedSecret: ""
+  coordinator:
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 500m
+      limits:
+        memory: 6Gi
+        cpu: "4"
+  worker:
+    replicas: 3
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: "1"
+      limits:
+        memory: 8Gi
+        cpu: "4"
+    hpa:
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+  memory:
+    jvmXmx: 6G
+    queryMaxMemory: 10GB
+    queryMaxMemoryPerNodeCoordinator: 1.5GB
+    heapHeadroomPerNode: 1GB
+    queryMaxMemoryPerNodeWorker: 3GB
+
+# Spark Operator — see chart/templates/05-spark-operator.yaml.
+sparkOperator:
+  maintenance:
+    schedule: "0 * * * *"
+    concurrencyPolicy: Forbid
+    bronzeRetentionDays: 30       # prod default (chart/values.yaml); kept explicit here for visibility
+    driver:
+      cores: 1
+      memory: 2G
+    executor:
+      cores: 2
+      instances: 4
+      memory: 4G
+  silverMerge:
+    schedule: "*/10 * * * *"
+    maxExecutors: 8
+
+# Kafka Connect — see chart/templates/12-kafka-connect.yaml.
+kafkaConnect:
+  replicas: 2
+  # PROD, ZORUNLU: önceden-build edilmiş Connect imajı. spec.build yolu Iceberg
+  # sink runtime'ını İNDİREMEZ (Apache indirilebilir binary yayınlamıyor; Tabular
+  # fork arşivde). images/connect/Dockerfile ile bir kez build
+  # edip OpenShift iç registry'ye push edin, sonra bu değeri o imaja işaret ettirin.
+  # Boş bırakılırsa spec.build devreye girer ve iceberg-sink plugin indirmesi 404
+  # ile patlar. (Test: values-microk8s-ingest.yaml 192.168.2.5:32000/... kullanır.)
+  image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/connect-lakehouse:1.0"
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# Kafka Connectors — see chart/templates/13-connectors.yaml.
+connectors:
+  examples:
+    mssqlHost: "mssql1.example.com"
+    mongoHost: "mongo1.example.com"
+    mssqlDatabase: OgrenciDB
+  icebergSink:
+    s3Endpoint: "https://s3.example.com"
+    warehouse: rawdata
+    tasksMax: 2
+
+# nginx-access ingest — see chart/templates/14-nginx-ingest.yaml.
+nginx:
+  streaming:
+    driver:
+      cores: 1
+      memory: "1G"
+    executor:
+      cores: 1
+      instances: 2
+      memory: "2G"
+    restartPolicy:
+      onFailureRetries: 5
+    checkpointBucket: nginx-web
+  fluentbit:
+    kafkaExternalBootstrap: "kafka-ext.example.com"
+    kafkaPassword: "REPLACE_WITH_FLUENTBIT_KAFKA_PASSWORD"
+
+# Apache Zeppelin — see chart/templates/09-zeppelin.yaml.
+zeppelin:
+  replicas: 1
+  notebooks:
+    storage: 20Gi
+  # Real StorageClass name (worked example — see `storage:` block above for
+  # this chart's own opt-in `fast-file-rwx` alternative).
+  storageClassName: fast-file-rwx
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 6Gi
+      cpu: "2"
+  ad:
+    url: "ldaps://ad.example.com:636"
+    principalSuffix: "@example.com"
+    bindDn: "CN=svc-lakehouse-ad,OU=Service Accounts,DC=example,DC=com"
+    # Left EMPTY on purpose (see chart/values.yaml's `secrets:` comment): the
+    # `ad-bind-credentials` Secret is provisioned out-of-band (ExternalSecret/
+    # Vault or manual `oc create secret`) per this file's own header ("do NOT
+    # commit real secret material"). Only set a real value here for a
+    # local/dev install that wants this chart to render the Secret inline.
+    bindPassword: ""
+    userSearchBase: "OU=Users,DC=example,DC=com"
+    groupSearchBase: "OU=Groups,DC=example,DC=com"
+    groups:
+      admin: "CN=lakehouse-admins,OU=Groups,DC=example,DC=com"
+      analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
+      student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
+    sessionTimeoutMs: 28800000
+
+# AD LDAP federation for Keycloak — see chart/templates/10-keycloak.yaml.
+# Same corporate AD account as
+# `zeppelin.ad.*` above (independent values block, see chart/values.yaml
+# comment on `ad:` for why it isn't shared).
+ad:
+  url: "ldaps://ad.example.com:636"
+  bindDn: "CN=svc-lakehouse-ad,OU=Service Accounts,DC=example,DC=com"
+  bindPassword: "REPLACE_WITH_AD_BIND_PASSWORD"
+  userSearchBase: "OU=Users,DC=example,DC=com"
+  groupSearchBase: "OU=Groups,DC=example,DC=com"
+
+# Routes + cert-manager TLS — see chart/templates/08-routes-tls.yaml.
+routes:
+  # Real corporate CA issuer example (source comment's alternative to
+  # letsencrypt-prod) — demonstrates overriding the chart default.
+  certIssuer: kurumsal-ca
+
+# Keycloak — see chart/templates/10-keycloak.yaml. `realm.name`
+# intentionally stays `lakehouse` (not the source's literal `example`) even in
+# this prod-example file — see chart/values.yaml's `keycloak.realm.name`
+# comment for why (this example file is itself exercised against multiple
+# release namespaces by the test harness). A real per-cluster values-<env>.yaml
+# may override it back to `example` if desired.
+keycloak:
+  instances: 2
+  adminUsername: admin
+  # Left EMPTY on purpose (see chart/values.yaml's `secrets:` comment): the
+  # `keycloak-admin-credentials` Secret is provisioned out-of-band
+  # (ExternalSecret/Vault or manual `oc create secret`) per this file's own
+  # header ("do NOT commit real secret material"). Only set a real value here
+  # for a local/dev install that wants this chart to render the Secret inline.
+  adminPassword: ""
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: "2"
+  realm:
+    name: lakehouse
+    displayName: "Lakehouse"
+
+# Self-Service Lakehouse Console — see chart/templates/console/console.yaml.
+console:
+  backend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  frontend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  oidc:
+    audience: lakehouse-console
+  networkPolicy:
+    s3Cidr: "10.20.30.0/24"
+
+# Kafka UI — see chart/templates/console/kafka-ui.yaml.
+kafkaUi:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  oidc:
+    # Left EMPTY on purpose (see chart/values.yaml's `secrets:` comment): the
+    # `kafka-ui-oidc-credentials` Secret is provisioned out-of-band
+    # (ExternalSecret/Vault or manual `oc create secret`) per this file's own
+    # header ("do NOT commit real secret material"). Only set a real value
+    # here for a local/dev install that wants this chart to render the
+    # Secret inline (also used verbatim by 10-keycloak.yaml's client secret
+    # field, single source).
+    clientSecret: ""
+
+# İzleme (D1): prod'da Grafana OIDC açık, gerçek Thanos endpoint (varsayılan
+# zaten doğru), tüm hedefler açık.
+monitoring:
+  grafana:
+    oidc:
+      enabled: true
+      # Left EMPTY on purpose (see chart/values.yaml's `secrets:` comment): the
+      # `grafana-oidc` Secret is provisioned out-of-band (ExternalSecret/Vault
+      # or manual `oc create secret`) per this file's own "do NOT commit real
+      # secret material" header. Only set a real value here for a local/dev
+      # install that wants this chart to render the Secret inline (also used
+      # verbatim by 10-keycloak.yaml's grafana client secret field — single
+      # source, same contract as kafkaUi.oidc.clientSecret above).
+      clientSecret: ""
+
+# Chart prereq-check — see chart/values.yaml's `prereqCheck` comment
+# for the full mechanism. Kept `false` in THIS example file too, deliberately:
+# this file is exercised directly by the chart's own CI test harness
+# (`helm template chart/ -f chart/values-prod.example.yaml -n example`, see
+# prod-manifests/validate.sh --helm), which never has a live cluster to
+# connect to — flipping this to `true` here would make that exact command
+# hard-fail. A REAL per-cluster deployment copies this file, applies
+# `operators/` first (see operators/README.md), confirms every CSV shows
+# `Succeeded`, and only then runs its own `helm install`/`helm upgrade` with
+# `--set prereqCheck.enabled=true` (or flips this value in its own copy).
+prereqCheck:
+  enabled: false

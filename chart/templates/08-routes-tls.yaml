@@ -1,0 +1,174 @@
+# OpenShift Routes + cert-manager entegrasyonu. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.routesTls`.
+#
+# Prod'da her public UI ayrı bir Route ile HTTPS üzerinde servis edilir.
+#
+# Host tutarlılığı (task brief kabul kriteri): her Route'un `spec.host`'u
+# `lakehouse.routeHost` helper'ından (_helpers.tpl) üretilir, `.Values.global.
+# domain`'e bağlı — Keycloak'ın OIDC client redirect URI'leri
+# (chart/templates/10-keycloak.yaml) de AYNI helper'dan AYNI mantıksal isimle
+# üretilir, böylece bir Route'un host'u ile o UI'nin OIDC redirect host'u
+# asla ayrışamaz.
+#
+# Ek gate (bu task): `lakehouse.isOpenShift` (`.Values.platform`) — bu
+# dosyanın TAMAMI yalnızca `platform: openshift` iken render edilir; vanilla
+# eşleniği chart/templates/08b-ingress-tls.yaml'da (`networking.k8s.io/v1`
+# Ingress, AYNI components.* gate'leri + AYNI lakehouse.routeHost helper'ı).
+#
+# DANGLING-ROUTE GATING (spec §3.1/§8 Route-referans kapalılığı):
+# `superset`/`jupyter`/`ai-ui` Route'ları backing Deployment/Service'i OLMAYAN
+# follow-up bileşenlere işaret ediyor (Superset+JupyterHub alt-proje D'de,
+# AI ise `prod-manifests/optional/07-ai-gpu.yaml`'da — bu Helm paketleme
+# planının HİÇBİR task'ında chart template'e taşınmıyor; plan: "prod'da AI
+# yok"). Bu yüzden ÜÇÜ DE kendi `.Values.components.{superset,jupyter,ai}`
+# flag'i arkasında (hepsi varsayılan false, `.Values.components.routesTls`'den
+# bağımsız ikinci switch'ler) — prod'da render OLMAZ, backing Service'i
+# olmayan dangling bir Route oluşmaz. helm-check.py'nin --service-closure
+# kontrolü artık Route `spec.to.name` hedeflerini de doğruluyor;
+# bu gate'ler sayesinde o kontrol whitelist-istisnasına gerek kalmadan
+# gerçekten kapalıdır. İlgili bileşen chart'a taşındığında flag true'ya
+# alınır + backing Service üretilir. Bkz. chart/templates/10-keycloak.yaml'daki
+# aynı `.Values.components.ai` gate'inin `ai-ui` OIDC client'ı.
+{{- if and .Values.components.routesTls (include "lakehouse.isOpenShift" .) }}
+---
+# Trino — SQL endpoint + OAuth2 callback
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: trino
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "trino" "context" .) }}
+  to:
+    kind: Service
+    name: {{ include "lakehouse.svc.trino" . }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- if .Values.components.ai }}
+---
+# AI Text-to-SQL UI (Streamlit) — bkz. dosya header notu (`components.ai`
+# gate'i, `text-to-sql-ui` Service'i bu chart'ta üretilmiyor).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ai-ui
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "ai" "context" .) }}
+  to:
+    kind: Service
+    name: text-to-sql-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+---
+# Nessie REST Catalog (opsiyonel: dış client'lar / federated catalog)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: nessie
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "nessie" "context" .) }}
+  to:
+    kind: Service
+    name: {{ include "lakehouse.svc.nessie" . }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- if .Values.components.superset }}
+---
+# Superset BI — Deployment/Service bu paketta tanımlı DEĞİL (follow-up
+# bileşen, alt-proje D). Route bu yüzden `.Values.components.superset`
+# arkasında (varsayılan false): prod'da render OLMAZ, backing Service'i
+# olmayan dangling bir Route oluşmaz (Route-referans kapalılığı).
+# Superset chart'a taşındığında bu flag true'ya alınır + `superset` Service'i
+# üretilir.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "bi" "context" .) }}
+  to:
+    kind: Service
+    name: superset
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- if .Values.components.zeppelin }}
+---
+# Apache Zeppelin (chart/templates/09-zeppelin.yaml ile deploy edildi).
+# components.zeppelin gate'i: zeppelin kapalıyken backing Service'i olmayan
+# dangling bir Route kalmasın (superset/jupyter/ai ile aynı desen).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zeppelin
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "zeppelin" "context" .) }}
+  to:
+    kind: Service
+    name: zeppelin
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- if .Values.components.jupyter }}
+---
+# JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu paketta
+# tanımlı DEĞİL (follow-up bileşen, alt-proje D). Route bu yüzden
+# `.Values.components.jupyter` arkasında (varsayılan false): prod'da render
+# OLMAZ, backing Service'i (`jupyterhub-proxy`) olmayan dangling bir Route
+# oluşmaz (Route-referans kapalılığı).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: jupyter
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "jupyter" "context" .) }}
+  to:
+    kind: Service
+    name: jupyterhub-proxy
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- end }}
+
+# NOT: Superset + JupyterHub Deployment/Service şablonları bu paketin
+# kapsamı dışında (kaynak manifestteki AYNI not). Referans:
+#   - Superset Helm:   https://github.com/apache/superset/tree/master/helm
+#   - JupyterHub Z2J:  https://zero-to-jupyterhub.readthedocs.io/
+# HA deploy pattern bu chart'taki Nessie/Trino şablonlarıyla aynı
+# prensipleri takip eder (OIDC + RWX PVC + HPA + Pod anti-affinity).

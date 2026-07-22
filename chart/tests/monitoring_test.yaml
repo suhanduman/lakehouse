@@ -1,0 +1,157 @@
+# chart/tests/monitoring_test.yaml — helm-unittest suite for D1 (İzleme/
+# Monitoring). This is the FIRST suite only: it proves conditionality —
+# when `components.monitoring` is false, none of the monitoring templates
+# render anything at all.
+#
+# EXPECTED TO FAIL right now: `chart/templates/monitoring/*.yaml` do not
+# exist yet (they land later). helm-unittest will error with
+# "no template found" for each path below until those templates exist.
+# That failure is the correct, intended state right now — this task's
+# deliverable is the values additions (`components.monitoring`,
+# `monitoring:` block) plus this committed conditionality suite, not a
+# passing test run. Do NOT add templates here to make it pass.
+suite: monitoring
+templates:
+  - templates/monitoring/servicemonitors.yaml
+  - templates/monitoring/podmonitors.yaml
+  - templates/monitoring/prometheusrules.yaml
+  - templates/monitoring/grafana.yaml
+tests:
+  - it: monitoring kapalıyken hiçbir monitoring kaynağı render edilmez
+    set:
+      components.monitoring: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: monitoring açıkken beklenen ServiceMonitor'lar render edilir
+    template: templates/monitoring/servicemonitors.yaml
+    set:
+      components.monitoring: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - containsDocument:
+          kind: ServiceMonitor
+          apiVersion: monitoring.coreos.com/v1
+          name: trino
+          any: true
+  - it: bir hedef kapalıyken onun ServiceMonitor'ı çıkar
+    template: templates/monitoring/servicemonitors.yaml
+    set:
+      components.monitoring: true
+      monitoring.targets.trino.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: PrometheusRule beklenen alert'leri içerir
+    template: templates/monitoring/prometheusrules.yaml
+    set:
+      components.monitoring: true
+    asserts:
+      - containsDocument:
+          kind: PrometheusRule
+          apiVersion: monitoring.coreos.com/v1
+      - matchRegex:
+          path: spec.groups[0].rules[0].alert
+          pattern: "KafkaConnectorFailed"
+  - it: PodMonitor'lar (kafka/connect/spark) monitoring açıkken render edilir
+    template: templates/monitoring/podmonitors.yaml
+    set:
+      components.monitoring: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - containsDocument:
+          kind: PodMonitor
+          apiVersion: monitoring.coreos.com/v1
+          name: spark
+          any: true
+  - it: bir PodMonitor hedefi kapalıyken çıkar
+    template: templates/monitoring/podmonitors.yaml
+    set:
+      components.monitoring: true
+      monitoring.targets.kafka.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: Grafana çekirdek kaynakları monitoring açıkken render edilir
+    template: templates/monitoring/grafana.yaml
+    set:
+      components.monitoring: true
+      # platform-switch task: the Route only renders on platform:openshift
+      # now (default flipped to "vanilla") — set explicitly so this
+      # Route-focused assertion still exercises the Route path.
+      platform: openshift
+    asserts:
+      # `any: true` scans ALL rendered documents (grafana.yaml's leading file
+      # header renders as a comment-only doc 0; without `any` containsDocument
+      # would only inspect that doc). Same convention as the ServiceMonitor
+      # containsDocument asserts above in this suite.
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: grafana, any: true}
+      - containsDocument: {kind: Service, apiVersion: v1, name: grafana, any: true}
+      - containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: grafana, any: true}
+  - it: Grafana Route host global.domain'den türetilir
+    template: templates/monitoring/grafana.yaml
+    set:
+      components.monitoring: true
+      platform: openshift
+      global.domain: example.edu.tr
+    asserts:
+      - equal:
+          path: spec.host
+          value: grafana.example.edu.tr
+    documentSelector: {path: kind, value: Route}
+
+---
+# Second suite document (separate `templates:` scope, per-suite in
+# helm-unittest — verified via scratch probe: a suite-level `templates:`
+# list is an allowlist for ALL tests in that suite unless a test gives its
+# own `template:`, and a test-level `template:` must itself be a string
+# already present in the enclosing suite's list or it silently matches zero
+# documents). Kept separate from the `monitoring` suite above so this guard
+# doesn't pull `templates/06-trino-ha.yaml`'s ~9 documents into the first
+# suite's `hasDocuments: count: 0` assertion.
+#
+# Guard for spec §7 acceptance criterion: "ServiceMonitor selector'ı Service
+# label'larıyla eşleşir". A Prometheus Operator ServiceMonitor selects target
+# Services by THEIR `metadata.labels` (NOT by `spec.selector`, which selects
+# the backing Pods). So this guard asserts the trino-coordinator Service now
+# carries `metadata.labels.app: trino` (chart/templates/06-trino-ha.yaml,
+# added alongside this monitoring work) — identical to the trino
+# ServiceMonitor's `selector.matchLabels.app`
+# (chart/templates/monitoring/servicemonitors.yaml). If the two ever drift,
+# the ServiceMonitor would discover zero Endpoints and scrape nothing.
+suite: monitoring-trino-servicemonitor-guard
+templates:
+  - templates/06-trino-ha.yaml
+tests:
+  - it: Trino Service, monitoring açıkken ServiceMonitor selector label'ını taşır
+    set:
+      components.trino: true
+      components.monitoring: true
+      monitoring.targets.trino.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels.app
+          value: trino
+    documentSelector:
+      path: kind
+      value: Service
+  - it: Trino Service, monitoring kapalıyken label/annotation taşımaz (byte-identical invariant)
+    release:
+      namespace: example
+    set:
+      components.trino: true
+      components.monitoring: false
+    asserts:
+      - equal:
+          path: metadata
+          value:
+            name: trino-coordinator
+            namespace: example
+    documentSelector:
+      path: kind
+      value: Service

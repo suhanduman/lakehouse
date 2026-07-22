@@ -1,0 +1,102 @@
+# ============================================================================
+# ArgoCD Application'ları (OpenShift GitOps) — PLATFORM repo'da tutulur
+# (DevOps/SRE). ArgoCD Helm'in ALTERNATİFİ DEĞİL, dağıtım orkestratörüdür:
+#   • lakehouse-platform  → HELM-source: karmaşık platform bileşenleri (Kafka,
+#     Trino, Nessie, Apicurio, MinIO/S3, Console...) `chart/` Helm chart'ından.
+#     ArgoCD Chart.yaml görünce arka planda `helm template` çalıştırır — chart
+#     yapısı (templates/, values.yaml) AYNEN korunur; manuel `helm
+#     install/upgrade` gerekmez, ArgoCD sync eder ve drift'i self-heal ile
+#     Git'e çeker.
+#   • lakehouse-pipelines → DIRECTORY-source: Console'un ürettiği saf-YAML CDC
+#     akış manifestleri (pipeline repo'su). PreSync hook sıralaması burada.
+#
+# App-of-Apps'e ölçeklemek istenirse: bu iki Application'ı yöneten bir kök
+# `Application` (source=gitops/apps) eklenebilir — bkz. gitops/README.md.
+#
+# ÖN KOŞUL: cluster-scoped OLM operatörleri (operators/, 06-openshift-gitops
+# dahil) ve secret'lar ArgoCD'den ÖNCE kurulur (chart namespaced release,
+# cluster-scoped Subscription'ı yönetmez — operators/README.md). Vanilla
+# (non-OpenShift) kümelerde bu ön koşulu `bootstrap/bootstrap.sh` (Product
+# Foundation Task 7) tek script'te yerine getirir — bkz. bootstrap/README.md
+# "Layer 1" bölümü.
+#
+# PROD-ONLY (OpenShift). `repoURL` alanları (`<PLATFORM_REPO_URL>` /
+# `<PIPELINE_REPO_URL>`) BİLEREK placeholder bırakılmıştır — bu dosya
+# chart'ın DIŞINDADIR (gitops/apps/, chart/templates/ değil), yani chart'ın
+# kendi `{{ .Values.* }}` templating mekanizmasıyla doldurulamaz/
+# doldurulmamalıdır (her platform repo'sunun kendi fork/mirror URL'i
+# farklıdır). Gerçek bir kurulumda bu iki placeholder'ı elle (veya bir
+# kurulum script'iyle) kendi repo URL'lerinizle değiştirin — bkz.
+# bootstrap/README.md "Layer 1" bölümü ve gitops/README.md. Prod'da ayrıca
+# `project: default` yerine ayrı bir AppProject (RBAC) kullanılması
+# önerilir — POC-DOĞRULA.
+# ============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lakehouse-platform
+  namespace: openshift-gitops
+  annotations:
+    # Sync-wave niyeti: platform (Kafka/Trino/Nessie/S3/bucket-init...)
+    # pipelines'tan ÖNCE gelmeli — Console'un ürettiği CDC akış manifestleri
+    # platformun ayakta olmasını varsayar. NOT: bu iki Application doğrudan
+    # apply edildiği (ortak bir root Application altında OLMADIĞI) sürece
+    # ArgoCD wave'leri Application'lar ARASINDA sıralama uygulamaz — wave'ler
+    # tek bir Application'ın kendi kaynakları içinde işler. Anotasyonlar,
+    # ileride bir root Application (+ argocd-cm'de Application health check)
+    # eklendiğinde sıralamanın hazır olması için şimdiden konuldu; bugünkü
+    # pratik güvence pipelines'ın kendi PreSync hook'ları + platformun
+    # PostSync bucket-init'idir.
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: "<PLATFORM_REPO_URL>"   # bkz. yukarıdaki placeholder notu — elle değiştirin
+    targetRevision: main
+    path: chart
+    helm:
+      valueFiles:
+        # POC-DOĞRULA: gerçek bir kurulum bu alanı KENDİ values dosyanızla
+        # değiştirir (bkz. chart/values-prod.example.yaml — SCC restricted-v2
+        # uyumlu, worked-example dosya; chart'ın kendisi bu adı içermez).
+        - values-prod.example.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lakehouse
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lakehouse-pipelines
+  namespace: openshift-gitops
+  annotations:
+    # Sync-wave 1 (niyet — üstteki lakehouse-platform anotasyonundaki nota
+    # bkz: root Application olmadan Application'lar-arası wave sıralaması
+    # UYGULANMAZ; bugünkü pratik güvence bu Application'ın kendi PreSync
+    # hook sırasıdır).
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: "<PIPELINE_REPO_URL>"   # bkz. yukarıdaki placeholder notu — elle değiştirin
+    targetRevision: main
+    path: "."                        # her kaynak = bir manifest seti (recurse)
+    directory: {recurse: true}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lakehouse
+  syncPolicy:
+    # selfHeal: küme drift'ini Git'e geri çeker (Single Source of Truth).
+    # prune: Git'ten silinen akış küme'den de temizlenir. PreSync hook'lar
+    # (pre-create Job) her sync'te otomatik ve SIRALI çalışır (wave 0→1→sync).
+    automated: {prune: true, selfHeal: true}
+    syncOptions:
+      - CreateNamespace=false        # lakehouse ns'i platform chart/operatörler kurar

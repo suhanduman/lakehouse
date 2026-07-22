@@ -1,0 +1,111 @@
+# values-large.yaml — high-volume production tier.
+#
+# Layer OVER the chart defaults (`chart/values.yaml`, already "medium-ish
+# HA" by design — see values-medium.yaml). Use this overlay for a production
+# install expecting sustained high ingest/query volume beyond the
+# medium/default sizing: more Kafka brokers + bigger PVCs, more Trino
+# workers + bigger heaps, more Spark Silver-merge executors, longer-lived
+# Bronze retention windows, wider console HA. Requests/limits below are
+# realistic (~2-4x the chart's medium/default numbers), not invented
+# absurd values — retune per your actual cluster capacity before install.
+#
+#   helm install lakehouse chart/ -f chart/values-large.yaml -n <namespace>
+
+postgres:
+  nessie:
+    storage:
+      size: 200Gi
+    walStorage:
+      size: 50Gi
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "1"
+      limits:
+        memory: 4Gi
+        cpu: "4"
+  apicurio:
+    storage:
+      size: 50Gi
+    walStorage:
+      size: 20Gi
+  keycloak:
+    storage:
+      size: 50Gi
+    walStorage:
+      size: 20Gi
+
+kafka:
+  nodePools:
+    broker:
+      replicas: 5
+      storage:
+        size: 500Gi
+      resources:
+        requests: {memory: 2Gi, cpu: "1"}
+        limits: {memory: 8Gi, cpu: "4"}
+  topics:
+    # Higher-volume ingest topics get more partitions for parallelism; RF
+    # stays at the chart default (3) — 5 brokers gives it more placement
+    # headroom, no need to raise RF itself for this tier.
+    nginxAccess: {partitions: 24}
+    lmsEvents: {partitions: 12}
+
+nessie:
+  # Bumped from the chart default (2) to match hpa.minReplicas below — the
+  # Deployment's initial replica count should never sit below the HPA's own
+  # floor.
+  replicas: 3
+  hpa:
+    minReplicas: 3
+    maxReplicas: 8
+
+trino:
+  worker:
+    replicas: 6
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: "2"
+      limits:
+        memory: 16Gi
+        cpu: "8"
+    hpa:
+      minReplicas: 4
+      maxReplicas: 16
+  coordinator:
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: "1"
+      limits:
+        memory: 12Gi
+        cpu: "8"
+  memory:
+    jvmXmx: 12G
+    queryMaxMemory: 20GB
+    queryMaxMemoryPerNodeCoordinator: 3GB
+    heapHeadroomPerNode: 2GB
+    queryMaxMemoryPerNodeWorker: 6GB
+
+console:
+  backend:
+    replicas: 3
+  frontend:
+    replicas: 3
+
+sparkOperator:
+  maintenance:
+    # Longer retention window for high-volume Bronze — more time before the
+    # partition-aligned TTL delete + expire_snapshots reclaim runs.
+    bronzeRetentionDays: 90
+    executor:
+      instances: 8
+      memory: 8G
+  silverMerge:
+    driver: {memory: "2g"}
+    executor: {memory: "2g"}
+    # Dynamic-allocation ceiling — high-volume Silver-merge needs more
+    # executors available under load (minExecutors stays 0, hardcoded in
+    # the template: scales down to zero between runs same as every tier).
+    maxExecutors: 8

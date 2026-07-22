@@ -1,0 +1,157 @@
+# chart/tests/connect-v1_test.yaml — helm-unittest coverage for the
+# Strimzi v1 KafkaConnect fix (feat/ingest-e2e, sub-project F live-testing
+# finding; see .superpowers/sdd/connect-v1-fix-report.md) and the v1 shape
+# it settled into (chart/templates/12-kafka-connect.yaml, current header).
+#
+# Live `kubectl apply` under kafka.strimzi.io/v1 rejected the original
+# v1beta2-shaped KafkaConnect CR on several counts, all asserted below:
+#   1. `spec.externalConfiguration` was REMOVED in Strimzi v1. Fixed by
+#      moving the secret volumes to `spec.template.pod.volumes` +
+#      `spec.template.connectContainer.volumeMounts`, mounted at
+#      `/mnt/external-configuration/<name>` (NOT the old
+#      `/opt/kafka/external-configuration/<name>` path — every connector's
+#      colon-form `${directory:...}` reference depends on the CURRENT path).
+#   2. `spec.config.{group.id,config.storage.topic,offset.storage.topic,
+#      status.storage.topic}` are REJECTED under v1 — Connect cluster
+#      group + internal-topic NAMES are now dedicated top-level
+#      `spec.{groupId,configStorageTopic,offsetStorageTopic,
+#      statusStorageTopic}` fields. `spec.config` keeps only the
+#      replication-factor / converter / config.providers keys (no
+#      dedicated top-level field exists for those).
+#   3. `spec.build.output.additionalKanikoOptions` is not a v1 field — v1's
+#      Strimzi 0.51 default builder is Buildah, whose equivalent field is
+#      `additionalPushOptions`. Fixed by renaming the values key and the
+#      rendered YAML key in lockstep (chart/values.yaml,
+#      chart/values-microk8s-ingest.yaml).
+#   4. Build vs. pre-built image: `.Values.kafkaConnect.image` set → CR
+#      uses `spec.image` (no in-cluster build, needed because Apache
+#      publishes no downloadable Iceberg kafka-connect-runtime binary —
+#      see .superpowers/sdd/connect-v1-fix-report.md); empty (default) →
+#      CR uses `spec.build` with the declarative plugin list, including
+#      debezium-postgres (added after the v1beta2 shape was first written;
+#      previously uncovered by this suite).
+#
+# This suite proves all of the above statically (no live cluster). Live
+# validation against a real v1 API server was done separately (see the
+# report referenced above).
+#
+# 12-kafka-connect.yaml renders 2 documents (KafkaConnect CR, then a
+# ConfigMap) — every test pins `documentSelector: {path: kind, value:
+# KafkaConnect}` (see tests/monitoring-hooks_test.yaml / kafka-replication_
+# test.yaml for the same convention) so it isn't also evaluated against the
+# unrelated ConfigMap document.
+suite: KafkaConnect renders v1-correct (top-level fields; /mnt template mounts; build/image toggle; debezium-postgres)
+templates:
+  - 12-kafka-connect.yaml
+tests:
+  - it: does not render spec.externalConfiguration (removed in Strimzi v1)
+    asserts:
+      - notExists:
+          path: spec.externalConfiguration
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: renders the v1 top-level group/internal-topic fields and does NOT duplicate them under spec.config
+    asserts:
+      - equal: {path: spec.groupId, value: connect-cluster}
+      - equal: {path: spec.configStorageTopic, value: connect-cluster-configs}
+      - equal: {path: spec.offsetStorageTopic, value: connect-cluster-offsets}
+      - equal: {path: spec.statusStorageTopic, value: connect-cluster-status}
+      - notExists: {path: 'spec.config["group.id"]'}
+      - notExists: {path: 'spec.config["config.storage.topic"]'}
+      - notExists: {path: 'spec.config["offset.storage.topic"]'}
+      - notExists: {path: 'spec.config["status.storage.topic"]'}
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: mounts all 6 secrets via spec.template.pod.volumes (incl. pg, added after the original v1beta2 shape)
+    asserts:
+      - lengthEqual:
+          path: spec.template.pod.volumes
+          count: 6
+      - equal:
+          path: spec.template.pod.volumes
+          value:
+            - {name: mssql, secret: {secretName: mssql}}
+            - {name: pg, secret: {secretName: pg}}
+            - {name: mongo, secret: {secretName: mongo}}
+            - {name: s3, secret: {secretName: s3-credentials}}
+            - {name: debezium-src, secret: {secretName: debezium-src}}
+            - {name: kafka-ca, secret: {secretName: kafka-cluster-ca-cert}}
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: mounts every volume at /mnt/external-configuration/<name> (NOT the removed /opt/kafka/external-configuration path), including pg
+    asserts:
+      - lengthEqual:
+          path: spec.template.connectContainer.volumeMounts
+          count: 6
+      - equal:
+          path: spec.template.connectContainer.volumeMounts
+          value:
+            - {name: mssql, mountPath: /mnt/external-configuration/mssql}
+            - {name: pg, mountPath: /mnt/external-configuration/pg}
+            - {name: mongo, mountPath: /mnt/external-configuration/mongo}
+            - {name: s3, mountPath: /mnt/external-configuration/s3}
+            - {name: debezium-src, mountPath: /mnt/external-configuration/debezium-src}
+            - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: kafkaConnect.image set -> CR uses spec.image, no spec.build (pre-built image path)
+    set:
+      kafkaConnect.image: "reg/connect:9"
+    asserts:
+      - equal:
+          path: spec.image
+          value: "reg/connect:9"
+      - notExists:
+          path: spec.build
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: kafkaConnect.image empty (default) -> CR uses spec.build, no spec.image (declarative-build path)
+    asserts:
+      - exists:
+          path: spec.build
+      - notExists:
+          path: spec.image
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: renders spec.build.output.additionalBuildOptions when kafkaConnect.build.additionalBuildOptions is set
+    set:
+      kafkaConnect.build.additionalBuildOptions:
+        - "--insecure"
+    asserts:
+      - equal:
+          path: spec.build.output.additionalBuildOptions
+          value:
+            - "--insecure"
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: does not render spec.build.output.additionalPushOptions by default (kafkaConnect.build.additionalPushOptions defaults to [])
+    asserts:
+      - notExists:
+          path: spec.build.output.additionalPushOptions
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: renders spec.build.output.additionalPushOptions (not additionalKanikoOptions) when kafkaConnect.build.additionalPushOptions is set
+    set:
+      kafkaConnect.build.additionalPushOptions:
+        - "--tls-verify=false"
+    asserts:
+      - equal:
+          path: spec.build.output.additionalPushOptions
+          value:
+            - "--tls-verify=false"
+      - notExists:
+          path: spec.build.output.additionalKanikoOptions
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: build plugins include debezium-postgres (added after the original v1beta2 shape; previously uncovered)
+    asserts:
+      - lengthEqual:
+          path: spec.build.plugins
+          count: 6
+      - equal:
+          path: spec.build.plugins[1].name
+          value: debezium-postgres
+      - matchRegex:
+          path: spec.build.plugins[1].artifacts[0].url
+          pattern: "debezium-connector-postgres"
+    documentSelector: {path: kind, value: KafkaConnect}

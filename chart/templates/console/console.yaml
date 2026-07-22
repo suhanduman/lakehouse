@@ -1,0 +1,350 @@
+# Self-Service Lakehouse Console — backend (FastAPI) + frontend (React/Vite)
+# Deployment/Service pair, a dedicated `lakehouse-console` ServiceAccount +
+# NAMESPACE-SCOPED Role/RoleBinding (KafkaConnector/KafkaTopic CRs + Secret
+# CRUD — no cluster-admin, no ClusterRole), a cert-manager TLS Route
+# (frontend only) and a NetworkPolicy set. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.console`.
+#
+# LOAD-BEARING (do not change without re-reading sub-project B):
+#   - The Role stays `kind: Role` (namespace-scoped), bound by a
+#     `RoleBinding` (never `ClusterRole`/`ClusterRoleBinding`) — this is the
+#     task's explicit acceptance criterion, carried over verbatim from the
+#     source manifest's own "cluster-admin YOK, ClusterRole YOK" comment.
+#   - `secrets` verbs are exactly `[create, update, delete]` — no `get`/
+#     `list`/`patch` (console/backend/app/services/k8s_service.py never
+#     reads secrets and never calls a JSON-patch; its 409-fallback on
+#     `create_secret` calls `replace_namespaced_secret`, a PUT, whose RBAC
+#     verb is `update`, not `patch`).
+#
+# Service wiring (spec §3.1/§8):
+#   - Backend Service name = `lakehouse.svc.consoleBackend` (`console-backend`)
+#     — MUST stay this exact name: console/frontend/nginx.conf's `/api`
+#     proxy target is baked into the frontend image at Docker-build time as
+#     the bare same-namespace service name `console-backend:8080` (see that
+#     file's own comment) — namespace-generic by construction, since a bare
+#     service name always resolves within the requesting pod's own
+#     namespace. This chart only needs to guarantee the backend Service is
+#     always named `console-backend` in the SAME namespace as the frontend,
+#     which it does under any release namespace.
+#   - Console -> Trino/Kafka Connect/Apicurio resolved via the
+#     `lakehouse.svc.trino` / `.svc.connect` / `.svc.apicurio` helpers
+#     (never hardcoded) — same helpers 06-trino-ha.yaml/12-kafka-connect.yaml/
+#     11-apicurio-registry.yaml are verified against.
+#   - S3 credentials come from the SAME `.Values.storage.s3.secretName`
+#     Secret every other S3 consumer uses (Trino, CNPG backups, ...).
+#   - `OIDC_ISSUER` is sourced from the SAME `.Values.oidc.secretName` Secret
+#     (key `issuer-url`) Trino/Nessie already consume — single issuer source
+#     across every OIDC-aware component in this chart (must match
+#     `keycloak.realm.name` = `lakehouse`). `OIDC_AUDIENCE` is plain
+#     (non-secret) config, `.Values.console.oidc.audience`.
+#
+{{- if .Values.components.console }}
+---
+# -------- ServiceAccount --------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lakehouse-console
+  namespace: {{ include "lakehouse.namespace" . }}
+
+---
+# -------- Role (NAMESPACE-SCOPED — kind: Role, NEVER ClusterRole) --------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lakehouse-console-role
+  namespace: {{ include "lakehouse.namespace" . }}
+rules:
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkaconnectors, kafkatopics]
+  verbs: [get, list, create, patch, delete]
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkaconnectors/status, kafkatopics/status]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [create, update, delete]
+
+---
+# -------- RoleBinding (namespace-scoped — NEVER ClusterRoleBinding) --------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lakehouse-console-binding
+  namespace: {{ include "lakehouse.namespace" . }}
+subjects:
+- kind: ServiceAccount
+  name: lakehouse-console
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef:
+  kind: Role
+  name: lakehouse-console-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# -------- Backend config (console/backend/app/config.py Settings ile
+# birebir — pydantic-settings büyük/küçük harf duyarsız NAMESPACE/TRINO_HOST/...
+# okur) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lakehouse-console-config
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  NAMESPACE: {{ include "lakehouse.namespace" . }}
+  TRINO_HOST: {{ include "lakehouse.svc.trino" . }}
+  TRINO_PORT: "8080"
+  TRINO_USER: lakehouse-console
+  CONNECT_URL: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
+  APICURIO_URL: {{ printf "http://%s:8080/apis/registry/v2" (include "lakehouse.svc.apicurio" .) | quote }}
+  OIDC_AUDIENCE: {{ .Values.console.oidc.audience | quote }}
+
+---
+# -------- Backend Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console-backend
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: console-backend}
+spec:
+  replicas: {{ .Values.console.backend.replicas }}
+  selector: {matchLabels: {app: console-backend}}
+  template:
+    metadata:
+      labels: {app: console-backend}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      serviceAccountName: lakehouse-console
+      containers:
+      - name: console-backend
+        image: {{ printf "%s/console-backend:%s" .Values.global.imageRegistry .Values.versions.consoleBackendImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8080}]
+        envFrom:
+        - configMapRef: {name: lakehouse-console-config}
+        env:
+        # S3 kimlik bilgileri S3 secret'ından — key adları farklı
+        # olduğu için (access-key-id/secret-access-key/endpoint) tek tek
+        # eşlenir, envFrom ile blindly aktarılmaz.
+        - {name: S3_ENDPOINT, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        # OIDC issuer — Trino/Nessie ile AYNI oidc-credentials Secret (tek kaynak).
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: {{ .Values.console.backend.resources.requests.cpu | quote }}
+            memory: {{ .Values.console.backend.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.console.backend.resources.limits.cpu | quote }}
+            memory: {{ .Values.console.backend.resources.limits.memory | quote }}
+
+---
+# -------- Backend Service — nginx `/api` proxy hedefiyle BİREBİR eşleşmeli
+# (bkz. dosya başı NOTE) --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.consoleBackend" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.console.enabled }}
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `console` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels: {app: console-backend}
+{{- end }}
+spec:
+  selector: {app: console-backend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+
+---
+# -------- Frontend Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console-frontend
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: console-frontend}
+spec:
+  replicas: {{ .Values.console.frontend.replicas }}
+  selector: {matchLabels: {app: console-frontend}}
+  template:
+    metadata:
+      labels: {app: console-frontend}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      # Statik nginx sunucusu — apiserver/Trino/Connect/Apicurio/S3'e hiç
+      # ihtiyacı yok; ayrı bir ServiceAccount/RBAC gerekmez (default SA yeterli).
+      # NOT (restrictedSecurityContext): OpenShift'te non-root nginx imajı
+      # gerekir (unprivileged; 8080 zaten ayrıcalıksız port).
+      containers:
+      - name: console-frontend
+        image: {{ printf "%s/console-frontend:%s" .Values.global.imageRegistry .Values.versions.consoleFrontendImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: {{ .Values.console.frontend.resources.requests.cpu | quote }}
+            memory: {{ .Values.console.frontend.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.console.frontend.resources.limits.cpu | quote }}
+            memory: {{ .Values.console.frontend.resources.limits.memory | quote }}
+
+---
+# -------- Frontend Service — Route hedefi --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.consoleFrontend" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  selector: {app: console-frontend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+
+{{- if include "lakehouse.isOpenShift" . }}
+---
+# -------- Route (cert-manager TLS) — yalnızca frontend dışarı açılır;
+# backend'e doğrudan dışarıdan erişim YOK (NetworkPolicy ile de kapalı).
+# Host, 10-keycloak.yaml'daki `lakehouse-console` OIDC client'ın
+# redirectUris/webOrigins'iyle AYNI `lakehouse.routeHost` helper'ından
+# ("console" mantıksal isim) üretilir — host/redirect asla ayrışmaz. --------
+# Ek gate: `lakehouse.isOpenShift` (`.Values.platform`) — vanilla eşleniği
+# chart/templates/08b-ingress-tls.yaml'da.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "lakehouse.svc.consoleFrontend" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" "console" "context" .) }}
+  to:
+    kind: Service
+    name: {{ include "lakehouse.svc.consoleFrontend" . }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+
+---
+# -------- NetworkPolicy: Ingress --------
+# Frontend: SADECE Route/ingress-controller'dan giriş (namespace içindeki
+# `allow-intra-namespace` politikası (00-namespace.yaml) ns-içi tüm pod'lardan
+# trafiğe zaten izin veriyor — bu politika console'a özgü savunma derinliği
+# katmanıdır, o geniş kuralı DARALTMAZ). Kaynak namespace selector'ı platform'a
+# göre değişir — AYNI gerekçe + AYNI helper 00-namespace.yaml'daki
+# `allow-from-ingress-and-monitoring` politikasıyla: OpenShift'in
+# `network.openshift.io/policy-group` etiketi vanilla'da YOK, k8s-standart
+# `kubernetes.io/metadata.name` + `.Values.ingress.controllerNamespace`
+# kullanılır. Pod/port scoping HER İKİ platformda AYNI.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-frontend-ingress
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {matchLabels: {app: console-frontend}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+{{- if include "lakehouse.isOpenShift" . }}
+    - namespaceSelector:
+        matchLabels: {network.openshift.io/policy-group: ingress}
+{{- else }}
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: {{ .Values.ingress.controllerNamespace }}}
+{{- end }}
+    ports: [{protocol: TCP, port: 8080}]
+
+---
+# Backend: SADECE frontend pod'undan (nginx `/api` proxy) — Route/dışarıdan
+# doğrudan erişim YOK.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-backend-ingress
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {matchLabels: {app: console-backend}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector: {matchLabels: {app: console-frontend}}
+    ports: [{protocol: TCP, port: 8080}]
+
+---
+# -------- NetworkPolicy: Egress --------
+# console-backend -> apiserver + Trino + Kafka Connect + Apicurio + S3 (+DNS).
+# Frontend'in (statik nginx) bu egress'e ihtiyacı YOK — bilerek bu politikaya
+# dahil edilmedi.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-backend-egress
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {matchLabels: {app: console-backend}}
+  policyTypes: [Egress]
+  egress:
+  # DNS çözümleme. Kaynak namespace selector'ı platform'a göre değişir — AYNI
+  # gerekçe + AYNI desen bu dosyanın frontend Ingress NetworkPolicy'sindeki
+  # (yukarıda) ve 00-namespace.yaml'daki allow-from-ingress-and-monitoring
+  # ile: OpenShift'in "dns" policy-group'u vanilla kümelerde YOK,
+  # k8s-standart `kubernetes.io/metadata.name` +
+  # `.Values.console.networkPolicy.dnsNamespace` ("kube-system", CoreDNS'in
+  # k8s-standart adresi) kullanılır.
+  - to:
+{{- if include "lakehouse.isOpenShift" . }}
+    - namespaceSelector:
+        matchLabels: {network.openshift.io/policy-group: dns}
+{{- else }}
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: {{ .Values.console.networkPolicy.dnsNamespace }}}
+{{- end }}
+    ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+  # Kubernetes API server — 443 VE 6443/TCP (bkz. kaynak manifest POC-DOĞRULA
+  # notu: CNI'ye göre in-cluster apiserver erişimi 443 veya 6443 olabilir).
+  - to:
+    - namespaceSelector: {}
+    ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
+  # Trino coordinator (bkz. 06-trino-ha.yaml)
+  - to:
+    - podSelector: {matchLabels: {app: trino, role: coordinator}}
+    ports: [{protocol: TCP, port: 8080}]
+  # Kafka Connect REST API (Strimzi otomatik pod label'ları — bkz. 12-kafka-connect.yaml)
+  - to:
+    - podSelector: {matchLabels: {strimzi.io/cluster: connect, strimzi.io/kind: KafkaConnect}}
+    ports: [{protocol: TCP, port: 8083}]
+  # Apicurio Registry (bkz. 11-apicurio-registry.yaml)
+  - to:
+    - podSelector: {matchLabels: {app: apicurio-registry}}
+    ports: [{protocol: TCP, port: 8080}]
+  # S3 (küme dışı) — CIDR/IP bloğu ortam-özel.
+  - to:
+    - ipBlock: {cidr: {{ .Values.console.networkPolicy.s3Cidr | quote }}}
+    ports: [{protocol: TCP, port: 443}]
+{{- end }}

@@ -1,0 +1,171 @@
+# Spark Operator RBAC + SparkApplication templates. Only parameterized +
+# made namespace-aware. Gated by `.Values.components.sparkOperator`.
+#
+# Spark Operator (kubeflow/spark-operator) OperatorHub'dan önceden kurulu.
+# PoC'deki "tek sandbox pod + interaktif spark-sql" yerine, prod'da her iş
+# bir SparkApplication CR olarak submit edilir; driver + N executor açılır,
+# iş bitince kapanır.
+#
+# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py) `spark-py` imajına
+# gömülüdür ve `local://` yolu ile referanslanır — imaj build ayrı bir
+# pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
+# referans verir, job dosyalarını TAŞIMAZ.
+#
+# Service wiring (spec §3.1/§8): spark-defaults'ın Iceberg REST catalog URI'si
+# Nessie'nin Service'ini, Nessie'nin kendisinin (04-nessie-ha.yaml) ve
+# Trino'nun (06-trino-ha.yaml) kullandığı AYNI `lakehouse.svc.nessie`
+# helper'ından çözer — namespace-içi kısa ad, `/iceberg/` path (Trino'nun
+# REST catalog path'i ile birebir aynı, `/v1` yok).
+{{- if .Values.components.sparkOperator }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark-driver
+  namespace: {{ include "lakehouse.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-driver-role
+  namespace: {{ include "lakehouse.namespace" . }}
+rules:
+- apiGroups: [""]
+  resources: [pods, services, configmaps, persistentvolumeclaims]
+  verbs: [get, list, watch, create, delete, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-driver-binding
+  namespace: {{ include "lakehouse.namespace" . }}
+subjects:
+- kind: ServiceAccount
+  name: spark-driver
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef:
+  kind: Role
+  name: spark-driver-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Paylaşılan Spark config — tüm SparkApplication'lar mount eder.
+# PoC spark.yaml ile aynı iki catalog (lakehouse + rawlake).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-defaults
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  spark-defaults.conf: |
+    spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:{{ .Values.versions.icebergSparkRuntime }},software.amazon.awssdk:bundle:{{ .Values.versions.awsSdkBundle }},software.amazon.awssdk:url-connection-client:{{ .Values.versions.awsSdkBundle }},org.apache.spark:spark-sql-kafka-0-10_2.12:{{ .Values.versions.sparkVersion }},org.apache.hadoop:hadoop-aws:{{ .Values.versions.hadoopAws }}
+    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+
+    # KRITIK: Dynamic allocation Kubernetes üzerinde çalışırken executor
+    # scale-down olduğunda shuffle verisi kaybolur → job crash. External
+    # Shuffle Service K8s'te yok; Spark 3.5'in içindeki "Shuffle Tracking"
+    # mekanizması executor'ı shuffle verisi okunmayı bekleyen süre
+    # (timeout) boyunca canlı tutar. Bu iki satır üretim için zorunludur.
+    spark.dynamicAllocation.shuffleTracking.enabled=true
+    spark.dynamicAllocation.shuffleTracking.timeout=3600s
+
+    spark.hadoop.fs.s3a.path.style.access=true
+    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
+    # endpoint ve region pod env'den ({{ .Values.storage.s3.secretName }} Secret) gelir:
+    # AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+
+    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
+    spark.sql.catalog.lakehouse.warehouse={{ .Values.nessie.catalog.warehouse.location }}
+    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+
+    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
+    spark.sql.catalog.rawlake.warehouse=rawdata
+    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+---
+# Iceberg bakım — saatlik compaction + snapshot expire + orphan-file temizliği.
+# jobs/iceberg_maintenance.py DİNAMİK: hardcoded tablo YOK. Script önce
+# lakehouse ve rawlake kataloglarındaki tüm namespace/tablo çiftlerini
+# keşfeder (SHOW NAMESPACES + SHOW TABLES), sonra her tablo için sırayla:
+#   CALL {catalog}.system.rewrite_data_files(table => '{ns}.{tbl}')
+#   CALL {catalog}.system.expire_snapshots(table => '{ns}.{tbl}')
+#   CALL {catalog}.system.remove_orphan_files(table => '{ns}.{tbl}')
+# Yeni tablolar eklendiğinde manifest değişmez; script otomatik keşfeder.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: iceberg-maintenance
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: {{ .Values.sparkOperator.maintenance.schedule | quote }}
+  concurrencyPolicy: {{ .Values.sparkOperator.maintenance.concurrencyPolicy }}
+  template:
+    type: Python
+    mode: cluster
+    image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
+    mainApplicationFile: "local:///opt/spark/jobs/iceberg_maintenance.py"
+    sparkVersion: {{ .Values.versions.sparkVersion | quote }}
+    driver:
+      cores: {{ .Values.sparkOperator.maintenance.driver.cores }}
+      memory: {{ .Values.sparkOperator.maintenance.driver.memory | quote }}
+      serviceAccount: spark-driver
+      env: [{name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}]
+      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    executor:
+      cores: {{ .Values.sparkOperator.maintenance.executor.cores }}
+      instances: {{ .Values.sparkOperator.maintenance.executor.instances }}
+      memory: {{ .Values.sparkOperator.maintenance.executor.memory | quote }}
+      env: [{name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}]
+      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    volumes:
+    - name: spark-conf
+      configMap: {name: spark-defaults}
+---
+{{- if .Values.sparkOperator.silverMerge.enabled }}
+# Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
+# jobs/merge_cdc.py rawlake'teki her `<ns>_raw` namespace'ini keşfeder, Silver'a
+# MERGE eder. Yeni kaynak eklenince manifest değişmez. Dynamic Allocation +
+# shuffle-tracking (spark-defaults'ta) ile executor'lar tablo başına elastik.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: silver-merge
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: {{ .Values.sparkOperator.silverMerge.schedule | quote }}
+  concurrencyPolicy: {{ .Values.sparkOperator.silverMerge.concurrencyPolicy }}
+  template:
+    type: Python
+    mode: cluster
+    image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
+    mainApplicationFile: "local:///opt/spark/jobs/merge_cdc.py"
+    sparkVersion: {{ .Values.versions.sparkVersion | quote }}
+    sparkConf:
+      "spark.dynamicAllocation.enabled": "true"
+      "spark.dynamicAllocation.shuffleTracking.enabled": "true"
+      "spark.dynamicAllocation.minExecutors": "0"
+      "spark.dynamicAllocation.maxExecutors": {{ .Values.sparkOperator.silverMerge.maxExecutors | quote }}
+    dynamicAllocation:
+      enabled: true
+      initialExecutors: 0
+      minExecutors: 0
+      maxExecutors: {{ .Values.sparkOperator.silverMerge.maxExecutors }}
+    driver:
+      cores: {{ .Values.sparkOperator.silverMerge.driver.cores }}
+      memory: {{ .Values.sparkOperator.silverMerge.driver.memory | quote }}
+      serviceAccount: spark-driver
+      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    executor:
+      cores: {{ .Values.sparkOperator.silverMerge.executor.cores }}
+      memory: {{ .Values.sparkOperator.silverMerge.executor.memory | quote }}
+      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    volumes:
+    - name: spark-conf
+      configMap: {name: spark-defaults}
+{{- end }}
+{{- end }}

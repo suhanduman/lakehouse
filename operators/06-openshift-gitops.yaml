@@ -1,0 +1,39 @@
+# OpenShift GitOps Operatörü — cluster-scoped OLM bootstrap (B-v2 GitOps).
+# Red Hat'in operatör-yönetimli ArgoCD paketi. B-v2'de Console'un ürettiği CDC
+# pipeline manifestlerini (KafkaTopic/KafkaConnector + pre-create PreSync hook)
+# Git'ten deklaratif olarak sync eder; PreSync sıralamasını (önce tablo, sonra
+# connector — F append-only fix'i) garanti eder. Ayrıntı:
+#   docs/superpowers/specs/2026-07-19-console-gitops-b-v2-design.md (EK 2026-07-20)
+#   gitops/README.md
+#
+# NEDEN operatör (upstream ArgoCD Helm/manifest DEĞİL) — şartname A.4
+# "Operator-pattern" + OpenShift SCC uyumu (least-privilege, non-root otomatik)
+# + native OAuth/Keycloak SSO + Red Hat kurumsal desteği. Upstream ArgoCD'yi
+# elle kurmak OpenShift'te anti-pattern'dir (SCC'leri manuel esnetmek gerekir).
+#
+# PROD-ONLY: yalnızca OpenShift'te kurulur. microk8s PoC'de OperatorHub/OLM
+# yoktur → bu dosya microk8s'e uygulanmaz; Console orada B-v1 direct-apply.
+#
+# Kurulumdan sonra operatör `openshift-gitops` ns'inde bir varsayılan ArgoCD
+# instance'ı otomatik yaratır. Keycloak/AD SSO + AppProject RBAC için o ArgoCD
+# CR'ı yamalanır — bkz. gitops/README.md "Keycloak SSO".
+#
+# POC-DOĞRULA:
+#   oc get packagemanifests -n openshift-marketplace | grep -i gitops
+#   oc get csv -n openshift-operators | grep -i gitops        # Succeeded bekle
+#   oc get argocd -n openshift-gitops                          # default instance
+#
+# NOT: `openshift-operators`, OpenShift'in yerleşik global operatör
+# namespace'idir (AllNamespaces kapsamlı, hazır bir OperatorGroup'a sahiptir) —
+# bu yüzden 05-keycloak'taki gibi ayrı Namespace/OperatorGroup GEREKMEZ.
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-gitops-operator
+  namespace: openshift-operators
+spec:
+  channel: latest            # POC-DOĞRULA (ör. "gitops-1.13"/"stable" olabilir)
+  name: openshift-gitops-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

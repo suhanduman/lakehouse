@@ -1,0 +1,190 @@
+# Apicurio Registry — Avro şema deposu (ilişkisel CDC + scheduled JDBC yolları).
+# Only parameterized + made namespace-aware. Storage: CNPG Postgres (sql) →
+# CNPG WAL+PITR backup
+# hikâyesine dahil.
+#
+# Two independent gates in this one file:
+#   - `pg-apicurio` Cluster + ScheduledBackup -> `.Values.components.postgres`
+#     (same CNPG-subsystem toggle as `pg-nessie`, 02-postgres-ha.yaml).
+#   - Apicurio Deployment/Service/PDB          -> `.Values.components.apicurio`
+{{- if .Values.components.postgres }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-apicurio
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  instances: {{ .Values.postgres.apicurio.instances }}
+  # 02-postgres-ha.yaml (pg-nessie) ile AYNI pin'li imaj — sürüm drift'ini
+  # önler (`versions.cnpgPostgresImage`, tek kaynak).
+  imageName: {{ .Values.versions.cnpgPostgresImage | quote }}
+  # storageClass empty (default) = the cluster's default StorageClass — CNPG
+  # only accepts an OMITTED field, not an empty string (storage-neutrality
+  # convention, Product Foundation task 6.5, same as 02-postgres-ha.yaml).
+  storage:
+    size: {{ .Values.postgres.apicurio.storage.size | quote }}
+{{- with .Values.postgres.apicurio.storage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  # Ayrı WAL volume (pg-nessie deseni) — apicurio için ölçeklendirildi.
+  walStorage:
+    size: {{ .Values.postgres.apicurio.walStorage.size | quote }}
+{{- with .Values.postgres.apicurio.walStorage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.apicurio.database }}
+      owner: {{ .Values.postgres.apicurio.owner }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgres.apicurio.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.postgres.apicurio.backup.endpointURL | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.storage.s3.secretName }}
+          key: access-key-id
+        secretAccessKey:
+          name: {{ .Values.storage.s3.secretName }}
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: {{ .Values.postgres.apicurio.backup.walMaxParallel }}
+      data:
+        compression: gzip
+        jobs: {{ .Values.postgres.apicurio.backup.dataJobs }}
+    retentionPolicy: {{ .Values.postgres.apicurio.backup.retentionPolicy | quote }}
+  monitoring:
+    enablePodMonitor: {{ and .Values.components.monitoring .Values.monitoring.targets.postgres.enabled .Values.postgres.apicurio.monitoring.enablePodMonitor }}
+  # Postgres pod kaynakları — apicurio için makul ölçek.
+  resources:
+    requests:
+      cpu: {{ .Values.postgres.apicurio.resources.requests.cpu | quote }}
+      memory: {{ .Values.postgres.apicurio.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.postgres.apicurio.resources.limits.cpu | quote }}
+      memory: {{ .Values.postgres.apicurio.resources.limits.memory | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-apicurio-daily
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: "0 0 3 * * *"
+  cluster:
+    name: pg-apicurio
+  backupOwnerReference: self
+{{- end }}
+{{- if .Values.components.apicurio }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lakehouse.svc.apicurio" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  replicas: {{ .Values.apicurio.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "lakehouse.svc.apicurio" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "lakehouse.svc.apicurio" . }}
+      annotations:
+{{- if and .Values.components.monitoring .Values.monitoring.targets.apicurio.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+{{- end }}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: apicurio-registry
+          image: {{ .Values.versions.apicurioImage | quote }}   # POC-DOĞRULA sürüm
+          {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+          {{- if $csc }}
+          securityContext:
+            {{- $csc | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APICURIO_STORAGE_KIND
+              value: sql
+            - name: APICURIO_STORAGE_SQL_KIND
+              value: postgresql
+            # Host, `lakehouse.svc.pgApicurioRw` helper'ından üretilir — CNPG
+            # operatörünün bu Cluster için ürettiği gerçek Service adıyla
+            # (pg-apicurio-rw) birebir aynı, namespace'e bağlı FQDN.
+            - name: APICURIO_DATASOURCE_URL
+              value: {{ printf "jdbc:postgresql://%s:5432/%s" (include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.pgApicurioRw" .) "context" .)) .Values.postgres.apicurio.database | quote }}
+            - name: APICURIO_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: pg-apicurio-app
+                  key: username
+            - name: APICURIO_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-apicurio-app
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /apis/registry/v2/system/info
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /apis/registry/v2/system/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: {{ .Values.apicurio.resources.requests.cpu | quote }}
+              memory: {{ .Values.apicurio.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.apicurio.resources.limits.cpu | quote }}
+              memory: {{ .Values.apicurio.resources.limits.memory | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.apicurio" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.apicurio.enabled }}
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `apicurio` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels:
+    app: {{ include "lakehouse.svc.apicurio" . }}
+{{- end }}
+spec:
+  selector:
+    app: {{ include "lakehouse.svc.apicurio" . }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-pdb" (include "lakehouse.svc.apicurio" .) }}
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ include "lakehouse.svc.apicurio" . }}
+{{- end }}
+
+# POC-DOĞRULA: Apicurio v3 env değişken adları (APICURIO_*) v2'den farklı;
+# kullanılacak sürümle teyit edilecek. CNPG `pg-apicurio-app` secret adı
+# CNPG operatörü tarafından otomatik üretilir (bkz. 02-postgres-ha.yaml deseni).

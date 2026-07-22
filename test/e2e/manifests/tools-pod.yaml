@@ -1,0 +1,34 @@
+# e2e in-cluster toolbox pod — python:3.11-slim + the e2e scripts/descriptors
+# (ConfigMap `e2e-scripts`, built by test/e2e/lib.sh) mounted at /e2e.
+# Runs IN-CLUSTER on purpose: Nessie's Iceberg REST table config carries
+# in-cluster S3 endpoints, so pyiceberg/Trino probes only resolve cleanly
+# from inside the cluster. pyiceberg is pip-installed lazily on first use
+# (e2e::tools_pip); the stage-1 Trino probe is stdlib-only.
+# Applied with `kubectl -n <ns> apply` — no namespace baked in.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e2e-tools
+  labels: {app: e2e-tools}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: tools
+    image: python:3.11-slim
+    command: ["sleep", "infinity"]
+    env:
+    - {name: NESSIE_URI, value: "http://nessie:19120/iceberg/"}
+    - {name: S3_ENDPOINT, valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+    - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+    - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+    - {name: AWS_REGION, valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+    resources:
+      # Token CPU request — the 2-vCPU CI runner is fully subscribed
+      # (see test/e2e/values-ci.yaml header); limits stay real.
+      requests: {cpu: 25m, memory: 256Mi}
+      limits: {cpu: 500m, memory: 1Gi}
+    volumeMounts:
+    - {name: scripts, mountPath: /e2e}
+  volumes:
+  - name: scripts
+    configMap: {name: e2e-scripts}

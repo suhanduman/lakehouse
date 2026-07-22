@@ -1,0 +1,13 @@
+# Silver current-state table for the e2e CDC path — pre-created BEFORE the
+# pipeline runs (tools/create_iceberg_table.py descriptor mode). The
+# identifier field is the MERGE key of tools/jobs/merge_cdc.py and can ONLY
+# be set at CREATE time (Nessie REST cannot ALTER it) — which is the whole
+# reason pre-creation is mandatory. Default warehouse (s3://depo).
+namespace: depo
+table: customers
+layer: silver
+identifier: [id]
+columns:
+  - {name: id, type: int, required: true}
+  - {name: name, type: string}
+  - {name: email, type: string}

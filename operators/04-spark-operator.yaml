@@ -1,0 +1,60 @@
+# Spark Operator — cluster-scoped OLM bootstrap. Provides the
+# `sparkoperator.k8s.io/v1beta2` CRDs this
+# chart's `SparkApplication`/`ScheduledSparkApplication` CRs depend on
+# (chart/templates/05-spark-operator.yaml `iceberg-maintenance`
+# ScheduledSparkApplication, chart/templates/14-nginx-ingest.yaml
+# `nginx-streaming` SparkApplication).
+#
+# Namespace per tools/README.md "Ön koşullar" table: `spark-system`.
+#
+# POC-DOĞRULA (higher uncertainty than the other five operators in this
+# directory): unlike Strimzi/CNPG/cert-manager/ExternalSecrets/Keycloak,
+# "Spark Operator" is NOT consistently published as a single well-known
+# OperatorHub package across catalogs — there are at least two independent
+# lineages historically offered under similar names (the kubeflow/
+# GoogleCloudPlatform `spark-operator` lineage, whose CRD API group IS
+# `sparkoperator.k8s.io` — the exact group this chart's CRs already use, see
+# chart/templates/05-spark-operator.yaml — vs. older community operators like
+# `radanalytics.io`'s, which use a DIFFERENT CRD group and would NOT satisfy
+# this chart's CRs). Whichever package/channel/source you pick here MUST
+# ship the `sparkoperator.k8s.io` CRD group specifically — confirm with:
+#   oc get packagemanifests -n openshift-marketplace | grep -i spark
+#   oc get crd sparkapplications.sparkoperator.k8s.io  # after install, expect Established
+# The values below assume a `community-operators` catalog listing under
+# package name `spark-operator` (the kubeflow/spark-operator lineage) exists
+# on the target cluster's CatalogSources — if it does not, this operator may
+# need to be installed via its Helm chart directly
+# (`helm install spark-operator spark-operator/spark-operator`) INSTEAD of
+# OLM, in which case this file is not applicable and should be removed/
+# replaced with that install step in your cluster's runbook.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spark-system
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: spark-operator-operatorgroup
+  namespace: spark-system
+spec:
+  targetNamespaces:
+  - spark-system
+  # POC-DOĞRULA: if the Spark Operator build you install needs to submit/
+  # watch SparkApplication CRs OUTSIDE its own namespace (i.e. in `example`,
+  # where this chart's SparkApplications actually run), add `example` here too:
+  # targetNamespaces: [spark-system, example]
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: spark-operator
+  namespace: spark-system
+spec:
+  channel: stable  # POC-DOĞRULA
+  name: spark-operator  # POC-DOĞRULA — bkz. yukarıdaki paket-adı belirsizliği notu
+  source: community-operators  # POC-DOĞRULA
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

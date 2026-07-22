@@ -1,0 +1,34 @@
+suite: kafka-replication
+templates:
+  - templates/03-kafka-strimzi.yaml
+  - templates/12-kafka-connect.yaml
+tests:
+  - it: RF ayarları values'tan gelir (override=1)
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.kafka: true
+      kafka.replication.offsetsTopic: 1
+      kafka.replication.default: 1
+      kafka.replication.minInsync: 1
+    asserts:
+      - equal: {path: 'spec.kafka.config["default.replication.factor"]', value: 1}
+      - equal: {path: 'spec.kafka.config["offsets.topic.replication.factor"]', value: 1}
+      - equal: {path: 'spec.kafka.config["min.insync.replicas"]', value: 1}
+    documentSelector: {path: kind, value: Kafka}
+  - it: Connect iç-topic RF values'tan gelir (override=1)
+    template: templates/12-kafka-connect.yaml
+    set:
+      components.kafkaConnect: true
+      kafkaConnect.internalTopicReplicationFactor: 1
+    asserts:
+      - equal: {path: 'spec.config["config.storage.replication.factor"]', value: 1}
+      - equal: {path: 'spec.config["offset.storage.replication.factor"]', value: 1}
+      - equal: {path: 'spec.config["status.storage.replication.factor"]', value: 1}
+    documentSelector: {path: kind, value: KafkaConnect}
+  - it: Connect iç-topic RF default = 3 (prod değişmedi)
+    template: templates/12-kafka-connect.yaml
+    set:
+      components.kafkaConnect: true
+    asserts:
+      - equal: {path: 'spec.config["config.storage.replication.factor"]', value: 3}
+    documentSelector: {path: kind, value: KafkaConnect}

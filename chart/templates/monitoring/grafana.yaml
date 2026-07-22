@@ -1,0 +1,323 @@
+# chart/templates/monitoring/grafana.yaml — D1 (İzleme/Monitoring).
+#
+# Grafana (open-source) as the visualization layer over OpenShift
+# user-workload-monitoring (UWM). Grafana does NOT run its own Prometheus:
+# it reads metrics from UWM's tenancy-aware Thanos querier
+# (`.Values.monitoring.datasource.thanosUrl`, :9091 = namespace-scoped read)
+# using its OWN ServiceAccount bearer token. That read path requires two
+# things this file wires up:
+#   1. RBAC — the `grafana` ServiceAccount is bound to the OpenShift built-in
+#      ClusterRole `cluster-monitoring-view`, which is what UWM's Thanos
+#      checks (TokenReview + SubjectAccessReview) before serving tenancy
+#      queries for the release namespace.
+#   2. Auth header — the datasource sends `Authorization: Bearer <token>`.
+#      Grafana provisioning expands `${GRAFANA_SA_TOKEN}` from the process
+#      env ONCE, at config-load (boot) time — it does NOT re-read per request.
+#      The token therefore MUST be stable for the pod's lifetime, or the
+#      datasource 401s the moment it rotates.
+#
+#      TOKEN STRATEGY: the bearer comes from a NON-EXPIRING `kubernetes.io/
+#      service-account-token`-typed Secret (`grafana-sa-token`, below) bound
+#      to the `grafana` SA via the `kubernetes.io/service-account.name`
+#      annotation. The k8s token controller populates its `.data.token` with
+#      a long-lived (non-expiring) token — this behaviour is retained
+#      post-1.24 for manually-created Secrets of this exact type, and is
+#      present on both OpenShift 4.14+ and microk8s/k8s 1.33. Because that
+#      token never rotates, capturing it once into `GRAFANA_SA_TOKEN` at boot
+#      (here via a plain `secretKeyRef` env) is CORRECT and avoids the
+#      rotation-staleness a shorter-lived projected token would introduce.
+#
+#      TRADEOFF: a long-lived token is an acceptable posture here — the SA is
+#      bound ONLY to the read-only `cluster-monitoring-view` ClusterRole
+#      (no write, no secret access), and removing rotation removes the
+#      staleness failure mode. (This path is OpenShift-only to validate
+#      against real UWM Thanos; microk8s smoke uses a local Prometheus
+#      datasource with no bearer, so it cannot exercise the 401 — see
+#      docs/POC-DOGRULA-cluster-checklist.md.)
+#
+# Every resource is gated by `.Values.components.monitoring`. NO secret
+# material lives here — admin creds and the OIDC client secret are consumed
+# by NAME from pre-provisioned Secrets (`.Values.monitoring.grafana.
+# adminSecretName` keys `admin-user`/`admin-password`;
+# `.Values.monitoring.grafana.oidc.secretName` key `client-secret`).
+{{- if .Values.components.monitoring }}
+{{- $dashboards := list "kafka" "cnpg" "trino" "iceberg" "console" "platform" }}
+{{- $dashMeta := dict
+    "kafka"    (dict "title" "Kafka"    "panel" "Messages In (rate)"       "expr" "sum(rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))")
+    "cnpg"     (dict "title" "CNPG"     "panel" "Postgres backends"         "expr" "sum(cnpg_backends_total)")
+    "trino"    (dict "title" "Trino"    "panel" "Running queries"           "expr" "sum(trino_execution_querymanager_running_queries)")
+    "iceberg"  (dict "title" "Iceberg / Nessie" "panel" "Nessie persist ops (rate)" "expr" "sum(rate(nessie_storage_persist_total[5m]))")
+    "console"  (dict "title" "Console"  "panel" "HTTP request rate"         "expr" "sum(rate(http_requests_total[5m]))")
+    "platform" (dict "title" "Platform" "panel" "Pods by phase"             "expr" "sum by (phase) (kube_pod_status_phase)") }}
+---
+# -------- ServiceAccount (bearer-token identity for Thanos reads) --------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+---
+# -------- Non-expiring SA-token Secret (bearer for Thanos reads) --------
+# `kubernetes.io/service-account-token`-typed Secret bound to the `grafana`
+# SA. The cluster's token controller fills `.data.token` with a NON-EXPIRING
+# token (this remains true for manually-created Secrets of this type
+# post-1.24, on OpenShift 4.14+ and microk8s/k8s 1.33 alike). Consumed by the
+# Deployment as `GRAFANA_SA_TOKEN`; because the token never rotates, the
+# boot-once capture stays valid for the pod's lifetime.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-sa-token
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: grafana
+type: kubernetes.io/service-account-token
+{{- if and .Values.monitoring.grafana.oidc.enabled .Values.monitoring.grafana.oidc.clientSecret }}
+---
+# -------- Grafana OIDC client-secret Secret --------
+# Rendered ONLY when a real `monitoring.grafana.oidc.clientSecret` is
+# explicitly supplied (dev/test convenience — same contract as
+# `kafkaUi.oidc.clientSecret`, chart/templates/console/routes-oidc.yaml).
+# Default is empty: the Secret named `.Values.monitoring.grafana.oidc.
+# secretName` (`grafana-oidc`, key `client-secret`) must then be provisioned
+# out-of-band (ExternalSecret/Vault or `oc create secret generic`) per
+# `.Values.secrets.mode` BEFORE install. Either way the SAME value seeds
+# BOTH this Secret AND 10-keycloak.yaml's grafana `clients[].secret`, so the
+# confidential Keycloak client and the secret Grafana mounts never drift.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.monitoring.grafana.oidc.secretName }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.monitoring.grafana.oidc.clientSecret | quote }}
+{{- end }}
+---
+# -------- ClusterRoleBinding: grafana SA -> cluster-monitoring-view --------
+# `cluster-monitoring-view` is an OpenShift BUILT-IN ClusterRole (provided by
+# the platform; not rendered by this chart) — it grants read access to UWM's
+# tenancy-aware Thanos querier. The binding NAME is suffixed with the release
+# namespace because a ClusterRoleBinding is cluster-scoped: without the suffix
+# two installs of this chart into different release namespaces (e.g. the two
+# namespaces the test harness renders into) would collide on one global object.
+# Same precedent as chart/templates/prereq-check-job.yaml's CRB.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-monitoring-view-{{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef:
+  kind: ClusterRole
+  name: cluster-monitoring-view
+  apiGroup: rbac.authorization.k8s.io
+---
+# -------- Datasource provisioning (Prometheus -> UWM Thanos querier) --------
+# `${GRAFANA_SA_TOKEN}` is expanded by Grafana from the container env at load
+# time (see Deployment command). tlsSkipVerify: the Thanos querier serves an
+# in-cluster serving cert not in Grafana's default trust store.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Thanos
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: {{ .Values.monitoring.datasource.thanosUrl }}
+        isDefault: true
+        jsonData:
+          tlsSkipVerify: true
+          httpHeaderName1: Authorization
+        secureJsonData:
+          httpHeaderValue1: "Bearer ${GRAFANA_SA_TOKEN}"
+---
+# -------- Dashboard provider (file provisioning) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+data:
+  providers.yaml: |
+    apiVersion: 1
+    providers:
+      - name: lakehouse
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+{{- range $name := $dashboards }}
+{{- if index $.Values.monitoring.dashboards $name }}
+{{- $m := index $dashMeta $name }}
+---
+# -------- Dashboard: {{ $m.title }} (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-{{ $name }}
+  namespace: {{ include "lakehouse.namespace" $ }}
+  labels:
+{{ include "lakehouse.labels" $ | indent 4 }}
+data:
+  {{ $name }}.json: |-
+    {"uid":"lakehouse-{{ $name }}","title":"{{ $m.title }}","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":{{ $m.panel | quote }},"datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":{{ $m.expr | quote }}}]}]}
+{{- end }}
+{{- end }}
+---
+# -------- Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.monitoring.grafana.replicas }}
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      serviceAccountName: grafana
+      containers:
+      - name: grafana
+        image: {{ .Values.monitoring.grafana.image | quote }}
+        ports:
+        - {name: http, containerPort: 3000}
+        env:
+        # Non-expiring SA token (grafana-sa-token Secret) captured once into
+        # the process env; Grafana's datasource provisioning expands
+        # `${GRAFANA_SA_TOKEN}` at boot. Because the token never rotates, this
+        # boot-once capture stays valid for the pod's lifetime.
+        - name: GRAFANA_SA_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: grafana-sa-token
+              key: token
+        - name: GF_SECURITY_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.monitoring.grafana.adminSecretName }}
+              key: admin-user
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.monitoring.grafana.adminSecretName }}
+              key: admin-password
+{{- if .Values.monitoring.grafana.oidc.enabled }}
+        - {name: GF_SERVER_ROOT_URL, value: {{ printf "https://%s" (include "lakehouse.routeHost" (dict "name" .Values.monitoring.grafana.route.host "context" .)) | quote }}}
+        - {name: GF_AUTH_GENERIC_OAUTH_ENABLED, value: "true"}
+        - {name: GF_AUTH_GENERIC_OAUTH_NAME, value: "Keycloak"}
+        - {name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID, value: {{ .Values.monitoring.grafana.oidc.clientId | quote }}}
+        - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.monitoring.grafana.oidc.secretName }}
+              key: client-secret
+        - {name: GF_AUTH_GENERIC_OAUTH_SCOPES, value: "openid email profile"}
+        - {name: GF_AUTH_GENERIC_OAUTH_AUTH_URL, value: {{ printf "https://%s/realms/%s/protocol/openid-connect/auth" (include "lakehouse.routeHost" (dict "name" "auth" "context" .)) .Values.keycloak.realm.name | quote }}}
+        - {name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL, value: {{ printf "https://%s/realms/%s/protocol/openid-connect/token" (include "lakehouse.routeHost" (dict "name" "auth" "context" .)) .Values.keycloak.realm.name | quote }}}
+        - {name: GF_AUTH_GENERIC_OAUTH_API_URL, value: {{ printf "https://%s/realms/%s/protocol/openid-connect/userinfo" (include "lakehouse.routeHost" (dict "name" "auth" "context" .)) .Values.keycloak.realm.name | quote }}}
+{{- end }}
+        volumeMounts:
+        - {name: datasources, mountPath: /etc/grafana/provisioning/datasources, readOnly: true}
+        - {name: dashboard-providers, mountPath: /etc/grafana/provisioning/dashboards, readOnly: true}
+{{- range $name := $dashboards }}
+{{- if index $.Values.monitoring.dashboards $name }}
+        - {name: dashboard-{{ $name }}, mountPath: /var/lib/grafana/dashboards/{{ $name }}.json, subPath: {{ $name }}.json, readOnly: true}
+{{- end }}
+{{- end }}
+        readinessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 30, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: {{ .Values.monitoring.grafana.resources.requests.cpu | quote }}
+            memory: {{ .Values.monitoring.grafana.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.monitoring.grafana.resources.limits.cpu | quote }}
+            memory: {{ .Values.monitoring.grafana.resources.limits.memory | quote }}
+      volumes:
+      - {name: datasources, configMap: {name: grafana-datasources}}
+      - {name: dashboard-providers, configMap: {name: grafana-dashboard-providers}}
+{{- range $name := $dashboards }}
+{{- if index $.Values.monitoring.dashboards $name }}
+      - {name: dashboard-{{ $name }}, configMap: {name: grafana-dashboard-{{ $name }}}}
+{{- end }}
+{{- end }}
+---
+# -------- Service --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  selector:
+    app: grafana
+  ports:
+  - {name: http, port: 3000, targetPort: http}
+{{- if .Values.components.routesTls }}
+{{- if include "lakehouse.isOpenShift" . }}
+---
+# -------- Route (edge TLS) — host + OIDC redirect share lakehouse.routeHost --------
+# Gated on `components.routesTls` (same lever as chart/templates/
+# 08-routes-tls.yaml) AND `lakehouse.isOpenShift` (`.Values.platform`):
+# OpenShift Routes (route.openshift.io) only exist on OpenShift. On
+# `platform: vanilla` (Route-less cluster) the rest of the İzleme stack
+# (Grafana Deployment/Service, ServiceMonitors, PrometheusRule) still
+# installs; Grafana's vanilla equivalent Ingress renders in
+# chart/templates/08b-ingress-tls.yaml instead. Default true in
+# values(-prod), so OpenShift render is unchanged. NB: Grafana OIDC login
+# needs a stable public URL, so monitoring.grafana.oidc.enabled effectively
+# presumes routesTls on OpenShift.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" .Values.monitoring.grafana.route.host "context" .) }}
+  to:
+    kind: Service
+    name: grafana
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- end }}
+{{- end }}

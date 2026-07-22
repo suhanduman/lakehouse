@@ -1,0 +1,113 @@
+# One-shot LOCAL-MODE Spark Job template — the CI stand-in for the chart's
+# ScheduledSparkApplications (silver-merge / iceberg-maintenance,
+# chart/templates/05-spark-operator.yaml). Chosen over a SparkApplication CR
+# because it is the LIGHTER CI path: the chart's CRs need the `spark-py`
+# image built out-of-band under `global.imageRegistry` (not available in
+# CI), while this runs the SAME job code (tools/jobs/*, ConfigMap
+# `e2e-spark-jobs`, mounted flat exactly like the image's /opt/spark/jobs
+# layout) on the stock apache/spark image with `--packages` — the approach
+# already live-proven on the F ingest environment.
+#
+# Tokens (replaced by test/e2e/run.sh via sed):
+#   __NAME__  Job name (e2e-silver-merge | e2e-maintenance)
+#   __MAIN__  main python file in the ConfigMap (merge_cdc.py | iceberg_maintenance.py)
+#   __NS__    release namespace (for the nessie/minio service FQDNs)
+#
+# Catalog wiring mirrors the chart's spark-defaults ConfigMap (lakehouse ->
+# default `warehouse` at s3://depo/warehouse, rawlake -> `rawdata`), with
+# the Iceberg runtime at 1.9.0 to match the Connect sink built from source
+# (images/connect/Dockerfile) — the version pair proven live for the MERGE.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1500
+  template:
+    metadata:
+      labels: {app: __NAME__}
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: spark
+        image: docker.io/apache/spark:3.5.3
+        command: ["/opt/spark/bin/spark-submit"]
+        args:
+        - --master
+        - local[2]
+        - --driver-memory
+        - 1200m
+        # hadoop-aws (+ its transitive aws-java-sdk-bundle): remove_orphan_files
+        # lists table locations through the Hadoop FileSystem API (not the
+        # catalog's FileIO), so the s3:// scheme needs a Hadoop S3A mapping or
+        # maintenance dies with 'No FileSystem for scheme "s3"' (live kind-e2e
+        # finding, 2026-07-22). Same package set as the chart's spark-defaults.
+        - --packages
+        - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.0,org.apache.iceberg:iceberg-aws-bundle:1.9.0,org.apache.hadoop:hadoop-aws:3.3.4
+        # apache/spark runs as a non-root user with no writable HOME — ivy
+        # needs an absolute, writable cache dir or spark-submit dies with
+        # "basedir must be absolute: ?/.ivy2/local".
+        - --conf
+        - spark.jars.ivy=/tmp/.ivy2
+        - --conf
+        - spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+        # Hadoop-side S3 wiring for remove_orphan_files' FileSystem listing
+        # (see the --packages comment): map the bare s3:// scheme to S3A and
+        # point it at the same MinIO endpoint/credentials as the catalogs.
+        - --conf
+        - spark.hadoop.fs.s3.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+        - --conf
+        - spark.hadoop.fs.s3a.endpoint=http://minio.__NS__.svc:9000
+        - --conf
+        - spark.hadoop.fs.s3a.path.style.access=true
+        - --conf
+        - spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
+        - --conf
+        - spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+        - --conf
+        - spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+        - --conf
+        - spark.sql.catalog.lakehouse.uri=http://nessie.__NS__.svc:19120/iceberg/
+        - --conf
+        - spark.sql.catalog.lakehouse.warehouse=s3://depo/warehouse
+        - --conf
+        - spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        - --conf
+        - spark.sql.catalog.lakehouse.s3.endpoint=http://minio.__NS__.svc:9000
+        - --conf
+        - spark.sql.catalog.lakehouse.s3.path-style-access=true
+        - --conf
+        - spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
+        - --conf
+        - spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+        - --conf
+        - spark.sql.catalog.rawlake.uri=http://nessie.__NS__.svc:19120/iceberg/
+        - --conf
+        - spark.sql.catalog.rawlake.warehouse=rawdata
+        - --conf
+        - spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        - --conf
+        - spark.sql.catalog.rawlake.s3.endpoint=http://minio.__NS__.svc:9000
+        - --conf
+        - spark.sql.catalog.rawlake.s3.path-style-access=true
+        - /opt/e2e-jobs/__MAIN__
+        env:
+        # S3FileIO resolves credentials via the AWS SDK default chain — env.
+        - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        - {name: AWS_REGION, valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+        # Read by iceberg_maintenance.py (Bronze TTL); harmless for merge_cdc.
+        - {name: BRONZE_RETENTION_DAYS, value: "7"}
+        - {name: HOME, value: /tmp}
+        resources:
+          # Modest requests — the 2-vCPU CI runner is fully subscribed (see
+          # test/e2e/values-ci.yaml header); the limit lets the local-mode
+          # driver burst to whatever the node has free at merge time.
+          requests: {cpu: 250m, memory: 1Gi}
+          limits: {cpu: "2", memory: 3Gi}
+        volumeMounts:
+        - {name: jobs, mountPath: /opt/e2e-jobs}
+      volumes:
+      - name: jobs
+        configMap: {name: e2e-spark-jobs}

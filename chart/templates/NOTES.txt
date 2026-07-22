@@ -1,0 +1,264 @@
+{{- /*
+Platform-aware CLI/wording vars (single source for this whole NOTES.txt):
+  - $cli       : the kubectl-compatible CLI this platform's users have —
+                 "oc" on OpenShift, "kubectl" on vanilla. Used for every
+                 generic post-install command below (exec/rollout/
+                 port-forward/get configmap/watch) — NOT the OPERATORS
+                 prerequisite bullet, which is genuinely OLM-vs-Helm
+                 (bootstrap/Task 7's concern, out of this chart's scope).
+  - $routeWord : "Route" on OpenShift, "URL" on vanilla — the public
+                 Ingress objects (chart/templates/08b-ingress-tls.yaml)
+                 aren't Routes, so user-facing prose must say so.
+Also doubles as this file's `lakehouse.isOpenShift` call: NOTES.txt always
+renders (no `enabled` flag), so an invalid `.Values.platform` fails loud
+here regardless of which optional components are on.
+*/}}
+{{- $cli := "kubectl" }}
+{{- $routeWord := "URL" }}
+{{- if include "lakehouse.isOpenShift" . }}
+{{- $cli = "oc" }}
+{{- $routeWord = "Route" }}
+{{- end }}
+============================================================================
+  Lakehouse — release "{{ .Release.Name }}" installed into
+  namespace "{{ include "lakehouse.namespace" . }}".
+============================================================================
+
+Chart {{ .Chart.Name }}-{{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }}).
+
+See exactly what this revision rendered with:
+  helm get manifest {{ .Release.Name }} -n {{ include "lakehouse.namespace" . }}
+
+{{- if .Values.components.routesTls }}
+
+----------------------------------------------------------------------------
+{{- if include "lakehouse.isOpenShift" . }}
+ Public URLs (OpenShift Routes, TLS via cert-manager issuer
+ "{{ .Values.routes.certIssuer }}"; all hosts derived from global.domain
+ "{{ .Values.global.domain }}")
+{{- else }}
+ Public URLs (Ingress, TLS via cert-manager issuer
+ "{{ .Values.routes.certIssuer }}"; all hosts derived from global.domain
+ "{{ .Values.global.domain }}")
+{{- end }}
+----------------------------------------------------------------------------
+  Trino (SQL + Web UI) : https://{{ include "lakehouse.routeHost" (dict "name" "trino" "context" .) }}
+  Nessie (Iceberg REST): https://{{ include "lakehouse.routeHost" (dict "name" "nessie" "context" .) }}
+{{- if .Values.components.zeppelin }}
+  Zeppelin (notebooks) : https://{{ include "lakehouse.routeHost" (dict "name" "zeppelin" "context" .) }}
+{{- end }}
+{{- if .Values.components.keycloak }}
+  Keycloak (OIDC/auth) : https://{{ include "lakehouse.routeHost" (dict "name" "auth" "context" .) }}
+{{- end }}
+{{- if .Values.components.console }}
+  Lakehouse Console    : https://{{ include "lakehouse.routeHost" (dict "name" "console" "context" .) }}
+{{- end }}
+{{- if .Values.components.kafkaUi }}
+  Kafka UI             : https://{{ include "lakehouse.routeHost" (dict "name" "kafka-ui" "context" .) }}
+{{- end }}
+{{- if .Values.components.ai }}
+  AI Text-to-SQL UI    : https://{{ include "lakehouse.routeHost" (dict "name" "ai" "context" .) }}
+{{- end }}
+{{- if .Values.components.monitoring }}
+  Grafana (İzleme)     : https://{{ include "lakehouse.routeHost" (dict "name" .Values.monitoring.grafana.route.host "context" .) }}
+{{- if .Values.monitoring.grafana.oidc.enabled }}
+                         (Keycloak OIDC login açık — "{{ .Values.monitoring.grafana.oidc.clientId }}" client)
+{{- else }}
+                         (OIDC kapalı — {{ .Values.monitoring.grafana.adminSecretName }} Secret'ındaki admin-user/admin-password ile giriş)
+{{- end }}
+{{- end }}
+
+{{- if or .Values.components.superset .Values.components.jupyter }}
+  NOTE: `superset` (bi.<domain>) and/or `jupyter` {{ $routeWord }}s are enabled
+  but their Deployments/Services are follow-up components NOT shipped by this
+  chart yet (see chart/templates/08-routes-tls.yaml /
+  08b-ingress-tls.yaml) — they 503 until those land. Keep
+  `components.superset`/`components.jupyter` false (the default) in prod until
+  the backing workloads are added.
+{{- end }}
+{{- end }}
+
+----------------------------------------------------------------------------
+ PRE-INSTALL PREREQUISITES (must already be true — this chart does NOT create
+ them; it only references them)
+----------------------------------------------------------------------------
+ 1. OPERATORS (cluster-scoped, OLM). Strimzi, CloudNativePG, Spark Operator,
+    Keycloak Operator, ExternalSecrets Operator, cert-manager must all be
+    installed and their CSVs `Succeeded` BEFORE install:
+        oc apply -f operators/          # see operators/README.md
+        oc get csv -A                   # wait for every relevant CSV = Succeeded
+    Re-run install with `--set prereqCheck.enabled=true` to have a pre-install
+    hook Job verify every required CRD is present (default off — see
+    chart/values.yaml `prereqCheck`).
+{{- if .Values.components.monitoring }}
+
+    *** İZLEME (monitoring) AÇIK — EK ÖN KOŞUL: OpenShift user-workload-
+    monitoring (UWM) etkin olmalı. Bu chart Prometheus/Thanos KURMAZ; yalnızca
+    ServiceMonitor/PodMonitor/PrometheusRule CR'ları (monitoring.coreos.com/v1)
+    ve Grafana'yı ekler — bu CR'ların CRD'leri UWM/Prometheus-Operator ile gelir.
+    UWM'i açın (openshift-monitoring/cluster-monitoring-config →
+    enableUserWorkloadMonitoring: true; bkz. operators/README.md), aksi halde
+    `--set prereqCheck.enabled=true` bu ön koşulu eksik bulup kurulumu durdurur.
+{{- end }}
+
+ 2. SECRETS (mode = "{{ .Values.secrets.mode }}"). By default this chart carries
+    NO secret material — it references Secret NAMES only. Provision these
+    BEFORE install:
+      - {{ .Values.storage.s3.secretName }}  (keys: access-key-id, secret-access-key, endpoint, region)
+      - {{ .Values.oidc.secretName }}  (keys: issuer-url, trino-client-id, trino-client-secret, ...)
+      - mssql / mongo / debezium-src   (Kafka Connect external-config, only if connectors enabled)
+{{- if .Values.components.trino }}
+      - trino-internal-secret          (key: shared-secret; only if `.Values.trino.internalSharedSecret` left empty)
+{{- end }}
+{{- if .Values.components.zeppelin }}
+      - ad-bind-credentials            (keys: bind-dn, bind-password, user-search-base, group-search-base, ad-url; only if `.Values.zeppelin.ad.bindPassword` left empty)
+{{- end }}
+{{- if .Values.components.keycloak }}
+      - keycloak-admin-credentials     (keys: username, password; only if `.Values.keycloak.adminPassword` left empty)
+{{- end }}
+{{- if .Values.components.consoleRoutesOidc }}
+      - kafka-ui-oidc-credentials      (key: client-secret; only if `.Values.kafkaUi.oidc.clientSecret` left empty)
+{{- end }}
+    (Set a real value for the corresponding `.Values.*` field instead, ONLY
+    for a local/dev install, and this chart renders that one Secret inline —
+    see chart/values.yaml's `secrets:` comment.)
+    The CNPG (`pg-*-app`) and Strimzi (`connect`, `kafka-ui`, `spark-nginx`,
+    `kafka-cluster-ca-cert`) Secrets are auto-generated by their operators.
+{{- if eq .Values.secrets.mode "generated" }}
+    mode=generated (default): the `bootstrap` script seeds every named Secret
+    above with strong random values out-of-band BEFORE this chart is
+    installed — this chart renders NO Secret/ExternalSecret material for
+    them (same as mode=manual, rendering-wise; see chart/values.yaml
+    `secrets:` comment for why). If a Secret above is missing on the
+    cluster, re-run:
+        bootstrap --secrets-mode generated
+{{- else if eq .Values.secrets.mode "external" }}
+    mode=external: an ExternalSecrets Operator + Vault/AD backend materializes
+    each named Secret from the remote store (no secret ever touches git) —
+    this chart renders one `ExternalSecret` per name above (see
+    chart/templates/15-external-secrets.yaml, gated additionally by
+    `.Values.components.externalSecrets`); the SecretStore/ClusterSecretStore
+    itself ("{{ .Values.secrets.external.secretStoreName }}") is
+    customer/vault-specific and must already exist out-of-band.
+{{- else }}
+    mode=manual: create each Secret by hand before install, e.g.:
+        {{ $cli }} -n {{ include "lakehouse.namespace" . }} create secret generic {{ .Values.storage.s3.secretName }} \
+          --from-literal=access-key-id=... --from-literal=secret-access-key=... \
+          --from-literal=endpoint=... --from-literal=region=...
+{{- end }}
+
+----------------------------------------------------------------------------
+ INSTALL ORDERING (informational — enforced by Helm's native kind ordering +
+ operator reconciliation + pod readiness, NOT by helm hooks; see
+ operators/README.md "Kurulum sıralaması" section)
+----------------------------------------------------------------------------
+ Helm applies everything in one pass, then components converge in this order
+ as operators reconcile and readiness probes retry:
+   1. namespace / quota / limits / NetworkPolicy / StorageClass  (foundation)
+   2. CNPG Postgres clusters + Kafka backbone + Apicurio          (stateful)
+   3. Nessie + Trino + Kafka Connect + Spark + Keycloak app       (depends on 2)
+   4. example connectors + Console + Kafka UI + Routes            (outermost)
+ Hard data-dependencies (Nessie needs pg-nessie ready; Connect needs Kafka +
+ Apicurio ready) settle automatically via operator reconcile + container
+ restarts — transient CrashLoopBackOff during the first minutes is EXPECTED,
+ not a failure. Watch convergence with:
+   watch {{ $cli }} -n {{ include "lakehouse.namespace" . }} get pods,cluster,kafka,kafkaconnect
+
+{{- if and .Values.components.trino .Values.components.keycloak }}
+
+ *** IMPORTANT — Trino/Keycloak ordering is NOT interchangeable with the rest
+ *** of "step 3" above, even though they're listed together:
+   - Nessie's OIDC check is LAZY (Quarkus): the pod stays Running even if the
+     Keycloak issuer isn't reachable yet; it only 500s on actual API calls
+     until the issuer resolves. Nessie degrades SOFT.
+   - Trino's coordinator does EAGER OIDC discovery AT STARTUP (fetches the
+     issuer's OIDC discovery document before it will serve traffic). If
+     Keycloak's realm/OIDC issuer endpoint is not YET reachable when the
+     Trino coordinator starts, it throws and CRASH-LOOPS — it does not retry
+     gracefully like Nessie. Trino fails HARD.
+   Practical consequence: with `components.keycloak=true`, let Keycloak (the
+   `Keycloak`/`KeycloakRealmImport` CRs + its {{ $routeWord }}) fully converge and its
+   OIDC issuer URL become resolvable BEFORE relying on Trino coming up —
+   don't assume "step 3" components converge safely in parallel. Verified
+   live on microk8s with a deliberately non-resolving issuer: Nessie stayed
+   Running (soft 500s), Trino's coordinator crash-looped on
+   `UnknownHostException` (hard fail). See
+   .superpowers/sdd/microk8s-smoke-report.md Finding 2 for the full repro.
+{{- end }}
+
+----------------------------------------------------------------------------
+ VERIFICATION — [KÜME] (run against the live cluster once pods are Ready)
+----------------------------------------------------------------------------
+ Render/closure self-check (no cluster needed):
+   helm get manifest {{ .Release.Name }} -n {{ include "lakehouse.namespace" . }} \
+     | python3 chart/scripts/helm-check.py - \
+         --release-namespace {{ include "lakehouse.namespace" . }} --service-closure
+
+{{- if .Values.components.trino }}
+
+ [KÜME] Trino — run a smoke query against the Iceberg/Nessie catalog:
+   {{ $cli }} -n {{ include "lakehouse.namespace" . }} exec deploy/{{ include "lakehouse.svc.trino" . }} -- \
+     trino --execute "SHOW CATALOGS; SHOW SCHEMAS FROM lakehouse;"
+   # expect the `lakehouse` and `rawlake` Iceberg catalogs to list.
+{{- end }}
+{{- if .Values.components.console }}
+
+ [KÜME] Console — backend health + open the UI:
+   {{ $cli }} -n {{ include "lakehouse.namespace" . }} exec deploy/console-backend -- curl -sf localhost:8080/healthz
+   open https://{{ include "lakehouse.routeHost" (dict "name" "console" "context" .) }}
+{{- end }}
+{{- if .Values.components.kafkaUi }}
+
+ [KÜME] Kafka UI — confirm it rolled out, then open the UI:
+   {{ $cli }} -n {{ include "lakehouse.namespace" . }} rollout status deploy/kafka-ui
+   open https://{{ include "lakehouse.routeHost" (dict "name" "kafka-ui" "context" .) }}
+{{- end }}
+{{- if .Values.components.zeppelin }}
+
+----------------------------------------------------------------------------
+ Zeppelin
+----------------------------------------------------------------------------
+  Sign in at the Zeppelin {{ $routeWord }} above with an AD account (bind credentials
+  come from the `ad-bind-credentials` Secret — fill in the `zeppelin.ad.*` values
+  or an ExternalSecret/Vault entry per-environment). For a quick local check:
+    {{ $cli }} -n {{ include "lakehouse.namespace" . }} port-forward svc/zeppelin 8080:8080
+{{- end }}
+{{- if .Values.components.nginxIngest }}
+
+----------------------------------------------------------------------------
+ nginx access-log ingest (FluentBit VM agent — runs OUTSIDE the cluster, on
+ each nginx host, not as a pod; this chart only ships the two config files as
+ a ConfigMap so they can be installed from one place)
+----------------------------------------------------------------------------
+  1. On each nginx VM: install FluentBit
+       curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
+  2. Pull the two files out of the ConfigMap this chart created and copy them
+     to the VM:
+       {{ $cli }} -n {{ include "lakehouse.namespace" . }} get configmap fluentbit-vm-agent -o jsonpath='{.data.fluent-bit\.conf}'  > fluent-bit.conf
+       {{ $cli }} -n {{ include "lakehouse.namespace" . }} get configmap fluentbit-vm-agent -o jsonpath='{.data.fluent-bit\.service}' > fluent-bit.service
+     Copy fluent-bit.conf -> /etc/fluent-bit/ on the VM (its Brokers/password
+     lines come from `.Values.nginx.fluentbit.kafkaExternalBootstrap` /
+     `.Values.nginx.fluentbit.kafkaPassword` — fill in real values
+     per-environment before copying, current render: broker=
+     {{ .Values.nginx.fluentbit.kafkaExternalBootstrap }}); also place the
+     Kafka cluster CA at /etc/fluent-bit/kafka-ca.crt.
+  3. Copy fluent-bit.service -> /etc/systemd/system/ on the VM, then:
+       systemctl enable --now fluent-bit
+  4. In the cluster (once, via Trino): create the Iceberg namespace the
+     streaming job writes into (bucket mirrors
+     `.Values.nginx.streaming.checkpointBucket`, default
+     "{{ .Values.nginx.streaming.checkpointBucket }}"):
+       CREATE NAMESPACE IF NOT EXISTS lakehouse.web WITH (location='s3://{{ .Values.nginx.streaming.checkpointBucket }}/warehouse');
+  5. The `nginx-streaming` SparkApplication (this chart) and `spark-nginx`
+     KafkaUser are already applied as part of this release — no separate
+     `oc apply` step needed (unlike the pre-Helm prod-manifests/ layout).
+{{- end }}
+
+----------------------------------------------------------------------------
+ UPGRADE / ROLLBACK
+----------------------------------------------------------------------------
+  helm upgrade {{ .Release.Name }} chart/ -f values-<env>.yaml -n {{ include "lakehouse.namespace" . }}
+  helm rollback {{ .Release.Name }} <revision> -n {{ include "lakehouse.namespace" . }}
+  helm history {{ .Release.Name }} -n {{ include "lakehouse.namespace" . }}
+  NOTE: CNPG/Kafka major-version upgrades are operator-managed — the chart only
+  changes the CR spec; data migration is the operator's responsibility.

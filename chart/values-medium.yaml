@@ -1,0 +1,101 @@
+# values-medium.yaml — typical production tier.
+#
+# Layer OVER the chart defaults (`chart/values.yaml`) — but there is almost
+# nothing TO layer: this chart's own defaults ARE the medium/typical-
+# production shape by design (see values.yaml's own header comment: "This
+# is the chart's skeleton default configuration"). This file exists to make
+# that contract EXPLICIT and TESTABLE, not to change behavior — every value
+# below is a documented no-op (explicitly restates a chart default), plus a
+# few comment-only reminders for choices a fresh install must consciously
+# make. `chart/tests/sizing-tiers_test.sh` asserts this file renders
+# identically to bare chart defaults (e.g. kafka broker replicas == 3, CNPG
+# instances == 3).
+#
+#   helm install lakehouse chart/ -f chart/values-medium.yaml -n <namespace>
+#
+# --- Reminders (comment-only — NOT set here; every real install must choose
+# these explicitly rather than silently ride the chart default) --------------
+#   - `platform`: chart default is `vanilla` (Ingress). An OpenShift install
+#     MUST override this to `platform: openshift` (Routes) — see
+#     values.yaml's own `platform` comment. Not set here: this file targets
+#     BOTH platforms identically (the sizing-tiers test exercises this file
+#     under `--set platform=vanilla` AND `--set platform=openshift`).
+#   - `secrets.mode`: chart default is `generated` (bootstrap script seeds
+#     Secrets before install). A real prod install with an ExternalSecrets/
+#     Vault backend should instead set `secrets.mode: external`. Out of
+#     scope for a SIZING overlay — choose this per-environment.
+#   - `components.minio`: chart default is `false` and MUST STAY false in
+#     any real production install (see values.yaml's own comment — MinIO
+#     here is single-replica/no-HA, dev/PoC/e2e-only). Not set here (already
+#     the default) — asserted by the sizing-tiers test instead (no MinIO
+#     Deployment renders from this file).
+
+# --- Documented no-ops: HA replica counts + PVC/RF knobs the chart already
+# defaults to the medium/typical-production shape. Restated explicitly (not
+# because the value would otherwise be different) so this file is a
+# testable assertion of the medium contract, not just a comment. ------------
+
+postgres:
+  nessie:
+    instances: 3   # chart default — CNPG 3-instance HA cluster
+  apicurio:
+    instances: 3   # chart default
+  keycloak:
+    instances: 3   # chart default
+
+kafka:
+  nodePools:
+    controller:
+      replicas: 3   # chart default — KRaft controller quorum
+    broker:
+      replicas: 3   # chart default
+  topics:
+    nginxAccess: {replicas: 3}     # chart default RF
+    lmsEvents: {replicas: 3}       # chart default RF
+    connectConfigs: {replicas: 3}  # chart default RF
+    connectOffsets: {replicas: 3}  # chart default RF
+    connectStatus: {replicas: 3}   # chart default RF
+  replication:
+    offsetsTopic: 3       # chart default
+    txnStateLog: 3        # chart default
+    txnStateLogMinIsr: 2  # chart default
+    default: 3            # chart default
+    minInsync: 2          # chart default
+
+nessie:
+  replicas: 2   # chart default
+
+trino:
+  # Trino coordinator replica count is NOT a values knob at all — chart/
+  # templates/06-trino-ha.yaml hardcodes `replicas: 1` on the coordinator
+  # Deployment in every tier (single coordinator is standard Trino
+  # topology). There is no `trino.coordinator.replicas` key to restate here.
+  worker:
+    replicas: 3   # chart default
+
+keycloak:
+  instances: 2   # chart default
+
+console:
+  backend:
+    replicas: 2    # chart default
+  frontend:
+    replicas: 2    # chart default
+
+kafkaConnect:
+  replicas: 2                       # chart default — already HA (2 workers)
+  internalTopicReplicationFactor: 3  # chart default
+
+sparkOperator:
+  maintenance:
+    bronzeRetentionDays: 30   # chart default
+
+# --- Known NON-HA singleton defaults, deliberately left unchanged --------
+# `zeppelin.replicas` (chart default 1) and `monitoring.grafana.replicas`
+# (chart default 1) are both single-replica by design, not "dev-leaning"
+# oversights: Zeppelin is a stateful single-writer interactive notebook
+# server (no shared session backend across replicas) and Grafana's single
+# pod is the common self-hosted-monitoring shape. Raising either to 2
+# without a compatibility review is a behavior change outside a sizing
+# overlay's scope, so this file does NOT restate/raise them — flagged here
+# instead so the choice is visible, not silent.

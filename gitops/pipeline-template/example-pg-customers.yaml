@@ -1,0 +1,144 @@
+# ============================================================================
+# Per-source pipeline entry (ÖRNEK) — Console'un ÜRETİP pipeline repo'suna bir
+# PR olarak açtığı birim. Örnek: pg kaynağı "pgdemo" → Iceberg depo.customers (CDC).
+#
+# ILLUSTRATIVE-ONLY / STALE ŞEKİL:
+#   Bu dosya Silver-only 4-manifest şeklini gösterir (descriptor CM +
+#   pre-create Job + KafkaTopic + KafkaConnector). Runtime üretim
+#   `console/backend/app/services/gitops_render.py`
+#   (`render_gitops_pipeline`) üzerinden yapılır ve GERÇEKTE 6 manifest
+#   üretir: Bronze descriptor ConfigMap + Bronze pre-create Job (`<ns>_raw`,
+#   `layer: bronze`, day(__ts_ms) partition, rawdata warehouse, identifier
+#   YOK) — Silver'dan ÖNCE — ardından bu dosyadaki Silver 4'lü. Güncel
+#   gerçek çıktı şekli için `console/backend/tests/test_gitops_render.py`
+#   testlerine bakın; bu dosya yalnızca anatomiyi (PreSync sıralaması,
+#   fail-loud sözleşmesi) göstermek için elle tutulur, otomatik render
+#   edilmez.
+#
+# Console her yeni kaynak için (Bronze dahil) manifest üretir; ArgoCD
+# (OpenShift GitOps) merge sonrası şu SIRAYLA sync eder:
+#   PreSync wave 0 : descriptor ConfigMap
+#   PreSync wave 1 : pre-create Job  → tabloyu identifier field (PK) ile yaratır
+#   Sync           : KafkaTopic + KafkaConnector  → tablo hazır, veri akar
+#
+# NOT: Iceberg sink'in dinamik auto-create'i tabloyu identifier-field-ids
+# OLMADAN yaratır → upsert SESSİZCE append-only'e düşer, her UPDATE duplicate
+# satır bırakır. Bu yüzden tablo, connector'dan (ve veriden) ÖNCE pyiceberg ile
+# identifier field set edilerek yaratılır. Ayrıntı ve fail-loud sözleşmesi:
+#   docs/superpowers/specs/2026-07-19-console-gitops-b-v2-design.md
+#
+# NOT: tablo/kolon/identifier değerleri Console'un DIRECT-DISCOVERY adımından
+# (kaynağa JDBC/pymongo ile bağlanıp şema+PK okuma) gelir — buradaki değerler
+# örnektir. Mongo kaynaklarında identifier DAİMA `_id` (STRING) olur.
+# ============================================================================
+
+# 1) descriptor — pre-create Job'ın okuduğu şema + identifier (PK). PreSync wave 0.
+#    (PR diff'inde şema+PK insan-gözden-geçirilebilir; append-only'i önleyen asıl
+#     onay artefaktı budur.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: icetbl-depo-customers
+  namespace: lakehouse
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "0"
+    # Kalıcı (Job'a erişilebilir kalır + Git'teki şema kaydı); her sync öncesi
+    # yeniden yaratılır. HookSucceeded ile SİLİNMEZ — Job ona bağımlı.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  descriptor.yaml: |
+    namespace: depo
+    table: customers
+    identifier: [id]
+    columns:
+      - {name: id, type: bigint, required: true}
+      - {name: name, type: varchar}
+      - {name: email, type: varchar}
+---
+# 2) pre-create Job — tabloyu identifier field ile yaratır. PreSync wave 1
+#    (ConfigMap'ten SONRA, KafkaConnector'dan ÖNCE). create_iceberg_table.py
+#    idempotent + FAIL-LOUD: tablo farklı identifier ile zaten varsa exit 1 →
+#    ArgoCD sync PreSync'te KİLİTLENİR → KafkaConnector ASLA apply edilmez.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: precreate-depo-customers
+  namespace: lakehouse
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: precreate
+          # images/iceberg-tools/Dockerfile (pyiceberg + create_iceberg_table.py).
+          # OpenShift dahili registry; prod'da <registry>/lakehouse/iceberg-tools.
+          image: image-registry.openshift-image-registry.svc:5000/lakehouse/iceberg-tools:latest
+          args: ["--descriptor", "/config/descriptor.yaml"]
+          env:
+            - name: NESSIE_URI
+              value: "http://nessie:19120/iceberg/"
+            - name: S3_ENDPOINT
+              valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}
+          volumeMounts:
+            - {name: descriptor, mountPath: /config, readOnly: true}
+      volumes:
+        - name: descriptor
+          configMap: {name: icetbl-depo-customers}
+---
+# 3) KafkaTopic — normal sync (PreSync tamamlandıktan sonra). prod RF=3.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: cdc.pgdemo.public.customers
+  namespace: lakehouse
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: 6
+  replicas: 3
+  config: {retention.ms: "604800000", cleanup.policy: delete}
+---
+# 4) KafkaConnector (Debezium pg) — normal sync. Tablo (identifier field ile)
+#    PreSync'te hazır olduğundan iceberg-sink-cdc upsert equality-delete'i DOĞRU
+#    çalışır (UPDATE → dedup, DELETE → equality-delete). SMT'ler _target_table
+#    enjekte eder (render_service ile birebir).
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: dbz-pgdemo-customers
+  namespace: lakehouse
+  labels: {strimzi.io/cluster: connect}
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: pgdemo
+    database.port: "5432"
+    database.dbname: appdb
+    database.user: ${directory:/mnt/external-configuration/pgdemo:user}
+    database.password: ${directory:/mnt/external-configuration/pgdemo:pass}
+    topic.prefix: cdc.pgdemo
+    table.include.list: public.customers
+    plugin.name: pgoutput
+    slot.name: debezium_pgdemo
+    publication.name: dbz_pgdemo_pub
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: http://apicurio-registry:8080/apis/registry/v2
+    value.converter.apicurio.registry.url: http://apicurio-registry:8080/apis/registry/v2
+    transforms: unwrap,route
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.delete.handling.mode: rewrite
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.route.type: org.apache.kafka.connect.transforms.InsertField$Value
+    transforms.route.static.field: _target_table
+    transforms.route.static.value: depo.customers

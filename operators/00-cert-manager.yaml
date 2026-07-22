@@ -1,0 +1,54 @@
+# cert-manager — cluster-scoped OLM bootstrap (OperatorHub prerequisite).
+# Installed BEFORE `helm install
+# lakehouse chart/` — the chart's own `Certificate`/`ClusterIssuer`
+# consumers (chart/templates/10-keycloak.yaml `cert-manager.io/v1`
+# Certificate CR, chart/templates/08-routes-tls.yaml Route TLS annotations)
+# depend on this operator's CRDs already being registered on the cluster
+# (verified by chart/templates/prereq-check-job.yaml + _prereq-check.tpl).
+#
+# Namespace per tools/README.md "Ön koşullar" table: `cert-manager`.
+#
+# POC-DOĞRULA: package/channel/source below are the current (at time of
+# writing) values for "cert-manager Operator for Red Hat OpenShift" on the
+# `redhat-operators` catalog — the supported path on OpenShift. Upstream
+# community cert-manager is also commonly available via `community-operators`
+# under package name `cert-manager`, channel `stable`, if the Red Hat build is
+# unavailable/undesired on your cluster. NOTE: the Red Hat build's OPERATOR
+# itself conventionally installs into a `cert-manager-operator` namespace
+# (creating the actual `cert-manager` workload namespace + pods separately);
+# this bootstrap instead follows tools/README.md's stated table
+# (operator + workload namespace both = `cert-manager`) for consistency with
+# the rest of this repo's docs — confirm which convention your cluster's
+# catalog entry actually uses before applying
+# (`oc get packagemanifests -n openshift-marketplace | grep -i cert-manager`),
+# and adjust the Subscription's namespace/OperatorGroup accordingly if it
+# differs.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cert-manager-operatorgroup
+  namespace: cert-manager
+spec:
+  targetNamespaces:
+  - cert-manager
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager
+spec:
+  # POC-DOĞRULA: channel name (e.g. "stable-v1" vs "stable") drifts across
+  # OpenShift minor versions — confirm against the target cluster's catalog.
+  channel: stable-v1
+  name: openshift-cert-manager-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

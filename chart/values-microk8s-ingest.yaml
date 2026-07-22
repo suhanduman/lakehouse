@@ -1,0 +1,115 @@
+# İngest e2e testi (F) — bellek-minimal, tek-node, no-auth. values-microk8s.yaml
+# ÜSTÜNE uygulanır: helm ... -f values-microk8s.yaml -f values-microk8s-ingest.yaml
+#
+# values-microk8s.yaml's kafka.nodePools comment explains WHY that overlay
+# keeps Kafka at 3 brokers/3 controllers even on a memory-starved node: the
+# chart's RF is hardcoded to 3, and Strimzi refuses to reconcile Ready with
+# fewer brokers than the configured replication factor
+# ("Kafka configuration option 'default.replication.factor' should be set to
+# 1 because this cluster has only 1 Kafka broker(s)"). That RF is
+# parameterized (chart/templates/03-kafka-strimzi.yaml + chart/values.yaml
+# `kafka.replication.*`), so THIS overlay can now also drop broker/controller
+# replicas to 1 — the memory-minimal shape the ingest e2e test needs.
+components:
+  kafkaConnect: true            # F: Connect gerekli
+  connectors:
+    enabled: true               # iceberg-sink-cdc (+ iceberg-sink-mongo) fan-out sink
+    examples: {enabled: false}
+  sparkOperator: false          # ileride açılır
+  monitoring: false
+  keycloak: false
+  console: false
+  kafkaUi: false
+  routesTls: false
+  zeppelin: false
+# Dev/test override (TOP-LEVEL connectors, NOT components.connectors): canlı
+# ingest testi hızlı iterasyon için Apicurio auto-register açık ister
+# (chart/values.yaml `connectors.schemaAutoRegister` prod-safe varsayılanı false).
+connectors:
+  schemaAutoRegister: true
+  icebergSink:
+    # In-cluster MinIO (fixtures/minio.yaml) — prod overlay points this at the
+    # prod S3 endpoint. Iceberg sink uses S3FileIO against this endpoint.
+    s3Endpoint: "http://minio.lakehouse-test.svc:9000"
+    # Tek-broker/tek-worker Connect'te sink control-consumer'ı Kafka 4.2 grup
+    # koordinatörüne karşı flap yaşayabiliyor; 30s'lik varsayılan commit
+    # penceresi worker'ın geç DATA_COMPLETE'ini kaçırıp "committed to 0
+    # table(s)" üretebiliyor. Pencereyi büyütmek commit'i güvenilir kılar.
+    commitIntervalMs: "120000"
+    commitTimeoutMs: "180000"
+    tasksMax: 1
+    # On a single-broker Connect, the 2-phase-commit control consumer
+    # (cg-control-*) can hit "Disconnecting from node 0 due to socket
+    # connection setup timeout" against the client default 10s
+    # socket.connection.setup.timeout.ms and fail to join its group. Raising
+    # these iceberg.kafka.* client timeouts (passed through to ALL of the
+    # sink's Kafka clients) avoids that — see chart/values.yaml
+    # `connectors.icebergSink.kafkaClientOverrides` comment.
+    kafkaClientOverrides:
+      socket.connection.setup.timeout.ms: "30000"
+      socket.connection.setup.timeout.max.ms: "120000"
+      request.timeout.ms: "60000"
+      session.timeout.ms: "120000"
+      default.api.timeout.ms: "120000"
+# sparkOperator itself stays disabled here (components.sparkOperator: false,
+# ileride açılır) — these sizing overrides just pre-shrink silver-merge for
+# this memory-minimal node once that gate flips.
+sparkOperator:
+  maintenance:
+    bronzeRetentionDays: 7        # kısa TTL: bellek-minimal test node'unda Bronze hızlı temizlensin
+  silverMerge:
+    driver: {memory: "768m"}
+    executor: {memory: "768m"}
+    maxExecutors: 2
+auth:
+  oidc: {enabled: false}
+kafka:
+  nodePools:
+    controller: {replicas: 1}
+    broker: {replicas: 1}
+  replication:                  # tek-broker → hepsi 1
+    offsetsTopic: 1
+    txnStateLog: 1
+    txnStateLogMinIsr: 1
+    default: 1
+    minInsync: 1
+  topics:                       # iç Connect + demo topic replica'ları 1
+    connectConfigs: {replicas: 1}
+    connectOffsets: {replicas: 1}
+    connectStatus: {replicas: 1}
+    nginxAccess: {replicas: 1}
+    lmsEvents: {replicas: 1}
+kafkaConnect:
+  replicas: 1                         # bellek: tek Connect worker (default 2 → ~4Gi)
+  # Önceden-build edilmiş imaj (images/connect/Dockerfile) — microk8s registry'ye
+  # import/push edilir. spec.image kullanılır (in-cluster build YOK). Apache
+  # Iceberg sink runtime kaynaktan derlenip bake edilir (indirilebilir binary yok).
+  image: "192.168.2.5:32000/connect-lakehouse:1.1"
+  internalTopicReplicationFactor: 1   # tek-broker → Connect iç topic'leri RF=1
+  build:
+    # microk8s container-registry addon (insecure, in-cluster). Bu Strimzi
+    # build'i Buildah kullanır (v1 / Strimzi 0.51 default builder) — registry'ye
+    # auth'suz push eder → pushSecret YOK; --tls-verify=false ile TLS'siz push
+    # (Buildah insecure-registry bayrağı; Kaniko'nun --insecure/--skip-tls-verify
+    # bayrakları DEĞİL). imaj adı `<global.imageRegistry>/connect-lakehouse:<tag>`
+    # (global.imageRegistry aşağıda registry svc'ye işaret eder).
+    pushSecret: ""
+    # Strimzi 0.51 default builder = KANIKO (build log: "Unpacking rootfs").
+    # İnsecure HTTP registry'ye push için Kaniko executor bayrakları
+    # additionalBuildOptions'a konur (Buildah'ın --tls-verify=false'i DEĞİL).
+    additionalBuildOptions:
+      - "--insecure"
+      - "--skip-tls-verify"
+trino:
+  worker: {replicas: 0}         # yalnız coordinator
+  includeCoordinator: true      # worker=0 → coordinator sorguları kendi çalıştırmalı
+  jvm:
+    g1HeapRegionSize: "16M"     # tek-node/bellek-minimal: coordinator heap 32GB'ın çok altında
+# Connect build imajı microk8s registry addon'una (NodePort 32000) push edilir.
+# NODE IP:NodePort kullanılır çünkü: (a) Kaniko build pod'u node IP'ye
+# routable (svc DNS'i node'un containerd'si pull sırasında çözemez); (b) node'un
+# containerd'si aynı NodePort'a localhost=192.168.2.5:32000 ile erişir. containerd
+# bu adresi insecure olarak tanıyacak şekilde ayarlanır (node certs.d hosts.toml).
+# NOT: 192.168.2.5 bu multipass VM'inin IP'si (test-özgü; prod OpenShift iç registry).
+global:
+  imageRegistry: "192.168.2.5:32000"

@@ -1,0 +1,139 @@
+name: e2e
+
+# Kind e2e (Product Foundation Phase 5 / Task 14), on a throwaway kind cluster.
+#   - STAGE 1 (install smoke) = the automated pull_request gate: a single
+#     bootstrap + helm install yields a WORKING platform (all workloads Ready,
+#     Trino answers). Fits the free private runner; runs on every relevant PR.
+#   - STAGE 2 (CDC data path) = OPT-IN only (workflow_dispatch, stage=2): the
+#     full medallion path end to end (Debezium pg -> Kafka -> append-only
+#     Iceberg sink Bronze -> silver-merge Spark MERGE -> Trino, + maintenance /
+#     no-S3-residue). It does NOT fit the free private 2-vCPU/7GB runner
+#     reliably (full stack + Spark driver concurrently), so it is NOT a PR
+#     gate. Full end-to-end acceptance is validated on the real OpenShift
+#     cluster; Stage 2 here can be run on demand on a 4-vCPU public runner.
+# All logic lives in test/e2e/run.sh (locally runnable); this workflow only
+# provisions the runner-side tooling and calls it.
+#
+# COST CONTROLS (GitHub Free minutes are finite):
+#   - Stage 1 only on paths-filtered pull_request; Stage 2 only on manual
+#     workflow_dispatch with stage=2 (never auto)
+#   - concurrency group with cancel-in-progress (superseded pushes stop)
+#   - timeout-minutes on every job (stage 1 <= 25, stage 2 <= 45)
+#   - stage 2 only starts after stage 1 is green (`needs`)
+#   - the Connect image is NEVER pushed to a registry: a dedicated job warms
+#     the GHA buildx cache (first build compiles the Apache Iceberg sink
+#     from source, ~20 min; cached rebuilds are minutes), the stage-2 job
+#     rebuilds from that cache and `kind load`s the image.
+on:
+  pull_request:
+    paths:
+      - 'chart/**'
+      - 'bootstrap/**'
+      - 'test/e2e/**'
+      - 'images/**'
+      - '.github/workflows/e2e.yaml'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Highest stage to run (1 = install smoke only, 2 = + data path)"
+        type: choice
+        options: ['1', '2']
+        default: '2'
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-smoke:
+    name: "stage 1 — install smoke"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.21.3'
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: lakehouse-e2e
+
+      - name: "Stage 1: bootstrap + helm install + assert"
+        run: bash test/e2e/run.sh --stage 1
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: bash test/e2e/diag.sh
+
+  connect-image:
+    # Warms the shared GHA buildx cache in parallel with stage 1 so the
+    # stage-2 job's own build is a fast cache replay. No push, no artifact —
+    # the cache IS the transport.
+    name: "connect image (buildx cache warm)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # Stage 2 (full data path) is OPT-IN only — see the header note. It runs
+    # exclusively via `workflow_dispatch` with stage=2, NOT on pull_request,
+    # because the full stack + Spark merge does not fit the free private
+    # 2-vCPU/7GB runner reliably. Run it on a 4-vCPU public runner or validate
+    # end-to-end on the real (OpenShift) cluster.
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == '2'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build images/connect (cache-to gha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/connect/Dockerfile
+          tags: lakehouse-connect:e2e
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  data-path:
+    name: "stage 2 — CDC data path"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [install-smoke, connect-image]
+    # Opt-in only (workflow_dispatch stage=2) — not a pull_request gate; the
+    # free private 2-vCPU/7GB runner cannot hold the full stack + Spark merge
+    # reliably. Full end-to-end acceptance is validated on OpenShift (or a
+    # 4-vCPU public runner). See the header note.
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == '2'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.21.3'
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Connect image from warm cache (load into docker)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/connect/Dockerfile
+          tags: lakehouse-connect:e2e
+          load: true
+          cache-from: type=gha
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: lakehouse-e2e
+
+      - name: "Stage 2: full install + CDC data path + asserts"
+        run: bash test/e2e/run.sh --stage 2
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: bash test/e2e/diag.sh

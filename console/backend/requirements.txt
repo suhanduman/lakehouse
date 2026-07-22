@@ -1,0 +1,16 @@
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+pydantic==2.*
+pydantic-settings==2.*
+kubernetes==30.*
+trino==0.329.*
+# Iceberg tablo pre-create (IcebergService → Nessie REST). CDC upsert identifier
+# field'ı için tablo yaratımı Trino DDL yerine pyiceberg ile yapılır (F bulgusu).
+pyiceberg[s3fs]==0.10.*
+boto3==1.35.*
+httpx==0.27.*
+authlib==1.3.*
+python-jose[cryptography]==3.3.*
+pyyaml==6.*
+pytest==8.*
+prometheus-fastapi-instrumentator==7.*

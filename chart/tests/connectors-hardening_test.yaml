@@ -1,0 +1,243 @@
+# chart/tests/connectors-hardening_test.yaml — helm-unittest suite covering
+# chart/templates/13-connectors.yaml's connector hardening:
+#   1. Apicurio schema auto-register is parametrized via
+#      `.Values.connectors.schemaAutoRegister` (prod-safe default `false`,
+#      overridden `true` in values-microk8s-ingest.yaml) instead of a
+#      hardcoded `"true"` on the example connectors.
+#   2. A second Iceberg fan-out sink, `iceberg-sink-mongo`, lands `mongo.*`
+#      (JSON, not Avro) alongside `iceberg-sink-cdc`'s `cdc.*`/`jdbc.*`
+#      (Avro/Apicurio) — same core-infra gate
+#      (`.Values.components.connectors.enabled` only, NOT behind `examples`).
+#   3. Both Iceberg sinks are Bronze append-only changelog writers: they land
+#      in `.Values.connectors.icebergSink.warehouse` (default `rawdata`) and
+#      carry no upsert/default-id-columns config (the Iceberg sink cannot
+#      upsert — see the APPEND-ONLY comment in 13-connectors.yaml and
+#      docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md; the
+#      `silver-merge` Spark job does the downstream MERGE INTO).
+suite: connector hardening — schema auto-register param, iceberg-sink-mongo, sink id-columns
+templates:
+  - 13-connectors.yaml
+tests:
+  - it: prod-safe default (schemaAutoRegister unset) renders auto-register=false on the example connectors
+    set:
+      components.connectors.examples.enabled: true
+    asserts:
+      - equal:
+          path: 'spec.config["key.converter.apicurio.registry.auto-register"]'
+          value: "false"
+        documentSelector: {path: metadata.name, value: dbz-mssql-students}
+      - equal:
+          path: 'spec.config["value.converter.apicurio.registry.auto-register"]'
+          value: "false"
+        documentSelector: {path: metadata.name, value: dbz-mssql-students}
+      - equal:
+          path: 'spec.config["value.converter.apicurio.registry.auto-register"]'
+          value: "false"
+        documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+
+  - it: dev/test override (schemaAutoRegister=true) flips the example connectors to auto-register=true
+    set:
+      components.connectors.examples.enabled: true
+      connectors.schemaAutoRegister: true
+    asserts:
+      - equal:
+          path: 'spec.config["key.converter.apicurio.registry.auto-register"]'
+          value: "true"
+        documentSelector: {path: metadata.name, value: dbz-mssql-students}
+      - equal:
+          path: 'spec.config["value.converter.apicurio.registry.auto-register"]'
+          value: "true"
+        documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+
+  - it: iceberg-sink-mongo renders (core infra, examples NOT required) with JsonConverter + mongo topics.regex
+    asserts:
+      - containsDocument:
+          kind: KafkaConnector
+          apiVersion: kafka.strimzi.io/v1
+          name: iceberg-sink-mongo
+          any: true
+      - equal:
+          path: 'spec.config["topics.regex"]'
+          value: "mongo\\..*"
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+      - equal:
+          path: 'spec.config["key.converter"]'
+          value: org.apache.kafka.connect.json.JsonConverter
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+      - equal:
+          path: 'spec.config["value.converter"]'
+          value: org.apache.kafka.connect.json.JsonConverter
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+      - equal:
+          path: 'spec.config["key.converter.schemas.enable"]'
+          value: "false"
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+      - equal:
+          path: 'spec.config["value.converter.schemas.enable"]'
+          value: "false"
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+      - equal:
+          path: 'spec.config["errors.deadletterqueue.topic.name"]'
+          value: "iceberg-mongo.dlq"
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+
+  - it: iceberg-sink-mongo is gated OFF by components.connectors.enabled=false, same as iceberg-sink-cdc
+    set:
+      components.connectors.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: both sinks render commit.timeout-ms (constrained-cluster tunable, F finding)
+    asserts:
+      - isNotNullOrEmpty:
+          path: 'spec.config["iceberg.control.commit.timeout-ms"]'
+        documentSelector: {path: metadata.name, value: iceberg-sink-cdc}
+      - isNotNullOrEmpty:
+          path: 'spec.config["iceberg.control.commit.timeout-ms"]'
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+
+  # --------------------------------------------------------------------
+  # kafkaClientOverrides: iceberg.kafka.* passes through to ALL of the sink's
+  # internal Kafka clients, incl. the 2-phase-commit control consumer
+  # (cg-control-*). Empty by default (prod Kafka client defaults are fine);
+  # the microk8s-ingest overlay raises the client socket/session/request
+  # timeouts to avoid a "socket connection setup timeout" JoinGroup failure
+  # on a constrained single-broker cluster.
+  # --------------------------------------------------------------------
+  - it: prod-safe default (kafkaClientOverrides unset) renders no iceberg.kafka.* keys on either sink
+    asserts:
+      - notExists:
+          path: 'spec.config["iceberg.kafka.socket.connection.setup.timeout.ms"]'
+        documentSelector: {path: metadata.name, value: iceberg-sink-cdc}
+      - notExists:
+          path: 'spec.config["iceberg.kafka.socket.connection.setup.timeout.ms"]'
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+
+  - it: kafkaClientOverrides passes through as iceberg.kafka.* on both sinks (microk8s-ingest overlay)
+    values:
+      - ../values-microk8s-ingest.yaml
+    asserts:
+      - equal:
+          path: 'spec.config["iceberg.kafka.socket.connection.setup.timeout.ms"]'
+          value: "30000"
+        documentSelector: {path: metadata.name, value: iceberg-sink-cdc}
+      - equal:
+          path: 'spec.config["iceberg.kafka.socket.connection.setup.timeout.ms"]'
+          value: "30000"
+        documentSelector: {path: metadata.name, value: iceberg-sink-mongo}
+
+  - it: iceberg-sink-cdc lands in the Bronze (rawdata) warehouse, append-only
+    template: templates/13-connectors.yaml
+    documentIndex: 0
+    asserts:
+      - equal: {path: 'spec.config["iceberg.catalog.warehouse"]', value: rawdata}
+      - equal: {path: spec.tasksMax, value: 1}
+      - notExists: {path: 'spec.config["iceberg.tables.upsert-enabled"]'}
+      - notExists: {path: 'spec.config["iceberg.tables.cdc-field"]'}
+      - notExists: {path: 'spec.config["iceberg.tables.default-id-columns"]'}
+      - equal: {path: 'spec.config["iceberg.tables.route-field"]', value: _target_table}
+  - it: iceberg-sink-mongo also lands in Bronze
+    template: templates/13-connectors.yaml
+    documentIndex: 1
+    asserts:
+      - equal: {path: 'spec.config["iceberg.catalog.warehouse"]', value: rawdata}
+      - notExists: {path: 'spec.config["iceberg.tables.upsert-enabled"]'}
+  - it: example mssql source carries CDC metadata + Bronze route
+    template: templates/13-connectors.yaml
+    set: {components: {connectors: {examples: {enabled: true}}}}
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: 'spec.config["transforms.unwrap.add.fields"]'
+          value: op,ts_ms,source.change_lsn:lsn
+      - equal:
+          path: 'spec.config["transforms.route.static.value"]'
+          value: mssql_ogrenci_raw.students
+
+  # --------------------------------------------------------------------
+  # Source-SMT contract: every example source connector uses `tsconv` only
+  # for __ts_ms — no `ingestts`/`__ingest_ts` field, since for Debezium
+  # relational records post-unwrap that field would come out NULL. Mongo
+  # full-CDC ExtractNewDocumentState unaffected.
+  # --------------------------------------------------------------------
+  - it: no example source connector carries the removed ingestts SMT
+    template: templates/13-connectors.yaml
+    set: {components: {connectors: {examples: {enabled: true}}}}
+    asserts:
+      - notExists:
+          path: 'spec.config["transforms.ingestts.timestamp.field"]'
+        documentSelector: {path: metadata.name, value: dbz-mssql-students}
+      - notExists:
+          path: 'spec.config["transforms.ingestts.timestamp.field"]'
+        documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+      - notExists:
+          path: 'spec.config["transforms.ingestts.timestamp.field"]'
+        documentSelector: {path: metadata.name, value: dbz-mongo-lms}
+      - equal:
+          path: 'spec.config["transforms.tsconv.field"]'
+          value: __ts_ms
+        documentSelector: {path: metadata.name, value: dbz-mssql-students}
+      - equal:
+          path: 'spec.config["transforms.tsconv.field"]'
+          value: __ts_ms
+        documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+      - equal:
+          path: 'spec.config["transforms.tsconv.field"]'
+          value: __ts_ms
+        documentSelector: {path: metadata.name, value: dbz-mongo-lms}
+
+  - it: example mongo source uses ExtractNewDocumentState for full CDC (not the relational ExtractNewRecordState)
+    template: templates/13-connectors.yaml
+    set: {components: {connectors: {examples: {enabled: true}}}}
+    documentSelector: {path: metadata.name, value: dbz-mongo-lms}
+    asserts:
+      - equal:
+          path: 'spec.config["transforms.unwrap.type"]'
+          value: io.debezium.connector.mongodb.transforms.ExtractNewDocumentState
+      - equal:
+          path: 'spec.config["transforms.unwrap.delete.handling.mode"]'
+          value: rewrite
+
+  - it: example jdbc source synthesizes __op/__deleted upsert-only fields
+    template: templates/13-connectors.yaml
+    set: {components: {connectors: {examples: {enabled: true}}}}
+    documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+    asserts:
+      - equal:
+          path: 'spec.config["transforms.setop.static.field"]'
+          value: __op
+      - equal:
+          path: 'spec.config["transforms.setop.static.value"]'
+          value: u
+      - equal:
+          path: 'spec.config["transforms.setdel.static.field"]'
+          value: __deleted
+      - equal:
+          path: 'spec.config["transforms.setdel.static.value"]'
+          value: "false"
+
+  # --------------------------------------------------------------------
+  # __ts_ms: Aiven's JDBC SourceRecord has no timestamp (5-arg constructor ->
+  # SourceRecord.timestamp() is always null), so __ts_ms is derived from the
+  # timestamp.column.name column via `tsfield` (ReplaceField$Value renames
+  # updated_at:__ts_ms) instead.
+  # --------------------------------------------------------------------
+  - it: example jdbc source derives __ts_ms from the timestamp column via ReplaceField (tsfield), not the removed setts InsertField
+    template: templates/13-connectors.yaml
+    set: {components: {connectors: {examples: {enabled: true}}}}
+    documentSelector: {path: metadata.name, value: jdbc-mssql-scheduled}
+    asserts:
+      - equal:
+          path: 'spec.config["transforms"]'
+          value: "route,setop,setdel,tsfield,tsconv"
+      - equal:
+          path: 'spec.config["transforms.tsfield.type"]'
+          value: org.apache.kafka.connect.transforms.ReplaceField$Value
+      - equal:
+          path: 'spec.config["transforms.tsfield.renames"]'
+          value: "updated_at:__ts_ms"
+      - notExists:
+          path: 'spec.config["transforms.setts.type"]'
+      - notExists:
+          path: 'spec.config["transforms.setts.timestamp.field"]'

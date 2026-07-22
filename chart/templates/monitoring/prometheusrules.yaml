@@ -1,0 +1,82 @@
+# chart/templates/monitoring/prometheusrules.yaml — D1 (İzleme/Monitoring).
+#
+# Single PrometheusRule (`lakehouse-alerts`) with 6 alert rules across the
+# ingest / storage / query / platform surfaces. Thresholds come from
+# `.Values.monitoring.alerts.*` (chart/values.yaml).
+#
+# IMPORTANT — Helm-vs-PromQL brace escaping: alert annotations.summary
+# strings embed PromQL label refs (Prometheus $labels.<name> syntax), which
+# must survive Helm's own templating literally. Each such ref below is
+# wrapped in Helm's raw-string escape form so it renders as a literal
+# PromQL label ref instead of Helm trying to evaluate $labels itself.
+# Verified via `helm template ... | grep '$labels'` producing plain
+# PromQL label refs in the rendered output (see task-5-report.md).
+#
+# NOTE TO EDITORS: Helm templates this entire file (including these `#`
+# comment lines) before YAML parsing — do NOT write a literal double-brace
+# PromQL example directly in a comment, or Helm's parser will choke on it
+# exactly like it would in the rules below. Describe such syntax in prose
+# instead (as done here).
+#
+# NOTE: the actual metric NAMES below (`kafka_connect_connector_status`,
+# `kafka_consumergroup_lag`, `kafka_server_brokertopicmetrics_messagesin_total`,
+# `cnpg_pg_replication_lag`, `trino_execution_querymanager_failedqueries_total`,
+# `kube_pod_container_status_restarts_total`) are exporter/version-dependent
+# (spec §9). `helm template`/`helm lint` only verify PromQL syntax + YAML
+# validity here; matching them against REAL exposed series is confirmed live
+# against microk8s/OpenShift separately — not attempted here.
+{{- if .Values.components.monitoring }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lakehouse-alerts
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  groups:
+    - name: lakehouse.ingest
+      rules:
+        - alert: KafkaConnectorFailed
+          expr: kafka_connect_connector_status{status="failed"} > 0
+          for: {{ .Values.monitoring.alerts.connectorFailedFor }}
+          labels: {severity: critical}
+          annotations:
+            summary: "Kafka Connect connector FAILED ({{`{{ $labels.connector }}`}})"
+        - alert: KafkaConsumerLagHigh
+          expr: sum(kafka_consumergroup_lag) by (consumergroup) > {{ .Values.monitoring.alerts.consumerLagThreshold }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Yüksek consumer lag ({{`{{ $labels.consumergroup }}`}})"
+        - alert: IcebergDLQGrowing
+          expr: rate(kafka_server_brokertopicmetrics_messagesin_total{topic=~".*dlq.*"}[5m]) > {{ .Values.monitoring.alerts.dlqRatePerSec }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "DLQ topic'ine yazım artıyor ({{`{{ $labels.topic }}`}})"
+    - name: lakehouse.storage
+      rules:
+        - alert: CNPGReplicationLagHigh
+          expr: cnpg_pg_replication_lag > {{ .Values.monitoring.alerts.cnpgReplicationLagSeconds }}
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "CNPG replication lag yüksek ({{`{{ $labels.pod }}`}})"
+    - name: lakehouse.query
+      rules:
+        - alert: TrinoQueryErrorRateHigh
+          expr: rate(trino_execution_querymanager_failedqueries_total[5m]) > {{ .Values.monitoring.alerts.trinoErrorRatePerSec }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Trino başarısız sorgu hızı yüksek"
+    - name: lakehouse.platform
+      rules:
+        - alert: PodRestartingFrequently
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ include "lakehouse.namespace" . }}"}[1h]) > {{ .Values.monitoring.alerts.podRestartThreshold }}
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "Pod sık yeniden başlıyor ({{`{{ $labels.pod }}`}})"
+{{- end }}

@@ -1,0 +1,106 @@
+name: ci
+
+# Static gate suite for every PR + every push to main. Three independent jobs
+# run in parallel (helm chart gates, Python backend/tools, shell scripts) —
+# no job depends on another, no secrets, no cluster access; every gate here
+# is the same one documented in CONTRIBUTING.md's "Running the test gates
+# locally" list, just wired into GitHub Actions.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  helm:
+    name: helm chart gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.21.3'
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.1
+
+      - name: helm lint
+        run: helm lint chart
+
+      - name: helm unittest
+        run: helm unittest chart
+
+      - name: Customer/tenant-identity guard
+        run: bash chart/tests/no-customer-identity_test.sh
+
+      - name: Set up Python (for integrity/sizing gates' PyYAML dependency)
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        # chart/tests/integrity.sh pipes into chart/scripts/helm-check.py
+        # (imports `yaml`) and chart/tests/sizing-tiers_test.sh directly
+        # imports `yaml` for its knob-content checks — both need PyYAML on
+        # PATH's python3, nothing else.
+        run: pip install pyyaml
+
+      - name: Full-chart namespace + service-reference-closure integrity gate
+        run: bash chart/tests/integrity.sh
+
+      - name: Sizing-tier overlays render + content-assertion suite
+        run: bash chart/tests/sizing-tiers_test.sh
+
+      - name: Render matrix (platform x tier smoke render)
+        run: |
+          set -euo pipefail
+          for platform in vanilla openshift; do
+            for tier in dev medium large example; do
+              echo "== platform=$platform tier=$tier =="
+              helm template chart -f "chart/values-${tier}.yaml" --set platform="$platform" > /dev/null
+            done
+          done
+
+  python:
+    name: python (backend + tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: pip install -r console/backend/requirements.txt
+
+      - name: Console backend test suite
+        run: cd console/backend && python -m pytest -q
+
+      - name: Tools test suite
+        # tools/tests/test_create_iceberg_table.py does
+        # `pytest.importorskip("pyiceberg")` — pyiceberg (and its s3fs/pyarrow
+        # transitive deps) is deliberately NOT installed here: it's a heavy,
+        # slow-to-resolve extra and every other tools test (merge_lib,
+        # maintenance_lib, merge_cdc arg parsing) is pure-Python by design
+        # specifically so it doesn't need Spark/Iceberg to unit-test. The one
+        # module that does need it skips cleanly instead of failing.
+        run: python3 -m pytest tools -q
+
+  shell:
+    name: shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # shellcheck ships preinstalled on the ubuntu-latest runner image.
+      - name: shellcheck
+        run: shellcheck bootstrap/*.sh bootstrap/lib/*.sh bootstrap/tests/*.sh chart/tests/*.sh test/e2e/*.sh
+
+      - name: Bootstrap (Layer-0) script test suite
+        run: bash bootstrap/tests/bootstrap_test.sh

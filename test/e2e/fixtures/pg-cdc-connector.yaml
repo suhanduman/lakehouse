@@ -1,0 +1,72 @@
+# e2e Debezium pg CDC source — adapted from tools/templates/source-cdc-pg.yaml
+# (the product's per-source template), pointed at the pg-src fixture and the
+# medallion Bronze route. Applied with `kubectl -n <ns> apply` AFTER the
+# Bronze/Silver tables are pre-created (test/e2e/run.sh ordering).
+#
+# Contract notes (must match chart/templates/13-connectors.yaml's sinks):
+#   - SMT chain `unwrap,route,tsconv`: ExtractNewRecordState (rewrite mode ->
+#     __op/__ts_ms/__deleted/__lsn metadata), InsertField `_target_table` =
+#     `depo_raw.customers` (the sink's dynamic-routing field — Bronze
+#     namespace is ALWAYS `<ns>_raw`), TimestampConverter __ts_ms->Timestamp
+#     (backs Bronze's day(__ts_ms) partition + MERGE ordering).
+#   - Avro via Apicurio with auto-register=true (CI has no separate
+#     schema-publish step; prod keeps auto-register=false).
+#   - The KafkaTopic CR below pre-creates the CDC topic: broker auto-create
+#     is effectively off, records would expire un-sent without it. RF=1 on
+#     the single-broker dev tier.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: cdc.pg.public.customers
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: e2e-pg-customers
+  labels:
+    strimzi.io/cluster: connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: pg-src
+    database.port: "5432"
+    database.dbname: postgres
+    database.user: "${directory:/mnt/external-configuration/pg:user}"
+    database.password: "${directory:/mnt/external-configuration/pg:pass}"
+    plugin.name: pgoutput
+    slot.name: debezium_e2e
+    publication.name: dbz_e2e_pub
+    publication.autocreate.mode: filtered
+    snapshot.mode: initial
+    topic.prefix: cdc.pg
+    table.include.list: public.customers
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    value.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    key.converter.apicurio.registry.auto-register: "true"
+    value.converter.apicurio.registry.auto-register: "true"
+    transforms: "unwrap,route,tsconv"
+    transforms.unwrap.type: "io.debezium.transforms.ExtractNewRecordState"
+    transforms.unwrap.delete.handling.mode: "rewrite"
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.unwrap.add.fields: "op,ts_ms,source.lsn:lsn"
+    transforms.route.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.route.static.field: "_target_table"
+    transforms.route.static.value: "depo_raw.customers"
+    transforms.tsconv.type: "org.apache.kafka.connect.transforms.TimestampConverter$Value"
+    transforms.tsconv.field: "__ts_ms"
+    transforms.tsconv.target.type: "Timestamp"
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: "cdc.pg.public.customers.dlq"
+    errors.deadletterqueue.topic.replication.factor: "1"
+    errors.deadletterqueue.context.headers.enable: "true"

@@ -1,0 +1,73 @@
+# chart/tests/helpers_test.yaml — helm-unittest suite for `_helpers.tpl` name
+# generation (optional unit-test layer; chart/tests/integrity.sh remains the
+# primary spec §3.1/§8 gate).
+#
+# Asserts the SINGLE-SOURCE-OF-TRUTH helpers in chart/templates/_helpers.tpl
+# actually produce the canonical, namespace-portable names their own header
+# comment documents — using a NON-default release namespace
+# ("lakehouse-test") so a helper that silently hardcoded "example" (or any
+# other literal) would be caught here, not just by the full-chart render in
+# integrity.sh.
+suite: _helpers name generation
+templates:
+  - 00-namespace.yaml
+  - 04-nessie-ha.yaml
+  - 08-routes-tls.yaml
+release:
+  name: lakehouse
+  namespace: lakehouse-test
+tests:
+  - it: lakehouse.namespace resolves to .Release.Namespace, never a hardcoded literal
+    template: 00-namespace.yaml
+    documentSelector:
+      path: kind
+      value: Namespace
+    asserts:
+      - equal:
+          path: metadata.name
+          value: lakehouse-test
+
+  - it: lakehouse.svc.nessie produces the canonical "nessie" Service name, namespaced under the release namespace
+    template: 04-nessie-ha.yaml
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nessie
+      - equal:
+          path: metadata.namespace
+          value: lakehouse-test
+
+  - it: lakehouse.routeHost builds "<logical-name>.<global.domain>", and the Route's own to.name resolves via lakehouse.svc.nessie
+    template: 08-routes-tls.yaml
+    set:
+      global.domain: example.org
+      # platform-switch task: Routes only render on platform:openshift now
+      # (default flipped to "vanilla") — set explicitly so this Route-focused
+      # assertion still exercises the Route path, not its Ingress mirror.
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: nessie
+    asserts:
+      - equal:
+          path: spec.host
+          value: nessie.example.org
+      - equal:
+          path: spec.to.name
+          value: nessie
+
+  - it: lakehouse.routeHost changes deterministically with global.domain (no cached/hardcoded domain)
+    template: 08-routes-tls.yaml
+    set:
+      global.domain: another.example.net
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: nessie
+    asserts:
+      - equal:
+          path: spec.host
+          value: nessie.another.example.net

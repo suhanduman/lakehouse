@@ -1,0 +1,143 @@
+# Chart prereq-check — pre-install/pre-upgrade hook Job. Second,
+# cluster-verified enforcement mechanism alongside
+# chart/templates/_prereq-check.tpl's template-time Capabilities check (see
+# that file's header comment for the full rationale + why both exist).
+#
+# Unlike the Capabilities check, THIS Job's manifest rendering is completely
+# unaffected by whether Helm is connected to a live cluster: Helm hooks are
+# never executed by `helm template` (or `helm lint`) — they are only ever run
+# by `helm install`/`helm upgrade`/`helm rollback`/`helm delete` against a
+# real API server. So this file can safely render as plain YAML in CI
+# (prod-manifests/validate.sh --helm) while still doing a genuine, live
+# `kubectl get crd` check the moment a real install/upgrade actually runs.
+#
+# Gated by the SAME `.Values.prereqCheck.enabled` flag as the Capabilities
+# check (single lever, see chart/values.yaml) — default `false` (bundled
+# values.yaml / values-prod.example.yaml), so a plain `helm install` without
+# `--set prereqCheck.enabled=true` does NOT get this Job (matches the
+# Capabilities check's default-off story for consistency; a deployer who
+# wants belt-and-suspenders CRD verification opts into both at once).
+#
+# RBAC: CustomResourceDefinitions are cluster-scoped, so a namespaced Role
+# cannot grant read access to them — a ClusterRole + ClusterRoleBinding is
+# unavoidable here (get/list only, on customresourcedefinitions.apiextensions.k8s.io
+# — no write, no other resource). Named with the release namespace suffixed
+# so multiple releases (e.g. this chart's own test harness applying against
+# more than one release namespace) never collide on the same cluster-scoped
+# object name. `helm.sh/hook-delete-policy: hook-succeeded` keeps a FAILED
+# Job (and its Pod logs) around for `oc logs job/lakehouse-prereq-check -n
+# <ns>` troubleshooting; only a successful run cleans itself up.
+{{- if .Values.prereqCheck.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lakehouse-prereq-check
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lakehouse-prereq-check-{{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: [customresourcedefinitions]
+  verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lakehouse-prereq-check-{{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+subjects:
+- kind: ServiceAccount
+  name: lakehouse-prereq-check
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef:
+  kind: ClusterRole
+  name: lakehouse-prereq-check-{{ include "lakehouse.namespace" . }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-prereq-check
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "lakehouse.labels" . | nindent 8 }}
+        app: lakehouse-prereq-check
+    spec:
+      serviceAccountName: lakehouse-prereq-check
+      restartPolicy: Never
+      # POC-DOĞRULA: `openshift/tools:latest` is the standard OpenShift
+      # "tools" ImageStream (ships oc/kubectl), present on every OpenShift
+      # 4.x cluster out of the box — chosen so this Job needs no extra image
+      # build/mirror step (same zero-extra-dependency reasoning as picking
+      # `oc`/`kubectl` over a custom image). Substitute a corporate-mirrored
+      # kubectl image if the target cluster's `openshift` namespace does not
+      # carry this ImageStreamTag (air-gapped clusters, etc.).
+      containers:
+      - name: prereq-check
+        image: "image-registry.openshift-image-registry.svc:5000/openshift/tools:latest"
+        command: ["/bin/bash", "-ceu"]
+        args:
+        - |
+          missing=""
+          check() {
+            if ! kubectl get crd "$1" >/dev/null 2>&1; then
+              missing="${missing}
+            - $1 (required by: $2)"
+            fi
+          }
+          check kafkas.kafka.strimzi.io "Strimzi (Kafka)"
+          check clusters.postgresql.cnpg.io "CloudNativePG"
+          check sparkapplications.sparkoperator.k8s.io "Spark Operator"
+          check keycloaks.k8s.keycloak.org "Keycloak Operator"
+          check externalsecrets.external-secrets.io "ExternalSecrets Operator"
+          check certificates.cert-manager.io "cert-manager"
+          {{- if .Values.components.monitoring }}
+          # İzleme (D1): ServiceMonitor CRD from OpenShift UWM /
+          # Prometheus-Operator — only required when components.monitoring is on.
+          check servicemonitors.monitoring.coreos.com "UWM/Prometheus-Operator (enable user-workload-monitoring — see operators/README.md)"
+          {{- end }}
+          if [ -n "$missing" ]; then
+            echo "FAIL: lakehouse prereq-check — required operator CRD(s) not found on this cluster:${missing}"
+            echo ""
+            echo "Install the cluster-scoped operator prerequisites FIRST — see operators/README.md:"
+            echo "  oc apply -f operators/"
+            echo "  oc get csv -A   # wait until every relevant CSV shows Succeeded"
+            echo "Then retry: helm install/helm upgrade ..."
+            exit 1
+          fi
+          echo "OK: lakehouse prereq-check — all required operator CRDs present."
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+{{- end }}

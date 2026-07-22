@@ -1,0 +1,111 @@
+# chart/tests/spark-operator_test.yaml — helm-unittest suite for
+# chart/templates/05-spark-operator.yaml. Covers the `silver-merge`
+# ScheduledSparkApplication (Bronze -> Silver incremental CDC MERGE, dynamic
+# allocation) added alongside the existing `iceberg-maintenance` job. See
+# docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
+suite: spark-operator — silver-merge ScheduledSparkApplication (dynamic-alloc CDC MERGE)
+templates:
+  - 05-spark-operator.yaml
+tests:
+  - it: renders the silver-merge ScheduledSparkApplication with dynamic allocation
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: spec.template.mainApplicationFile
+          value: "local:///opt/spark/jobs/merge_cdc.py"
+      - equal:
+          path: spec.template.dynamicAllocation.enabled
+          value: true
+
+  - it: silver-merge dynamic allocation is scaled by values (min 0, max from silverMerge.maxExecutors)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: spec.template.dynamicAllocation.minExecutors
+          value: 0
+      - equal:
+          path: spec.template.dynamicAllocation.maxExecutors
+          value: 4
+      - equal:
+          path: 'spec.template.sparkConf["spark.dynamicAllocation.maxExecutors"]'
+          value: "4"
+
+  - it: silver-merge uses the shared spark-driver ServiceAccount and spark-defaults ConfigMap
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: spec.template.driver.serviceAccount
+          value: spark-driver
+      - equal:
+          path: spec.template.volumes[0].configMap.name
+          value: spark-defaults
+
+  - it: silver-merge is gated off by sparkOperator.silverMerge.enabled=false
+    set:
+      sparkOperator:
+        silverMerge:
+          enabled: false
+    asserts:
+      - containsDocument:
+          kind: ScheduledSparkApplication
+          apiVersion: sparkoperator.k8s.io/v1beta2
+          name: silver-merge
+        not: true
+
+  - it: iceberg-maintenance still renders alongside silver-merge (SA, Role, RoleBinding, ConfigMap + 2 ScheduledSparkApplications)
+    asserts:
+      - hasDocuments:
+          count: 6
+      - containsDocument:
+          kind: ScheduledSparkApplication
+          apiVersion: sparkoperator.k8s.io/v1beta2
+          name: iceberg-maintenance
+          any: true
+      - containsDocument:
+          kind: ScheduledSparkApplication
+          apiVersion: sparkoperator.k8s.io/v1beta2
+          name: silver-merge
+          any: true
+
+  - it: iceberg-maintenance passes BRONZE_RETENTION_DAYS (Bronze TTL, Task 5) to driver and executor
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - equal:
+          path: spec.template.driver.env[0]
+          value:
+            name: BRONZE_RETENTION_DAYS
+            value: "30"
+      - equal:
+          path: spec.template.executor.env[0]
+          value:
+            name: BRONZE_RETENTION_DAYS
+            value: "30"
+
+  - it: iceberg-maintenance BRONZE_RETENTION_DAYS is scaled by values (sparkOperator.maintenance.bronzeRetentionDays)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    set:
+      sparkOperator:
+        maintenance:
+          bronzeRetentionDays: 7
+    asserts:
+      - equal:
+          path: spec.template.driver.env[0].value
+          value: "7"
+      - equal:
+          path: spec.template.executor.env[0].value
+          value: "7"

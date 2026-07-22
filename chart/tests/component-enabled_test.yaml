@@ -1,0 +1,66 @@
+# chart/tests/component-enabled_test.yaml — helm-unittest suite proving an
+# `enabled: false` component flag fully removes that component's manifests
+# from the render (optional unit-test layer; chart/tests/integrity.sh
+# remains the primary spec §3.1/§8 gate).
+#
+# Uses Zeppelin (chart/templates/09-zeppelin.yaml, gated by
+# `.Values.components.zeppelin`) as the representative case: 6 documents
+# (PVC, 2x ConfigMap, Deployment, Service, PodDisruptionBudget) when enabled
+# with the default (empty) `zeppelin.ad.bindPassword` — the `ad-bind-
+# credentials` Secret itself is conditionally rendered only when a real
+# bindPassword is supplied (final-review FIX 4: dev-convenience-only inline
+# Secret, see chart/values.yaml's `secrets:` comment) — 7 documents when a
+# bindPassword IS supplied, 0 when the component is disabled — verified
+# against a real `helm template` render of this exact file before writing
+# these assertions.
+suite: enabled:false component disappears from render
+templates:
+  - 09-zeppelin.yaml
+tests:
+  - it: renders nothing at all when components.zeppelin is false
+    set:
+      components.zeppelin: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders its manifest set (minus the dev-convenience Secret) when components.zeppelin is true and bindPassword is left at its empty default (control case, proves the assertion above isn't vacuously true)
+    set:
+      components.zeppelin: true
+    asserts:
+      - hasDocuments:
+          count: 6
+      # `any: true` searches ACROSS all rendered docs for a match, instead
+      # of asserting every doc individually (which fails on the PVC/
+      # ConfigMap/PDB siblings). Names verified against a real
+      # `helm template -s templates/09-zeppelin.yaml` render: both the
+      # Deployment and the Service are named exactly `zeppelin`.
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: zeppelin
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: zeppelin
+          any: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: ad-bind-credentials
+          any: true
+        not: true
+
+  - it: also renders the ad-bind-credentials Secret when a real bindPassword is explicitly supplied (FIX 4 dev-convenience path)
+    set:
+      components.zeppelin: true
+      zeppelin.ad.bindPassword: "dev-only-test-password"
+    asserts:
+      - hasDocuments:
+          count: 7
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: ad-bind-credentials
+          any: true

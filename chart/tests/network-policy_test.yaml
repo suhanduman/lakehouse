@@ -1,0 +1,62 @@
+# allow-from-operator-namespaces (chart/templates/00-namespace.yaml): the
+# cluster-scoped operators (CNPG instance-status :8000 polls, Strimzi
+# KafkaAgent) must reach INTO the release namespace past default-deny on
+# any CNI that enforces NetworkPolicy (Calico, Cilium, kind >= 0.24 — live
+# kind-e2e finding, 2026-07-22). These tests pin the values-driven source
+# namespace list on both platforms.
+suite: operator-namespace NetworkPolicy
+templates:
+  - 00-namespace.yaml
+tests:
+  - it: renders allow-from-operator-namespaces with every default operator namespace (vanilla)
+    documentSelector:
+      path: metadata.name
+      value: allow-from-operator-namespaces
+    asserts:
+      - equal:
+          path: spec.podSelector
+          value: {}
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: strimzi
+      - equal:
+          path: spec.ingress[0].from[1].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: cnpg-system
+      - equal:
+          path: spec.ingress[0].from[2].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: spark-operator
+      - equal:
+          path: spec.ingress[0].from[3].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: keycloak-system
+      - equal:
+          path: spec.ingress[0].from[4].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-operators
+
+  - it: renders the same operator allow-list on openshift (metadata.name label exists on every platform)
+    set:
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: allow-from-operator-namespaces
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[4].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-operators
+
+  - it: honors an environment override of the operator namespace list
+    set:
+      namespaceConfig:
+        operatorNamespaces: [my-operators]
+    documentSelector:
+      path: metadata.name
+      value: allow-from-operator-namespaces
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: my-operators
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 1

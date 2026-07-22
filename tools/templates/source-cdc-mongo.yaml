@@ -1,0 +1,31 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata: {name: "dbz-{{SOURCE}}-{{TABLE}}", namespace: example, labels: {strimzi.io/cluster: connect}}
+spec:
+  class: io.debezium.connector.mongodb.MongoDbConnector
+  tasksMax: 1
+  config:
+    mongodb.connection.string: "{{MONGO_URI}}"
+    mongodb.user: "${directory:/mnt/external-configuration/{{SOURCE}}:user}"
+    mongodb.password: "${directory:/mnt/external-configuration/{{SOURCE}}:pass}"
+    topic.prefix: "{{TOPIC_PREFIX}}"
+    collection.include.list: "{{DB}}.{{TABLE}}"
+    capture.mode: "change_streams_update_full"
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+    transforms: "unwrap,route,tsconv"
+    transforms.unwrap.type: "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState"
+    transforms.unwrap.delete.handling.mode: "rewrite"
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.unwrap.add.fields: "op,ts_ms"
+    transforms.route.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.route.static.field: "_target_table"
+    transforms.route.static.value: "{{TARGET_NS}}_raw.{{TARGET_TABLE}}"
+    transforms.tsconv.type: "org.apache.kafka.connect.transforms.TimestampConverter$Value"
+    transforms.tsconv.field: "__ts_ms"
+    transforms.tsconv.target.type: "Timestamp"
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: "{{TOPIC_PREFIX}}.{{TABLE}}.dlq"
+    errors.deadletterqueue.context.headers.enable: "true"

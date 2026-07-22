@@ -1,0 +1,4453 @@
+# GENERATED from chart/ — do not edit; edit the chart and re-run
+# manual-install/render.sh instead. chart/ is the single source of truth;
+# this file is a rendered convenience for air-gapped/manual/no-helm
+# install scenarios (see manual-install/README.md).
+#
+# Command used to generate this file:
+#   manual-install/render.sh example chart/values-prod.example.yaml
+#
+---
+# Source: lakehouse/templates/00-namespace.yaml
+# Namespace + ResourceQuota + LimitRange + default-deny/allow NetworkPolicies.
+# Only parameterized + made namespace-aware. This template always renders
+# (no `enabled` flag): every release needs its namespace's isolation policy,
+# regardless of which optional components are turned on.
+#
+# Compute/storage quota'ları çekişmeyi önler, default-deny prensibi
+# namespace'i dışarıdan gelen trafiğe kapalı tutar.
+#
+# Chart prereq-check: runs before anything else renders — see
+# chart/templates/_prereq-check.tpl for the full mechanism + why it is
+# disabled by default. Renders to an empty string (no output) unless
+# `.Values.prereqCheck.enabled` is true.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  # The Namespace object's own name IS the release namespace — this is the
+  # one resource in the chart where "namespace" means "what am I", not
+  # "where do I live".
+  name: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+    openshift.io/cluster-monitoring: "true"  # Prometheus bu ns'i scrape eder
+  annotations:
+    openshift.io/description: "Lakehouse Data Platform (Prod)"
+    openshift.io/display-name: "Lakehouse"
+---
+# Source: lakehouse/templates/00-namespace.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: example
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Source: lakehouse/templates/00-namespace.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: example
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector: {}
+---
+# Source: lakehouse/templates/00-namespace.yaml
+# Route/Ingress controller + monitoring'in girebilmesi için. Kaynak
+# namespace'ler platform'a göre farklı etiketlenir (bkz. `lakehouse.
+# isOpenShift`, _helpers.tpl): OpenShift'in `network.openshift.io/
+# policy-group` etiketi vanilla kümelerde YOK — vanilla'da bunun yerine
+# k8s-standart `kubernetes.io/metadata.name` (her namespace'de otomatik var)
+# ile `.Values.ingress.controllerNamespace` / `.Values.monitoring.
+# prometheusNamespace`'i hedefleriz. Pod/port scoping (podSelector: {},
+# policyTypes: [Ingress]) HER İKİ platformda da AYNI — yalnızca kaynak
+# namespaceSelector'lar farklı.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-ingress-and-monitoring
+  namespace: example
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: ingress
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: monitoring
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- NetworkPolicy: Ingress --------
+# Frontend: SADECE Route/ingress-controller'dan giriş (namespace içindeki
+# `allow-intra-namespace` politikası (00-namespace.yaml) ns-içi tüm pod'lardan
+# trafiğe zaten izin veriyor — bu politika console'a özgü savunma derinliği
+# katmanıdır, o geniş kuralı DARALTMAZ). Kaynak namespace selector'ı platform'a
+# göre değişir — AYNI gerekçe + AYNI helper 00-namespace.yaml'daki
+# `allow-from-ingress-and-monitoring` politikasıyla: OpenShift'in
+# `network.openshift.io/policy-group` etiketi vanilla'da YOK, k8s-standart
+# `kubernetes.io/metadata.name` + `.Values.ingress.controllerNamespace`
+# kullanılır. Pod/port scoping HER İKİ platformda AYNI.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-frontend-ingress
+  namespace: example
+spec:
+  podSelector: {matchLabels: {app: console-frontend}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels: {network.openshift.io/policy-group: ingress}
+    ports: [{protocol: TCP, port: 8080}]
+---
+# Source: lakehouse/templates/console/console.yaml
+# Backend: SADECE frontend pod'undan (nginx `/api` proxy) — Route/dışarıdan
+# doğrudan erişim YOK.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-backend-ingress
+  namespace: example
+spec:
+  podSelector: {matchLabels: {app: console-backend}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector: {matchLabels: {app: console-frontend}}
+    ports: [{protocol: TCP, port: 8080}]
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- NetworkPolicy: Egress --------
+# console-backend -> apiserver + Trino + Kafka Connect + Apicurio + S3 (+DNS).
+# Frontend'in (statik nginx) bu egress'e ihtiyacı YOK — bilerek bu politikaya
+# dahil edilmedi.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: console-backend-egress
+  namespace: example
+spec:
+  podSelector: {matchLabels: {app: console-backend}}
+  policyTypes: [Egress]
+  egress:
+  # DNS çözümleme. Kaynak namespace selector'ı platform'a göre değişir — AYNI
+  # gerekçe + AYNI desen bu dosyanın frontend Ingress NetworkPolicy'sindeki
+  # (yukarıda) ve 00-namespace.yaml'daki allow-from-ingress-and-monitoring
+  # ile: OpenShift'in "dns" policy-group'u vanilla kümelerde YOK,
+  # k8s-standart `kubernetes.io/metadata.name` +
+  # `.Values.console.networkPolicy.dnsNamespace` ("kube-system", CoreDNS'in
+  # k8s-standart adresi) kullanılır.
+  - to:
+    - namespaceSelector:
+        matchLabels: {network.openshift.io/policy-group: dns}
+    ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+  # Kubernetes API server — 443 VE 6443/TCP (bkz. kaynak manifest POC-DOĞRULA
+  # notu: CNI'ye göre in-cluster apiserver erişimi 443 veya 6443 olabilir).
+  - to:
+    - namespaceSelector: {}
+    ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
+  # Trino coordinator (bkz. 06-trino-ha.yaml)
+  - to:
+    - podSelector: {matchLabels: {app: trino, role: coordinator}}
+    ports: [{protocol: TCP, port: 8080}]
+  # Kafka Connect REST API (Strimzi otomatik pod label'ları — bkz. 12-kafka-connect.yaml)
+  - to:
+    - podSelector: {matchLabels: {strimzi.io/cluster: connect, strimzi.io/kind: KafkaConnect}}
+    ports: [{protocol: TCP, port: 8083}]
+  # Apicurio Registry (bkz. 11-apicurio-registry.yaml)
+  - to:
+    - podSelector: {matchLabels: {app: apicurio-registry}}
+    ports: [{protocol: TCP, port: 8080}]
+  # S3 (küme dışı) — CIDR/IP bloğu ortam-özel.
+  - to:
+    - ipBlock: {cidr: "10.20.30.0/24"}
+    ports: [{protocol: TCP, port: 443}]
+---
+# Source: lakehouse/templates/00-namespace.yaml
+# Namespace toplam kaynak kotası (values'tan; kendi sizing'inize göre ayarlayın)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: lakehouse-quota
+  namespace: example
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: "64Gi"
+    limits.cpu: "32"
+    limits.memory: "128Gi"
+    persistentvolumeclaims: "50"
+    requests.storage: "2Ti"
+    pods: "100"
+    services.nodeports: "0"         # Prod'da NodePort yok; Route kullanırız
+    count/deployments.apps: "30"
+---
+# Source: lakehouse/templates/00-namespace.yaml
+# "resources:" yazmayan podların varsayılan + tavan değerleri
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: lakehouse-limits
+  namespace: example
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "256Mi"
+    max:
+      cpu: "8"
+      memory: "16Gi"
+  - type: PersistentVolumeClaim
+    max:
+      storage: "500Gi"
+    min:
+      storage: "1Gi"
+---
+# Source: lakehouse/templates/04-nessie-ha.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nessie-pdb
+  namespace: example
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: nessie}
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zeppelin-pdb
+  namespace: example
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels: {app: zeppelin}
+---
+# Source: lakehouse/templates/11-apicurio-registry.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: apicurio-registry-pdb
+  namespace: example
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: apicurio-registry
+
+# POC-DOĞRULA: Apicurio v3 env değişken adları (APICURIO_*) v2'den farklı;
+# kullanılacak sürümle teyit edilecek. CNPG `pg-apicurio-app` secret adı
+# CNPG operatörü tarafından otomatik üretilir (bkz. 02-postgres-ha.yaml deseni).
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka-ui-pdb
+  namespace: example
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: kafka-ui}}
+---
+# Source: lakehouse/templates/04-nessie-ha.yaml
+# Nessie HA — 2 replica Deployment + Service + PDB + HPA, CNPG `pg-nessie`
+# backend. Only parameterized + made namespace-aware. Gated by
+# `.Values.components.nessie`.
+#
+# Service wiring (spec §3.1/§8 — never hardcode a cross-component name):
+#   - Nessie's own Service NAME is `lakehouse.svc.nessie` (helper) — this is
+#     the SAME name Trino's Iceberg REST catalog URI resolves via the same
+#     helper in 06-trino-ha.yaml. Keep them in lockstep.
+#   - Nessie's Postgres JDBC host is `lakehouse.svc.pgNessieRw` (the
+#     `pg-nessie` CNPG Cluster from 02-postgres-ha.yaml) — CNPG-operator-
+#     managed Service, never a literal `kind: Service` in this chart (see
+#     _helpers.tpl header + chart/scripts/helm-check.py's CNPG-aware
+#     service-closure check).
+#   - OIDC issuer comes from the `.Values.oidc.secretName` Secret (material
+#     provisioned out-of-band — same "name reference only" convention as
+#     `storage.s3.secretName`, see chart/templates/01-storage.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nessie
+  namespace: example
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+# Spark Operator RBAC + SparkApplication templates. Only parameterized +
+# made namespace-aware. Gated by `.Values.components.sparkOperator`.
+#
+# Spark Operator (kubeflow/spark-operator) OperatorHub'dan önceden kurulu.
+# PoC'deki "tek sandbox pod + interaktif spark-sql" yerine, prod'da her iş
+# bir SparkApplication CR olarak submit edilir; driver + N executor açılır,
+# iş bitince kapanır.
+#
+# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py) `spark-py` imajına
+# gömülüdür ve `local://` yolu ile referanslanır — imaj build ayrı bir
+# pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
+# referans verir, job dosyalarını TAŞIMAZ.
+#
+# Service wiring (spec §3.1/§8): spark-defaults'ın Iceberg REST catalog URI'si
+# Nessie'nin Service'ini, Nessie'nin kendisinin (04-nessie-ha.yaml) ve
+# Trino'nun (06-trino-ha.yaml) kullandığı AYNI `lakehouse.svc.nessie`
+# helper'ından çözer — namespace-içi kısa ad, `/iceberg/` path (Trino'nun
+# REST catalog path'i ile birebir aynı, `/v1` yok).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark-driver
+  namespace: example
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- ServiceAccount --------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lakehouse-console
+  namespace: example
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- ServiceAccount (bearer-token identity for Thanos reads) --------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Non-expiring SA-token Secret (bearer for Thanos reads) --------
+# `kubernetes.io/service-account-token`-typed Secret bound to the `grafana`
+# SA. The cluster's token controller fills `.data.token` with a NON-EXPIRING
+# token (this remains true for manually-created Secrets of this type
+# post-1.24, on OpenShift 4.14+ and microk8s/k8s 1.33 alike). Consumed by the
+# Deployment as `GRAFANA_SA_TOKEN`; because the token never rotates, the
+# boot-once capture stays valid for the pod's lifetime.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-sa-token
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    kubernetes.io/service-account.name: grafana
+type: kubernetes.io/service-account-token
+---
+# Source: lakehouse/templates/00-s3-trust-bundle.yaml
+# S3 Internal-CA trust bundle (prod hardening) — OpenShift
+# "trusted CA bundle" injection. Bu ConfigMap boş yaratılır ve etiketlenir;
+# OpenShift cluster-network-operator `ca-bundle.crt` anahtarını (sistem CA'ları
+# + cluster additional-trust) OTOMATİK doldurur. S3 endpoint'inin Root CA'sının
+# cluster'ın additional trust'ına (Proxy `trustedCA` / image config) eklenmiş
+# olması gerekir (cluster-admin, tek seferlik).
+#
+# Bu bundle, JVM tabanlı S3 istemcilerine (Trino / Nessie / Kafka Connect /
+# Spark) mount edilip truststore'a eklenmelidir — aksi halde HTTPS S3
+# endpoint'ine `SSLHandshakeException`. Per-bileşen JVM truststore wiring
+# (init-container + keytool + -Djavax.net.ssl.trustStore) canlı-OpenShift'e
+# bağlı olduğundan RUNBOOK olarak belgelenmiştir: gitops/README.md
+# "Prod hardening kontrol listesi".
+#
+# openshiftInject=false ise: bu ConfigMap YARATILMAZ; `configMapName` elle
+# sağlanan (CA PEM içeren) mevcut bir ConfigMap'e işaret etmelidir.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s3-trust-bundle
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+    config.openshift.io/inject-trusted-cabundle: "true"
+# data BİLİNÇLİ olarak boş — `ca-bundle.crt`'yi OpenShift enjekte eder.
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # Broker/topic başına mesaj & bayt hızı, consumer lag, request süreleri.
+      - pattern: kafka.server<type=(.+), name=(.+)PerSec\w*, topic=(.+)><>Count
+        name: kafka_server_$1_$2_total
+        type: COUNTER
+        labels: {topic: "$3"}
+      - pattern: kafka.server<type=(.+), name=(.+)PerSec\w*><>Count
+        name: kafka_server_$1_$2_total
+        type: COUNTER
+      - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value
+        name: kafka_server_$1_$2
+        type: GAUGE
+        labels: {clientId: "$3", topic: "$4", partition: "$5"}
+      - pattern: kafka.(\w+)<type=(.+), name=(.+)><>Value
+        name: kafka_$1_$2_$3
+        type: GAUGE
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+# Paylaşılan Spark config — tüm SparkApplication'lar mount eder.
+# PoC spark.yaml ile aynı iki catalog (lakehouse + rawlake).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-defaults
+  namespace: example
+data:
+  spark-defaults.conf: |
+    spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,software.amazon.awssdk:bundle:2.25.11,software.amazon.awssdk:url-connection-client:2.25.11,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.hadoop:hadoop-aws:3.3.4
+    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+
+    # KRITIK: Dynamic allocation Kubernetes üzerinde çalışırken executor
+    # scale-down olduğunda shuffle verisi kaybolur → job crash. External
+    # Shuffle Service K8s'te yok; Spark 3.5'in içindeki "Shuffle Tracking"
+    # mekanizması executor'ı shuffle verisi okunmayı bekleyen süre
+    # (timeout) boyunca canlı tutar. Bu iki satır üretim için zorunludur.
+    spark.dynamicAllocation.shuffleTracking.enabled=true
+    spark.dynamicAllocation.shuffleTracking.timeout=3600s
+
+    spark.hadoop.fs.s3a.path.style.access=true
+    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
+    # endpoint ve region pod env'den (s3-credentials Secret) gelir:
+    # AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+
+    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.lakehouse.uri=http://nessie:19120/iceberg/
+    spark.sql.catalog.lakehouse.warehouse=s3://depo/warehouse
+    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+
+    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.rawlake.uri=http://nessie:19120/iceberg/
+    spark.sql.catalog.rawlake.warehouse=rawdata
+    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+---
+# Source: lakehouse/templates/06-trino-ha.yaml
+# Trino HA — Coordinator + N Worker + OIDC + internal-communication auth.
+# Only parameterized + made namespace-aware. Gated by
+# `.Values.components.trino`.
+#
+# İç iletişim: internal-communication.shared-secret pod'lar arası kimlik
+# doğrulama için zorunlu (HMAC). Bulk data şifrelemesi için iki seçenek:
+#   (a) Trino native internal TLS — ConfigMap'te yorum satırları aktif
+#       edilir + cert-manager Certificate CR ile keystore.p12 üretilir.
+#   (b) OpenShift Service Mesh (Istio) — namespace'e PeerAuthentication
+#       {mode: STRICT} uygulanır; uygulama kodunda değişiklik gerekmez.
+#
+# Service wiring (spec §3.1/§8 — never hardcode a cross-component name):
+#   - Trino coordinator's own Service NAME is `lakehouse.svc.trino` (helper,
+#     resolves to `trino-coordinator` — matches the Strimzi/CNPG-style
+#     canonical name convention in _helpers.tpl).
+#   - Trino's Iceberg/Nessie REST catalog URI resolves the Nessie Service
+#     via `lakehouse.svc.nessie` + `lakehouse.fqdn` — the SAME helper Nessie
+#     itself is rendered under (04-nessie-ha.yaml). Path stays the exact
+#     `/iceberg/` prefix the source uses (no `/v1`).
+#   - S3 + OIDC credentials come from `.Values.storage.s3.
+#     secretName` / `.Values.oidc.secretName` (name-reference-only Secrets,
+#     see chart/templates/01-storage.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-config
+  namespace: example
+data:
+  jvm.config: |
+    -server
+    # Xmx 6G (worker pod limit 8Gi) — JVM overhead + Iceberg memory-mapped
+    # file okuma için 2 GB tampon bırakır. OOM crash riskini düşürür.
+    -Xmx6G
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+UnlockDiagnosticVMOptions
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/tmp/heap-dump.hprof
+    # S3 internal-CA truststore — s3-trust-init container kurar
+    # (prod hardening; global.security.s3TrustBundle.enabled).
+    -Djavax.net.ssl.trustStore=/work/s3-trust/cacerts
+    -Djavax.net.ssl.trustStorePassword=changeit
+  coordinator.config.properties: |
+    coordinator=true
+    # HA prod: false (dedicated workers execute). Single-node/memory-minimal
+    # (worker.replicas=0) needs true, else there are ZERO execution nodes and
+    # every query hangs/fails. Default false; the microk8s-ingest overlay
+    # flips it true.
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://trino-coordinator:8080
+    query.max-memory=10GB
+    # coord sadece planner; küçük tut
+    query.max-memory-per-node=1.5GB
+    memory.heap-headroom-per-node=1GB
+    # OpenMetrics endpoint: Trino serves it AUTOMATICALLY at `/metrics` on the
+    # HTTP port — there is NO enable flag; an unknown property here (e.g. a
+    # nonexistent `openmetrics.jmx.enabled`) makes the coordinator CRASH-LOOP
+    # at startup, since Trino rejects unrecognized config properties (see
+    # Trino docs admin/openmetrics.html). The endpoint is protected by the
+    # SAME authentication as the Web UI/client API: with OIDC on (prod) it
+    # needs HTTPS + a system-information-permitted user; the trino
+    # ServiceMonitor's scrape auth must be wired accordingly on the cluster
+    # (see docs/POC-DOGRULA-cluster-checklist.md). An optional
+    # `openmetrics.jmx-object-names` (valid property) can filter exposed MBeans.
+    # OIDC (TLS Route'ta sonlanır). Trino yalnızca `etc/config.properties`'i
+    # (bu dosya) otomatik yükler — ayrı bir `oauth2.properties` dosyası
+    # OTOMATİK OKUNMAZ, bu yüzden OIDC satırları doğrudan buraya inline
+    # edilmiştir. Gated by `.Values.auth.oidc.enabled` (default true — see
+    # values.yaml's `auth:` comment); Trino's OAuth2 authenticator does EAGER
+    # discovery at startup, so with no reachable issuer this config MUST be
+    # omitted entirely rather than pointed at a dummy URL, or the coordinator
+    # crash-loops forever.
+    http-server.authentication.type=oauth2
+    web-ui.authentication.type=oauth2
+    http-server.authentication.oauth2.issuer=${ENV:OIDC_ISSUER}
+    http-server.authentication.oauth2.client-id=${ENV:OIDC_CLIENT_ID}
+    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
+    http-server.authentication.oauth2.principal-field=preferred_username
+    http-server.authentication.oauth2.scopes=openid,email,profile
+    # Pod'lar arası iletişim auth zorunlu (shared-secret Secret'tan)
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+    # Faz-2: cluster içi trafik şifreleme. Aşağıdaki satırları aktif ederek
+    # coordinator↔worker arası TLS açılır. Gerekli: cert-manager Certificate
+    # CR ile trino-internal-tls Secret üretmek (keystore.p12 + passphrase).
+    # internal-communication.https.required=true
+    # internal-communication.https.keystore.path=/etc/trino/certs/keystore.p12
+    # internal-communication.https.keystore.key=${ENV:KEYSTORE_PASS}
+    # discovery.uri=https://trino-coordinator:8443
+    # http-server.https.enabled=true
+    # http-server.https.port=8443
+    # http-server.https.keystore.path=/etc/trino/certs/keystore.p12
+    # http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
+    # Alternatif: OpenShift Service Mesh (Istio) PeerAuthentication CR ile
+    # namespace-seviye mTLS; uygulama konfigürasyonu değişmez.
+  worker.config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://trino-coordinator:8080
+    # 4GB → 3GB: JVM + IO tamponu
+    query.max-memory-per-node=3GB
+    internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+  node.properties: |
+    node.environment=prod
+    node.data-dir=/data/trino
+  lakehouse.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://nessie.example.svc.cluster.local:19120/iceberg/
+    iceberg.rest-catalog.warehouse=s3://depo/warehouse
+    iceberg.register-table-procedure.enabled=false
+    fs.native-s3.enabled=true
+    s3.endpoint=${ENV:S3_ENDPOINT}
+    s3.path-style-access=true
+    s3.region=${ENV:S3_REGION}
+    s3.aws-access-key=${ENV:S3_ACCESS_KEY}
+    s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+  rawlake.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://nessie.example.svc.cluster.local:19120/iceberg/
+    iceberg.rest-catalog.warehouse=rawdata
+    iceberg.register-table-procedure.enabled=true
+    fs.native-s3.enabled=true
+    s3.endpoint=${ENV:S3_ENDPOINT}
+    s3.path-style-access=true
+    s3.region=${ENV:S3_REGION}
+    s3.aws-access-key=${ENV:S3_ACCESS_KEY}
+    s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+  access-control.properties: |
+    access-control.name=file
+    security.config-file=etc/rules.json
+  rules.json: |
+    {
+      "catalogs": [
+        {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
+        {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
+        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
+      ]
+    }
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+---
+# Apache Shiro — ActiveDirectoryGroupRealm
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeppelin-shiro
+  namespace: example
+data:
+  shiro.ini: |
+    [main]
+    # AD realm — LDAPS (port 636) + TLS; AD sertifikası Zeppelin truststore'da
+    activeDirectoryRealm = org.apache.zeppelin.realm.ActiveDirectoryGroupRealm
+    activeDirectoryRealm.systemUsername = ${AD_BIND_DN}
+    activeDirectoryRealm.systemPassword = ${AD_BIND_PASSWORD}
+    activeDirectoryRealm.searchBase = ${AD_USER_SEARCH_BASE}
+    activeDirectoryRealm.url = ${AD_URL}
+    activeDirectoryRealm.principalSuffix = @example.com
+
+    # AD group DN → Zeppelin role eşlemesi
+    activeDirectoryRealm.groupRolesMap = "\
+      CN=lakehouse-admins,OU=Groups,DC=example,DC=com:admin,\
+      CN=lakehouse-analysts,OU=Groups,DC=example,DC=com:analyst,\
+      CN=lakehouse-students,OU=Groups,DC=example,DC=com:student"
+
+    cacheManager = org.apache.shiro.cache.MemoryConstrainedCacheManager
+    securityManager.cacheManager = $cacheManager
+    sessionManager = org.apache.shiro.web.session.mgt.DefaultWebSessionManager
+    sessionManager.globalSessionTimeout = 28800000   # 8 saat
+    securityManager.sessionManager = $sessionManager
+    securityManager.realms = $activeDirectoryRealm
+
+    shiro.loginUrl = /api/login
+
+    [roles]
+    admin = *
+    analyst = *
+    student = *
+
+    [urls]
+    /api/version = anon
+    /api/interpreter/** = authc, roles[admin]
+    /api/configurations/** = authc, roles[admin]
+    /api/credential/** = authc
+    /** = authc
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+# Spark interpreter config — spark.yaml ile aynı iki catalog + hadoop-aws.
+# 05-spark-operator.yaml'daki paylaşılan `spark-defaults` ConfigMap ile KASITLI
+# olarak AYRI (bu, Kafka connector paketini içermez — Zeppelin interaktif
+# notebook, streaming job değil; kaynak manifestteki fark korunur).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeppelin-spark-defaults
+  namespace: example
+data:
+  spark-defaults.conf: |
+    spark.jars.ivy=/tmp/ivy2
+    spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,software.amazon.awssdk:bundle:2.25.11,software.amazon.awssdk:url-connection-client:2.25.11,org.apache.hadoop:hadoop-aws:3.3.4
+    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+
+    spark.hadoop.fs.s3a.path.style.access=true
+    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
+
+    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.lakehouse.uri=http://nessie:19120/iceberg/
+    spark.sql.catalog.lakehouse.warehouse=s3://depo/warehouse
+    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+
+    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.rawlake.uri=http://nessie:19120/iceberg/
+    spark.sql.catalog.rawlake.warehouse=rawdata
+    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+---
+# Source: lakehouse/templates/12-kafka-connect.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: connect-metrics, namespace: example}
+data:
+  metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: "kafka.connect<type=(.+), connector=(.+), task=(.+)><>(.+): (.+)"
+---
+# Source: lakehouse/templates/14-nginx-ingest.yaml
+# FluentBit VM-agent artefaktları — kümede ÇALIŞMAZ (nginx host'larına kurulur,
+# bu chart yalnızca dosyaları taşır). ConfigMap olarak paketlenir ki chart
+# tek bir yerden (helm get / kubectl get configmap) dağıtılabilsin; NOTES.txt
+# kurulum adımlarını anlatır (bkz. prod-manifests/14-nginx-ingest/README.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentbit-vm-agent
+  namespace: example
+  labels:
+    app.kubernetes.io/component: fluentbit-vm-agent
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        5
+        Daemon       Off
+        Log_Level    info
+    [INPUT]
+        Name         tail
+        Path         /var/log/nginx/access.log
+        Tag          nginx.access
+        DB           /var/lib/fluent-bit/nginx.db
+    [OUTPUT]
+        Name                 kafka
+        Match                nginx.access
+        Brokers              kafka-ext.example.com:443
+        Topics               nginx-access
+        rdkafka.security.protocol  SASL_SSL
+        rdkafka.sasl.mechanisms    SCRAM-SHA-512
+        rdkafka.sasl.username      fluentbit
+        rdkafka.sasl.password      REPLACE_WITH_FLUENTBIT_KAFKA_PASSWORD
+        rdkafka.ssl.ca.location    /etc/fluent-bit/kafka-ca.crt
+  fluent-bit.service: |
+    [Unit]
+    Description=Fluent Bit (nginx -> Kafka lakehouse)
+    After=network-online.target
+    [Service]
+    ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
+    Restart=always
+    RestartSec=5
+    [Install]
+    WantedBy=multi-user.target
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Backend config (console/backend/app/config.py Settings ile
+# birebir — pydantic-settings büyük/küçük harf duyarsız NAMESPACE/TRINO_HOST/...
+# okur) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lakehouse-console-config
+  namespace: example
+data:
+  NAMESPACE: example
+  TRINO_HOST: trino-coordinator
+  TRINO_PORT: "8080"
+  TRINO_USER: lakehouse-console
+  CONNECT_URL: "http://connect-connect-api:8083"
+  APICURIO_URL: "http://apicurio-registry:8080/apis/registry/v2"
+  OIDC_AUDIENCE: "lakehouse-console"
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+# -------- Kafka UI config (Spring Boot YAML — kafbat-ui dokümantasyonu env
+# değişkenleri yerine bu dosyayı önerir). `${VAR}` yer tutucuları Spring'in
+# standart env değişkeni interpolasyonu (Trino'daki `${ENV:VAR}`'dan FARKLI). --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-ui-config
+  namespace: example
+data:
+  config.yml: |
+    kafka:
+      clusters:
+        - name: example
+          bootstrap-servers: kafka-kafka-bootstrap:9093
+          properties:
+            "security.protocol": SASL_SSL
+            "sasl.mechanism": SCRAM-SHA-512
+            "sasl.jaas.config": >-
+              org.apache.kafka.common.security.scram.ScramLoginModule required
+              username="kafka-ui" password="${KAFKA_UI_SCRAM_PASSWORD}";
+          ssl:
+            truststore-location: /mnt/kafka-ca/ca.p12       # POC-DOĞRULA: bkz. dosya başı notu
+            truststore-password: "${KAFKA_CA_TRUSTSTORE_PASSWORD}"
+          schemaRegistry: "http://apicurio-registry:8080/apis/ccompat/v7"
+          kafka-connect:
+            - name: connect
+              address: "http://connect-connect-api:8083"
+      # NOT: connector'ların TEK doğruluk kaynağı Git'teki KafkaConnector
+      # CR'leridir (bkz. 12-kafka-connect.yaml `strimzi.io/use-connector-resources`,
+      # 13-connectors.yaml). Aşağıdaki RBAC bilerek connector'a yalnızca "view"
+      # veriyor — Kafka UI'de connector oluşturma işlevsiz kalır.
+    auth:
+      type: OAUTH2
+      oauth2:
+        client:
+          keycloak:
+            clientId: kafka-ui
+            clientSecret: "${OIDC_CLIENT_SECRET}"
+            scope: openid
+            client-name: Keycloak
+            provider: keycloak
+            redirect-uri: "https://kafka-ui.lakehouse.example.com/login/oauth2/code/keycloak"
+            issuer-uri: "${OIDC_ISSUER}"
+            user-name-attribute: preferred_username
+            custom-params:
+              type: oauth
+              roles-field: groups             # bkz. 10-keycloak.yaml groups claim mapper
+    rbac:
+      roles:
+        # AD grup adları 10-keycloak.yaml'daki `groups` (lakehouse-admins/
+        # lakehouse-analysts/lakehouse-students) ile birebir — bkz.
+        # console/backend/app/services/authz.py _GROUP_TO_ROLE ile aynı sözleşme.
+        - name: lakehouse-admins
+          clusters: [example]
+          subjects:
+          - {provider: oauth, type: role, value: "lakehouse-admins"}   # POC-DOĞRULA: type enum
+          permissions:
+          - {resource: applicationconfig, actions: ["view"]}
+          - {resource: clusterconfig, actions: ["view"]}
+          - {resource: topic, value: ".*", actions: ["view", "messages_read"]}
+          - {resource: consumer, value: ".*", actions: ["view"]}
+          - {resource: schema, value: ".*", actions: ["view"]}
+          - {resource: connect, value: ".*", actions: ["view"]}
+          - {resource: connector, value: ".*", actions: ["view"]}   # salt-okunur — yukarıdaki NOT'a bkz.
+        - name: lakehouse-analysts
+          clusters: [example]
+          subjects:
+          - {provider: oauth, type: role, value: "lakehouse-analysts"}
+          permissions:
+          - {resource: clusterconfig, actions: ["view"]}
+          - {resource: topic, value: ".*", actions: ["view", "messages_read"]}
+          - {resource: consumer, value: ".*", actions: ["view"]}
+          - {resource: schema, value: ".*", actions: ["view"]}
+          - {resource: connect, value: ".*", actions: ["view"]}
+          - {resource: connector, value: ".*", actions: ["view"]}
+        - name: lakehouse-students
+          clusters: [example]
+          subjects:
+          - {provider: oauth, type: role, value: "lakehouse-students"}
+          permissions:
+          - {resource: topic, value: ".*", actions: ["view"]}
+      # Eşleşmeyen (mapsiz) AD grupları/kullanıcıları — varsayılan: hiçbir
+      # şey görünmez (deny-by-default, least-privilege).
+      default-role:
+        permissions: []
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Datasource provisioning (Prometheus -> UWM Thanos querier) --------
+# `${GRAFANA_SA_TOKEN}` is expanded by Grafana from the container env at load
+# time (see Deployment command). tlsSkipVerify: the Thanos querier serves an
+# in-cluster serving cert not in Grafana's default trust store.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Thanos
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+        isDefault: true
+        jsonData:
+          tlsSkipVerify: true
+          httpHeaderName1: Authorization
+        secureJsonData:
+          httpHeaderValue1: "Bearer ${GRAFANA_SA_TOKEN}"
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard provider (file provisioning) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  providers.yaml: |
+    apiVersion: 1
+    providers:
+      - name: lakehouse
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: Kafka (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-kafka
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  kafka.json: |-
+    {"uid":"lakehouse-kafka","title":"Kafka","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"Messages In (rate)","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum(rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))"}]}]}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: CNPG (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cnpg
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  cnpg.json: |-
+    {"uid":"lakehouse-cnpg","title":"CNPG","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"Postgres backends","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum(cnpg_backends_total)"}]}]}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: Trino (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-trino
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  trino.json: |-
+    {"uid":"lakehouse-trino","title":"Trino","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"Running queries","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum(trino_execution_querymanager_running_queries)"}]}]}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: Iceberg / Nessie (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-iceberg
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  iceberg.json: |-
+    {"uid":"lakehouse-iceberg","title":"Iceberg / Nessie","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"Nessie persist ops (rate)","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum(rate(nessie_storage_persist_total[5m]))"}]}]}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: Console (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-console
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  console.json: |-
+    {"uid":"lakehouse-console","title":"Console","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"HTTP request rate","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum(rate(http_requests_total[5m]))"}]}]}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Dashboard: Platform (minimal) --------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-platform
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+data:
+  platform.json: |-
+    {"uid":"lakehouse-platform","title":"Platform","schemaVersion":39,"editable":true,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"timeseries","title":"Pods by phase","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"expr":"sum by (phase) (kube_pod_status_phase)"}]}]}
+---
+# Source: lakehouse/templates/01-storage.yaml
+# Opt-in vendor CSI StorageClasses. Only parameterized. Gated by
+# `.Values.components.storage` (DEFAULT `false` — storage neutrality:
+# StorageClass availability/naming varies customer to customer, so most
+# installs bring their own pre-existing cluster-scoped StorageClass(es) and
+# just point `postgres.*.storage(.walStorage).storageClass` /
+# `zeppelin.storageClassName` / `kafka.nodePools.*.storage.class` at them —
+# empty default on every one of those fields means "use the cluster's
+# default StorageClass", so no StorageClass at all needs to exist for a
+# minimal install). Flip `components.storage` to `true` only when the chart
+# itself should create the two StorageClasses below (e.g. a fresh cluster
+# with a CSI driver already installed but no StorageClass yet) — set
+# `storage.classes.*.provisioner`/`backend` to match your driver. Pure
+# Storage (PSO CSI driver) is one example (see
+# chart/values.yaml comment); any CSI driver works the same way.
+#
+# İki katmanda depolama:
+#   (a) PV/PVC   — konteyner-local disk (Postgres, Kafka, notebook, Ollama cache)
+#   (b) S3 object — lakehouse veri deposu; herhangi bir S3-uyumlu object store
+#                   endpoint'i (MinIO, AWS S3, Ceph RGW, ...).
+#
+# NOTE (scope): the source manifest also carried `nessie-db-credentials` and
+# `oidc-credentials` Secret placeholders alongside these StorageClasses.
+# Those are out of scope here — `nessie-db-credentials` is auto-generated by
+# the CNPG `Cluster` CR (see 02-postgres-ha.yaml), and
+# `oidc-credentials` belongs to the components that actually consume it
+# (Trino/Console). Only the StorageClasses and the
+# S3 credential *name* (no material) belong to this task.
+# -------- Block (ReadWriteOnce) StorageClass --------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-block
+provisioner: pure-csi
+parameters:
+  backend: block
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# Source: lakehouse/templates/01-storage.yaml
+# -------- File (ReadWriteMany) StorageClass — JupyterHub shared home vb. --------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-file-rwx
+provisioner: pure-csi
+parameters:
+  backend: file
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+# Apache Zeppelin — prod deployment. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.zeppelin`.
+#
+# Jupyter ile yan yana. Zeppelin, notebook içinde paragraf bazlı Spark SQL +
+# Python + Scala + Markdown harmanlamaya izin verir; yöneticilere sunum
+# dostu bir analiz ortamı sağlar.
+#
+# Arm64 sorunu: apache/zeppelin yalnızca linux/amd64 destekler. OpenShift
+# prod node'ları genelde amd64 olduğundan sorun yok.
+#
+# Spark binary'si: kurumsal custom imajda /opt/spark'a build-time'da kurulu
+# (prod-manifests/README.md'deki Dockerfile — bkz. `versions.zeppelinImage`).
+#
+# Kimlik doğrulama: Apache Shiro native ActiveDirectoryGroupRealm ile
+# kurumsal Active Directory. Bind service account DN + password Secret'tan
+# gelir; AD grup üyeliği Zeppelin rollerine eşlenir. AD/LDAPS ayarları
+# (`zeppelin.ad.*`) values-driven. `ad-bind-credentials` follows the SAME
+# "name reference only" contract as `storage.s3.secretName` by
+# default (`zeppelin.ad.bindPassword` defaults empty in chart/values.yaml —
+# see that field's comment): this template only renders the Secret inline
+# when a real `bindPassword` is explicitly supplied (dev/test convenience);
+# otherwise the Secret must be provisioned out-of-band (ExternalSecret/Vault
+# or `oc create secret`) under the same name/keys BEFORE install.
+#
+# Service wiring: Zeppelin'in kendi Service'inin bu chart'ta downstream
+# tüketicisi yok (yalnızca kullanıcı erişimi) — bu yüzden _helpers.tpl'nin
+# kanonik servis listesine eklenmedi (o liste yalnızca en az bir consumer'ı
+# olan Service'leri kapsar); ad literal "zeppelin" kalır, ns yalnızca helper'dan.
+# Nessie catalog URI'si ise `lakehouse.svc.nessie` helper'ından — Trino/Spark
+# Operator'ın kullandığı AYNI helper (spec §3.1/§8).
+# Spark binary image içinde geldiği için ayrı bir cache PVC gerekmez.
+# Notebook'ların paylaşımlı home'u — birden fazla replica için RWX.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeppelin-notebooks-pvc
+  namespace: example
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests: {storage: "20Gi"}
+  # storageClassName empty (default, `zeppelin.storageClassName`) = the
+  # cluster's default StorageClass — no longer coupled to the opt-in
+  # `storage.classes.fileRwx` SC-creation block / `components.storage`
+  # (storage-neutrality convention, Product Foundation task 6.5).
+  storageClassName: fast-file-rwx
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- ClusterRoleBinding: grafana SA -> cluster-monitoring-view --------
+# `cluster-monitoring-view` is an OpenShift BUILT-IN ClusterRole (provided by
+# the platform; not rendered by this chart) — it grants read access to UWM's
+# tenancy-aware Thanos querier. The binding NAME is suffixed with the release
+# namespace because a ClusterRoleBinding is cluster-scoped: without the suffix
+# two installs of this chart into different release namespaces (e.g. the two
+# namespaces the test harness renders into) would collide on one global object.
+# Same precedent as chart/templates/prereq-check-job.yaml's CRB.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-monitoring-view-example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+subjects:
+- kind: ServiceAccount
+  name: grafana
+  namespace: example
+roleRef:
+  kind: ClusterRole
+  name: cluster-monitoring-view
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-driver-role
+  namespace: example
+rules:
+- apiGroups: [""]
+  resources: [pods, services, configmaps, persistentvolumeclaims]
+  verbs: [get, list, watch, create, delete, patch]
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Role (NAMESPACE-SCOPED — kind: Role, NEVER ClusterRole) --------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lakehouse-console-role
+  namespace: example
+rules:
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkaconnectors, kafkatopics]
+  verbs: [get, list, create, patch, delete]
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkaconnectors/status, kafkatopics/status]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [create, update, delete]
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-driver-binding
+  namespace: example
+subjects:
+- kind: ServiceAccount
+  name: spark-driver
+  namespace: example
+roleRef:
+  kind: Role
+  name: spark-driver-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- RoleBinding (namespace-scoped — NEVER ClusterRoleBinding) --------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lakehouse-console-binding
+  namespace: example
+subjects:
+- kind: ServiceAccount
+  name: lakehouse-console
+  namespace: example
+roleRef:
+  kind: Role
+  name: lakehouse-console-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: lakehouse/templates/04-nessie-ha.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nessie
+  namespace: example
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `nessie` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels:
+    app: nessie
+spec:
+  selector: {app: nessie}
+  ports:
+  - {name: http, port: 19120, targetPort: 19120}
+  - {name: mgmt, port: 9000,  targetPort: 9000}
+---
+# Source: lakehouse/templates/06-trino-ha.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-coordinator
+  namespace: example
+  # ServiceMonitor selector target labels (chart/templates/monitoring/
+  # servicemonitors.yaml `trino` selector.matchLabels) — a ServiceMonitor
+  # selects Services by THEIR metadata.labels, not by spec.selector (pods).
+  labels:
+    app: trino
+    role: coordinator
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  selector: {app: trino, role: coordinator}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: zeppelin
+  namespace: example
+spec:
+  selector: {app: zeppelin}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Source: lakehouse/templates/11-apicurio-registry.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: apicurio-registry
+  namespace: example
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `apicurio` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels:
+    app: apicurio-registry
+spec:
+  selector:
+    app: apicurio-registry
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Backend Service — nginx `/api` proxy hedefiyle BİREBİR eşleşmeli
+# (bkz. dosya başı NOTE) --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: console-backend
+  namespace: example
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `console` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels: {app: console-backend}
+spec:
+  selector: {app: console-backend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Frontend Service — Route hedefi --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: lakehouse-console
+  namespace: example
+spec:
+  selector: {app: console-frontend}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: example
+spec:
+  selector: {app: kafka-ui}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Service --------
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  selector:
+    app: grafana
+  ports:
+  - {name: http, port: 3000, targetPort: http}
+---
+# Source: lakehouse/templates/04-nessie-ha.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nessie
+  namespace: example
+  labels:
+    app: nessie
+    app.kubernetes.io/part-of: lakehouse
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: nessie
+  template:
+    metadata:
+      labels:
+        app: nessie
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: nessie
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels: {app: nessie}
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: s3-trust-init
+        image: ghcr.io/projectnessie/nessie:0.104.3
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            SRC="${JAVA_HOME:-/usr/lib/jvm/jre}/lib/security/cacerts"
+            [ -f "$SRC" ] || SRC="$(find / -path '*/security/cacerts' 2>/dev/null | head -1)"
+            cp "$SRC" /work/s3-trust/cacerts
+            keytool -importcert -noprompt -alias s3-endpoint \
+              -file /mnt/s3-ca/ca-bundle.crt \
+              -keystore /work/s3-trust/cacerts -storepass changeit
+        volumeMounts:
+          - {name: s3-trust-ca, mountPath: /mnt/s3-ca, readOnly: true}
+          - {name: s3-trust-store, mountPath: /work/s3-trust}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      containers:
+      - name: nessie
+        image: "ghcr.io/projectnessie/nessie:0.104.3"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - {name: http, containerPort: 19120}
+        - {name: mgmt, containerPort: 9000}
+        env:
+        # S3 internal-CA truststore — s3-trust-init container kurar
+        # (prod hardening). Quarkus JAVA_OPTS_APPEND ile JVM'e verilir.
+        - name: JAVA_OPTS_APPEND
+          value: "-Djavax.net.ssl.trustStore=/work/s3-trust/cacerts -Djavax.net.ssl.trustStorePassword=changeit"
+        # --- Version store (CNPG Cluster'dan secret ile) ---
+        - {name: NESSIE_VERSION_STORE_TYPE, value: "JDBC2"}
+        - {name: QUARKUS_DATASOURCE_POSTGRESQL_DB_KIND, value: "postgresql"}
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL
+          value: "jdbc:postgresql://pg-nessie-rw.example.svc.cluster.local:5432/nessie"
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_USERNAME
+          valueFrom: {secretKeyRef: {name: pg-nessie-app, key: username}}
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD
+          valueFrom: {secretKeyRef: {name: pg-nessie-app, key: password}}
+        - {name: NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE, value: "postgresql"}
+
+        # --- Iceberg REST warehouses (multi-warehouse; PoC deseni) ---
+        - name: NESSIE_CATALOG_DEFAULT_WAREHOUSE
+          value: "warehouse"
+        - name: NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION
+          value: "s3://depo/warehouse"
+        - name: NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION
+          value: "s3://ham-veri/warehouse"
+
+        # --- S3 (credentials from Secret, resolved via Nessie URN) ---
+        - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION
+          valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}
+        - {name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS, value: "true"}
+        - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT
+          valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}
+        - {name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY, value: "urn:nessie-secret:quarkus:nessie.catalog.secrets.s3creds"}
+        - name: NESSIE_CATALOG_SECRETS_S3CREDS_NAME
+          valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}
+        - name: NESSIE_CATALOG_SECRETS_S3CREDS_SECRET
+          valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}
+
+        # --- AuthN — OIDC (prod'da zorunlu) ---
+        # Gated by `.Values.auth.oidc.enabled` (default true — see
+        # values.yaml's `auth:` comment). Unlike Trino, Nessie's Quarkus OIDC
+        # extension does LAZY discovery (pod stays Running even with a
+        # dead issuer, but every REST call 500s — microk8s-smoke-report.md
+        # Finding 2), so this gate is a correctness/intent fix rather than a
+        # crash-loop fix: when false, Nessie runs genuinely unauthenticated
+        # (DEV/SMOKE-TEST ONLY) instead of silently-broken-but-"Running".
+        - {name: QUARKUS_OIDC_ENABLED, value: "true"}
+        - name: QUARKUS_OIDC_AUTH_SERVER_URL
+          valueFrom: {secretKeyRef: {name: oidc-credentials, key: issuer-url}}
+        - name: QUARKUS_OIDC_CLIENT_ID
+          value: "nessie"
+        - {name: NESSIE_SERVER_AUTHENTICATION_ENABLED, value: "true"}
+
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+
+        readinessProbe:
+          httpGet: {path: /q/health/ready, port: mgmt}
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /q/health/live, port: mgmt}
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        volumeMounts:
+        
+        - name: s3-trust-store
+          mountPath: /work/s3-trust
+      volumes:
+      
+      - name: s3-trust-ca
+        configMap:
+          name: s3-trust-bundle
+      - name: s3-trust-store
+        emptyDir: {}
+---
+# Source: lakehouse/templates/06-trino-ha.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+  namespace: example
+  labels: {app: trino, role: coordinator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: trino, role: coordinator}
+  template:
+    metadata:
+      labels: {app: trino, role: coordinator}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: s3-trust-init
+        image: trinodb/trino:439
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            SRC="${JAVA_HOME:-/usr/lib/jvm/jre}/lib/security/cacerts"
+            [ -f "$SRC" ] || SRC="$(find / -path '*/security/cacerts' 2>/dev/null | head -1)"
+            cp "$SRC" /work/s3-trust/cacerts
+            keytool -importcert -noprompt -alias s3-endpoint \
+              -file /mnt/s3-ca/ca-bundle.crt \
+              -keystore /work/s3-trust/cacerts -storepass changeit
+        volumeMounts:
+          - {name: s3-trust-ca, mountPath: /mnt/s3-ca, readOnly: true}
+          - {name: s3-trust-store, mountPath: /work/s3-trust}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      containers:
+      - name: trino
+        image: "trinodb/trino:439"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: S3_ENDPOINT,        valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+        - {name: S3_REGION,          valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+        - {name: S3_ACCESS_KEY,      valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: S3_SECRET_KEY,      valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        - {name: OIDC_ISSUER,        valueFrom: {secretKeyRef: {name: oidc-credentials, key: issuer-url}}}
+        - {name: OIDC_CLIENT_ID,     valueFrom: {secretKeyRef: {name: oidc-credentials, key: trino-client-id}}}
+        - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: oidc-credentials, key: trino-client-secret}}}
+        # Coordinator↔worker internal-communication auth (see
+        # coordinator.config.properties' `internal-communication.shared-
+        # secret=${ENV:TRINO_INTERNAL_SECRET}` above) — both the coordinator
+        # and worker Deployments must define this env var, or the missing
+        # side crash-loops on 'unset environment variable
+        # TRINO_INTERNAL_SECRET'.
+        - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "6Gi"
+            cpu: "4"
+        volumeMounts:
+        
+        - name: s3-trust-store
+          mountPath: /work/s3-trust
+        - {name: config, mountPath: /etc/trino/jvm.config,                subPath: jvm.config}
+        - {name: config, mountPath: /etc/trino/config.properties,         subPath: coordinator.config.properties}
+        - {name: config, mountPath: /etc/trino/node.properties,           subPath: node.properties}
+        - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
+        - {name: config, mountPath: /etc/trino/rules.json,                subPath: rules.json}
+        - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
+        - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+      volumes:
+      
+      - name: s3-trust-ca
+        configMap:
+          name: s3-trust-bundle
+      - name: s3-trust-store
+        emptyDir: {}
+      - name: config
+        configMap: {name: trino-config}
+---
+# Source: lakehouse/templates/06-trino-ha.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-worker
+  namespace: example
+  labels: {app: trino, role: worker}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: trino, role: worker}
+  template:
+    metadata:
+      labels: {app: trino, role: worker}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector: {matchLabels: {app: trino, role: worker}}
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: s3-trust-init
+        image: trinodb/trino:439
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            SRC="${JAVA_HOME:-/usr/lib/jvm/jre}/lib/security/cacerts"
+            [ -f "$SRC" ] || SRC="$(find / -path '*/security/cacerts' 2>/dev/null | head -1)"
+            cp "$SRC" /work/s3-trust/cacerts
+            keytool -importcert -noprompt -alias s3-endpoint \
+              -file /mnt/s3-ca/ca-bundle.crt \
+              -keystore /work/s3-trust/cacerts -storepass changeit
+        volumeMounts:
+          - {name: s3-trust-ca, mountPath: /mnt/s3-ca, readOnly: true}
+          - {name: s3-trust-store, mountPath: /work/s3-trust}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+      containers:
+      - name: trino
+        image: "trinodb/trino:439"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: S3_ENDPOINT,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+        - {name: S3_REGION,     valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+        - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+        volumeMounts:
+        - {name: config, mountPath: /etc/trino/jvm.config,                   subPath: jvm.config}
+        - {name: config, mountPath: /etc/trino/config.properties,            subPath: worker.config.properties}
+        - {name: config, mountPath: /etc/trino/node.properties,              subPath: node.properties}
+        - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
+        - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+      volumes:
+      
+      - name: s3-trust-ca
+        configMap:
+          name: s3-trust-bundle
+      - name: s3-trust-store
+        emptyDir: {}
+      - name: config
+        configMap: {name: trino-config}
+---
+# Source: lakehouse/templates/09-zeppelin.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zeppelin
+  namespace: example
+  labels: {app: zeppelin}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: zeppelin}
+  template:
+    metadata:
+      labels: {app: zeppelin}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Spark image'a gömülü olduğu için initContainers yok.
+      containers:
+      - name: zeppelin
+        image: "registry.apps.ocp.example.com/lakehouse/zeppelin:1.0"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: SPARK_HOME,            value: "/opt/spark"}
+        - {name: ZEPPELIN_NOTEBOOK_DIR, value: "/zeppelin/notebook"}
+        - {name: SPARK_CONF_DIR,        value: "/spark-conf"}
+        - {name: ZEPPELIN_SHIRO_CONF,   value: "/zeppelin/conf/shiro.ini"}
+        - {name: AD_BIND_DN,          valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-dn}}}
+        - {name: AD_BIND_PASSWORD,    valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-password}}}
+        - {name: AD_USER_SEARCH_BASE, valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: user-search-base}}}
+        - {name: AD_URL,              valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: ad-url}}}
+        - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+        - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+        volumeMounts:
+        - {name: zeppelin-notebooks, mountPath: /zeppelin/notebook}
+        - {name: spark-conf,         mountPath: /spark-conf}
+        - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
+        resources:
+          requests: {memory: "2Gi", cpu: "500m"}
+          limits:   {memory: "6Gi",   cpu: "2"}
+        readinessProbe:
+          httpGet: {path: /api/version, port: 8080}
+          initialDelaySeconds: 60
+          periodSeconds: 15
+        livenessProbe:
+          httpGet: {path: /api/version, port: 8080}
+          initialDelaySeconds: 120
+          periodSeconds: 30
+      volumes:
+      - name: zeppelin-notebooks
+        persistentVolumeClaim: {claimName: zeppelin-notebooks-pvc}
+      - name: spark-conf
+        configMap: {name: zeppelin-spark-defaults}
+      - name: shiro-conf
+        configMap: {name: zeppelin-shiro}
+---
+# Source: lakehouse/templates/11-apicurio-registry.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apicurio-registry
+  namespace: example
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: apicurio-registry
+  template:
+    metadata:
+      labels:
+        app: apicurio-registry
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: apicurio-registry
+          image: "quay.io/apicurio/apicurio-registry:3.0.6"   # POC-DOĞRULA sürüm
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APICURIO_STORAGE_KIND
+              value: sql
+            - name: APICURIO_STORAGE_SQL_KIND
+              value: postgresql
+            # Host, `lakehouse.svc.pgApicurioRw` helper'ından üretilir — CNPG
+            # operatörünün bu Cluster için ürettiği gerçek Service adıyla
+            # (pg-apicurio-rw) birebir aynı, namespace'e bağlı FQDN.
+            - name: APICURIO_DATASOURCE_URL
+              value: "jdbc:postgresql://pg-apicurio-rw.example.svc.cluster.local:5432/apicurio"
+            - name: APICURIO_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: pg-apicurio-app
+                  key: username
+            - name: APICURIO_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-apicurio-app
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /apis/registry/v2/system/info
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /apis/registry/v2/system/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Backend Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console-backend
+  namespace: example
+  labels: {app: console-backend}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: console-backend}}
+  template:
+    metadata:
+      labels: {app: console-backend}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: lakehouse-console
+      containers:
+      - name: console-backend
+        image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/console-backend:1.0"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080}]
+        envFrom:
+        - configMapRef: {name: lakehouse-console-config}
+        env:
+        # S3 kimlik bilgileri S3 secret'ından — key adları farklı
+        # olduğu için (access-key-id/secret-access-key/endpoint) tek tek
+        # eşlenir, envFrom ile blindly aktarılmaz.
+        - {name: S3_ENDPOINT, valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+        - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        # OIDC issuer — Trino/Nessie ile AYNI oidc-credentials Secret (tek kaynak).
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: oidc-credentials, key: issuer-url}}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "1"
+            memory: "512Mi"
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Frontend Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console-frontend
+  namespace: example
+  labels: {app: console-frontend}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: console-frontend}}
+  template:
+    metadata:
+      labels: {app: console-frontend}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Statik nginx sunucusu — apiserver/Trino/Connect/Apicurio/S3'e hiç
+      # ihtiyacı yok; ayrı bir ServiceAccount/RBAC gerekmez (default SA yeterli).
+      # NOT (restrictedSecurityContext): OpenShift'te non-root nginx imajı
+      # gerekir (unprivileged; 8080 zaten ayrıcalıksız port).
+      containers:
+      - name: console-frontend
+        image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/console-frontend:1.0"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui
+  namespace: example
+  labels: {app: kafka-ui}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: kafka-ui}}
+  template:
+    metadata:
+      labels: {app: kafka-ui}
+    spec:
+      # Kafka UI apiserver'a hiç çağrı yapmaz (yalnızca Kafka/Connect/
+      # Apicurio/Keycloak'a HTTP/Kafka protokolü) — özel ServiceAccount/RBAC
+      # gerekmez.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: kafka-ui
+        image: "ghcr.io/kafbat/kafka-ui:v1.5.0"   # POC-DOĞRULA: bkz. dosya başı notu
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        ports: [{containerPort: 8080, name: http}]
+        env:
+        - {name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "/kafka-ui-config/config.yml"}   # POC-DOĞRULA: bkz. dosya başı notu
+        - {name: KAFKA_UI_SCRAM_PASSWORD, valueFrom: {secretKeyRef: {name: kafka-ui, key: password}}}
+        - {name: KAFKA_CA_TRUSTSTORE_PASSWORD, valueFrom: {secretKeyRef: {name: kafka-cluster-ca-cert, key: ca.password}}}
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: oidc-credentials, key: issuer-url}}}
+        - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: kafka-ui-oidc-credentials, key: client-secret}}}  # bkz. chart/templates/console/routes-oidc.yaml
+        volumeMounts:
+        - {name: kafka-ui-config, mountPath: /kafka-ui-config, readOnly: true}
+        - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}
+        readinessProbe: {httpGet: {path: /actuator/health, port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}  # POC-DOĞRULA: actuator path
+        livenessProbe: {httpGet: {path: /actuator/health, port: 8080}, initialDelaySeconds: 40, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+      volumes:
+      - name: kafka-ui-config
+        configMap: {name: kafka-ui-config}
+      - name: kafka-ca
+        secret: {secretName: kafka-cluster-ca-cert}
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Deployment --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      serviceAccountName: grafana
+      containers:
+      - name: grafana
+        image: "docker.io/grafana/grafana:11.3.0"
+        ports:
+        - {name: http, containerPort: 3000}
+        env:
+        # Non-expiring SA token (grafana-sa-token Secret) captured once into
+        # the process env; Grafana's datasource provisioning expands
+        # `${GRAFANA_SA_TOKEN}` at boot. Because the token never rotates, this
+        # boot-once capture stays valid for the pod's lifetime.
+        - name: GRAFANA_SA_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: grafana-sa-token
+              key: token
+        - name: GF_SECURITY_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: grafana-admin
+              key: admin-user
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: grafana-admin
+              key: admin-password
+        - {name: GF_SERVER_ROOT_URL, value: "https://grafana.lakehouse.example.com"}
+        - {name: GF_AUTH_GENERIC_OAUTH_ENABLED, value: "true"}
+        - {name: GF_AUTH_GENERIC_OAUTH_NAME, value: "Keycloak"}
+        - {name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID, value: "grafana"}
+        - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: grafana-oidc
+              key: client-secret
+        - {name: GF_AUTH_GENERIC_OAUTH_SCOPES, value: "openid email profile"}
+        - {name: GF_AUTH_GENERIC_OAUTH_AUTH_URL, value: "https://auth.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/auth"}
+        - {name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL, value: "https://auth.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/token"}
+        - {name: GF_AUTH_GENERIC_OAUTH_API_URL, value: "https://auth.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/userinfo"}
+        volumeMounts:
+        - {name: datasources, mountPath: /etc/grafana/provisioning/datasources, readOnly: true}
+        - {name: dashboard-providers, mountPath: /etc/grafana/provisioning/dashboards, readOnly: true}
+        - {name: dashboard-kafka, mountPath: /var/lib/grafana/dashboards/kafka.json, subPath: kafka.json, readOnly: true}
+        - {name: dashboard-cnpg, mountPath: /var/lib/grafana/dashboards/cnpg.json, subPath: cnpg.json, readOnly: true}
+        - {name: dashboard-trino, mountPath: /var/lib/grafana/dashboards/trino.json, subPath: trino.json, readOnly: true}
+        - {name: dashboard-iceberg, mountPath: /var/lib/grafana/dashboards/iceberg.json, subPath: iceberg.json, readOnly: true}
+        - {name: dashboard-console, mountPath: /var/lib/grafana/dashboards/console.json, subPath: console.json, readOnly: true}
+        - {name: dashboard-platform, mountPath: /var/lib/grafana/dashboards/platform.json, subPath: platform.json, readOnly: true}
+        readinessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /api/health, port: http}, initialDelaySeconds: 30, periodSeconds: 15}
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - {name: datasources, configMap: {name: grafana-datasources}}
+      - {name: dashboard-providers, configMap: {name: grafana-dashboard-providers}}
+      - {name: dashboard-kafka, configMap: {name: grafana-dashboard-kafka}}
+      - {name: dashboard-cnpg, configMap: {name: grafana-dashboard-cnpg}}
+      - {name: dashboard-trino, configMap: {name: grafana-dashboard-trino}}
+      - {name: dashboard-iceberg, configMap: {name: grafana-dashboard-iceberg}}
+      - {name: dashboard-console, configMap: {name: grafana-dashboard-console}}
+      - {name: dashboard-platform, configMap: {name: grafana-dashboard-platform}}
+---
+# Source: lakehouse/templates/04-nessie-ha.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nessie
+  namespace: example
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nessie
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: {type: Utilization, averageUtilization: 70}
+---
+# Source: lakehouse/templates/06-trino-ha.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trino-worker
+  namespace: example
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: trino-worker
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: {type: Utilization, averageUtilization: 70}
+---
+# Source: lakehouse/templates/01-storage.yaml
+# -------- S3 credential Secret (vendor-neutral) — NAME REFERENCE ONLY --------
+# BU SECRET'I ELLE YAZMAYIN / bu chart material üretmez.
+# `s3-credentials` adlı bir `Opaque` Secret,
+# şu key'lerle namespace `example` içinde
+# önceden var olmalı — ExternalSecret/Vault (`values.secrets.mode: external`)
+# veya `oc create secret` (`manual`) ile sağlanır:
+#   access-key-id, secret-access-key, endpoint, region
+# Bu chart'ın hiçbir template'i bu Secret'ı OLUŞTURMAZ; yalnızca isimle
+# referans verir (bkz. spec §4 — secret materyali git'e/chart'a girmez).
+---
+# Source: lakehouse/templates/08-routes-tls.yaml
+# OpenShift Routes + cert-manager entegrasyonu. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.routesTls`.
+#
+# Prod'da her public UI ayrı bir Route ile HTTPS üzerinde servis edilir.
+#
+# Host tutarlılığı (task brief kabul kriteri): her Route'un `spec.host`'u
+# `lakehouse.routeHost` helper'ından (_helpers.tpl) üretilir, `.Values.global.
+# domain`'e bağlı — Keycloak'ın OIDC client redirect URI'leri
+# (chart/templates/10-keycloak.yaml) de AYNI helper'dan AYNI mantıksal isimle
+# üretilir, böylece bir Route'un host'u ile o UI'nin OIDC redirect host'u
+# asla ayrışamaz.
+#
+# Ek gate (bu task): `lakehouse.isOpenShift` (`.Values.platform`) — bu
+# dosyanın TAMAMI yalnızca `platform: openshift` iken render edilir; vanilla
+# eşleniği chart/templates/08b-ingress-tls.yaml'da (`networking.k8s.io/v1`
+# Ingress, AYNI components.* gate'leri + AYNI lakehouse.routeHost helper'ı).
+#
+# DANGLING-ROUTE GATING (spec §3.1/§8 Route-referans kapalılığı):
+# `superset`/`jupyter`/`ai-ui` Route'ları backing Deployment/Service'i OLMAYAN
+# follow-up bileşenlere işaret ediyor (Superset+JupyterHub alt-proje D'de,
+# AI ise `prod-manifests/optional/07-ai-gpu.yaml`'da — bu Helm paketleme
+# planının HİÇBİR task'ında chart template'e taşınmıyor; plan: "prod'da AI
+# yok"). Bu yüzden ÜÇÜ DE kendi `.Values.components.{superset,jupyter,ai}`
+# flag'i arkasında (hepsi varsayılan false, `.Values.components.routesTls`'den
+# bağımsız ikinci switch'ler) — prod'da render OLMAZ, backing Service'i
+# olmayan dangling bir Route oluşmaz. helm-check.py'nin --service-closure
+# kontrolü artık Route `spec.to.name` hedeflerini de doğruluyor;
+# bu gate'ler sayesinde o kontrol whitelist-istisnasına gerek kalmadan
+# gerçekten kapalıdır. İlgili bileşen chart'a taşındığında flag true'ya
+# alınır + backing Service üretilir. Bkz. chart/templates/10-keycloak.yaml'daki
+# aynı `.Values.components.ai` gate'inin `ai-ui` OIDC client'ı.
+---
+# Source: lakehouse/templates/08b-ingress-tls.yaml
+# Vanilla Kubernetes Ingress + cert-manager entegrasyonu — chart/templates/
+# 08-routes-tls.yaml (trino/ai-ui/nessie/superset/zeppelin/jupyter),
+# 10-keycloak.yaml'daki auth Route, console/console.yaml + console/
+# kafka-ui.yaml'daki Route'ların VE monitoring/grafana.yaml'daki Route'un
+# `networking.k8s.io/v1` Ingress eşleniği.
+#
+# Bu dosyanın TAMAMI `lakehouse.isOpenShift` (`.Values.platform`) helper'ının
+# TERSİ ile gate'lenir: `platform: openshift` iken buradan HİÇBİR ŞEY render
+# edilmez (o path'te Route'lar render edilir); `platform: vanilla`
+# (varsayılan) iken TERSİ — Route'lar render OLMAZ, buradaki Ingress'ler
+# render edilir. Aynı `lakehouse.isOpenShift` helper'ı (bir kez tanımlı,
+# _helpers.tpl), asla ikinci bir literal `eq .Values.platform ...` kontrolü
+# değil — bu yüzden iki path aynı anda render olamaz (ya da ikisi de boş
+# kalamaz) aynı mantıksal endpoint için.
+#
+# Host tutarlılığı (task brief kabul kriteri, Route'larla AYNI): her
+# Ingress'in `spec.rules[].host`'u AYNI `lakehouse.routeHost` helper'ından
+# (_helpers.tpl), AYNI mantıksal isimle üretilir — Keycloak OIDC client
+# redirectUris/webOrigins'i (10-keycloak.yaml) platformdan bağımsız her
+# zaman aynı host'u gösterir.
+#
+# Gating: her Ingress, Route eşleniğiyle BİREBİR AYNI `.Values.components.*`
+# flag'i arkasında (dangling-Route notunun AYNISı burada da geçerli —
+# superset/jupyter/ai backing Service'i bu pakette YOK, flag'leri varsayılan
+# false, bkz. 08-routes-tls.yaml header).
+#
+# cert-manager: her Ingress AYNI `.Values.routes.certIssuer`'ı
+# `cert-manager.io/cluster-issuer` annotation'ı olarak taşır (Route'larla
+# aynı ClusterIssuer) ve kendi `spec.tls[].secretName`'ini talep eder
+# (`<name>-tls` — cert-manager bu Secret'ı üretir).
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+# Lakehouse — ExternalSecret CRs (`.Values.secrets.mode: external` only).
+#
+# Chart position in the "generated | external | manual" three-mode secrets
+# contract (see chart/values.yaml `secrets:` header comment for the full
+# picture):
+#   - generated (DEFAULT): the `bootstrap` script (Task 7) seeds every named
+#     Secret out-of-band before `helm install`. THIS FILE renders nothing —
+#     same as `manual`, rendering-wise. An ExternalSecret would fight
+#     bootstrap's own seeded material for ownership (Helm/ArgoCD would
+#     overwrite/prune it on the next sync), so the chart must stay hands-off.
+#   - external: THIS FILE renders one `ExternalSecret` (external-secrets.io/
+#     v1beta1) per named platform Secret, referencing a customer-provided
+#     SecretStore/ClusterSecretStore (`.Values.secrets.external.*`). The
+#     store itself stays out-of-band — customer/vault-specific config this
+#     chart never sees.
+#   - manual: THIS FILE renders nothing; NOTES.txt prints the manual
+#     `oc create secret` steps.
+#
+# Gated by BOTH `.Values.secrets.mode == "external"` AND
+# `.Values.components.externalSecrets` (default true) — the latter is an
+# escape hatch for a cluster that runs `mode: external` but hasn't installed
+# the External Secrets Operator CRD yet (see chart/templates/
+# _prereq-check.tpl's `external-secrets.io/v1beta1` prereq check for the
+# "operator not installed at all" case, which this flag lets an operator
+# work around without a hard render failure).
+#
+# Secret inventory covered here — the SAME named platform Secrets NOTES.txt
+# already documents as "provision before install" (chart/templates/
+# NOTES.txt's SECRETS section) — verified against each Secret's actual
+# consumer template:
+#   - `.Values.storage.s3.secretName` (default
+#     s3-credentials) — S3 credential Secret, consumed by
+#     Trino/Spark/Nessie/Connect (chart/templates/01-storage.yaml doc
+#     comment). Always rendered (no component gate — every core component
+#     depends on S3).
+#   - `.Values.oidc.secretName` (default oidc-credentials) — Nessie/Trino/
+#     Console OIDC issuer+client credentials. Always rendered.
+#   - `keycloak-admin-credentials` (literal, chart/templates/10-keycloak.yaml)
+#     — gated on `.Values.components.keycloak` (only rendered when Keycloak
+#     itself is enabled).
+#   - `pg` / `mssql` / `mongo` (literals, chart/templates/12-kafka-connect.yaml
+#     `spec.template.pod.volumes` — Kafka Connect's DirectoryConfigProvider
+#     external-configuration source-DB credentials) — gated on
+#     `.Values.components.kafkaConnect`.
+# NOT covered here (deliberately): `debezium-src` and `kafka-cluster-ca-cert`
+# are Strimzi-managed `KafkaUser`/cluster-CA Secrets — Strimzi's OWN operator
+# generates them, so an ExternalSecret here would conflict with that
+# ownership (same reasoning as why `generated`/`manual` render nothing: two
+# owners fighting over one Secret). The four dev-convenience inline Secrets
+# (`trino.internalSharedSecret`, `zeppelin.ad.bindPassword`,
+# `keycloak.adminPassword`, `kafkaUi.oidc.clientSecret`) are also excluded —
+# they are local/dev-only and, when a real value IS supplied, render inline
+# from that value regardless of `secrets.mode` (see chart/values.yaml
+# `secrets:` comment); when left empty (the shipped default) they still fall
+# under the SAME out-of-band provisioning contract as everything else, but
+# are not part of this file's fixed inventory since their Secret NAMES are
+# not otherwise referenced by any other template independent of the
+# dev-convenience toggle.
+---
+# Source: lakehouse/templates/17-minio.yaml
+# MinIO — DEV/PoC/e2e-ONLY in-cluster S3-compatible object store (Product
+# Foundation Task 8). Gated by `.Values.components.minio` (DEFAULT FALSE).
+#
+# *** THIS IS NOT FOR PRODUCTION. *** A real install brings its OWN
+# S3-compatible object store (Pure Storage FlashBlade, AWS S3, Ceph RGW,
+# ...) and points `storage.s3.secretName`'s Secret material at it instead
+# (see chart/templates/01-storage.yaml) — this component exists ONLY so a
+# throwaway dev/PoC/e2e cluster (no real S3 endpoint available) has
+# somewhere for first ingest to land. Single replica, ONE PVC, no HA/
+# erasure-coding — a MinIO outage on this Deployment loses no customer
+# data, because no real customer install ever points production traffic
+# at it.
+#
+# Root credentials are the SAME `storage.s3.secretName` Secret every other
+# S3 consumer in this chart already reads (Trino/Nessie/Spark/CNPG
+# backups, see e.g. 06-trino-ha.yaml) — MinIO's root user/password ARE
+# that Secret's `access-key-id`/`secret-access-key` keys, so bootstrap's
+# `generated`-mode credentials (bootstrap/lib/secrets.sh) work here with NO
+# second secret to keep in sync. Service name is `minio`
+# (`lakehouse.svc.minio` helper, _helpers.tpl) on port 9000 — this MUST
+# match bootstrap's default `s3-credentials.endpoint`
+# (`http://minio.<namespace>.svc:9000`) when no `--s3-endpoint` is given.
+---
+# Source: lakehouse/templates/console/console.yaml
+# Self-Service Lakehouse Console — backend (FastAPI) + frontend (React/Vite)
+# Deployment/Service pair, a dedicated `lakehouse-console` ServiceAccount +
+# NAMESPACE-SCOPED Role/RoleBinding (KafkaConnector/KafkaTopic CRs + Secret
+# CRUD — no cluster-admin, no ClusterRole), a cert-manager TLS Route
+# (frontend only) and a NetworkPolicy set. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.console`.
+#
+# LOAD-BEARING (do not change without re-reading sub-project B):
+#   - The Role stays `kind: Role` (namespace-scoped), bound by a
+#     `RoleBinding` (never `ClusterRole`/`ClusterRoleBinding`) — this is the
+#     task's explicit acceptance criterion, carried over verbatim from the
+#     source manifest's own "cluster-admin YOK, ClusterRole YOK" comment.
+#   - `secrets` verbs are exactly `[create, update, delete]` — no `get`/
+#     `list`/`patch` (console/backend/app/services/k8s_service.py never
+#     reads secrets and never calls a JSON-patch; its 409-fallback on
+#     `create_secret` calls `replace_namespaced_secret`, a PUT, whose RBAC
+#     verb is `update`, not `patch`).
+#
+# Service wiring (spec §3.1/§8):
+#   - Backend Service name = `lakehouse.svc.consoleBackend` (`console-backend`)
+#     — MUST stay this exact name: console/frontend/nginx.conf's `/api`
+#     proxy target is baked into the frontend image at Docker-build time as
+#     the bare same-namespace service name `console-backend:8080` (see that
+#     file's own comment) — namespace-generic by construction, since a bare
+#     service name always resolves within the requesting pod's own
+#     namespace. This chart only needs to guarantee the backend Service is
+#     always named `console-backend` in the SAME namespace as the frontend,
+#     which it does under any release namespace.
+#   - Console -> Trino/Kafka Connect/Apicurio resolved via the
+#     `lakehouse.svc.trino` / `.svc.connect` / `.svc.apicurio` helpers
+#     (never hardcoded) — same helpers 06-trino-ha.yaml/12-kafka-connect.yaml/
+#     11-apicurio-registry.yaml are verified against.
+#   - S3 credentials come from the SAME `.Values.storage.s3.secretName`
+#     Secret every other S3 consumer uses (Trino, CNPG backups, ...).
+#   - `OIDC_ISSUER` is sourced from the SAME `.Values.oidc.secretName` Secret
+#     (key `issuer-url`) Trino/Nessie already consume — single issuer source
+#     across every OIDC-aware component in this chart (must match
+#     `keycloak.realm.name` = `lakehouse`). `OIDC_AUDIENCE` is plain
+#     (non-secret) config, `.Values.console.oidc.audience`.
+#
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+# Kafka UI (kafbat-ui — community fork of provectus/kafka-ui, Apache-2.0) —
+# tek pencereden Kafka cluster/topic/consumer-group + Kafka Connect + Apicurio
+# schema registry görünürlüğü. Only parameterized + made namespace-aware.
+# Gated by `.Values.components.kafkaUi`.
+# Kafka UI'nin kendi Route'u burada tanımlı (kaynak manifestte
+# 17-console-routes-oidc.yaml'daydı — bu chart'ta "component dosyası kendi
+# Route'unu taşır" konvansiyonuyla buraya taşındı, bkz.
+# chart/templates/console/routes-oidc.yaml header notu).
+#
+# Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
+# (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
+# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
+# console/).
+#
+# Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
+# Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`
+# — hepsi helper'dan (asla hardcoded).
+#
+# `kafka-ui` KafkaUser'ın SCRAM Secret'ı ve `kafka-cluster-ca-cert`
+# Strimzi-yönetimlidir (fixed convention, 12-kafka-connect.yaml'ın `connect`
+# kimlik bilgileriyle aynı desen) — values-driven değil.
+#
+# POC-DOĞRULA (kaynak manifestten devralınan, kümede doğrulanacak — bkz.
+# prod-manifests/16-kafka-ui.yaml header notu):
+#   - kafbat-ui:v1.5.0 config şeması (kafka.clusters[].properties/ssl/
+#     schemaRegistry/kafka-connect/auth.oauth2/rbac).
+#   - `ssl.truststore-location: .../ca.p12` — kafka-cluster-ca-cert Secret'ının
+#     PKCS12 `ca.p12`/`ca.password` anahtarları içerdiği varsayımı.
+#   - `SPRING_CONFIG_ADDITIONAL_LOCATION` env adı (altçizgili — relaxed binding).
+#   - `rbac.roles[].subjects[].type: role` (provider: oauth) enum değeri.
+#   - Apicurio ccompat path'i (`/apis/ccompat/v7`).
+---
+# Source: lakehouse/templates/console/routes-oidc.yaml
+# Keycloak OIDC client credentials for the Self-Service Lakehouse Console
+# and Kafka UI. Gated by `.Values.components.consoleRoutesOidc`.
+#
+# RECONCILED (do not re-add what already exists elsewhere):
+#   - The Console (`lakehouse-console`) Route lives in
+#     chart/templates/console/console.yaml (frontend Service target).
+#   - The Kafka UI Route lives in chart/templates/console/kafka-ui.yaml
+#     (component-owns-its-Route convention this chart uses, unlike the
+#     source's prod-manifests split where both Routes were split across
+#     15/17 for a different reason — see that file's own header note about
+#     avoiding a duplicate Route object for `lakehouse-console`).
+#   - The `lakehouse-console` and `kafka-ui` OIDC client definitions
+#     themselves (clientId/redirectUris/protocolMappers) were already PATCHed
+#     into the single `KeycloakRealmImport` (chart/templates/
+#     10-keycloak.yaml `clients:` list) — NOT duplicated here (a second
+#     `KeycloakRealmImport` for the same realm risks the Keycloak Operator's
+#     idempotent/skip behavior silently dropping the new clients; see that
+#     file's own comment). This file only holds the material those
+#     already-declared clients need but that isn't realm-import data:
+#     the `kafka-ui` confidential client's actual secret VALUE, consumed by
+#     chart/templates/console/kafka-ui.yaml's Deployment
+#     (`OIDC_CLIENT_SECRET` env) — single source with 10-keycloak.yaml's
+#     `clients[].secret` field via `.Values.kafkaUi.oidc.clientSecret`, so
+#     the two can never drift apart.
+#   - `lakehouse-console` is a PUBLIC client (SPA + PKCE, see
+#     10-keycloak.yaml) — it has no confidential secret and needs no Secret
+#     object here.
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# chart/templates/monitoring/grafana.yaml — D1 (İzleme/Monitoring).
+#
+# Grafana (open-source) as the visualization layer over OpenShift
+# user-workload-monitoring (UWM). Grafana does NOT run its own Prometheus:
+# it reads metrics from UWM's tenancy-aware Thanos querier
+# (`.Values.monitoring.datasource.thanosUrl`, :9091 = namespace-scoped read)
+# using its OWN ServiceAccount bearer token. That read path requires two
+# things this file wires up:
+#   1. RBAC — the `grafana` ServiceAccount is bound to the OpenShift built-in
+#      ClusterRole `cluster-monitoring-view`, which is what UWM's Thanos
+#      checks (TokenReview + SubjectAccessReview) before serving tenancy
+#      queries for the release namespace.
+#   2. Auth header — the datasource sends `Authorization: Bearer <token>`.
+#      Grafana provisioning expands `${GRAFANA_SA_TOKEN}` from the process
+#      env ONCE, at config-load (boot) time — it does NOT re-read per request.
+#      The token therefore MUST be stable for the pod's lifetime, or the
+#      datasource 401s the moment it rotates.
+#
+#      TOKEN STRATEGY: the bearer comes from a NON-EXPIRING `kubernetes.io/
+#      service-account-token`-typed Secret (`grafana-sa-token`, below) bound
+#      to the `grafana` SA via the `kubernetes.io/service-account.name`
+#      annotation. The k8s token controller populates its `.data.token` with
+#      a long-lived (non-expiring) token — this behaviour is retained
+#      post-1.24 for manually-created Secrets of this exact type, and is
+#      present on both OpenShift 4.14+ and microk8s/k8s 1.33. Because that
+#      token never rotates, capturing it once into `GRAFANA_SA_TOKEN` at boot
+#      (here via a plain `secretKeyRef` env) is CORRECT and avoids the
+#      rotation-staleness a shorter-lived projected token would introduce.
+#
+#      TRADEOFF: a long-lived token is an acceptable posture here — the SA is
+#      bound ONLY to the read-only `cluster-monitoring-view` ClusterRole
+#      (no write, no secret access), and removing rotation removes the
+#      staleness failure mode. (This path is OpenShift-only to validate
+#      against real UWM Thanos; microk8s smoke uses a local Prometheus
+#      datasource with no bearer, so it cannot exercise the 401 — see
+#      docs/POC-DOGRULA-cluster-checklist.md.)
+#
+# Every resource is gated by `.Values.components.monitoring`. NO secret
+# material lives here — admin creds and the OIDC client secret are consumed
+# by NAME from pre-provisioned Secrets (`.Values.monitoring.grafana.
+# adminSecretName` keys `admin-user`/`admin-password`;
+# `.Values.monitoring.grafana.oidc.secretName` key `client-secret`).
+---
+# Source: lakehouse/templates/monitoring/podmonitors.yaml
+# chart/templates/monitoring/podmonitors.yaml — D1 (İzleme/Monitoring).
+#
+# PodMonitors ONLY for targets that expose Prometheus metrics on the POD
+# itself with no owning `kind: Service` fronting that port — kafka, connect
+# (Strimzi JMX-Prometheus exporter, port `tcp-prometheus` / 9404) and spark
+# (Spark PrometheusServlet). See servicemonitors.yaml for the Service-backed
+# targets (trino, nessie, apicurio, console).
+#
+# `selector.matchLabels` / endpoint port values below are copied verbatim
+# from the task brief's confirmed pod facts (not invented):
+#   - kafka   -> Strimzi `Kafka` CR name is `kafka` (03-kafka-strimzi.yaml)
+#                -> Strimzi pod labels `{strimzi.io/cluster: kafka,
+#                strimzi.io/kind: Kafka}`; JMX exporter port `tcp-prometheus`.
+#                NOTE: the Strimzi `kafka-kafka-exporter` pod
+#                (enabled via `spec.kafkaExporter`, 03-kafka-strimzi.yaml — the
+#                consumer-group lag source behind the `KafkaConsumerLagHigh`
+#                alert) carries these SAME labels + the SAME `tcp-prometheus`
+#                port name (live-verified, monitoring-smoke-report.md), so THIS
+#                one PodMonitor already scrapes both the broker JMX metrics and
+#                the exporter's `kafka_consumergroup_lag` — no separate monitor.
+#   - connect -> Strimzi `KafkaConnect` CR name is `connect`
+#                (12-kafka-connect.yaml:33) -> pod labels
+#                `{strimzi.io/cluster: connect, strimzi.io/kind: KafkaConnect}`;
+#                port `tcp-prometheus`.
+#   - spark   -> SparkApplication driver pods carry `spark-role: driver`;
+#                PrometheusServlet port `metrics`. Executor pods are not
+#                covered by this selector yet (driver-only start, per brief).
+---
+# Source: lakehouse/templates/monitoring/servicemonitors.yaml
+# chart/templates/monitoring/servicemonitors.yaml — D1 (İzleme/Monitoring).
+#
+# ServiceMonitors ONLY for targets that expose HTTP metrics via a real
+# in-cluster `kind: Service` — trino, nessie, apicurio, console. Kafka and
+# Kafka Connect are NOT here: Strimzi's JMX-Prometheus exporter runs on the
+# Pod (port `tcp-prometheus` / 9404) with no owning Service, so they are
+# scraped via PodMonitor instead (chart/templates/monitoring/podmonitors.yaml).
+#
+# Every `selector.matchLabels` / `endpoints[].port` (or `targetPort`) value
+# below is copied verbatim from the target's owning Service template — not
+# invented:
+#   - trino    -> chart/templates/06-trino-ha.yaml:266-278
+#                 (`trino-coordinator` Service; `spec.selector: {app: trino,
+#                 role: coordinator}`; `ports: [{name: http, port: 8080}]`).
+#   - nessie   -> chart/templates/04-nessie-ha.yaml:136-144
+#                 (`nessie` Service; `spec.selector: {app: nessie}`;
+#                 `ports: [{name: http, ...}, {name: mgmt, port: 9000}]`).
+#   - apicurio -> chart/templates/11-apicurio-registry.yaml:142-151
+#                 (`apicurio-registry` Service; `spec.selector:
+#                 {app: apicurio-registry}`; `ports: [{port: 8080}]` —
+#                 UNNAMED port, hence `targetPort: 8080` below instead of a
+#                 port name).
+#   - console  -> chart/templates/console/console.yaml:149-155
+#                 (`console-backend` Service; `spec.selector:
+#                 {app: console-backend}`; `ports: [{name: http,
+#                 port: 8080}]`).
+---
+# Source: lakehouse/templates/prereq-check-job.yaml
+# Chart prereq-check — pre-install/pre-upgrade hook Job. Second,
+# cluster-verified enforcement mechanism alongside
+# chart/templates/_prereq-check.tpl's template-time Capabilities check (see
+# that file's header comment for the full rationale + why both exist).
+#
+# Unlike the Capabilities check, THIS Job's manifest rendering is completely
+# unaffected by whether Helm is connected to a live cluster: Helm hooks are
+# never executed by `helm template` (or `helm lint`) — they are only ever run
+# by `helm install`/`helm upgrade`/`helm rollback`/`helm delete` against a
+# real API server. So this file can safely render as plain YAML in CI
+# (prod-manifests/validate.sh --helm) while still doing a genuine, live
+# `kubectl get crd` check the moment a real install/upgrade actually runs.
+#
+# Gated by the SAME `.Values.prereqCheck.enabled` flag as the Capabilities
+# check (single lever, see chart/values.yaml) — default `false` (bundled
+# values.yaml / values-prod.example.yaml), so a plain `helm install` without
+# `--set prereqCheck.enabled=true` does NOT get this Job (matches the
+# Capabilities check's default-off story for consistency; a deployer who
+# wants belt-and-suspenders CRD verification opts into both at once).
+#
+# RBAC: CustomResourceDefinitions are cluster-scoped, so a namespaced Role
+# cannot grant read access to them — a ClusterRole + ClusterRoleBinding is
+# unavoidable here (get/list only, on customresourcedefinitions.apiextensions.k8s.io
+# — no write, no other resource). Named with the release namespace suffixed
+# so multiple releases (e.g. this chart's own test harness applying against
+# more than one release namespace) never collide on the same cluster-scoped
+# object name. `helm.sh/hook-delete-policy: hook-succeeded` keeps a FAILED
+# Job (and its Pod logs) around for `oc logs job/lakehouse-prereq-check -n
+# <ns>` troubleshooting; only a successful run cleans itself up.
+---
+# Source: lakehouse/templates/10-keycloak.yaml
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-tls
+  namespace: example
+spec:
+  secretName: keycloak-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: "kurumsal-ca"
+  dnsNames:
+  # Operator'ün ürettiği GERÇEK Service adı (`lakehouse.svc.keycloak`
+  # helper'ı, Route'un `to.name` hedefiyle eşleşir) + dış erişim için
+  # "auth.<domain>" SAN'ı. helm-check.py'nin --service-closure kontrolü
+  # (chart/scripts/helm-check.py Keycloak Operator closure eklentisi) bu
+  # Service adının doğruluğunu doğrular.
+  - keycloak-service.example.svc.cluster.local
+  - auth.lakehouse.example.com
+---
+# Source: lakehouse/templates/02-postgres-ha.yaml
+# CNPG (CloudNativePG) HA Postgres — Nessie metadata store. 3 instance,
+# 1 primary + 2 replica, automatic failover; WAL archive to S3;
+# backup + PITR — only parameterized + made namespace-aware. Gated by
+# `.Values.components.postgres` (also gates `pg-apicurio` in
+# 11-apicurio-registry.yaml — both CNPG clusters are one "postgres"
+# subsystem toggle).
+#
+# CNPG Operator OpenShift OperatorHub'dan önceden kurulu olmalı.
+#
+# CNPG Cluster adını taşıyan Secret'ları otomatik üretir:
+#   pg-nessie-app       — application user (Nessie bağlanacak)
+#   pg-nessie-superuser — superuser (operator kullanır)
+#
+# Service DNS: CNPG operatörü bu Cluster'ı reconcile ederken `pg-nessie-rw`
+# (+ `-ro`/`-r`) Service'lerini KENDİSİ üretir (chart bunları literal
+# `kind: Service` olarak render ETMEZ). Tüketiciler bu adı ASLA sabit
+# yazmaz — `lakehouse.svc.pgNessieRw` helper'ından okur (bkz. _helpers.tpl
+# ve chart/scripts/helm-check.py'nin CNPG-farkında servis-kapanış kontrolü).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-nessie
+  namespace: example
+spec:
+  instances: 3
+  # SAME pin as pg-apicurio (11-apicurio-registry.yaml) — both read
+  # `versions.cnpgPostgresImage` so the two CNPG clusters can never drift
+  # apart on Postgres version (parity hardening, sub-project A).
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
+
+  primaryUpdateStrategy: unsupervised
+
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "1GB"
+      work_mem: "8MB"
+      wal_level: "replica"
+      max_wal_senders: "10"
+      archive_mode: "on"
+      # archive_timeout VARSAYILAN (0): yalnızca WAL dolduğunda arşivle.
+      # Düşük değerlere (örn. 60s) çekmek S3'e sürekli küçük obje
+      # akışı yaratır — IO yükü ve obje sayısı patlar. barman zaten zstd
+      # ile sıkıştırıyor; agresif timeout yerine sıkıştırmaya güvenin.
+    # NOT bir `postgresql.parameters` anahtarı — CNPG'nin GÜNCEL Cluster
+    # CRD'sinde (operator 1.30 / v1) `shared_preload_libraries` kendi
+    # top-level `[]string` alanına taşındı; `parameters` map'i içinde
+    # bırakmak admission webhook'undan "Can't set fixed configuration
+    # parameter" hatasıyla reddedilir (microk8s canlı smoke-test'te
+    # doğrulandı — bkz. .superpowers/sdd/microk8s-smoke-report.md Finding 5).
+    shared_preload_libraries: ["pg_stat_statements"]
+
+  bootstrap:
+    initdb:
+      database: nessie
+      owner: nessie
+
+  # storageClass empty (default) = the cluster's default StorageClass — CNPG
+  # only accepts an OMITTED field, not an empty string, so this template
+  # renders the key at all only when a real value is set (storage-neutrality
+  # convention, Product Foundation task 6.5).
+  storage:
+    storageClass: fast-block
+    size: "50Gi"
+
+  walStorage:
+    storageClass: fast-block
+    size: "20Gi"
+
+  # S3'e WAL + base backup
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://backups/nessie-pg"
+      endpointURL: "https://s3.example.com"
+      s3Credentials:
+        accessKeyId:
+          name: s3-credentials
+          key: access-key-id
+        secretAccessKey:
+          name: s3-credentials
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: 4
+      data:
+        compression: gzip
+        jobs: 2
+    retentionPolicy: "30d"
+
+  monitoring:
+    enablePodMonitor: true
+
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+---
+# Source: lakehouse/templates/10-keycloak.yaml
+# Keycloak — OIDC Provider + AD LDAP Federation. Only parameterized + made
+# namespace-aware.
+#
+# Neden: Kurumsal AD OIDC protokolü konuşmaz (yalnızca LDAP/Kerberos).
+# Trino, Superset, Jupyter, AI UI gibi modern servisler OIDC ister.
+# Keycloak aradaki çevirici: AD'yi "user federation" olarak tanır,
+# OIDC token dağıtır.
+#
+# Zeppelin istisnası: Apache Shiro ActiveDirectoryRealm üzerinden
+# doğrudan AD'ye LDAPS ile bağlanır (Keycloak'ı atlar) — bkz.
+# chart/templates/09-zeppelin.yaml.
+#
+# Ön koşul: Keycloak Operator OperatorHub'dan kurulu olmalı.
+#
+# Gating (iki bağımsız switch, aynı dosyada):
+#   - `pg-keycloak` CNPG Cluster  -> `.Values.components.keycloakDb`, ki bu
+#     DEĞER AÇIKÇA SET EDİLMEDİĞİ SÜRECE `.Values.components.keycloak`'a
+#     düşer (bkz. aşağıdaki `$keycloakDbEnabled` hesaplaması). `postgres`
+#     subsystem toggle'ından (pg-nessie/pg-apicurio ile AYNI toggle)
+#     BAĞIMSIZDIR: Keycloak app'i kapatıldığında (`components.keycloak: false`)
+#     hiçbir zaman bağlanmayacak bir "sahipsiz" pg-keycloak CNPG Cluster'ı
+#     üretilmez. Bir operatör Keycloak'ı kapatırken DB'yi bilinçli olarak
+#     önceden sağlamak isterse (`components.keycloak: false` +
+#     `components.keycloakDb: true`), bu mümkündür.
+#   - Admin Secret/Certificate/Keycloak CR/KeycloakRealmImport/Route
+#                                  -> `.Values.components.keycloak`.
+#
+# Host/redirect tutarlılığı (task brief kabul kriteri): Keycloak'ın kendi
+# Route'u ("auth" adı) VE her OIDC client'ın redirectUris/webOrigins'i AYNI
+# `lakehouse.routeHost` helper'ından (_helpers.tpl) üretilir — bir Route'un
+# host'u ile ona karşılık gelen client'ın redirect host'u asla ayrışamaz.
+#
+# `lakehouse-console` + `kafka-ui` client'ları (+ `groups` claim mapper): B
+# alt-projesinin patch'i (bkz. prod-manifests/17-console-routes-oidc.yaml
+# header notu — aynı realme ikinci bir KeycloakRealmImport eklemek yerine bu
+# TEK `clients:` listesine patch'lendi). Bu iki client'ın KENDİ Route'ları
+# (console/kafka-ui) chart/templates/console/ altında tanımlı; burada
+# yalnızca redirect host tutarlılığı için `lakehouse.routeHost` ile AYNI
+# "console"/"kafka-ui" mantıksal isimleri kullanılır.
+#
+# AI-UI client: kaynak manifestte var, ama `prod-manifests/optional/
+# 07-ai-gpu.yaml` (Ollama + text-to-sql-ui) bu Helm paketleme planının HİÇBİR
+# task'ında chart template'e taşınmıyor (plan: "ai.enabled: false, prod'da AI
+# yok"). Bu yüzden hem bu client hem de 08-routes-tls.yaml'daki "ai-ui"
+# Route'u `.Values.components.ai` ile gate'lenir (varsayılan false) — prod'da
+# render OLMAZ, dolayısıyla var-olmayan `text-to-sql-ui` Service'ine
+# dangling referans oluşmaz.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-keycloak
+  namespace: example
+spec:
+  instances: 3
+  # SAME pin as pg-nessie/pg-apicurio — tek kaynak, sürüm drift'i önler.
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
+  primaryUpdateStrategy: unsupervised
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+  # storageClass empty (default) = the cluster's default StorageClass — CNPG
+  # only accepts an OMITTED field, not an empty string (storage-neutrality
+  # convention, Product Foundation task 6.5, same as 02-postgres-ha.yaml).
+  storage:
+    storageClass: fast-block
+    size: "20Gi"
+  walStorage:
+    storageClass: fast-block
+    size: "10Gi"
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://backups/keycloak-pg"
+      endpointURL: "https://s3.example.com"
+      s3Credentials:
+        accessKeyId:
+          name: s3-credentials
+          key: access-key-id
+        secretAccessKey:
+          name: s3-credentials
+          key: secret-access-key
+      wal:
+        # zstd — pg-nessie/pg-apicurio'nun gzip'inden KASITLI farklı.
+        compression: zstd
+        maxParallel: 4
+      data:
+        # gzip — DİKKAT: `data.compression: zstd` CNPG'nin Cluster CRD'sinde
+        # GEÇERSİZ ("supported values: bzip2, gzip, lz4, snappy" — zstd bu
+        # enum'da YOK), `wal.compression: zstd` (yukarıda) ise aynı CRD
+        # sürümünde geçerlidir — iki farklı enum, biri zstd'yi destekliyor
+        # diğeri desteklemiyor. gzip kullanılır (pg-nessie/pg-apicurio ile aynı).
+        compression: gzip
+        jobs: 2
+    retentionPolicy: "30d"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1"
+---
+# Source: lakehouse/templates/11-apicurio-registry.yaml
+# Apicurio Registry — Avro şema deposu (ilişkisel CDC + scheduled JDBC yolları).
+# Only parameterized + made namespace-aware. Storage: CNPG Postgres (sql) →
+# CNPG WAL+PITR backup
+# hikâyesine dahil.
+#
+# Two independent gates in this one file:
+#   - `pg-apicurio` Cluster + ScheduledBackup -> `.Values.components.postgres`
+#     (same CNPG-subsystem toggle as `pg-nessie`, 02-postgres-ha.yaml).
+#   - Apicurio Deployment/Service/PDB          -> `.Values.components.apicurio`
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-apicurio
+  namespace: example
+spec:
+  instances: 3
+  # 02-postgres-ha.yaml (pg-nessie) ile AYNI pin'li imaj — sürüm drift'ini
+  # önler (`versions.cnpgPostgresImage`, tek kaynak).
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
+  # storageClass empty (default) = the cluster's default StorageClass — CNPG
+  # only accepts an OMITTED field, not an empty string (storage-neutrality
+  # convention, Product Foundation task 6.5, same as 02-postgres-ha.yaml).
+  storage:
+    size: "10Gi"
+    storageClass: fast-block
+  # Ayrı WAL volume (pg-nessie deseni) — apicurio için ölçeklendirildi.
+  walStorage:
+    size: "5Gi"
+    storageClass: fast-block
+  bootstrap:
+    initdb:
+      database: apicurio
+      owner: apicurio
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://backups/pg-apicurio"
+      endpointURL: "https://s3.example.com"
+      s3Credentials:
+        accessKeyId:
+          name: s3-credentials
+          key: access-key-id
+        secretAccessKey:
+          name: s3-credentials
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: 4
+      data:
+        compression: gzip
+        jobs: 2
+    retentionPolicy: "30d"
+  monitoring:
+    enablePodMonitor: true
+  # Postgres pod kaynakları — apicurio için makul ölçek.
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: s3-credentials
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: s3-credentials
+  dataFrom:
+    - extract:
+        key: lakehouse/s3-credentials
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: oidc-credentials
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: oidc-credentials
+  dataFrom:
+    - extract:
+        key: lakehouse/oidc-credentials
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: keycloak-admin-credentials
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: keycloak-admin-credentials
+  dataFrom:
+    - extract:
+        key: lakehouse/keycloak-admin-credentials
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: pg
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: pg
+  dataFrom:
+    - extract:
+        key: lakehouse/pg
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mssql
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: mssql
+  dataFrom:
+    - extract:
+        key: lakehouse/mssql
+---
+# Source: lakehouse/templates/15-external-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mongo
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: lakehouse-vault
+    kind: ClusterSecretStore
+  target:
+    name: mongo
+  dataFrom:
+    - extract:
+        key: lakehouse/mongo
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: example
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: "4.2.0"
+    # metadataVersion is pinned explicitly so a future `versions.kafka` bump
+    # never silently drags the KRaft metadata log format along with it (a
+    # one-way upgrade). This chart's apiVersion above is parametrized
+    # (`.Values.versions.strimziApi`, default `v1`) — the customer target is
+    # upstream community Strimzi, where >=1.1.0 serves the Kafka CRD ONLY as
+    # `v1` (`v1beta2` is gone). See `values.yaml`'s "COHERENT STRIMZI VERSION
+    # TRIPLE" comment for the full strimziApi/kafka/kafkaMetadata
+    # compatibility contract.
+    metadataVersion: "4.2-IV1"
+    listeners:
+    - name: plain                    # iç plaintext (cluster içi)
+      port: 9092
+      type: internal
+      tls: false
+    - name: tls                      # iç TLS + SCRAM auth (spec §10: SCRAM+TLS)
+      port: 9093
+      type: internal
+      tls: true
+      authentication:
+        type: scram-sha-512
+    - name: external                 # dış erişim — OpenShift Route + SCRAM
+      port: 9094
+      type: route
+      tls: true
+      authentication:
+        type: scram-sha-512
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      log.retention.hours: 168
+      log.segment.bytes: 1073741824
+    authorization:
+      type: simple
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+  # Consumer-group lag source. The broker JMX-Prometheus exporter (metricsConfig
+  # above) does NOT expose per-consumer-group lag; Strimzi's built-in
+  # kafka-exporter does. Enabling it makes Strimzi run a
+  # `kafka-kafka-exporter` Deployment that exports `kafka_consumergroup_lag` /
+  # `kafka_consumergroup_current_offset` on its `tcp-prometheus` port — which the
+  # kafka PodMonitor (podmonitors.yaml, selector strimzi.io/cluster=kafka +
+  # strimzi.io/kind=Kafka, port tcp-prometheus) already scrapes, because the
+  # exporter pod carries those SAME labels + port name. This is what backs the
+  # `KafkaConsumerLagHigh` PrometheusRule alert; without it that alert can
+  # never fire. Gated by the SAME switch as the broker metricsConfig so lag
+  # scraping tracks monitoring on/off exactly.
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+---
+# Source: lakehouse/templates/12-kafka-connect.yaml
+# Kafka Connect — tek ingest düzlemi. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.kafkaConnect`.
+#
+# LOAD-BEARING (do not change without re-reading spec + sub-project A —
+# docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
+#   - `config.providers=directory` + DirectoryConfigProvider class — every
+#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference
+#     in 13-connectors.yaml resolves through THIS provider + THESE
+#     `spec.template.pod.volumes` / `spec.template.connectContainer.
+#     volumeMounts` mount `name:`s (mssql/mongo/s3/debezium-src/kafka-ca),
+#     each mounted at the exact `/mnt/external-configuration/<name>`
+#     path. Do not rename a volume `name:` (or move its mountPath) without
+#     updating every connector's colon-form reference in lockstep.
+#     (`spec.externalConfiguration` was removed in Strimzi v1 — this
+#     `spec.template` form replaces it; see feat/ingest-e2e sub-project F
+#     live-testing finding, .superpowers/sdd/connect-v1-fix-report.md.)
+#   - Custom image is declaratively built via Strimzi `spec.build` (Debezium
+#     + Aiven JDBC + Iceberg sink + Apicurio converter); every plugin
+#     version below is the single source of truth (`.Values.versions.*`).
+#
+# Service wiring (spec §3.1/§8):
+#   - `bootstrapServers` resolves Kafka's Service via `lakehouse.svc.kafkaBootstrap`
+#     — the SAME helper 03-kafka-strimzi.yaml's `Kafka` CR is verified
+#     against.
+#   - Kafka cluster/KafkaUser/topic names referenced below (`kafka`,
+#     `connect`, `connect-cluster-*`) are FIXED literals — they MUST match
+#     03-kafka-strimzi.yaml's fixed names (Strimzi-managed Secret/Service
+#     naming convention; see that file's header for why they are not
+#     values-driven).
+#   - The custom Connect image is built from `.Values.global.imageRegistry`
+#     (never a hardcoded namespace/project literal).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: connect
+  namespace: example
+  annotations:
+    strimzi.io/use-connector-resources: "true"   # Git tek doğruluk kaynağı
+spec:
+  version: "4.2.0"   # Kafka broker sürümü ile hizalı (bkz. 03-kafka-strimzi.yaml spec.kafka.version)
+  replicas: 2
+  bootstrapServers: kafka-kafka-bootstrap:9093
+  tls:
+    trustedCertificates:
+      - {secretName: kafka-cluster-ca-cert, certificate: ca.crt}
+  authentication:
+    type: scram-sha-512
+    username: connect
+    passwordSecret: {secretName: connect, password: password}
+  # Strimzi v1: Connect cluster group + internal-topic NAMES are dedicated
+  # top-level spec fields (REQUIRED). They were `spec.config.{group.id,
+  # config.storage.topic,offset.storage.topic,status.storage.topic}` under
+  # v1beta2 — v1 rejects the CR without these top-level fields. (feat/ingest-e2e
+  # sub-project F live-testing finding — .superpowers/sdd/connect-v1-fix-report.md.)
+  groupId: connect-cluster
+  configStorageTopic: connect-cluster-configs
+  offsetStorageTopic: connect-cluster-offsets
+  statusStorageTopic: connect-cluster-status
+  config:
+    # NB: group.id / *.storage.topic are NOT here — they are the top-level
+    # fields above in v1. Replication-factor has no dedicated top-level field,
+    # so it stays a worker property here.
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: false
+    value.converter.schemas.enable: false
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+  # Pre-built Connect image (prod-grade): every plugin — including the Apache
+  # Iceberg sink runtime built from source — is baked in (images/connect/
+  # Dockerfile). No in-cluster `spec.build` download step. Used whenever
+  # `.Values.kafkaConnect.image` is set (recommended for prod + the F test).
+  # See .superpowers/sdd/connect-v1-fix-report.md for why: Apache publishes no
+  # downloadable Iceberg kafka-connect-runtime binary.
+  image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/connect-lakehouse:1.0"
+  resources:
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom: {configMapKeyRef: {name: connect-metrics, key: metrics-config.yml}}
+  template:
+    pod:
+      volumes:
+        - {name: mssql, secret: {secretName: mssql}}
+        - {name: pg, secret: {secretName: pg}}
+        - {name: mongo, secret: {secretName: mongo}}
+        - {name: s3, secret: {secretName: s3-credentials}}
+        - {name: debezium-src, secret: {secretName: debezium-src}}
+        - {name: kafka-ca, secret: {secretName: kafka-cluster-ca-cert}}
+    connectContainer:
+      volumeMounts:
+        - {name: mssql, mountPath: /mnt/external-configuration/mssql}
+        - {name: pg, mountPath: /mnt/external-configuration/pg}
+        - {name: mongo, mountPath: /mnt/external-configuration/mongo}
+        - {name: s3, mountPath: /mnt/external-configuration/s3}
+        - {name: debezium-src, mountPath: /mnt/external-configuration/debezium-src}
+        - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
+---
+# Source: lakehouse/templates/13-connectors.yaml
+# Kafka Connectors — per-source ingest (Debezium CDC + scheduled JDBC) + the
+# global Iceberg fan-out sink. Only parameterized + made namespace-aware.
+#
+# TWO independent gates in this one file (see values.yaml `components.connectors`):
+#   - `iceberg-sink-cdc` (`cdc.*`/`jdbc.*`, Avro/Apicurio) + `iceberg-sink-mongo`
+#     (`mongo.*`, JSON — Mongo has no Avro schema, see that connector's own
+#     comment) -> BOTH gated by `.Values.components.connectors.enabled` only.
+#     Together they are CORE ingest infrastructure, not an example: the pair
+#     is the source-agnostic sink that lands every `cdc.*`/`jdbc.*`/`mongo.*`
+#     topic into Iceberg via the `_target_table` SMT field the source
+#     connectors below set. Nothing else in this chart (and nothing in the
+#     Console, `console/backend/app/render_service.py`) ever generates a
+#     replacement for either, so — unlike the three source connectors below —
+#     neither is gated behind the `examples` flag; without them the ingest
+#     pipeline has no sink at all, in ANY environment.
+#   - `dbz-mssql-students` / `jdbc-mssql-scheduled` / `dbz-mongo-lms` (the
+#     three EXAMPLE per-source connectors) -> ALSO requires
+#     `.Values.components.connectors.examples.enabled` (default `false`).
+#     These are demo/reference instances of the ingest pattern for a
+#     specific PoC source (MSSQL "OgrenciDB", Mongo "lms") — real
+#     per-source CRs are generated at runtime by the scaffold script
+#     (`scaffold-source.sh`) or the Console's add-source wizard
+#     (`console/backend/app/orchestrator.py`), not by this chart.
+#
+# LOAD-BEARING (do not change without re-reading spec + sub-project A —
+# docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
+#   - Debezium SMTs: `unwrap` (ExtractNewRecordState, delete.handling.mode=
+#     rewrite, drop.tombstones=false) + `route` (InsertField$Value,
+#     `_target_table` static value) — the Iceberg sink's dynamic routing
+#     depends on EVERY source connector setting this field.
+#   - COLON-form `${directory:/mnt/external-configuration/<vol>:<key>}`
+#     credential references — resolved by 12-kafka-connect.yaml's
+#     `config.providers=directory` + the matching `externalConfiguration`
+#     volume `name:`s. Never rewritten to `${file:...}` or any other form.
+#   - `schema.history.internal.*` SASL_SSL/SCRAM-SHA-512 + truststore block
+#     (Debezium's own producer/consumer to the `schema-history.*` topic;
+#     the `debezium-src` KafkaUser, 03-kafka-strimzi.yaml, only has ACLs
+#     for that prefix — nothing else).
+#   - `errors.deadletterqueue.*` on the source connectors is a documented
+#     no-op (DLQ is a sink-only Connect feature; real DLQ delivery happens
+#     via `iceberg-sink-cdc` below) — preserved verbatim anyway, unchanged
+#     from source.
+#
+# Service wiring (spec §3.1/§8):
+#   - schema-history bootstrap servers + Apicurio registry URL resolve via
+#     `lakehouse.svc.kafkaBootstrap` / `lakehouse.svc.apicurio` — the SAME
+#     helpers 12-kafka-connect.yaml / 11-apicurio-registry.yaml render under.
+#   - iceberg-sink-cdc's Nessie catalog URI resolves via `lakehouse.svc.nessie`
+#     — the SAME helper 05-spark-operator.yaml/04-nessie-ha.yaml/
+#     06-trino-ha.yaml use (path stays the source's exact `/iceberg/v1`).
+#   - The MSSQL_HOST / MONGO_HOST / S3_ENDPOINT source hostnames
+#     are PRE-Helm double-brace placeholder tokens held in `values.yaml`
+#     (same convention as `postgres.nessie.backup.endpointURL`) — plain
+#     values-file string data, never parsed by Helm's template engine. They
+#     are deliberately NOT spelled out with literal double braces in this
+#     comment: doing so inside a template file (even in a YAML `#` comment)
+#     makes Helm's Go-template engine try to parse them as an action, since
+#     it processes raw text before any YAML/comment parsing — the exact
+#     `helm lint` failure this phrasing avoids.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: iceberg-sink-cdc
+  namespace: example
+  labels: {strimzi.io/cluster: connect}
+spec:
+  class: org.apache.iceberg.connect.IcebergSinkConnector
+  tasksMax: 2
+  config:
+    # AVRO (Apicurio) sources only — relational CDC (cdc.*) + scheduled JDBC
+    # (jdbc.*). Mongo (mongo.*) is JSON, NOT Avro: one Connect sink has a SINGLE
+    # value.converter, so a JSON source cannot share this Avro sink. Mongo needs
+    # its OWN sink (JsonConverter).
+    topics.regex: "cdc\\..*|jdbc\\..*"
+    # Sink deserializes Avro via Apicurio (matches Debezium/Aiven relational
+    # producers). Without this the sink uses the worker-default JsonConverter and
+    # fails with "Illegal character (CTRL-CHAR)" on Avro bytes.
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    value.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    # --- Nessie REST katalog ---
+    iceberg.catalog.type: rest
+    # Nessie Iceberg REST base — MUST end at /iceberg/ (Trino/Spark use the same).
+    # A trailing /v1 makes Nessie parse "v1" as a named reference (branch) →
+    # "Named reference 'v1' not found".
+    iceberg.catalog.uri: "http://nessie:19120/iceberg/"
+    iceberg.catalog.warehouse: "rawdata"
+    # --- S3 ---
+    iceberg.catalog.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+    iceberg.catalog.s3.endpoint: "https://s3.example.com"
+    iceberg.catalog.s3.path-style-access: "true"
+    iceberg.catalog.s3.access-key-id: "${directory:/mnt/external-configuration/s3:access-key-id}"
+    iceberg.catalog.s3.secret-access-key: "${directory:/mnt/external-configuration/s3:secret-access-key}"
+    # --- Fan-out (dinamik routing) ---
+    iceberg.tables.dynamic-enabled: "true"
+    iceberg.tables.route-field: "_target_table"
+    iceberg.tables.auto-create-enabled: "true"
+    iceberg.tables.evolve-schema-enabled: "true"
+    # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
+    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
+    # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
+    # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
+    # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
+    # --- Commit ---
+    iceberg.control.commit.interval-ms: "60000"
+    # commit.timeout-ms: koordinatörün, worker'ların DATA_COMPLETE'ini beklediği
+    # süre. Kaynak-kısıtlı tek-worker Connect'te sink'in control-consumer'ı
+    # (cg-control-*) Kafka 4.2 grup koordinatörüne karşı ~commit-interval
+    # periyoduyla rebalance/flap yaşayabiliyor; varsayılan 30s pencere worker'ın
+    # geç DATA_COMPLETE'ini kaçırıp "committed to 0 table(s)" üretiyor. Kısıtlı
+    # overlay'de bunu büyütmek (ör. 180000) commit'i güvenilir kılar; prod'da
+    # varsayılan yeterli.
+    iceberg.control.commit.timeout-ms: "30000"
+    # --- Kafka client overrides (iceberg.kafka.* -> all sink Kafka clients) ---
+    # --- Hata/DLQ ---
+    errors.tolerance: all
+    errors.log.enable: "true"
+    errors.deadletterqueue.topic.name: "iceberg-sink.dlq"
+    # DLQ topic replication factor — Connect auto-creates the DLQ topic with
+    # this RF; the default (3) fails on a <3-broker cluster ("Could not
+    # initialize dead letter queue"). Tracks broker count via the same knob as
+    # Connect's internal topics (1 on microk8s-ingest, 3 in prod).
+    errors.deadletterqueue.topic.replication.factor: "3"
+    errors.deadletterqueue.context.headers.enable: "true"
+---
+# Source: lakehouse/templates/13-connectors.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: iceberg-sink-mongo
+  namespace: example
+  labels: {strimzi.io/cluster: connect}
+spec:
+  class: org.apache.iceberg.connect.IcebergSinkConnector
+  tasksMax: 2
+  config:
+    # Mongo (mongo.*) is JSON, NOT Avro (see the topics.regex comment on
+    # iceberg-sink-cdc above) — a separate sink with JsonConverter, since one
+    # Connect sink can only have a single value.converter.
+    topics.regex: "mongo\\..*"
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+    # --- Nessie REST katalog ---
+    iceberg.catalog.type: rest
+    # Same /iceberg/ (NOT /v1) base as iceberg-sink-cdc above — see that
+    # connector's comment on why a trailing /v1 breaks Nessie's ref parsing.
+    iceberg.catalog.uri: "http://nessie:19120/iceberg/"
+    iceberg.catalog.warehouse: "rawdata"
+    # --- S3 ---
+    iceberg.catalog.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+    iceberg.catalog.s3.endpoint: "https://s3.example.com"
+    iceberg.catalog.s3.path-style-access: "true"
+    iceberg.catalog.s3.access-key-id: "${directory:/mnt/external-configuration/s3:access-key-id}"
+    iceberg.catalog.s3.secret-access-key: "${directory:/mnt/external-configuration/s3:secret-access-key}"
+    # --- Fan-out (dinamik routing) ---
+    iceberg.tables.dynamic-enabled: "true"
+    iceberg.tables.route-field: "_target_table"
+    iceberg.tables.auto-create-enabled: "true"
+    iceberg.tables.evolve-schema-enabled: "true"
+    # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
+    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
+    # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
+    # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
+    # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
+    # --- Commit ---
+    iceberg.control.commit.interval-ms: "60000"
+    # commit.timeout-ms — kısıtlı tek-worker Connect'te control-consumer flap'ine
+    # karşı büyütülür (iceberg-sink-cdc'deki ayrıntılı nota bkz.).
+    iceberg.control.commit.timeout-ms: "30000"
+    # --- Kafka client overrides (iceberg.kafka.* -> all sink Kafka clients) ---
+    # --- Hata/DLQ ---
+    errors.tolerance: all
+    errors.log.enable: "true"
+    errors.deadletterqueue.topic.name: "iceberg-mongo.dlq"
+    errors.deadletterqueue.topic.replication.factor: "3"
+    errors.deadletterqueue.context.headers.enable: "true"
+
+# POC-DOĞRULA (spec §15.1 — en yüksek risk): Iceberg sink v1.6.x tam anahtar
+# isimleri; sink'in Bronze (rawdata warehouse) append-only changelog yazdığı
+# ve current-state upsert'ün downstream `silver-merge` Spark job'ında
+# (MERGE INTO) gerçekleştiği medallion akışı — bkz.
+# docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md; S3
+# credential geçişi (${file:...} external config veya env). Kümede uçtan uca
+# doğrulanacak.
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+# Strimzi Kafka (KRaft mode, node pools) — Kafka omurgası (backbone). Only
+# parameterized (version/replicas/storage sizing/topic partition+RF/external
+# listener type) + made namespace-aware. Gated by `.Values.components.kafka`.
+#
+# Strimzi Operator OperatorHub'dan önceden kurulu olmalı. KRaft = ZooKeeper yok.
+#
+# LOAD-BEARING (do NOT change without re-reading spec §10 + sub-project A/B):
+#   - listener `tls` (9093): tls: true + authentication.type: scram-sha-512
+#     (the "SCRAM+TLS" unified auth model).
+#   - listener `external` (9094): OpenShift Route + tls: true +
+#     authentication.type: scram-sha-512 (type itself is values-driven for
+#     non-OpenShift envs; auth stays scram-sha-512 always).
+#   - every KafkaUser ACL below: `connect`'s ingest-namespace ACLs
+#     (cdc./jdbc./mongo./control/iceberg + connect-cluster- + `connect` group prefix;
+#     bkz. connect KafkaUser notu), `debezium-src`'s
+#     `schema-history.` prefix, `fluentbit`'s write-only `nginx-access`,
+#     `lakehouse-ingest`'s nginx-access/lms-events + `spark-` group prefix.
+#   - `default.replication.factor: 3` / `min.insync.replicas: 2` cluster
+#     config, and RF=3 on every KafkaTopic below.
+#
+# Kafka cluster adı SABİT "kafka" kalır (parametreleştirilmez) — Strimzi
+# operatörü bu isimden `kafka-kafka-bootstrap` Service'ini üretir; bu isim
+# `_helpers.tpl`'deki `lakehouse.svc.kafkaBootstrap` helper'ının ürettiği
+# değerle birebir eşleşmek ZORUNDA (bkz. helper dosyasının header yorumu +
+# chart/scripts/helm-check.py'nin Kafka-farkında servis-kapanış kontrolü).
+#
+# KAPSAM NOTU: `KafkaUser/spark-nginx` bu dosyada DEĞİL — o
+# prod-manifests/14-nginx-ingest/spark-nginx-streaming.yaml'da tanımlı ve
+# 14-nginx-ingest.yaml kapsamında migrate edilecek.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: controller
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  replicas: 3
+  roles: [controller]
+  # storage.class empty (default) = the cluster's default StorageClass —
+  # Strimzi only omits storageClassName on the PVC when the field is left
+  # out entirely (storage-neutrality convention, Product Foundation task 6.5).
+  storage:
+    type: persistent-claim
+    size: "10Gi"
+    deleteClaim: false
+    class: fast-block
+  resources:
+    requests: {memory: "512Mi", cpu: "250m"}
+    limits:   {memory: "1Gi",   cpu: "500m"}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: broker
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  replicas: 3
+  roles: [broker]
+  # storage.class empty (default) = the cluster's default StorageClass (same
+  # convention as the controller pool above).
+  storage:
+    type: jbod
+    volumes:
+    - id: 0
+      type: persistent-claim
+      size: "100Gi"
+      deleteClaim: false
+      class: fast-block
+  resources:
+    requests: {memory: "1Gi", cpu: "500m"}
+    limits:   {memory: "4Gi", cpu: "2"}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: nginx-access
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: lms-events
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+# Kafka Connect internal topic'leri (config/offset/status) — RF=3.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-configs
+  namespace: example
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: 1
+  replicas: 3
+  config: {cleanup.policy: compact}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-offsets
+  namespace: example
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: 25
+  replicas: 3
+  config: {cleanup.policy: compact}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: connect-cluster-status
+  namespace: example
+  labels: {strimzi.io/cluster: kafka}
+spec:
+  partitions: 5
+  replicas: 3
+  config: {cleanup.policy: compact}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: lakehouse-ingest
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+    - resource: {type: topic, name: "nginx-access", patternType: literal}
+      operations: [Read, Write, Describe]
+    - resource: {type: topic, name: "lms-events", patternType: literal}
+      operations: [Read, Write, Describe]
+    - resource: {type: group, name: "spark-", patternType: prefix}
+      operations: [Read]
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+# Ingest omurgası KafkaUser'ları (SCRAM-SHA-512 + ACL).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata: {name: connect, namespace: example, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      # NOT: boş kaynak adı (`name: "" patternType: prefix`) Kafka ACL API'since
+      # reddedilir (InvalidRequestException: Invalid empty resource name), bu yüzden
+      # ACL'ler ingest topic namespace'lerine daraltılmış haldedir. POC-DOĞRULA:
+      # Iceberg sink control topic/consumer-group ve DLQ adları sürüme bağlı —
+      # OpenShift'te connector'lar çalışınca teyit/genişlet.
+      - {resource: {type: group, name: connect, patternType: prefix}, operations: [Read]}          # connect-cluster + sink consumer group'ları
+      # Iceberg sink control consumer group (cg-control-<uuid>) — separate from
+      # the `connect` prefix. Without this the sink fails with
+      # GroupAuthorizationException. (POC-DOĞRULA Iceberg-sink control-group item.)
+      - {resource: {type: group, name: cg-control-, patternType: prefix}, operations: [Read, Describe]}
+      - {resource: {type: topic, name: connect-cluster-, patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Connect internal topic'leri
+      - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
+      - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
+      - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
+      - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
+      - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
+      # Iceberg sink exactly-once: coordinator/worker transactional producers
+      # (transactional.id = coordinator-txn-*/worker-txn-*). Without these the
+      # sink task dies with TransactionalIdAuthorizationException. (POC-DOĞRULA
+      # Iceberg-sink ACL item.)
+      - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
+      - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata: {name: debezium-src, namespace: example, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - {resource: {type: topic, name: schema-history., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+---
+# Source: lakehouse/templates/03-kafka-strimzi.yaml
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata: {name: fluentbit, namespace: example, labels: {strimzi.io/cluster: kafka}}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - {resource: {type: topic, name: nginx-access, patternType: literal}, operations: [Write, Describe]}
+---
+# Source: lakehouse/templates/14-nginx-ingest.yaml
+# Spark → Kafka nginx-access consumer'ı için SCRAM-SHA-512 KafkaUser (spec §10: SCRAM+TLS).
+# `strimzi.io/cluster: kafka` SABİT kalır (03-kafka-strimzi.yaml'daki Kafka CR
+# adıyla aynı convention — bkz. o dosyanın "kadar SABİT 'kafka'" yorumu).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: spark-nginx
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+    - {resource: {type: topic, name: nginx-access, patternType: literal}, operations: [Read, Describe]}
+    # Spark Structured Streaming default consumer group: spark-kafka-source-* → prefix "spark-" (lakehouse-ingest deseni)
+    - {resource: {type: group, name: "spark-", patternType: prefix}, operations: [Read]}
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+# Kafka UI'nin kendi SCRAM kimliği — salt-okunur (Describe/Read); Write/
+# Create/Delete/Alter YOK. Veri düzlemine müdahale (topic/ACL oluşturma,
+# mesaj üretme) bilerek bu ACL setinin dışında tutuldu.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kafka-ui
+  namespace: example
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+    - {resource: {type: topic, name: "", patternType: prefix}, operations: [Read, Describe]}
+    - {resource: {type: group, name: "", patternType: prefix}, operations: [Read, Describe]}
+    - {resource: {type: cluster}, operations: [Describe, DescribeConfigs]}
+---
+# Source: lakehouse/templates/10-keycloak.yaml
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: example
+spec:
+  instances: 2
+  db:
+    vendor: postgres
+    host: pg-keycloak-rw.example.svc.cluster.local
+    port: 5432
+    database: keycloak
+    usernameSecret:
+      name: pg-keycloak-app
+      key: username
+    passwordSecret:
+      name: pg-keycloak-app
+      key: password
+  hostname:
+    hostname: auth.lakehouse.example.com
+    strict: false
+    strictBackchannel: false
+  http:
+    tlsSecret: keycloak-tls
+  ingress:
+    enabled: false                  # OpenShift Route ile; aşağıda Route tanımlı
+  additionalOptions:
+  - name: log
+    value: "console"
+  - name: log-level
+    value: "INFO"
+  - name: metrics-enabled
+    value: "true"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+---
+# Source: lakehouse/templates/10-keycloak.yaml
+# Realm import — AD federation + OIDC client'lar tek YAML'da. Operator
+# bunu işleyip Keycloak'a deklaratif olarak uygular.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: lakehouse-realm
+  namespace: example
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: lakehouse
+    displayName: "Lakehouse"
+    enabled: true
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    sslRequired: "external"
+
+    # --- AD LDAP Federation ---
+    components:
+      "org.keycloak.storage.UserStorageProvider":
+      - name: "Kurumsal AD"
+        providerId: "ldap"
+        config:
+          enabled: ["true"]
+          priority: ["0"]
+          editMode: ["READ_ONLY"]
+          vendor: ["ad"]
+          connectionUrl: ["ldaps://ad.example.com:636"]
+          bindDn: ["CN=svc-lakehouse-ad,OU=Service Accounts,DC=example,DC=com"]
+          bindCredential: ["REPLACE_WITH_AD_BIND_PASSWORD"]
+          usersDn: ["OU=Users,DC=example,DC=com"]
+          userObjectClasses: ["person,organizationalPerson,user"]
+          usernameLDAPAttribute: ["sAMAccountName"]
+          rdnLDAPAttribute: ["cn"]
+          uuidLDAPAttribute: ["objectGUID"]
+          searchScope: ["2"]
+          useTruststoreSpi: ["ldapsOnly"]
+          connectionPooling: ["true"]
+          pagination: ["true"]
+          batchSizeForSync: ["1000"]
+          fullSyncPeriod: ["86400"]
+          changedSyncPeriod: ["3600"]
+          importEnabled: ["true"]
+          syncRegistrations: ["false"]
+
+      "org.keycloak.storage.ldap.mappers.LDAPStorageMapper":
+      - name: "email-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["email"]
+          ldap.attribute: ["mail"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["false"]
+      - name: "last-name-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["lastName"]
+          ldap.attribute: ["sn"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["true"]
+      - name: "first-name-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["firstName"]
+          ldap.attribute: ["givenName"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["true"]
+      - name: "group-mapper"
+        providerId: "group-ldap-mapper"
+        config:
+          groups.dn: ["OU=Groups,DC=example,DC=com"]
+          group.name.ldap.attribute: ["cn"]
+          group.object.classes: ["group"]
+          preserve.group.inheritance: ["false"]
+          membership.ldap.attribute: ["member"]
+          membership.attribute.type: ["DN"]
+          membership.user.ldap.attribute: ["sAMAccountName"]
+          mode: ["READ_ONLY"]
+
+    # --- OIDC Client'lar ---
+    clients:
+    - clientId: trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://trino.lakehouse.example.com/*"]
+      webOrigins: ["https://trino.lakehouse.example.com"]
+      attributes:
+        access.token.lifespan: "3600"
+    - clientId: superset
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://bi.lakehouse.example.com/*"]
+      webOrigins: ["https://bi.lakehouse.example.com"]
+    - clientId: jupyter
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://jupyter.lakehouse.example.com/hub/oauth_callback"]
+      webOrigins: ["https://jupyter.lakehouse.example.com"]
+    - clientId: nessie
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://nessie.lakehouse.example.com/*"]
+      webOrigins: ["https://nessie.lakehouse.example.com"]
+    # Self-Service Lakehouse Console (frontend, SPA). PUBLIC client
+    # (PKCE): frontend backend'e Bearer JWT gönderir, backend audience'ı
+    # doğrular — bu client'ın confidential secret'ına İHTİYACI YOK (diğer
+    # client'ların aksine). `groups` claim mapper: console/backend/app/
+    # services/authz.py `claims.get("groups")` (AD grup adı listesi) bekliyor.
+    - clientId: lakehouse-console
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: true
+      standardFlowEnabled: true
+      directAccessGrantsEnabled: false
+      redirectUris: ["https://console.lakehouse.example.com/*"]
+      webOrigins: ["https://console.lakehouse.example.com"]
+      attributes:
+        "pkce.code.challenge.method": "S256"
+      protocolMappers:
+      - name: groups
+        protocol: "openid-connect"
+        protocolMapper: "oidc-group-membership-mapper"
+        config:
+          "claim.name": "groups"
+          "full.path": "false"
+          "id.token.claim": "true"
+          "access.token.claim": "true"
+          "userinfo.token.claim": "true"
+    # Kafka UI (kafbat-ui). CONFIDENTIAL client (Spring Security
+    # OAuth2 authorization_code, sunucu tarafı) — secret
+    # kafka-ui-oidc-credentials Secret'ıyla eşleşmeli. Redirect URI Spring
+    # Security OAuth2 login'in varsayılan `/login/oauth2/code/{registrationId}`
+    # deseni (registrationId: keycloak).
+    - clientId: kafka-ui
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://kafka-ui.lakehouse.example.com/login/oauth2/code/keycloak"]
+      webOrigins: ["https://kafka-ui.lakehouse.example.com"]
+      # Single source with the `kafka-ui-oidc-credentials` Secret
+      # (chart/templates/console/routes-oidc.yaml `stringData.client-secret`)
+      # — both sides read `.Values.kafkaUi.oidc.clientSecret`, so this
+      # client's secret and the Secret the kafka-ui Deployment mounts can
+      # never drift apart.
+      secret: ""
+      protocolMappers:
+      - name: groups
+        protocol: "openid-connect"
+        protocolMapper: "oidc-group-membership-mapper"
+        config:
+          "claim.name": "groups"
+          "full.path": "false"
+          "id.token.claim": "true"
+          "access.token.claim": "true"
+          "userinfo.token.claim": "true"
+    # Grafana (İzleme/D1). CONFIDENTIAL client (generic OAuth,
+    # authorization_code). Redirect URI = Grafana's `generic_oauth` callback
+    # (`/login/generic_oauth`). Host derives from the SAME `lakehouse.routeHost`
+    # helper ("grafana" logical name) as the Grafana Route's own spec.host
+    # (chart/templates/monitoring/grafana.yaml) — host/redirect never drift.
+    # Gated on `monitoring.grafana.oidc.enabled` (false in microk8s smoke →
+    # client not rendered → smoke unblocked; true in values-prod.example.yaml).
+    - clientId: "grafana"
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: ["https://grafana.lakehouse.example.com/login/generic_oauth"]
+      webOrigins: ["https://grafana.lakehouse.example.com"]
+      # Single source with the `grafana-oidc` Secret Grafana mounts
+      # (chart/templates/monitoring/grafana.yaml `stringData.
+      # client-secret`) — both sides read `.Values.monitoring.grafana.oidc.
+      # clientSecret`, so this confidential client's secret and the Secret the
+      # Grafana Deployment consumes can never drift (same `secrets.mode`
+      # pattern as the sibling `trino`/`kafka-ui` confidential clients). Left
+      # empty in values → Keycloak keeps the client but the secret is
+      # provisioned out-of-band; a real value is quoted verbatim here.
+      secret: ""
+
+    # Realm roller — AD grup üyeliğine göre runtime'da atanır
+    roles:
+      realm:
+      - name: admin
+        description: "Lakehouse yöneticisi"
+      - name: analyst
+        description: "Veri analisti / Araştırmacı"
+      - name: student
+        description: "Öğrenci (salt-okunur)"
+
+    groups:
+    - name: lakehouse-admins
+      realmRoles: [admin]
+    - name: lakehouse-analysts
+      realmRoles: [analyst]
+    - name: lakehouse-students
+      realmRoles: [student]
+---
+# Source: lakehouse/templates/monitoring/podmonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      strimzi.io/cluster: kafka
+      strimzi.io/kind: Kafka
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/podmonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: connect
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      strimzi.io/cluster: connect
+      strimzi.io/kind: KafkaConnect
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/podmonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: spark
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      spark-role: driver
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/prometheusrules.yaml
+# chart/templates/monitoring/prometheusrules.yaml — D1 (İzleme/Monitoring).
+#
+# Single PrometheusRule (`lakehouse-alerts`) with 6 alert rules across the
+# ingest / storage / query / platform surfaces. Thresholds come from
+# `.Values.monitoring.alerts.*` (chart/values.yaml).
+#
+# IMPORTANT — Helm-vs-PromQL brace escaping: alert annotations.summary
+# strings embed PromQL label refs (Prometheus $labels.<name> syntax), which
+# must survive Helm's own templating literally. Each such ref below is
+# wrapped in Helm's raw-string escape form so it renders as a literal
+# PromQL label ref instead of Helm trying to evaluate $labels itself.
+# Verified via `helm template ... | grep '$labels'` producing plain
+# PromQL label refs in the rendered output (see task-5-report.md).
+#
+# NOTE TO EDITORS: Helm templates this entire file (including these `#`
+# comment lines) before YAML parsing — do NOT write a literal double-brace
+# PromQL example directly in a comment, or Helm's parser will choke on it
+# exactly like it would in the rules below. Describe such syntax in prose
+# instead (as done here).
+#
+# NOTE: the actual metric NAMES below (`kafka_connect_connector_status`,
+# `kafka_consumergroup_lag`, `kafka_server_brokertopicmetrics_messagesin_total`,
+# `cnpg_pg_replication_lag`, `trino_execution_querymanager_failedqueries_total`,
+# `kube_pod_container_status_restarts_total`) are exporter/version-dependent
+# (spec §9). `helm template`/`helm lint` only verify PromQL syntax + YAML
+# validity here; matching them against REAL exposed series is confirmed live
+# against microk8s/OpenShift separately — not attempted here.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lakehouse-alerts
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  groups:
+    - name: lakehouse.ingest
+      rules:
+        - alert: KafkaConnectorFailed
+          expr: kafka_connect_connector_status{status="failed"} > 0
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "Kafka Connect connector FAILED ({{ $labels.connector }})"
+        - alert: KafkaConsumerLagHigh
+          expr: sum(kafka_consumergroup_lag) by (consumergroup) > 100000
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Yüksek consumer lag ({{ $labels.consumergroup }})"
+        - alert: IcebergDLQGrowing
+          expr: rate(kafka_server_brokertopicmetrics_messagesin_total{topic=~".*dlq.*"}[5m]) > 1
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "DLQ topic'ine yazım artıyor ({{ $labels.topic }})"
+    - name: lakehouse.storage
+      rules:
+        - alert: CNPGReplicationLagHigh
+          expr: cnpg_pg_replication_lag > 30
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "CNPG replication lag yüksek ({{ $labels.pod }})"
+    - name: lakehouse.query
+      rules:
+        - alert: TrinoQueryErrorRateHigh
+          expr: rate(trino_execution_querymanager_failedqueries_total[5m]) > 5
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Trino başarısız sorgu hızı yüksek"
+    - name: lakehouse.platform
+      rules:
+        - alert: PodRestartingFrequently
+          expr: increase(kube_pod_container_status_restarts_total{namespace="example"}[1h]) > 5
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "Pod sık yeniden başlıyor ({{ $labels.pod }})"
+---
+# Source: lakehouse/templates/08-routes-tls.yaml
+# Trino — SQL endpoint + OAuth2 callback
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: trino
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: trino.lakehouse.example.com
+  to:
+    kind: Service
+    name: trino-coordinator
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Source: lakehouse/templates/08-routes-tls.yaml
+# Nessie REST Catalog (opsiyonel: dış client'lar / federated catalog)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: nessie
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: nessie.lakehouse.example.com
+  to:
+    kind: Service
+    name: nessie
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Source: lakehouse/templates/08-routes-tls.yaml
+# Apache Zeppelin (chart/templates/09-zeppelin.yaml ile deploy edildi)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zeppelin
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: zeppelin.lakehouse.example.com
+  to:
+    kind: Service
+    name: zeppelin
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+# NOT: Superset + JupyterHub Deployment/Service şablonları bu paketin
+# kapsamı dışında (kaynak manifestteki AYNI not). Referans:
+#   - Superset Helm:   https://github.com/apache/superset/tree/master/helm
+#   - JupyterHub Z2J:  https://zero-to-jupyterhub.readthedocs.io/
+# HA deploy pattern bu chart'taki Nessie/Trino şablonlarıyla aynı
+# prensipleri takip eder (OIDC + RWX PVC + HPA + Pod anti-affinity).
+---
+# Source: lakehouse/templates/10-keycloak.yaml
+# Keycloak Route — harici erişim (reencrypt: Keycloak kendisi TLS, Route
+# bunu reencrypt eder). Ek gate: `lakehouse.isOpenShift` (`.Values.platform`)
+# — vanilla eşleniği chart/templates/08b-ingress-tls.yaml'da.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: keycloak
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: auth.lakehouse.example.com
+  to:
+    kind: Service
+    name: keycloak-service   # Keycloak Operator tarafından üretilen Service
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+---
+# Source: lakehouse/templates/console/console.yaml
+# -------- Route (cert-manager TLS) — yalnızca frontend dışarı açılır;
+# backend'e doğrudan dışarıdan erişim YOK (NetworkPolicy ile de kapalı).
+# Host, 10-keycloak.yaml'daki `lakehouse-console` OIDC client'ın
+# redirectUris/webOrigins'iyle AYNI `lakehouse.routeHost` helper'ından
+# ("console" mantıksal isim) üretilir — host/redirect asla ayrışmaz. --------
+# Ek gate: `lakehouse.isOpenShift` (`.Values.platform`) — vanilla eşleniği
+# chart/templates/08b-ingress-tls.yaml'da.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: lakehouse-console
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: console.lakehouse.example.com
+  to:
+    kind: Service
+    name: lakehouse-console
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Source: lakehouse/templates/console/kafka-ui.yaml
+# Kafka UI — cert-manager TLS Route (edge; Kafka UI kendi TLS'ini konuşmaz).
+# Host, 10-keycloak.yaml'daki `kafka-ui` OIDC client'ın redirectUris/
+# webOrigins'iyle AYNI `lakehouse.routeHost` helper'ından ("kafka-ui"
+# mantıksal isim) üretilir — host/redirect asla ayrışmaz. Ek gate:
+# `lakehouse.isOpenShift` (`.Values.platform`) — vanilla eşleniği
+# chart/templates/08b-ingress-tls.yaml'da.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: kafka-ui
+  namespace: example
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: kafka-ui.lakehouse.example.com
+  to:
+    kind: Service
+    name: kafka-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Source: lakehouse/templates/monitoring/grafana.yaml
+# -------- Route (edge TLS) — host + OIDC redirect share lakehouse.routeHost --------
+# Gated on `components.routesTls` (same lever as chart/templates/
+# 08-routes-tls.yaml) AND `lakehouse.isOpenShift` (`.Values.platform`):
+# OpenShift Routes (route.openshift.io) only exist on OpenShift. On
+# `platform: vanilla` (Route-less cluster) the rest of the İzleme stack
+# (Grafana Deployment/Service, ServiceMonitors, PrometheusRule) still
+# installs; Grafana's vanilla equivalent Ingress renders in
+# chart/templates/08b-ingress-tls.yaml instead. Default true in
+# values(-prod), so OpenShift render is unchanged. NB: Grafana OIDC login
+# needs a stable public URL, so monitoring.grafana.oidc.enabled effectively
+# presumes routesTls on OpenShift.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: grafana
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    cert-manager.io/cluster-issuer: "kurumsal-ca"
+spec:
+  host: grafana.lakehouse.example.com
+  to:
+    kind: Service
+    name: grafana
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Source: lakehouse/templates/02-postgres-ha.yaml
+# Scheduled backup — her gece 02:00
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-nessie-daily-backup
+  namespace: example
+spec:
+  schedule: "0 0 2 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: pg-nessie
+---
+# Source: lakehouse/templates/11-apicurio-registry.yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-apicurio-daily
+  namespace: example
+spec:
+  schedule: "0 0 3 * * *"
+  cluster:
+    name: pg-apicurio
+  backupOwnerReference: self
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+# Iceberg bakım — saatlik compaction + snapshot expire + orphan-file temizliği.
+# jobs/iceberg_maintenance.py DİNAMİK: hardcoded tablo YOK. Script önce
+# lakehouse ve rawlake kataloglarındaki tüm namespace/tablo çiftlerini
+# keşfeder (SHOW NAMESPACES + SHOW TABLES), sonra her tablo için sırayla:
+#   CALL {catalog}.system.rewrite_data_files(table => '{ns}.{tbl}')
+#   CALL {catalog}.system.expire_snapshots(table => '{ns}.{tbl}')
+#   CALL {catalog}.system.remove_orphan_files(table => '{ns}.{tbl}')
+# Yeni tablolar eklendiğinde manifest değişmez; script otomatik keşfeder.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: iceberg-maintenance
+  namespace: example
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  template:
+    type: Python
+    mode: cluster
+    image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/spark-py:1.0"
+    mainApplicationFile: "local:///opt/spark/jobs/iceberg_maintenance.py"
+    sparkVersion: "3.5.1"
+    driver:
+      cores: 1
+      memory: "2G"
+      serviceAccount: spark-driver
+      env: [{name: BRONZE_RETENTION_DAYS, value: "30"}]
+      envFrom: [{secretRef: {name: s3-credentials}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    executor:
+      cores: 2
+      instances: 4
+      memory: "4G"
+      env: [{name: BRONZE_RETENTION_DAYS, value: "30"}]
+      envFrom: [{secretRef: {name: s3-credentials}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    volumes:
+    - name: spark-conf
+      configMap: {name: spark-defaults}
+---
+# Source: lakehouse/templates/05-spark-operator.yaml
+# Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
+# jobs/merge_cdc.py rawlake'teki her `<ns>_raw` namespace'ini keşfeder, Silver'a
+# MERGE eder. Yeni kaynak eklenince manifest değişmez. Dynamic Allocation +
+# shuffle-tracking (spark-defaults'ta) ile executor'lar tablo başına elastik.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: silver-merge
+  namespace: example
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  template:
+    type: Python
+    mode: cluster
+    image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/spark-py:1.0"
+    mainApplicationFile: "local:///opt/spark/jobs/merge_cdc.py"
+    sparkVersion: "3.5.1"
+    sparkConf:
+      "spark.dynamicAllocation.enabled": "true"
+      "spark.dynamicAllocation.shuffleTracking.enabled": "true"
+      "spark.dynamicAllocation.minExecutors": "0"
+      "spark.dynamicAllocation.maxExecutors": "8"
+    dynamicAllocation:
+      enabled: true
+      initialExecutors: 0
+      minExecutors: 0
+      maxExecutors: 8
+    driver:
+      cores: 1
+      memory: "1g"
+      serviceAccount: spark-driver
+      envFrom: [{secretRef: {name: s3-credentials}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    executor:
+      cores: 1
+      memory: "1g"
+      envFrom: [{secretRef: {name: s3-credentials}}]
+      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+    volumes:
+    - name: spark-conf
+      configMap: {name: spark-defaults}
+---
+# Source: lakehouse/templates/monitoring/servicemonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: trino
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      app: trino
+      role: coordinator
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/servicemonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nessie
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      app: nessie
+  endpoints:
+    - port: mgmt
+      path: /q/metrics
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/servicemonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: apicurio
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      app: apicurio-registry
+  endpoints:
+    # Service port is UNNAMED (`ports: [{port: 8080}]`) — target by
+    # targetPort, not a port name.
+    - targetPort: 8080
+      path: /metrics
+      interval: 30s
+---
+# Source: lakehouse/templates/monitoring/servicemonitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: console
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+spec:
+  namespaceSelector:
+    matchNames: [example]
+  selector:
+    matchLabels:
+      app: console-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+# Source: lakehouse/templates/14-nginx-ingest.yaml
+# nginx-access → lakehouse.web.access_log ingest. This template renders:
+#   - spark-nginx-streaming.yaml  → SparkApplication `nginx-streaming` +
+#     KafkaUser `spark-nginx` (this file — see 03-kafka-strimzi.yaml's own
+#     "KAPSAM NOTU" header comment, which explicitly defers spark-nginx here).
+#   - fluent-bit.conf / fluent-bit.service → packaged as a ConfigMap below,
+#     NOT run in-cluster. FluentBit is an agent installed on the external
+#     nginx VM hosts (not a pod this chart schedules) — the chart only ships
+#     the two files as data so an operator can pull them out and install them
+#     on those VMs (see NOTES.txt for the exact steps, mirroring
+#     prod-manifests/14-nginx-ingest/README.md).
+# Only parameterized + made namespace-aware. Gated by
+# `.Values.components.nginxIngest`.
+#
+# Service wiring (spec §3.1/§8):
+#   - Kafka bootstrap: prod-manifests/jobs/nginx_streaming.py (baked into the
+#     spark-py image, referenced via `local://` — NOT a chart template, see
+#     05-spark-operator.yaml's header comment for the same convention) hardcodes
+#     `kafka.bootstrap.servers=kafka-kafka-bootstrap:9093`. That literal is the
+#     SAME value `lakehouse.svc.kafkaBootstrap` resolves to (verified against
+#     _helpers.tpl's canonical-name header) on the `tls` (9093, SASL_SSL+SCRAM)
+#     listener from 03-kafka-strimzi.yaml — kept in lockstep by convention,
+#     not re-templated (the job file is not chart-owned).
+#   - Nessie catalog: the SparkApplication mounts the SAME shared `spark-conf`
+#     ConfigMap (`spark-defaults`, created once in 05-spark-operator.yaml)
+#     every other SparkApplication in this chart mounts — its Iceberg REST
+#     catalog URI is already wired via the `lakehouse.svc.nessie` helper
+#     there. Not duplicated here.
+#   - S3 checkpoint: the job's `checkpointLocation=s3://nginx-web/_checkpoints/
+#     access_log` is durable object storage (NOT emptyDir) — baked into the
+#     job script, preserved verbatim. `.Values.nginx.streaming.checkpointBucket`
+#     below mirrors this same constant for NOTES.txt's operator setup step
+#     only (see comment on that value — it is NOT read by the running job).
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: nginx-streaming
+  namespace: example
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/spark-py:1.0"
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: "local:///opt/spark/jobs/nginx_streaming.py"
+  sparkVersion: "3.5.1"
+  restartPolicy:
+    type: Always                 # streaming job; crash → restart
+    onFailureRetries: 5
+  driver:
+    cores: 1
+    memory: "1G"
+    serviceAccount: spark-driver
+    envFrom:
+    - secretRef: {name: s3-credentials}
+    volumeMounts:
+    - {name: spark-conf, mountPath: /opt/spark/conf}
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
+  executor:
+    cores: 1
+    instances: 2
+    memory: "2G"
+    envFrom:
+    - secretRef: {name: s3-credentials}
+    volumeMounts:
+    - {name: spark-conf, mountPath: /opt/spark/conf}
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA
+  volumes:
+  - name: spark-conf
+    configMap: {name: spark-defaults}
+  - name: kafka-ca
+    secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
+  - name: spark-nginx-scram
+    secret: {secretName: spark-nginx}                                      # POC-DOĞRULA: Strimzi User Operator üretir (password)
+  monitoring:
+    exposeDriverMetrics: true
+    exposeExecutorMetrics: true
+---
+# Source: lakehouse/templates/18-bucket-init.yaml
+# Bucket-init Job — vendor-generic S3 bucket bootstrap (Product Foundation
+# Task 8). Gated by `.Values.storage.createBuckets` (DEFAULT TRUE) — NOT
+# gated on `.Values.components.minio`: this Job runs `mc mb
+# --ignore-existing` against WHATEVER endpoint `storage.s3.secretName`'s
+# Secret points at (the dev MinIO from 17-minio.yaml, or any real customer
+# S3 — Pure Storage FlashBlade, AWS S3, Ceph RGW, ...). Nothing in this
+# file is MinIO-component-specific. Disable when the customer
+# pre-provisions buckets out-of-band, or when the install credentials
+# deliberately lack bucket-create rights (least-privilege S3 policies).
+#
+# Bucket list: `.Values.storage.buckets` if set explicitly, else COMPUTED
+# from the actual `s3://` locations already embedded elsewhere in this
+# values file — `nessie.catalog.warehouse.location` (silver/Iceberg,
+# "depo"), `nessie.catalog.rawdata.location` (bronze, "ham-veri"),
+# `nginx.streaming.checkpointBucket` (Spark checkpoint, "nginx-web"), and
+# `postgres.nessie.backup.destinationPath`'s bucket (CNPG barman,
+# "backups") — see the `lakehouse.s3BucketFromUri` helper (_helpers.tpl).
+# ONE extraction so this list and those `s3://...` values can never
+# silently drift apart.
+#
+# Runs on BOTH install paths so first ingest always has somewhere to
+# land: plain `helm install/upgrade` (`helm.sh/hook`
+# post-install,post-upgrade) AND ArgoCD sync (`argocd.argoproj.io/hook`
+# PostSync — see gitops/apps/app-of-apps.yaml). `backoffLimit: 6` covers
+# the "wait until the S3 endpoint is actually reachable" case (e.g. the
+# dev MinIO Pod from 17-minio.yaml still starting) via ordinary
+# Job-controller retries, with no separate init-container/wait-for logic.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-bucket-init
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: lakehouse
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: lakehouse
+        helm.sh/chart: lakehouse-0.1.0
+        app: lakehouse-bucket-init
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: Never
+      containers:
+      - name: bucket-init
+        image: "quay.io/minio/mc:RELEASE.2024-01-13T08-44-48Z"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          mc mb --ignore-existing s3/depo
+          mc mb --ignore-existing s3/ham-veri
+          mc mb --ignore-existing s3/nginx-web
+          mc mb --ignore-existing s3/backups
+        env:
+        - {name: S3_ENDPOINT,    valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+        - {name: S3_ACCESS_KEY,  valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+        - {name: S3_SECRET_KEY,  valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}

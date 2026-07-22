@@ -1,0 +1,54 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata: {name: "jdbc-{{SOURCE}}-{{TABLE}}", namespace: example, labels: {strimzi.io/cluster: connect}}
+spec:
+  class: io.aiven.connect.jdbc.JdbcSourceConnector
+  tasksMax: 1
+  config:
+    connection.url: "{{JDBC_URL}}"
+    connection.user: "${directory:/mnt/external-configuration/{{SOURCE}}:user}"
+    connection.password: "${directory:/mnt/external-configuration/{{SOURCE}}:pass}"
+    mode: "timestamp+incrementing"
+    incrementing.column.name: "{{INCREMENTING_COL}}"
+    timestamp.column.name: "{{TIMESTAMP_COL}}"
+    table.whitelist: "{{TABLE}}"
+    topic.prefix: "{{TOPIC_PREFIX}}"
+    poll.interval.ms: "{{POLL_MS}}"
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    value.converter.apicurio.registry.auto-register: "{{AUTO_REGISTER}}"
+    # JDBC has no CDC envelope — __op/__deleted are synthesized constants
+    # ("u"/"false": every polled row is an upsert of current state).
+    #
+    # __ts_ms: Aiven's JDBC source connector (TimestampIncrementingTableQuerier)
+    # builds every SourceRecord via the 5-arg constructor (partition, offset,
+    # topic, schema, value) — it never passes a timestamp, so
+    # SourceRecord.timestamp() is always null. __ts_ms is instead derived from
+    # the timestamp.column.name column: `tsfield` (ReplaceField) renames
+    # {{TIMESTAMP_COL}}:__ts_ms in place (keeps its Timestamp value), `tsconv`
+    # then normalizes it to a Connect Timestamp. This is what backs the Bronze
+    # day(__ts_ms) partition/TTL and the MERGE ORDER BY __ts_ms DESC
+    # latest-per-key ordering. Matching console/backend's
+    # _render_scheduled_jdbc.
+    transforms: "route,setop,setdel,tsfield,tsconv"
+    transforms.route.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.route.static.field: "_target_table"
+    transforms.route.static.value: "{{TARGET_NS}}_raw.{{TARGET_TABLE}}"
+    transforms.setop.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.setop.static.field: "__op"
+    transforms.setop.static.value: "u"
+    transforms.setdel.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.setdel.static.field: "__deleted"
+    transforms.setdel.static.value: "false"
+    transforms.tsfield.type: "org.apache.kafka.connect.transforms.ReplaceField$Value"
+    transforms.tsfield.renames: "{{TIMESTAMP_COL}}:__ts_ms"
+    transforms.tsconv.type: "org.apache.kafka.connect.transforms.TimestampConverter$Value"
+    transforms.tsconv.field: "__ts_ms"
+    transforms.tsconv.target.type: "Timestamp"
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: "{{TOPIC_PREFIX}}{{TABLE}}.dlq"
+    errors.deadletterqueue.context.headers.enable: "true"
+    # Prod default (3+ broker cluster); a single-broker/dev deployment must
+    # hand-edit this down to "1" (same rationale as chart/templates/
+    # 13-connectors.yaml's iceberg-sink-cdc DLQ RF comment).
+    errors.deadletterqueue.topic.replication.factor: "3"

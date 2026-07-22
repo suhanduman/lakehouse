@@ -1,0 +1,86 @@
+# chart/templates/monitoring/podmonitors.yaml — D1 (İzleme/Monitoring).
+#
+# PodMonitors ONLY for targets that expose Prometheus metrics on the POD
+# itself with no owning `kind: Service` fronting that port — kafka, connect
+# (Strimzi JMX-Prometheus exporter, port `tcp-prometheus` / 9404) and spark
+# (Spark PrometheusServlet). See servicemonitors.yaml for the Service-backed
+# targets (trino, nessie, apicurio, console).
+#
+# `selector.matchLabels` / endpoint port values below are copied verbatim
+# from the task brief's confirmed pod facts (not invented):
+#   - kafka   -> Strimzi `Kafka` CR name is `kafka` (03-kafka-strimzi.yaml)
+#                -> Strimzi pod labels `{strimzi.io/cluster: kafka,
+#                strimzi.io/kind: Kafka}`; JMX exporter port `tcp-prometheus`.
+#                NOTE: the Strimzi `kafka-kafka-exporter` pod
+#                (enabled via `spec.kafkaExporter`, 03-kafka-strimzi.yaml — the
+#                consumer-group lag source behind the `KafkaConsumerLagHigh`
+#                alert) carries these SAME labels + the SAME `tcp-prometheus`
+#                port name (live-verified, monitoring-smoke-report.md), so THIS
+#                one PodMonitor already scrapes both the broker JMX metrics and
+#                the exporter's `kafka_consumergroup_lag` — no separate monitor.
+#   - connect -> Strimzi `KafkaConnect` CR name is `connect`
+#                (12-kafka-connect.yaml:33) -> pod labels
+#                `{strimzi.io/cluster: connect, strimzi.io/kind: KafkaConnect}`;
+#                port `tcp-prometheus`.
+#   - spark   -> SparkApplication driver pods carry `spark-role: driver`;
+#                PrometheusServlet port `metrics`. Executor pods are not
+#                covered by this selector yet (driver-only start, per brief).
+{{- if and .Values.components.monitoring .Values.monitoring.targets.kafka.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      strimzi.io/cluster: kafka
+      strimzi.io/kind: Kafka
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.connect.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: connect
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      strimzi.io/cluster: connect
+      strimzi.io/kind: KafkaConnect
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.spark.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: spark
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+{{ include "lakehouse.labels" . | indent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ include "lakehouse.namespace" . }}]
+  selector:
+    matchLabels:
+      spark-role: driver
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitorInterval }}
+{{- end }}

@@ -1,0 +1,324 @@
+# Vanilla Kubernetes Ingress + cert-manager entegrasyonu — chart/templates/
+# 08-routes-tls.yaml (trino/ai-ui/nessie/superset/zeppelin/jupyter),
+# 10-keycloak.yaml'daki auth Route, console/console.yaml + console/
+# kafka-ui.yaml'daki Route'ların VE monitoring/grafana.yaml'daki Route'un
+# `networking.k8s.io/v1` Ingress eşleniği.
+#
+# Bu dosyanın TAMAMI `lakehouse.isOpenShift` (`.Values.platform`) helper'ının
+# TERSİ ile gate'lenir: `platform: openshift` iken buradan HİÇBİR ŞEY render
+# edilmez (o path'te Route'lar render edilir); `platform: vanilla`
+# (varsayılan) iken TERSİ — Route'lar render OLMAZ, buradaki Ingress'ler
+# render edilir. Aynı `lakehouse.isOpenShift` helper'ı (bir kez tanımlı,
+# _helpers.tpl), asla ikinci bir literal `eq .Values.platform ...` kontrolü
+# değil — bu yüzden iki path aynı anda render olamaz (ya da ikisi de boş
+# kalamaz) aynı mantıksal endpoint için.
+#
+# Host tutarlılığı (task brief kabul kriteri, Route'larla AYNI): her
+# Ingress'in `spec.rules[].host`'u AYNI `lakehouse.routeHost` helper'ından
+# (_helpers.tpl), AYNI mantıksal isimle üretilir — Keycloak OIDC client
+# redirectUris/webOrigins'i (10-keycloak.yaml) platformdan bağımsız her
+# zaman aynı host'u gösterir.
+#
+# Gating: her Ingress, Route eşleniğiyle BİREBİR AYNI `.Values.components.*`
+# flag'i arkasında (dangling-Route notunun AYNISı burada da geçerli —
+# superset/jupyter/ai backing Service'i bu pakette YOK, flag'leri varsayılan
+# false, bkz. 08-routes-tls.yaml header).
+#
+# cert-manager: her Ingress AYNI `.Values.routes.certIssuer`'ı
+# `cert-manager.io/cluster-issuer` annotation'ı olarak taşır (Route'larla
+# aynı ClusterIssuer) ve kendi `spec.tls[].secretName`'ini talep eder
+# (`<name>-tls` — cert-manager bu Secret'ı üretir).
+{{- if not (include "lakehouse.isOpenShift" .) }}
+{{- if .Values.components.routesTls }}
+---
+# Trino — SQL endpoint + OAuth2 callback (bkz. 08-routes-tls.yaml Route eşleniği)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trino
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "trino" "context" .) }}
+    secretName: trino-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "trino" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "lakehouse.svc.trino" . }}
+            port:
+              name: http
+{{- if .Values.components.ai }}
+---
+# AI Text-to-SQL UI — bkz. 08-routes-tls.yaml header notu (`text-to-sql-ui`
+# Service'i bu pakette YOK; flag varsayılan false).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-ui
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "ai" "context" .) }}
+    secretName: ai-ui-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "ai" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: text-to-sql-ui
+            port:
+              name: http
+{{- end }}
+---
+# Nessie REST Catalog (opsiyonel: dış client'lar / federated catalog)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nessie
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "nessie" "context" .) }}
+    secretName: nessie-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "nessie" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "lakehouse.svc.nessie" . }}
+            port:
+              name: http
+{{- if .Values.components.superset }}
+---
+# Superset BI — Deployment/Service bu pakette YOK (follow-up bileşen, bkz.
+# 08-routes-tls.yaml header notu); flag varsayılan false.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "bi" "context" .) }}
+    secretName: superset-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "bi" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: superset
+            port:
+              name: http
+{{- end }}
+{{- if .Values.components.zeppelin }}
+---
+# Apache Zeppelin (chart/templates/09-zeppelin.yaml ile deploy edildi).
+# components.zeppelin gate'i: zeppelin kapalıyken backing Service'i olmayan
+# dangling bir Ingress kalmasın (Route tarafındaki gate ile birebir — bkz.
+# 08-routes-tls.yaml).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zeppelin
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "zeppelin" "context" .) }}
+    secretName: zeppelin-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "zeppelin" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: zeppelin
+            port:
+              name: http
+{{- end }}
+{{- if .Values.components.jupyter }}
+---
+# JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu pakette YOK
+# (follow-up bileşen, bkz. 08-routes-tls.yaml header notu); flag varsayılan
+# false.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jupyter
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "jupyter" "context" .) }}
+    secretName: jupyter-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "jupyter" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: jupyterhub-proxy
+            port:
+              name: http
+{{- end }}
+{{- end }}
+{{- if .Values.components.keycloak }}
+---
+# Keycloak auth Ingress — bkz. 10-keycloak.yaml'daki Route eşleniği (orada
+# `termination: reencrypt`; burada eşdeğeri
+# `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` — nginx ingress
+# controller'a backend'e HTTPS ile konuşmasını söyler, Keycloak Operator'ün
+# ürettiği Service'in `https` portu hedeflenir).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "auth" "context" .) }}
+    secretName: keycloak-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "auth" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "lakehouse.svc.keycloak" . }}
+            port:
+              name: https
+{{- end }}
+{{- if .Values.components.console }}
+---
+# Self-Service Lakehouse Console frontend — bkz. console/console.yaml'daki
+# Route eşleniği.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "lakehouse.svc.consoleFrontend" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "console" "context" .) }}
+    secretName: {{ include "lakehouse.svc.consoleFrontend" . }}-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "console" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "lakehouse.svc.consoleFrontend" . }}
+            port:
+              name: http
+{{- end }}
+{{- if .Values.components.kafkaUi }}
+---
+# Kafka UI — bkz. console/kafka-ui.yaml'daki Route eşleniği.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "lakehouse.svc.kafkaUi" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" "kafka-ui" "context" .) }}
+    secretName: {{ include "lakehouse.svc.kafkaUi" . }}-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" "kafka-ui" "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "lakehouse.svc.kafkaUi" . }}
+            port:
+              name: http
+{{- end }}
+{{- if and .Values.components.monitoring .Values.components.routesTls }}
+---
+# Grafana — bkz. monitoring/grafana.yaml'daki Route eşleniği (AYNI iki gate:
+# `components.monitoring` + `components.routesTls`).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" .Values.monitoring.grafana.route.host "context" .) }}
+    secretName: grafana-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" .Values.monitoring.grafana.route.host "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: grafana
+            port:
+              name: http
+{{- end }}
+{{- end }}

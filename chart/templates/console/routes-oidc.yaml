@@ -1,0 +1,48 @@
+# Keycloak OIDC client credentials for the Self-Service Lakehouse Console
+# and Kafka UI. Gated by `.Values.components.consoleRoutesOidc`.
+#
+# RECONCILED (do not re-add what already exists elsewhere):
+#   - The Console (`lakehouse-console`) Route lives in
+#     chart/templates/console/console.yaml (frontend Service target).
+#   - The Kafka UI Route lives in chart/templates/console/kafka-ui.yaml
+#     (component-owns-its-Route convention this chart uses, unlike the
+#     source's prod-manifests split where both Routes were split across
+#     15/17 for a different reason — see that file's own header note about
+#     avoiding a duplicate Route object for `lakehouse-console`).
+#   - The `lakehouse-console` and `kafka-ui` OIDC client definitions
+#     themselves (clientId/redirectUris/protocolMappers) were already PATCHed
+#     into the single `KeycloakRealmImport` (chart/templates/
+#     10-keycloak.yaml `clients:` list) — NOT duplicated here (a second
+#     `KeycloakRealmImport` for the same realm risks the Keycloak Operator's
+#     idempotent/skip behavior silently dropping the new clients; see that
+#     file's own comment). This file only holds the material those
+#     already-declared clients need but that isn't realm-import data:
+#     the `kafka-ui` confidential client's actual secret VALUE, consumed by
+#     chart/templates/console/kafka-ui.yaml's Deployment
+#     (`OIDC_CLIENT_SECRET` env) — single source with 10-keycloak.yaml's
+#     `clients[].secret` field via `.Values.kafkaUi.oidc.clientSecret`, so
+#     the two can never drift apart.
+#   - `lakehouse-console` is a PUBLIC client (SPA + PKCE, see
+#     10-keycloak.yaml) — it has no confidential secret and needs no Secret
+#     object here.
+{{- if .Values.components.consoleRoutesOidc }}
+{{- if .Values.kafkaUi.oidc.clientSecret }}
+---
+# Inline stringData Secret -- rendered ONLY when a real
+# `kafkaUi.oidc.clientSecret` is explicitly supplied (dev/test convenience).
+# Default is empty: in that case this Secret is NOT rendered at all, and the
+# SAME name/key (referenced by chart/templates/console/kafka-ui.yaml's
+# `secretKeyRef` regardless of which path created it) must be provisioned
+# out-of-band (ExternalSecret/Vault or `oc create secret generic
+# kafka-ui-oidc-credentials --from-literal=client-secret=...`) per
+# `.Values.secrets.mode`, BEFORE install.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kafka-ui-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.kafkaUi.oidc.clientSecret | quote }}
+{{- end }}
+{{- end }}

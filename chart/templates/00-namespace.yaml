@@ -1,0 +1,155 @@
+# Namespace + ResourceQuota + LimitRange + default-deny/allow NetworkPolicies.
+# Only parameterized + made namespace-aware. This template always renders
+# (no `enabled` flag): every release needs its namespace's isolation policy,
+# regardless of which optional components are turned on.
+#
+# Compute/storage quota'ları çekişmeyi önler, default-deny prensibi
+# namespace'i dışarıdan gelen trafiğe kapalı tutar.
+#
+# Chart prereq-check: runs before anything else renders — see
+# chart/templates/_prereq-check.tpl for the full mechanism + why it is
+# disabled by default. Renders to an empty string (no output) unless
+# `.Values.prereqCheck.enabled` is true.
+{{ include "lakehouse.prereqCheck" . }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  # The Namespace object's own name IS the release namespace — this is the
+  # one resource in the chart where "namespace" means "what am I", not
+  # "where do I live".
+  name: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"  # Prometheus bu ns'i scrape eder
+  annotations:
+    openshift.io/description: "Lakehouse Data Platform (Prod)"
+    openshift.io/display-name: "Lakehouse"
+---
+# Namespace toplam kaynak kotası (values'tan; kendi sizing'inize göre ayarlayın)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: lakehouse-quota
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.namespaceConfig.quota.requestsCpu | quote }}
+    requests.memory: {{ .Values.namespaceConfig.quota.requestsMemory | quote }}
+    limits.cpu: {{ .Values.namespaceConfig.quota.limitsCpu | quote }}
+    limits.memory: {{ .Values.namespaceConfig.quota.limitsMemory | quote }}
+    persistentvolumeclaims: {{ .Values.namespaceConfig.quota.persistentVolumeClaims | quote }}
+    requests.storage: {{ .Values.namespaceConfig.quota.requestsStorage | quote }}
+    pods: {{ .Values.namespaceConfig.quota.pods | quote }}
+    services.nodeports: {{ .Values.namespaceConfig.quota.serviceNodePorts | quote }}         # Prod'da NodePort yok; Route kullanırız
+    count/deployments.apps: {{ .Values.namespaceConfig.quota.countDeployments | quote }}
+---
+# "resources:" yazmayan podların varsayılan + tavan değerleri
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: lakehouse-limits
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: {{ .Values.namespaceConfig.limitRange.container.default.cpu | quote }}
+      memory: {{ .Values.namespaceConfig.limitRange.container.default.memory | quote }}
+    defaultRequest:
+      cpu: {{ .Values.namespaceConfig.limitRange.container.defaultRequest.cpu | quote }}
+      memory: {{ .Values.namespaceConfig.limitRange.container.defaultRequest.memory | quote }}
+    max:
+      cpu: {{ .Values.namespaceConfig.limitRange.container.max.cpu | quote }}
+      memory: {{ .Values.namespaceConfig.limitRange.container.max.memory | quote }}
+  - type: PersistentVolumeClaim
+    max:
+      storage: {{ .Values.namespaceConfig.limitRange.pvc.max.storage | quote }}
+    min:
+      storage: {{ .Values.namespaceConfig.limitRange.pvc.min.storage | quote }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector: {}
+---
+# Route/Ingress controller + monitoring'in girebilmesi için. Kaynak
+# namespace'ler platform'a göre farklı etiketlenir (bkz. `lakehouse.
+# isOpenShift`, _helpers.tpl): OpenShift'in `network.openshift.io/
+# policy-group` etiketi vanilla kümelerde YOK — vanilla'da bunun yerine
+# k8s-standart `kubernetes.io/metadata.name` (her namespace'de otomatik var)
+# ile `.Values.ingress.controllerNamespace` / `.Values.monitoring.
+# prometheusNamespace`'i hedefleriz. Pod/port scoping (podSelector: {},
+# policyTypes: [Ingress]) HER İKİ platformda da AYNI — yalnızca kaynak
+# namespaceSelector'lar farklı.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-ingress-and-monitoring
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+{{- if include "lakehouse.isOpenShift" . }}
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: ingress
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: monitoring
+{{- else }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.ingress.controllerNamespace }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.monitoring.prometheusNamespace }}
+{{- end }}
+---
+# Operator ingress: the cluster-scoped operators this platform depends on
+# live OUTSIDE the release namespace and must reach INTO it — CloudNativePG
+# polls every instance pod's status endpoint (:8000; without it the Cluster
+# sits at "Instance Status Extraction Error: HTTP communication issue" and
+# never reports Ready) and Strimzi's cluster operator talks to the Kafka
+# pods' KafkaAgent. On a CNI that actually enforces NetworkPolicy (Calico,
+# Cilium, kind >= 0.24 — live kind-e2e finding, 2026-07-22) the
+# default-deny above would break reconciliation of every operator-managed
+# workload. Source namespaces are values-driven
+# (`namespaceConfig.operatorNamespaces`): defaults cover BOTH install paths
+# — the vanilla bootstrap's helm-installed operator namespaces
+# (bootstrap/operators.env) AND OpenShift's OLM `openshift-operators` — via
+# the k8s-standard `kubernetes.io/metadata.name` label (present on every
+# namespace on every platform); entries for namespaces that don't exist on
+# a given cluster simply match nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-operator-namespaces
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+{{- range .Values.namespaceConfig.operatorNamespaces }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ . }}
+{{- end }}

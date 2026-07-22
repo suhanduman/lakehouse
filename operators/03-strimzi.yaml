@@ -1,0 +1,62 @@
+# Strimzi (Kafka) — cluster-scoped OLM bootstrap. Provides the
+# `kafka.strimzi.io` CRDs this chart's
+# Kafka/KafkaTopic/KafkaUser/KafkaConnect/KafkaConnector CRs depend on
+# (chart/templates/03-kafka-strimzi.yaml, 12-kafka-connect.yaml,
+# 13-connectors.yaml, 14-nginx-ingest.yaml, console/kafka-ui.yaml) — served
+# as `apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}` per
+# chart, default `v1` (see values.yaml's "COHERENT STRIMZI VERSION TRIPLE"
+# comment — this project targets upstream community Strimzi, where >=1.1.0
+# drops `v1beta2` entirely).
+#
+# Namespace per tools/README.md "Ön koşullar" table:
+# `openshift-operators` (cluster-wide, single shared install — NOT its own
+# dedicated namespace, unlike the other five operators in this directory).
+#
+# No dedicated OperatorGroup manifest is created here: `openshift-operators`
+# ships with a default "global-operators" OperatorGroup (AllNamespaces install
+# mode) out of the box on every OpenShift cluster, and OLM allows only ONE
+# OperatorGroup per namespace — adding a second one here would conflict with
+# it. POC-DOĞRULA: confirm `oc get operatorgroup -n openshift-operators`
+# already shows one before applying; if this is a from-scratch cluster
+# without it (rare), create the default OperatorGroup once manually first.
+#
+# TARGET (confirmed, not POC-DOĞRULA): this project's customer targets
+# UPSTREAM COMMUNITY Strimzi, NOT Red Hat's certified/paid "Streams for
+# Apache Kafka" (formerly "AMQ Streams", package `amq-streams`,
+# `redhat-operators` catalog) — do NOT swap `name`/`source` below to the
+# Red Hat package. Verified against the upstream OperatorHub.io / ArtifactHub
+# `community-operators` catalog listing for this package (2026-07):
+#   - package name : `strimzi-kafka-operator`   (matches `name:` below)
+#   - channel      : `stable`                    (matches `channel:` below —
+#     OperatorHub.io's own generic install snippet,
+#     https://operatorhub.io/install/strimzi-kafka-operator.yaml, uses this
+#     exact channel; on OpenShift the equivalent bundled catalog source is
+#     `community-operators` in `openshift-marketplace`, NOT the generic
+#     `operatorhubio-catalog`/`olm` pairing that snippet shows for a plain
+#     upstream-Kubernetes+OLM install — this file already uses the correct
+#     OpenShift-native pairing)
+#   - latest package version at time of writing: 1.1.0 (upstream Strimzi
+#     >=1.1.0 serves the `kafka.strimzi.io` CRDs ONLY as `v1` — `v1beta2` is
+#     gone entirely; this is exactly why chart/values.yaml's
+#     `versions.strimziApi` now defaults to `v1`, see that file's "COHERENT
+#     STRIMZI VERSION TRIPLE" comment + .superpowers/sdd/strimzi-v1-report.md)
+#
+# POC-DOĞRULA (cluster-specific, cannot be confirmed from outside a real
+# OpenShift cluster — some OpenShift installs disable/restrict the
+# community-operators CatalogSource): confirm this exact package is actually
+# listed on the TARGET cluster's OperatorHub before applying, and note which
+# channel/version it resolves to there (channels can differ per catalog
+# snapshot/mirroring policy):
+#   oc get packagemanifests -n openshift-marketplace strimzi-kafka-operator -o yaml
+#   oc get packagemanifests -n openshift-marketplace | grep -i strimzi
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: strimzi-kafka-operator
+  namespace: openshift-operators
+spec:
+  channel: stable
+  name: strimzi-kafka-operator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

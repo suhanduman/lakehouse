@@ -1,0 +1,55 @@
+# e2e CDC source database — a tiny throwaway in-cluster PostgreSQL the
+# Debezium source connector snapshots/streams from. NOT part of the chart:
+# real installs bring their own source databases; this stands in for one.
+# `wal_level=logical` is required for Debezium logical decoding (pgoutput).
+# Credentials are synthetic CI-only literals and MUST match the `pg` Secret
+# test/e2e/run.sh creates (the connector reads them via Connect's
+# DirectoryConfigProvider: ${directory:/mnt/external-configuration/pg:...}).
+# Applied with `kubectl -n <ns> apply` — no namespace baked in.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-src
+  labels: {app: pg-src}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: pg-src}
+  template:
+    metadata:
+      labels: {app: pg-src}
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16
+        args: ["-c", "wal_level=logical", "-c", "max_wal_senders=4", "-c", "max_replication_slots=4"]
+        env:
+        - {name: POSTGRES_USER, value: postgres}
+        - {name: POSTGRES_PASSWORD, value: e2e-pgpass}
+        - {name: POSTGRES_DB, value: postgres}
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+        ports:
+        - {containerPort: 5432}
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "postgres"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          # Token CPU request — the 2-vCPU CI runner is fully subscribed
+          # (see test/e2e/values-ci.yaml header); limits stay real.
+          requests: {cpu: 25m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 512Mi}
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+      - {name: data, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-src
+spec:
+  selector: {app: pg-src}
+  ports:
+  - {port: 5432, targetPort: 5432}

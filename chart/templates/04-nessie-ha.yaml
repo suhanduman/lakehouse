@@ -1,0 +1,210 @@
+# Nessie HA — 2 replica Deployment + Service + PDB + HPA, CNPG `pg-nessie`
+# backend. Only parameterized + made namespace-aware. Gated by
+# `.Values.components.nessie`.
+#
+# Service wiring (spec §3.1/§8 — never hardcode a cross-component name):
+#   - Nessie's own Service NAME is `lakehouse.svc.nessie` (helper) — this is
+#     the SAME name Trino's Iceberg REST catalog URI resolves via the same
+#     helper in 06-trino-ha.yaml. Keep them in lockstep.
+#   - Nessie's Postgres JDBC host is `lakehouse.svc.pgNessieRw` (the
+#     `pg-nessie` CNPG Cluster from 02-postgres-ha.yaml) — CNPG-operator-
+#     managed Service, never a literal `kind: Service` in this chart (see
+#     _helpers.tpl header + chart/scripts/helm-check.py's CNPG-aware
+#     service-closure check).
+#   - OIDC issuer comes from the `.Values.oidc.secretName` Secret (material
+#     provisioned out-of-band — same "name reference only" convention as
+#     `storage.s3.secretName`, see chart/templates/01-storage.yaml).
+{{- if .Values.components.nessie }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lakehouse.svc.nessie" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lakehouse.svc.nessie" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    app: {{ include "lakehouse.svc.nessie" . }}
+    app.kubernetes.io/part-of: lakehouse
+spec:
+  replicas: {{ .Values.nessie.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: {{ include "lakehouse.svc.nessie" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "lakehouse.svc.nessie" . }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "lakehouse.svc.nessie" . }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels: {app: {{ include "lakehouse.svc.nessie" . }}}
+              topologyKey: kubernetes.io/hostname
+      {{- $it := include "lakehouse.s3TrustInitContainer" (dict "context" . "image" .Values.versions.nessieImage) | trim }}
+      {{- if $it }}
+      initContainers:
+        {{- $it | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: nessie
+        image: {{ .Values.versions.nessieImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports:
+        - {name: http, containerPort: 19120}
+        - {name: mgmt, containerPort: 9000}
+        env:
+        {{- if .Values.global.security.s3TrustBundle.enabled }}
+        # S3 internal-CA truststore — s3-trust-init container kurar
+        # (prod hardening). Quarkus JAVA_OPTS_APPEND ile JVM'e verilir.
+        - name: JAVA_OPTS_APPEND
+          value: "-Djavax.net.ssl.trustStore=/work/s3-trust/cacerts -Djavax.net.ssl.trustStorePassword=changeit"
+        {{- end }}
+        # --- Version store (CNPG Cluster'dan secret ile) ---
+        - {name: NESSIE_VERSION_STORE_TYPE, value: "JDBC2"}
+        - {name: QUARKUS_DATASOURCE_POSTGRESQL_DB_KIND, value: "postgresql"}
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL
+          value: {{ printf "jdbc:postgresql://%s:5432/%s" (include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.pgNessieRw" .) "context" .)) .Values.postgres.nessie.database | quote }}
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_USERNAME
+          valueFrom: {secretKeyRef: {name: pg-nessie-app, key: username}}
+        - name: QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD
+          valueFrom: {secretKeyRef: {name: pg-nessie-app, key: password}}
+        - {name: NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE, value: "postgresql"}
+
+        # --- Iceberg REST warehouses (multi-warehouse; PoC deseni) ---
+        - name: NESSIE_CATALOG_DEFAULT_WAREHOUSE
+          value: {{ .Values.nessie.catalog.defaultWarehouse | quote }}
+        - name: NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION
+          value: {{ .Values.nessie.catalog.warehouse.location | quote }}
+        - name: NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION
+          value: {{ .Values.nessie.catalog.rawdata.location | quote }}
+
+        # --- S3 (credentials from Secret, resolved via Nessie URN) ---
+        - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION
+          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}
+        - {name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS, value: "true"}
+        - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT
+          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}
+        - {name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY, value: "urn:nessie-secret:quarkus:nessie.catalog.secrets.s3creds"}
+        - name: NESSIE_CATALOG_SECRETS_S3CREDS_NAME
+          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}
+        - name: NESSIE_CATALOG_SECRETS_S3CREDS_SECRET
+          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}
+
+        # --- AuthN — OIDC (prod'da zorunlu) ---
+        # Gated by `.Values.auth.oidc.enabled` (default true — see
+        # values.yaml's `auth:` comment). Unlike Trino, Nessie's Quarkus OIDC
+        # extension does LAZY discovery (pod stays Running even with a
+        # dead issuer, but every REST call 500s — microk8s-smoke-report.md
+        # Finding 2), so this gate is a correctness/intent fix rather than a
+        # crash-loop fix: when false, Nessie runs genuinely unauthenticated
+        # (DEV/SMOKE-TEST ONLY) instead of silently-broken-but-"Running".
+{{- if .Values.auth.oidc.enabled }}
+        - {name: QUARKUS_OIDC_ENABLED, value: "true"}
+        - name: QUARKUS_OIDC_AUTH_SERVER_URL
+          valueFrom: {secretKeyRef: {name: {{ required "auth.oidc.enabled=true but oidc.secretName is empty — provision the OIDC credentials secret (issuer-url/client-id/...) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}
+        - name: QUARKUS_OIDC_CLIENT_ID
+          value: {{ .Values.nessie.oidcClientId | quote }}
+        - {name: NESSIE_SERVER_AUTHENTICATION_ENABLED, value: "true"}
+{{- else }}
+        - {name: QUARKUS_OIDC_ENABLED, value: "false"}
+        - {name: NESSIE_SERVER_AUTHENTICATION_ENABLED, value: "false"}
+{{- end }}
+
+        resources:
+          requests:
+            memory: {{ .Values.nessie.resources.requests.memory | quote }}
+            cpu: {{ .Values.nessie.resources.requests.cpu | quote }}
+          limits:
+            memory: {{ .Values.nessie.resources.limits.memory | quote }}
+            cpu: {{ .Values.nessie.resources.limits.cpu | quote }}
+
+        readinessProbe:
+          httpGet: {path: /q/health/ready, port: mgmt}
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /q/health/live, port: mgmt}
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        {{- $s3mount := include "lakehouse.s3TrustStoreMount" . | trim }}
+        {{- if $s3mount }}
+        volumeMounts:
+          {{- include "lakehouse.s3TrustStoreMount" . | nindent 8 }}
+        {{- end }}
+      {{- $s3vols := include "lakehouse.s3TrustVolumes" . | trim }}
+      {{- if $s3vols }}
+      volumes:
+        {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.nessie" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+{{- if and .Values.components.monitoring .Values.monitoring.targets.nessie.enabled }}
+  # ServiceMonitor selector target label (chart/templates/monitoring/
+  # servicemonitors.yaml `nessie` selector.matchLabels) — matches on the
+  # Service's metadata.labels, not spec.selector.
+  labels:
+    app: {{ include "lakehouse.svc.nessie" . }}
+{{- end }}
+spec:
+  selector: {app: {{ include "lakehouse.svc.nessie" . }}}
+  ports:
+  - {name: http, port: 19120, targetPort: 19120}
+  - {name: mgmt, port: 9000,  targetPort: 9000}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-pdb" (include "lakehouse.svc.nessie" .) }}
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  minAvailable: {{ .Values.nessie.pdb.minAvailable }}
+  selector:
+    matchLabels: {app: {{ include "lakehouse.svc.nessie" . }}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "lakehouse.svc.nessie" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "lakehouse.svc.nessie" . }}
+  minReplicas: {{ .Values.nessie.hpa.minReplicas }}
+  maxReplicas: {{ .Values.nessie.hpa.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: {type: Utilization, averageUtilization: {{ .Values.nessie.hpa.targetCPUUtilizationPercentage }}}
+{{- end }}

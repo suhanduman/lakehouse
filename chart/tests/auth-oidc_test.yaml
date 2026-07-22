@@ -1,0 +1,110 @@
+# chart/tests/auth-oidc_test.yaml — helm-unittest suite for
+# `values.auth.oidc.enabled` gating (feat/oidc-optional; decouples the core
+# ingest slice from Keycloak — see .superpowers/sdd/microk8s-smoke-report.md
+# Finding 2 + chart/values.yaml's `auth:` comment for the full rationale).
+#
+# Covers both templates that read the flag:
+#   - 06-trino-ha.yaml: Trino's OAuth2 authenticator does EAGER discovery at
+#     startup, so with `auth.oidc.enabled=false` the oauth2 config lines and
+#     the coordinator's OIDC_* env vars must be OMITTED entirely (not just
+#     pointed at a placeholder) — otherwise the coordinator crash-loops the
+#     moment no real IdP is reachable (verified live on microk8s).
+#   - 04-nessie-ha.yaml: Nessie's OIDC extension does LAZY discovery (stays
+#     "Running" either way), so this is a correctness/intent assertion —
+#     `QUARKUS_OIDC_ENABLED`/`NESSIE_SERVER_AUTHENTICATION_ENABLED` must
+#     both flip to "false" rather than silently staying "true" against a
+#     dead issuer.
+#
+# Default (auth.oidc.enabled=true, unset) behavior is asserted unchanged in
+# both suites as the control case, so neither assertion is vacuously true.
+suite: auth.oidc.enabled gates OIDC wiring on Trino + Nessie
+templates:
+  - 06-trino-ha.yaml
+  - 04-nessie-ha.yaml
+tests:
+  - it: default (auth.oidc.enabled unset/true) keeps Trino's oauth2 config + OIDC env vars (control case)
+    templates:
+      - 06-trino-ha.yaml
+    asserts:
+      - matchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "http-server\\.authentication\\.type=oauth2"
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef: {name: oidc-credentials, key: issuer-url}
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=false removes Trino's oauth2 config entirely (no-auth mode)
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "http-server\\.authentication\\.type=oauth2"
+        documentIndex: 0
+      - notMatchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "oauth2\\.issuer"
+        documentIndex: 0
+      - notMatchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "oauth2\\.client-id"
+        documentIndex: 0
+      - notMatchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "oauth2\\.client-secret"
+        documentIndex: 0
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef: {name: oidc-credentials, key: issuer-url}
+        documentIndex: 1
+
+  - it: default (auth.oidc.enabled unset/true) keeps Nessie's OIDC env vars enabled (control case)
+    templates:
+      - 04-nessie-ha.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: QUARKUS_OIDC_ENABLED
+            value: "true"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHENTICATION_ENABLED
+            value: "true"
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=false flips Nessie to unauthenticated (no OIDC wiring)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: QUARKUS_OIDC_ENABLED
+            value: "false"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHENTICATION_ENABLED
+            value: "false"
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: QUARKUS_OIDC_AUTH_SERVER_URL
+        documentIndex: 1

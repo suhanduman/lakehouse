@@ -1,0 +1,55 @@
+# --- Secrets / credentials (ASLA commit'lenmez) ---
+kubeconfig.yaml
+kubeconfig*.yaml
+*.kubeconfig
+*.key
+*.pem
+*.p12
+*.pfx
+*-credentials.yaml
+*-secret.yaml
+secrets/
+.env
+.env.*
+# .env.example files are templates (no real secrets) and should be committed.
+!.env.example
+!**/.env.example
+
+# --- SDD scratch / ledger (git-ignored) ---
+.superpowers/
+
+# Customer-specific requirement docs & overlays — local only, never committed
+/KatipCelebi-BigData-Sartnamesi-v5.md
+/KatipÇelebi_v2.txt
+/values-*.local.yaml
+
+# --- Python (console/backend) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Node (console/frontend) ---
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+*~
+
+# --- Büyük/geçici veri (gerekirse kaldırılabilir) ---
+*.tmp
+
+# Local-only architecture decision doc (internal — not shipped in the OSS product)
+/Mimari_Karar_Belgesi.md
+
+# Internal dev/process artifacts — not shipped in the OSS product
+/docs/superpowers/
+
+# Internal dev/process artifacts — not shipped in the OSS product
+/.superpowers/

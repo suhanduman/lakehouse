@@ -1,0 +1,237 @@
+name: release
+
+# Cuts a versioned, customer-neutral release (Product Foundation Phase 5 /
+# Task 15): builds every product Dockerfile image, pushes them to ghcr.io,
+# packages + pushes the Helm chart as an OCI artifact to ghcr.io, and cuts a
+# GitHub Release with the packaged chart attached. See docs/RELEASING.md for
+# the full runbook (how to cut a release, how consumers install one).
+#
+# Trigger:
+#   - `push: tags: v*.*.*` -- a REAL release. The tag IS the version (see
+#     docs/UPGRADING.md's SemVer contract): `vX.Y.Z` -> chart/image tag
+#     `X.Y.Z`. Publishes for real.
+#   - `workflow_dispatch` with a `dry_run` input (default true) -- runs the
+#     exact same pipeline to validate it end-to-end WITHOUT publishing:
+#     images build with `push: false`, the chart is packaged but not OCI-
+#     pushed (uploaded as a workflow artifact instead), and the GitHub
+#     Release job is skipped entirely. Safe to run against any branch/ref.
+#
+# PUBLISH SAFETY: publishing (image push + helm OCI push + GitHub Release)
+# requires BOTH "not a dry run" AND an actual `refs/tags/v*.*.*` ref. A
+# `workflow_dispatch` run against a branch can never publish, even if
+# `dry_run` is explicitly set to `false` -- there is no tag to derive a
+# version from, so it structurally falls back to the dry-run path. The only
+# way to get a real publish out of `workflow_dispatch` is to run it with
+# `--ref <existing tag>` (e.g. re-running a failed publish for a tag that
+# already exists), which resolves the same version a tag `push` would.
+#
+# COST CONTROLS: the images/connect build compiles the Apache Iceberg
+# kafka-connect-runtime from source (~20 min cold, see that Dockerfile's
+# header). Every image build below sets `cache-from: type=gha`, reusing the
+# GHA buildx cache that e2e.yaml's "connect image (buildx cache warm)" job
+# keeps warm -- a release build (real or dry-run) is a fast cache replay, not
+# a from-scratch compile.
+#
+# RELEASE-COHERENT CHART DEFAULTS: `helm package` only rewrites Chart.yaml's
+# `version`/`appVersion` metadata -- it does NOT touch `values.yaml`. Without
+# further action, the packaged/published chart's DEFAULTS would still point
+# at `chart/values.yaml`'s in-repo placeholders (`global.imageRegistry:
+# image-registry.openshift-image-registry.svc:5000/lakehouse`, `versions.
+# {connect,consoleBackend,consoleFrontend}ImageTag: "1.0"`), i.e. NOT the
+# images this same workflow just built and pushed to ghcr.io. The `chart`
+# job below rewrites its checked-out (workspace-only, never committed) copy
+# of `chart/values.yaml` with `yq` before packaging, so the OCI chart's
+# defaults are self-consistent with the images it ships alongside. An
+# OpenShift customer who mirrors images to an internal registry still
+# overrides `global.imageRegistry` (and the per-component tags) themselves,
+# exactly as today -- ghcr.io is simply the correct DEFAULT for the artifact
+# this workflow itself publishes. `images/iceberg-tools` is deliberately
+# excluded from this rewrite: no chart template references its image (see
+# docs/RELEASING.md), so it isn't part of the chart's image-coherence
+# contract.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate the release pipeline without publishing anything (no image/chart push, no GitHub Release)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Unlike ci.yaml/e2e.yaml, a real publish is never cancelled mid-flight by
+  # a superseding run -- a half-pushed set of images/chart is worse than a
+  # slightly stale queue. Dry-run workflow_dispatch runs share this same
+  # non-cancelling behavior for simplicity (they're cheap cache replays).
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # GitHub Release creation
+  packages: write   # ghcr.io image + OCI chart push
+
+jobs:
+  version:
+    name: resolve release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v*.*.* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            version="${tag#v}"
+            tag_ref=true
+          else
+            version="0.0.0-dryrun"
+            tag_ref=false
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            dry_run=false
+          else
+            dry_run="${{ inputs.dry_run }}"
+          fi
+
+          # Only publish when BOTH conditions hold -- see the PUBLISH SAFETY
+          # note in the workflow header.
+          if [ "$tag_ref" = "true" ] && [ "$dry_run" = "false" ]; then
+            publish=true
+          else
+            publish=false
+          fi
+
+          echo "Resolved: version=$version publish=$publish (event=${{ github.event_name }}, ref=$GITHUB_REF)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: "image: ${{ matrix.name }}"
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Build args default to the exact versions pinned in
+          # chart/values.yaml's `versions:` block already (see that
+          # Dockerfile's own ARG defaults) -- no override needed here.
+          - name: connect
+            dockerfile: images/connect/Dockerfile
+            image: connect-lakehouse
+          - name: iceberg-tools
+            dockerfile: images/iceberg-tools/Dockerfile
+            image: iceberg-tools
+          - name: console-backend
+            dockerfile: console/backend/Dockerfile
+            image: console-backend
+          - name: console-frontend
+            dockerfile: console/frontend/Dockerfile
+            image: console-frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: needs.version.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (push only on a real, non-dry-run release)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ needs.version.outputs.publish == 'true' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/lakehouse/${{ matrix.image }}:${{ needs.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/lakehouse/${{ matrix.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    name: chart package (+ OCI push on a real release)
+    needs: [version, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.21.3'
+
+      - name: Bake release-coherent image defaults into chart/values.yaml (workspace-only, never committed)
+        # See the "RELEASE-COHERENT CHART DEFAULTS" note in this workflow's
+        # header. Rewrites the CHECKED-OUT copy only -- chart/values.yaml in
+        # git is untouched. Runs on BOTH the dry-run and the real-publish
+        # path so the dry-run artifact is representative of what a real
+        # release would actually package. `yq` (mikefarah/yq) ships
+        # preinstalled on the ubuntu-latest runner image.
+        run: |
+          set -euo pipefail
+          export REGISTRY="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/lakehouse"
+          export RELEASE_VERSION="${{ needs.version.outputs.version }}"
+          yq -i '
+            .global.imageRegistry = strenv(REGISTRY) |
+            .versions.connectImageTag = strenv(RELEASE_VERSION) |
+            .versions.consoleBackendImageTag = strenv(RELEASE_VERSION) |
+            .versions.consoleFrontendImageTag = strenv(RELEASE_VERSION)
+          ' chart/values.yaml
+
+      - name: helm package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          helm package chart \
+            --version "${{ needs.version.outputs.version }}" \
+            --app-version "${{ needs.version.outputs.version }}" \
+            -d dist
+
+      - name: Upload packaged chart as a workflow artifact
+        # Always uploaded (both dry-run and real release) -- the
+        # github-release job below downloads this same artifact to attach
+        # the .tgz to the GitHub Release.
+        uses: actions/upload-artifact@v4
+        with:
+          name: lakehouse-chart-${{ needs.version.outputs.version }}
+          path: dist/*.tgz
+
+      - name: helm registry login ghcr.io
+        if: needs.version.outputs.publish == 'true'
+        run: helm registry login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+      - name: helm push (OCI)
+        if: needs.version.outputs.publish == 'true'
+        run: helm push dist/*.tgz "oci://ghcr.io/${{ github.repository_owner }}/lakehouse/charts"
+
+  github-release:
+    name: GitHub Release
+    needs: [version, chart]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lakehouse-chart-${{ needs.version.outputs.version }}
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.tgz

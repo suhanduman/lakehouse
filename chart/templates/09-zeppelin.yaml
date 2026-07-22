@@ -1,0 +1,233 @@
+# Apache Zeppelin — prod deployment. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.zeppelin`.
+#
+# Jupyter ile yan yana. Zeppelin, notebook içinde paragraf bazlı Spark SQL +
+# Python + Scala + Markdown harmanlamaya izin verir; yöneticilere sunum
+# dostu bir analiz ortamı sağlar.
+#
+# Arm64 sorunu: apache/zeppelin yalnızca linux/amd64 destekler. OpenShift
+# prod node'ları genelde amd64 olduğundan sorun yok.
+#
+# Spark binary'si: kurumsal custom imajda /opt/spark'a build-time'da kurulu
+# (prod-manifests/README.md'deki Dockerfile — bkz. `versions.zeppelinImage`).
+#
+# Kimlik doğrulama: Apache Shiro native ActiveDirectoryGroupRealm ile
+# kurumsal Active Directory. Bind service account DN + password Secret'tan
+# gelir; AD grup üyeliği Zeppelin rollerine eşlenir. AD/LDAPS ayarları
+# (`zeppelin.ad.*`) values-driven. `ad-bind-credentials` follows the SAME
+# "name reference only" contract as `storage.s3.secretName` by
+# default (`zeppelin.ad.bindPassword` defaults empty in chart/values.yaml —
+# see that field's comment): this template only renders the Secret inline
+# when a real `bindPassword` is explicitly supplied (dev/test convenience);
+# otherwise the Secret must be provisioned out-of-band (ExternalSecret/Vault
+# or `oc create secret`) under the same name/keys BEFORE install.
+#
+# Service wiring: Zeppelin'in kendi Service'inin bu chart'ta downstream
+# tüketicisi yok (yalnızca kullanıcı erişimi) — bu yüzden _helpers.tpl'nin
+# kanonik servis listesine eklenmedi (o liste yalnızca en az bir consumer'ı
+# olan Service'leri kapsar); ad literal "zeppelin" kalır, ns yalnızca helper'dan.
+# Nessie catalog URI'si ise `lakehouse.svc.nessie` helper'ından — Trino/Spark
+# Operator'ın kullandığı AYNI helper (spec §3.1/§8).
+{{- if .Values.components.zeppelin }}
+# Spark binary image içinde geldiği için ayrı bir cache PVC gerekmez.
+# Notebook'ların paylaşımlı home'u — birden fazla replica için RWX.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeppelin-notebooks-pvc
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests: {storage: {{ .Values.zeppelin.notebooks.storage | quote }}}
+  # storageClassName empty (default, `zeppelin.storageClassName`) = the
+  # cluster's default StorageClass — no longer coupled to the opt-in
+  # `storage.classes.fileRwx` SC-creation block / `components.storage`
+  # (storage-neutrality convention, Product Foundation task 6.5).
+{{- with .Values.zeppelin.storageClassName }}
+  storageClassName: {{ . }}
+{{- end }}
+---
+{{- if .Values.zeppelin.ad.bindPassword }}
+# AD bind (service account) secret şablonu -- rendered ONLY when a real
+# `zeppelin.ad.bindPassword` is explicitly supplied (dev/test convenience).
+# Default is empty: in that case this Secret is NOT rendered at all, and the
+# SAME name/keys (referenced by the Deployment's `secretKeyRef`s below
+# regardless of which path created it) must be provisioned out-of-band
+# (ExternalSecret/Vault or `oc create secret generic ad-bind-credentials
+# --from-literal=...`) per `.Values.secrets.mode`, BEFORE install.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ad-bind-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  # Salt-okuma hakkına sahip AD service account:
+  #   CN=svc-lakehouse-ad,OU=Service Accounts,DC=example,DC=com
+  bind-dn: {{ .Values.zeppelin.ad.bindDn | quote }}
+  bind-password: {{ .Values.zeppelin.ad.bindPassword | quote }}
+  user-search-base: {{ .Values.zeppelin.ad.userSearchBase | quote }}   # OU=Users,DC=example,DC=com
+  group-search-base: {{ .Values.zeppelin.ad.groupSearchBase | quote }} # OU=Groups,DC=example,DC=com
+  ad-url: {{ .Values.zeppelin.ad.url | quote }}
+{{- end }}
+---
+# Apache Shiro — ActiveDirectoryGroupRealm
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeppelin-shiro
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  shiro.ini: |
+    [main]
+    # AD realm — LDAPS (port 636) + TLS; AD sertifikası Zeppelin truststore'da
+    activeDirectoryRealm = org.apache.zeppelin.realm.ActiveDirectoryGroupRealm
+    activeDirectoryRealm.systemUsername = ${AD_BIND_DN}
+    activeDirectoryRealm.systemPassword = ${AD_BIND_PASSWORD}
+    activeDirectoryRealm.searchBase = ${AD_USER_SEARCH_BASE}
+    activeDirectoryRealm.url = ${AD_URL}
+    activeDirectoryRealm.principalSuffix = {{ .Values.zeppelin.ad.principalSuffix }}
+
+    # AD group DN → Zeppelin role eşlemesi
+    activeDirectoryRealm.groupRolesMap = "\
+      {{ .Values.zeppelin.ad.groups.admin }}:admin,\
+      {{ .Values.zeppelin.ad.groups.analyst }}:analyst,\
+      {{ .Values.zeppelin.ad.groups.student }}:student"
+
+    cacheManager = org.apache.shiro.cache.MemoryConstrainedCacheManager
+    securityManager.cacheManager = $cacheManager
+    sessionManager = org.apache.shiro.web.session.mgt.DefaultWebSessionManager
+    sessionManager.globalSessionTimeout = {{ .Values.zeppelin.ad.sessionTimeoutMs | int64 }}   # {{ div .Values.zeppelin.ad.sessionTimeoutMs 3600000 }} saat
+    securityManager.sessionManager = $sessionManager
+    securityManager.realms = $activeDirectoryRealm
+
+    shiro.loginUrl = /api/login
+
+    [roles]
+    admin = *
+    analyst = *
+    student = *
+
+    [urls]
+    /api/version = anon
+    /api/interpreter/** = authc, roles[admin]
+    /api/configurations/** = authc, roles[admin]
+    /api/credential/** = authc
+    /** = authc
+---
+# Spark interpreter config — spark.yaml ile aynı iki catalog + hadoop-aws.
+# 05-spark-operator.yaml'daki paylaşılan `spark-defaults` ConfigMap ile KASITLI
+# olarak AYRI (bu, Kafka connector paketini içermez — Zeppelin interaktif
+# notebook, streaming job değil; kaynak manifestteki fark korunur).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeppelin-spark-defaults
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  spark-defaults.conf: |
+    spark.jars.ivy=/tmp/ivy2
+    spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:{{ .Values.versions.icebergSparkRuntime }},software.amazon.awssdk:bundle:{{ .Values.versions.awsSdkBundle }},software.amazon.awssdk:url-connection-client:{{ .Values.versions.awsSdkBundle }},org.apache.hadoop:hadoop-aws:{{ .Values.versions.hadoopAws }}
+    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+
+    spark.hadoop.fs.s3a.path.style.access=true
+    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
+
+    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
+    spark.sql.catalog.lakehouse.warehouse={{ .Values.nessie.catalog.warehouse.location }}
+    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+
+    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
+    spark.sql.catalog.rawlake.warehouse=rawdata
+    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zeppelin
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: zeppelin}
+spec:
+  replicas: {{ .Values.zeppelin.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: zeppelin}
+  template:
+    metadata:
+      labels: {app: zeppelin}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      # Spark image'a gömülü olduğu için initContainers yok.
+      containers:
+      - name: zeppelin
+        image: {{ .Values.versions.zeppelinImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8080}]
+        env:
+        - {name: SPARK_HOME,            value: "/opt/spark"}
+        - {name: ZEPPELIN_NOTEBOOK_DIR, value: "/zeppelin/notebook"}
+        - {name: SPARK_CONF_DIR,        value: "/spark-conf"}
+        - {name: ZEPPELIN_SHIRO_CONF,   value: "/zeppelin/conf/shiro.ini"}
+        - {name: AD_BIND_DN,          valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-dn}}}
+        - {name: AD_BIND_PASSWORD,    valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-password}}}
+        - {name: AD_USER_SEARCH_BASE, valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: user-search-base}}}
+        - {name: AD_URL,              valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: ad-url}}}
+        - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
+        volumeMounts:
+        - {name: zeppelin-notebooks, mountPath: /zeppelin/notebook}
+        - {name: spark-conf,         mountPath: /spark-conf}
+        - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
+        resources:
+          requests: {memory: {{ .Values.zeppelin.resources.requests.memory | quote }}, cpu: {{ .Values.zeppelin.resources.requests.cpu | quote }}}
+          limits:   {memory: {{ .Values.zeppelin.resources.limits.memory | quote }},   cpu: {{ .Values.zeppelin.resources.limits.cpu | quote }}}
+        readinessProbe:
+          httpGet: {path: /api/version, port: 8080}
+          initialDelaySeconds: 60
+          periodSeconds: 15
+        livenessProbe:
+          httpGet: {path: /api/version, port: 8080}
+          initialDelaySeconds: 120
+          periodSeconds: 30
+      volumes:
+      - name: zeppelin-notebooks
+        persistentVolumeClaim: {claimName: zeppelin-notebooks-pvc}
+      - name: spark-conf
+        configMap: {name: zeppelin-spark-defaults}
+      - name: shiro-conf
+        configMap: {name: zeppelin-shiro}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zeppelin
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  selector: {app: zeppelin}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zeppelin-pdb
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels: {app: zeppelin}
+{{- end }}

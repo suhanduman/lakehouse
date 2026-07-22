@@ -1,0 +1,57 @@
+# chart/tests/strimzi-api_test.yaml — helm-unittest coverage for the
+# Strimzi v1beta2 -> v1 migration (feat/strimzi-v1). Proves
+# `.Values.versions.strimziApi` is a single, working switch across every
+# Strimzi CR this chart renders, in both directions:
+#   - default (`v1`, upstream community Strimzi target, chart/values.yaml
+#     "COHERENT STRIMZI VERSION TRIPLE" comment) — live-validated on
+#     microk8s, see .superpowers/sdd/strimzi-v1-report.md.
+#   - explicit override back to `v1beta2` (an environment genuinely pinned
+#     to Red Hat's certified "Streams for Apache Kafka" channel).
+#
+# Uses the `Kafka` CR (03-kafka-strimzi.yaml) as the representative case —
+# same templated `apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}`
+# expression is used verbatim on every other Strimzi CR in this chart
+# (KafkaNodePool/KafkaTopic/KafkaUser in 03-kafka-strimzi.yaml, KafkaConnect
+# in 12-kafka-connect.yaml, KafkaConnector in 13-connectors.yaml, KafkaUser
+# `spark-nginx` in 14-nginx-ingest.yaml, KafkaUser `kafka-ui` in
+# console/kafka-ui.yaml — grep-verified, chart/tests/integrity.sh's live
+# `helm template` renders exercise all of them together).
+suite: Strimzi apiVersion is parametrized via versions.strimziApi
+templates:
+  - 03-kafka-strimzi.yaml
+tests:
+  - it: renders the Kafka CR as kafka.strimzi.io/v1 by default (upstream community Strimzi target)
+    asserts:
+      - containsDocument:
+          kind: Kafka
+          apiVersion: kafka.strimzi.io/v1
+          name: kafka
+          any: true
+
+  - it: renders the Kafka CR as kafka.strimzi.io/v1beta2 when versions.strimziApi is explicitly overridden
+    set:
+      versions.strimziApi: v1beta2
+    asserts:
+      - containsDocument:
+          kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          name: kafka
+          any: true
+
+  - it: also flips every other Strimzi CR in this file (KafkaNodePool/KafkaTopic/KafkaUser) to v1 by default
+    asserts:
+      - containsDocument:
+          kind: KafkaNodePool
+          apiVersion: kafka.strimzi.io/v1
+          name: broker
+          any: true
+      - containsDocument:
+          kind: KafkaTopic
+          apiVersion: kafka.strimzi.io/v1
+          name: nginx-access
+          any: true
+      - containsDocument:
+          kind: KafkaUser
+          apiVersion: kafka.strimzi.io/v1
+          name: connect
+          any: true

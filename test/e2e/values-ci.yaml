@@ -1,0 +1,182 @@
+# test/e2e/values-ci.yaml — CI e2e overlay, layered ON TOP of
+# chart/values-dev.yaml (never used alone):
+#
+#   helm install lakehouse chart/ \
+#     -f chart/values-dev.yaml -f test/e2e/values-ci.yaml -n lakehouse
+#
+# Target: a throwaway kind cluster on a GitHub Actions ubuntu-latest runner
+# (4 vCPU / 16GB, shared with the kind control plane + every operator
+# bootstrap/bootstrap.sh installs). This overlay (a) disables the components
+# the e2e does not assert on (each disable documented inline), (b) wires the
+# S3 endpoint / CNPG backup endpoint at the in-cluster dev MinIO, (c) adapts
+# the two knobs that are OpenShift-shaped in the defaults (Kafka external
+# listener, Trino OIDC) to a vanilla kind cluster with no IdP, and (d) trims
+# CPU REQUESTS far below the dev tier (live kind-e2e finding, 2026-07-22):
+# a PRIVATE repo's ubuntu-latest runner is 2 vCPU / 7GB (the 4 vCPU / 16GB
+# spec applies to public repos only — node allocatable measured at 2000m),
+# and kube-system alone reserves ~0.95 CPU. Every chart CPU request drops
+# to a token 25m (scheduling reservations only — limits stay at the dev
+# tier's values, nothing is throttled harder), test/e2e/run.sh additionally
+# patches the operators' own requests down, and Trino collapses to
+# single-node (worker 0 + include-coordinator) to save a whole JVM of the
+# 7GB. Trimmed HERE rather than in values-dev so the dev tier + its
+# sizing-tiers_test.sh budget accounting stay untouched.
+#
+# NAMESPACE COUPLING: the `minio.lakehouse.svc` endpoints below hardcode the
+# `lakehouse` release namespace — test/e2e/run.sh always installs with
+# `-n lakehouse` (same default as bootstrap.sh). Change both together.
+
+components:
+  # DISABLED — Keycloak app + its CNPG cluster (components.keycloakDb tracks
+  # this flag). The e2e asserts the ingest/query data path, not SSO; with no
+  # IdP, `auth.oidc.enabled: false` below decouples Trino/Nessie from it.
+  # The Keycloak OPERATOR is still installed + CRD-validated by bootstrap.
+  keycloak: false
+  # DISABLED — interactive notebook, not on the CDC data path, and
+  # `versions.zeppelinImage` is a customer-built image that does not exist
+  # in CI. (Safe to disable since the Phase-3 Route/Ingress gating fix.)
+  zeppelin: false
+  # DISABLED — console backend/frontend images are built out-of-band under
+  # `global.imageRegistry` (no such registry in CI), and the Console is not
+  # part of this e2e's assertions.
+  console: false
+  # DISABLED — UI convenience, not asserted; saves runner CPU.
+  kafkaUi: false
+  # DISABLED — ServiceMonitor/PodMonitor/PrometheusRule CRDs come from a
+  # Prometheus operator this e2e does not install (bootstrap installs the
+  # platform operators only); rendering them would fail the install.
+  monitoring: false
+  # DISABLED — the chart's ScheduledSparkApplications reference the
+  # `spark-py` image built out-of-band (`global.imageRegistry`, not
+  # available in CI). The e2e instead runs the SAME job code
+  # (tools/jobs/merge_cdc.py + iceberg_maintenance.py) as one-shot
+  # local-mode Spark Jobs with the code ConfigMap-mounted — the approach
+  # already live-proven on the F ingest environment (see
+  # test/e2e/manifests/spark-local-job.yaml). The Spark OPERATOR itself is
+  # still installed + CRD-validated by bootstrap.
+  sparkOperator: false
+  # components.minio: true and nginxIngest: false come from values-dev.
+
+auth:
+  # No IdP in CI (components.keycloak: false above). Trino's oauth2
+  # authenticator does EAGER OIDC discovery at startup and would crash-loop
+  # forever without a reachable issuer — this is the documented
+  # dev/smoke-test escape hatch (see values.yaml `auth:`).
+  oidc:
+    enabled: false
+
+namespaceConfig:
+  limitRange:
+    container:
+      defaultRequest:
+        # CI request trim (see header): requests-less containers — e.g. the
+        # Strimzi entity-operator's two — default to 25m/128Mi.
+        cpu: 25m
+        memory: 128Mi
+
+kafka:
+  # Default `route` needs OpenShift's Route API — Strimzi cannot reconcile
+  # it on vanilla kind. `cluster-ip` keeps the listener shape without
+  # needing NodePorts (so `namespaceConfig.quota.serviceNodePorts: "0"`
+  # stays untouched) or a cloud LoadBalancer.
+  externalListenerType: cluster-ip
+  # CI CPU-request trims (see header comment).
+  nodePools:
+    controller:
+      resources:
+        requests: {memory: 512Mi, cpu: 25m}
+    broker:
+      resources:
+        requests: {memory: 512Mi, cpu: 25m}
+
+nessie:
+  # CI CPU-request trim (see header).
+  resources:
+    requests:
+      cpu: 25m
+
+trino:
+  # Single-node Trino for the 7GB runner: 0 dedicated workers, the
+  # coordinator schedules work on itself (values.yaml documents this exact
+  # coupling — worker.replicas=0 REQUIRES includeCoordinator=true). Saves a
+  # whole ~1.3GB Trino JVM. The worker HPA stays inert at replicas 0.
+  includeCoordinator: true
+  worker:
+    replicas: 0
+    resources:
+      requests:
+        cpu: 25m
+  # CI CPU-request trims (see header).
+  coordinator:
+    resources:
+      requests:
+        cpu: 25m
+
+apicurio:
+  # CI CPU-request trim (see header).
+  resources:
+    requests:
+      cpu: 25m
+
+minio:
+  # CI CPU-request trim (see header).
+  resources:
+    requests:
+      cpu: 25m
+
+postgres:
+  # CNPG barman endpoint: values.yaml ships the `{{S3_ENDPOINT}}`
+  # pre-Helm placeholder token — point it at the in-cluster dev MinIO so WAL
+  # archiving works instead of erroring against a bogus URL.
+  # (pg-keycloak needs no entry — its Cluster is disabled via
+  # components.keycloak above.) CPU requests trimmed per the header.
+  nessie:
+    backup:
+      endpointURL: "http://minio.lakehouse.svc:9000"
+    resources:
+      requests:
+        cpu: 25m
+  apicurio:
+    backup:
+      endpointURL: "http://minio.lakehouse.svc:9000"
+    resources:
+      requests:
+        cpu: 25m
+
+kafkaConnect:
+  # Pre-built Connect image (prebuilt-image path — NOT spec.build): built in
+  # the workflow from images/connect/Dockerfile and `kind load`ed into the
+  # cluster (never pushed to a registry). Tag is deliberately not `latest`
+  # so Strimzi's default imagePullPolicy stays IfNotPresent and the
+  # kind-loaded image is used as-is.
+  image: "lakehouse-connect:e2e"
+  # CI request trims (see header) — Connect does real work on the data path,
+  # so it keeps a slightly larger token than the rest.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+connectors:
+  icebergSink:
+    # In-cluster dev MinIO (see NAMESPACE COUPLING note above).
+    s3Endpoint: "http://minio.lakehouse.svc:9000"
+    # Faster Bronze landing for CI (default 60000): the e2e polls for the
+    # first commit, and a shorter interval directly shortens the run.
+    commitIntervalMs: "20000"
+    # Constrained single-worker Connect: the coordinator's default 30s
+    # commit window can miss a slow worker's DATA_COMPLETE ("committed to
+    # 0 table(s)") — same setting the constrained microk8s ingest overlay
+    # uses; chart defaults stay prod-correct.
+    commitTimeoutMs: "120000"
+    # Constrained single-broker cluster: the sink's 2-phase-commit control
+    # consumer (cg-control-*) can hit the default 10s
+    # socket.connection.setup.timeout.ms and fail to join its group
+    # (commits stall) — live-proven fix from the F ingest environment;
+    # `iceberg.kafka.*` passes through to ALL the sink's Kafka clients.
+    kafkaClientOverrides:
+      socket.connection.setup.timeout.ms: "30000"
+      socket.connection.setup.timeout.max.ms: "120000"
+      request.timeout.ms: "60000"
+      session.timeout.ms: "120000"
+      default.api.timeout.ms: "120000"

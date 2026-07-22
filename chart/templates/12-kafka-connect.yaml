@@ -1,0 +1,155 @@
+# Kafka Connect — tek ingest düzlemi. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.kafkaConnect`.
+#
+# LOAD-BEARING (do not change without re-reading spec + sub-project A —
+# docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
+#   - `config.providers=directory` + DirectoryConfigProvider class — every
+#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference
+#     in 13-connectors.yaml resolves through THIS provider + THESE
+#     `spec.template.pod.volumes` / `spec.template.connectContainer.
+#     volumeMounts` mount `name:`s (mssql/mongo/s3/debezium-src/kafka-ca),
+#     each mounted at the exact `/mnt/external-configuration/<name>`
+#     path. Do not rename a volume `name:` (or move its mountPath) without
+#     updating every connector's colon-form reference in lockstep.
+#     (`spec.externalConfiguration` was removed in Strimzi v1 — this
+#     `spec.template` form replaces it; see feat/ingest-e2e sub-project F
+#     live-testing finding, .superpowers/sdd/connect-v1-fix-report.md.)
+#   - Custom image is declaratively built via Strimzi `spec.build` (Debezium
+#     + Aiven JDBC + Iceberg sink + Apicurio converter); every plugin
+#     version below is the single source of truth (`.Values.versions.*`).
+#
+# Service wiring (spec §3.1/§8):
+#   - `bootstrapServers` resolves Kafka's Service via `lakehouse.svc.kafkaBootstrap`
+#     — the SAME helper 03-kafka-strimzi.yaml's `Kafka` CR is verified
+#     against.
+#   - Kafka cluster/KafkaUser/topic names referenced below (`kafka`,
+#     `connect`, `connect-cluster-*`) are FIXED literals — they MUST match
+#     03-kafka-strimzi.yaml's fixed names (Strimzi-managed Secret/Service
+#     naming convention; see that file's header for why they are not
+#     values-driven).
+#   - The custom Connect image is built from `.Values.global.imageRegistry`
+#     (never a hardcoded namespace/project literal).
+{{- if .Values.components.kafkaConnect }}
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaConnect
+metadata:
+  name: connect
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    strimzi.io/use-connector-resources: "true"   # Git tek doğruluk kaynağı
+spec:
+  version: {{ .Values.versions.kafka | quote }}   # Kafka broker sürümü ile hizalı (bkz. 03-kafka-strimzi.yaml spec.kafka.version)
+  replicas: {{ .Values.kafkaConnect.replicas }}
+  bootstrapServers: {{ printf "%s:9093" (include "lakehouse.svc.kafkaBootstrap" .) }}
+  tls:
+    trustedCertificates:
+      - {secretName: kafka-cluster-ca-cert, certificate: ca.crt}
+  authentication:
+    type: scram-sha-512
+    username: connect
+    passwordSecret: {secretName: connect, password: password}
+  # Strimzi v1: Connect cluster group + internal-topic NAMES are dedicated
+  # top-level spec fields (REQUIRED). They were `spec.config.{group.id,
+  # config.storage.topic,offset.storage.topic,status.storage.topic}` under
+  # v1beta2 — v1 rejects the CR without these top-level fields. (feat/ingest-e2e
+  # sub-project F live-testing finding — .superpowers/sdd/connect-v1-fix-report.md.)
+  groupId: connect-cluster
+  configStorageTopic: connect-cluster-configs
+  offsetStorageTopic: connect-cluster-offsets
+  statusStorageTopic: connect-cluster-status
+  config:
+    # NB: group.id / *.storage.topic are NOT here — they are the top-level
+    # fields above in v1. Replication-factor has no dedicated top-level field,
+    # so it stays a worker property here.
+    config.storage.replication.factor: {{ .Values.kafkaConnect.internalTopicReplicationFactor }}
+    offset.storage.replication.factor: {{ .Values.kafkaConnect.internalTopicReplicationFactor }}
+    status.storage.replication.factor: {{ .Values.kafkaConnect.internalTopicReplicationFactor }}
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: false
+    value.converter.schemas.enable: false
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+{{- if .Values.kafkaConnect.image }}
+  # Pre-built Connect image (prod-grade): every plugin — including the Apache
+  # Iceberg sink runtime built from source — is baked in (images/connect/
+  # Dockerfile). No in-cluster `spec.build` download step. Used whenever
+  # `.Values.kafkaConnect.image` is set (recommended for prod + the F test).
+  # See .superpowers/sdd/connect-v1-fix-report.md for why: Apache publishes no
+  # downloadable Iceberg kafka-connect-runtime binary.
+  image: {{ .Values.kafkaConnect.image | quote }}
+{{- else }}
+  build:
+    output:
+      type: docker
+      image: {{ printf "%s/connect-lakehouse:%s" .Values.global.imageRegistry .Values.versions.connectImageTag | quote }}
+{{- if .Values.kafkaConnect.build.pushSecret }}
+      pushSecret: {{ .Values.kafkaConnect.build.pushSecret }}        # registry push secret (OpenShift internal registry). Empty on an insecure microk8s registry (no auth).
+{{- end }}
+{{- with .Values.kafkaConnect.build.additionalBuildOptions }}
+      additionalBuildOptions:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.kafkaConnect.build.additionalPushOptions }}
+      additionalPushOptions:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    plugins:
+      - name: debezium-sqlserver
+        artifacts:
+          - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/%s.Final/debezium-connector-sqlserver-%s.Final-plugin.zip" .Values.versions.debezium .Values.versions.debezium | quote }}}
+      - name: debezium-postgres
+        artifacts:
+          - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/%s.Final/debezium-connector-postgres-%s.Final-plugin.zip" .Values.versions.debezium .Values.versions.debezium | quote }}}
+      - name: debezium-mongodb
+        artifacts:
+          - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/%s.Final/debezium-connector-mongodb-%s.Final-plugin.zip" .Values.versions.debezium .Values.versions.debezium | quote }}}
+      - name: aiven-jdbc
+        artifacts:
+          - {type: zip, url: {{ printf "https://github.com/Aiven-Open/jdbc-connector-for-apache-kafka/releases/download/v%s/jdbc-connector-for-apache-kafka-%s.zip" .Values.versions.aivenJdbc .Values.versions.aivenJdbc | quote }}}
+          - {type: jar, url: {{ printf "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/%s/mssql-jdbc-%s.jar" .Values.versions.mssqlJdbc .Values.versions.mssqlJdbc | quote }}}
+          - {type: jar, url: {{ printf "https://repo1.maven.org/maven2/org/postgresql/postgresql/%s/postgresql-%s.jar" .Values.versions.postgresqlJdbc .Values.versions.postgresqlJdbc | quote }}}
+      - name: iceberg-sink
+        artifacts:
+          - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-kafka-connect-runtime/%s/iceberg-kafka-connect-runtime-%s.zip" .Values.versions.icebergKafkaConnect .Values.versions.icebergKafkaConnect | quote }}}
+      - name: apicurio-avro-converter
+        artifacts:
+          - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/%s.Final/apicurio-registry-distro-connect-converter-%s.Final.zip" .Values.versions.apicurioConverter .Values.versions.apicurioConverter | quote }}}
+{{- end }}
+  resources:
+    requests:
+      cpu: {{ .Values.kafkaConnect.resources.requests.cpu | quote }}
+      memory: {{ .Values.kafkaConnect.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.kafkaConnect.resources.limits.cpu | quote }}
+      memory: {{ .Values.kafkaConnect.resources.limits.memory | quote }}
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom: {configMapKeyRef: {name: connect-metrics, key: metrics-config.yml}}
+  template:
+    pod:
+      volumes:
+        - {name: mssql, secret: {secretName: mssql}}
+        - {name: pg, secret: {secretName: pg}}
+        - {name: mongo, secret: {secretName: mongo}}
+        - {name: s3, secret: {secretName: {{ .Values.storage.s3.secretName }}}}
+        - {name: debezium-src, secret: {secretName: debezium-src}}
+        - {name: kafka-ca, secret: {secretName: kafka-cluster-ca-cert}}
+    connectContainer:
+      volumeMounts:
+        - {name: mssql, mountPath: /mnt/external-configuration/mssql}
+        - {name: pg, mountPath: /mnt/external-configuration/pg}
+        - {name: mongo, mountPath: /mnt/external-configuration/mongo}
+        - {name: s3, mountPath: /mnt/external-configuration/s3}
+        - {name: debezium-src, mountPath: /mnt/external-configuration/debezium-src}
+        - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: connect-metrics, namespace: {{ include "lakehouse.namespace" . }}}
+data:
+  metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: "kafka.connect<type=(.+), connector=(.+), task=(.+)><>(.+): (.+)"
+{{- end }}

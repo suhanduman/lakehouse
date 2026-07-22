@@ -1,0 +1,87 @@
+# Bucket-init Job — vendor-generic S3 bucket bootstrap (Product Foundation
+# Task 8). Gated by `.Values.storage.createBuckets` (DEFAULT TRUE) — NOT
+# gated on `.Values.components.minio`: this Job runs `mc mb
+# --ignore-existing` against WHATEVER endpoint `storage.s3.secretName`'s
+# Secret points at (the dev MinIO from 17-minio.yaml, or any real customer
+# S3 — Pure Storage FlashBlade, AWS S3, Ceph RGW, ...). Nothing in this
+# file is MinIO-component-specific. Disable when the customer
+# pre-provisions buckets out-of-band, or when the install credentials
+# deliberately lack bucket-create rights (least-privilege S3 policies).
+#
+# Bucket list: `.Values.storage.buckets` if set explicitly, else COMPUTED
+# from the actual `s3://` locations already embedded elsewhere in this
+# values file — `nessie.catalog.warehouse.location` (silver/Iceberg,
+# "depo"), `nessie.catalog.rawdata.location` (bronze, "ham-veri"),
+# `nginx.streaming.checkpointBucket` (Spark checkpoint, "nginx-web"), and
+# `postgres.nessie.backup.destinationPath`'s bucket (CNPG barman,
+# "backups") — see the `lakehouse.s3BucketFromUri` helper (_helpers.tpl).
+# ONE extraction so this list and those `s3://...` values can never
+# silently drift apart.
+#
+# Runs on BOTH install paths so first ingest always has somewhere to
+# land: plain `helm install/upgrade` (`helm.sh/hook`
+# post-install,post-upgrade) AND ArgoCD sync (`argocd.argoproj.io/hook`
+# PostSync — see gitops/apps/app-of-apps.yaml). `backoffLimit: 6` covers
+# the "wait until the S3 endpoint is actually reachable" case (e.g. the
+# dev MinIO Pod from 17-minio.yaml still starting) via ordinary
+# Job-controller retries, with no separate init-container/wait-for logic.
+{{- if .Values.storage.createBuckets }}
+{{- $buckets := .Values.storage.buckets }}
+{{- if not $buckets }}
+{{- $buckets = list
+      (include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.warehouse.location)
+      (include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.rawdata.location)
+      .Values.nginx.streaming.checkpointBucket
+      (include "lakehouse.s3BucketFromUri" .Values.postgres.nessie.backup.destinationPath)
+    | uniq }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-bucket-init
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "lakehouse.labels" . | nindent 8 }}
+        app: lakehouse-bucket-init
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      restartPolicy: Never
+      containers:
+      - name: bucket-init
+        image: {{ .Values.versions.mcImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          {{- range $buckets }}
+          mc mb --ignore-existing s3/{{ . }}
+          {{- end }}
+        env:
+        - {name: S3_ENDPOINT,    valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: S3_ACCESS_KEY,  valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: S3_SECRET_KEY,  valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+{{- end }}

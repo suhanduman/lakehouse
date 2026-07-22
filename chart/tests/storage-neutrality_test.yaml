@@ -1,0 +1,125 @@
+# chart/tests/storage-neutrality_test.yaml — helm-unittest suite for
+# storage neutrality (Product Foundation task 6.5): the two vendor CSI
+# StorageClasses this chart can optionally create (chart/templates/
+# 01-storage.yaml) are opt-in (`components.storage`, DEFAULT false), and
+# every StorageClass-consuming field (postgres nessie/apicurio/keycloak
+# storage+walStorage, Kafka node-pool storage, Zeppelin's notebooks PVC)
+# defaults to empty ("" = the cluster's default StorageClass) — rendered by
+# OMITTING the field entirely (`{{- with ... }}`), not by rendering an
+# empty string, because CNPG's `Cluster` CR only accepts an omitted
+# `storageClass` field (an explicit `storageClass: ""` is rejected/
+# meaningless to the operator).
+#
+# Only postgres.nessie + kafka.nodePools.controller + zeppelin are exercised
+# directly below (apicurio/keycloak follow the identical
+# 02-postgres-ha.yaml/11-apicurio-registry.yaml/10-keycloak.yaml pattern —
+# see chart/tests/integrity.sh's full-chart render for the closure-level
+# proof that every one of them renders cleanly with the new empty
+# defaults).
+suite: Storage neutrality — components.storage opt-in; empty storageClass/class omitted
+templates:
+  - 01-storage.yaml
+  - 02-postgres-ha.yaml
+  - 03-kafka-strimzi.yaml
+  - 09-zeppelin.yaml
+tests:
+  - it: default render (components.storage=false) creates NO StorageClass documents at all
+    template: 01-storage.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: components.storage=true renders the two StorageClasses with neutral (non-vendor) default names
+    template: 01-storage.yaml
+    set:
+      components.storage: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - containsDocument:
+          kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          name: lakehouse-block
+          any: true
+      - containsDocument:
+          kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          name: lakehouse-file-rwx
+          any: true
+
+  - it: pg-nessie Cluster OMITS spec.storage.storageClass / spec.walStorage.storageClass by default (empty = cluster default StorageClass)
+    template: 02-postgres-ha.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.storage.storageClass
+      - notExists:
+          path: spec.walStorage.storageClass
+      # sibling fields still render normally — proves the `{{- with }}` only
+      # suppresses the empty storageClass key, not the whole storage block.
+      - equal:
+          path: spec.storage.size
+          value: "50Gi"
+
+  - it: pg-nessie Cluster renders spec.storage.storageClass/spec.walStorage.storageClass when a real value is set
+    template: 02-postgres-ha.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      postgres.nessie.storage.storageClass: fast-block
+      postgres.nessie.walStorage.storageClass: fast-block
+    asserts:
+      - equal:
+          path: spec.storage.storageClass
+          value: fast-block
+      - equal:
+          path: spec.walStorage.storageClass
+          value: fast-block
+
+  - it: controller/broker KafkaNodePool OMIT storage.class by default (same empty-omit convention)
+    template: 03-kafka-strimzi.yaml
+    documentSelector:
+      path: metadata.name
+      value: controller
+    asserts:
+      - notExists:
+          path: spec.storage.class
+      - equal:
+          path: spec.storage.size
+          value: "10Gi"
+
+  - it: controller KafkaNodePool renders storage.class when kafka.nodePools.controller.storage.class is set
+    template: 03-kafka-strimzi.yaml
+    documentSelector:
+      path: metadata.name
+      value: controller
+    set:
+      kafka.nodePools.controller.storage.class: fast-block
+    asserts:
+      - equal:
+          path: spec.storage.class
+          value: fast-block
+
+  - it: zeppelin notebooks PVC OMITS storageClassName by default (no longer coupled to storage.classes.fileRwx)
+    template: 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - notExists:
+          path: spec.storageClassName
+
+  - it: zeppelin notebooks PVC renders storageClassName when zeppelin.storageClassName is set
+    template: 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    set:
+      zeppelin.storageClassName: fast-file-rwx
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast-file-rwx

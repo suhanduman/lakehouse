@@ -1,0 +1,27 @@
+{{- if and .Values.global.security.s3TrustBundle.enabled .Values.global.security.s3TrustBundle.openshiftInject }}
+# S3 Internal-CA trust bundle (prod hardening) — OpenShift
+# "trusted CA bundle" injection. Bu ConfigMap boş yaratılır ve etiketlenir;
+# OpenShift cluster-network-operator `ca-bundle.crt` anahtarını (sistem CA'ları
+# + cluster additional-trust) OTOMATİK doldurur. S3 endpoint'inin Root CA'sının
+# cluster'ın additional trust'ına (Proxy `trustedCA` / image config) eklenmiş
+# olması gerekir (cluster-admin, tek seferlik).
+#
+# Bu bundle, JVM tabanlı S3 istemcilerine (Trino / Nessie / Kafka Connect /
+# Spark) mount edilip truststore'a eklenmelidir — aksi halde HTTPS S3
+# endpoint'ine `SSLHandshakeException`. Per-bileşen JVM truststore wiring
+# (init-container + keytool + -Djavax.net.ssl.trustStore) canlı-OpenShift'e
+# bağlı olduğundan RUNBOOK olarak belgelenmiştir: gitops/README.md
+# "Prod hardening kontrol listesi".
+#
+# openshiftInject=false ise: bu ConfigMap YARATILMAZ; `configMapName` elle
+# sağlanan (CA PEM içeren) mevcut bir ConfigMap'e işaret etmelidir.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.global.security.s3TrustBundle.configMapName }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    config.openshift.io/inject-trusted-cabundle: "true"
+# data BİLİNÇLİ olarak boş — `ca-bundle.crt`'yi OpenShift enjekte eder.
+{{- end }}

@@ -1,0 +1,328 @@
+# chart/tests/platform-switch_test.yaml — helm-unittest suite for the
+# `platform: openshift|vanilla` switch (Product Foundation Phase 2, install
+# mechanism task): proves the Route <-> Ingress split renders EXACTLY one of
+# the two manifest shapes for the same logical public endpoint, never both,
+# never neither.
+#
+# Route templates under test: chart/templates/08-routes-tls.yaml (trino),
+# chart/templates/10-keycloak.yaml (auth), chart/templates/console/
+# console.yaml (console frontend), chart/templates/console/kafka-ui.yaml
+# (kafka-ui), chart/templates/monitoring/grafana.yaml (grafana). Their
+# vanilla Ingress equivalents all live in ONE file,
+# chart/templates/08b-ingress-tls.yaml.
+#
+# `platform` defaults to "vanilla" (chart/values.yaml) — tests that want the
+# OpenShift path must `set: {platform: openshift}` explicitly.
+suite: platform switch (Route <-> Ingress)
+templates:
+  - 00-namespace.yaml
+  - 08-routes-tls.yaml
+  - 08b-ingress-tls.yaml
+  - 10-keycloak.yaml
+  - templates/console/console.yaml
+  - templates/console/kafka-ui.yaml
+  - templates/monitoring/grafana.yaml
+tests:
+  # -------------------- trino (components.routesTls) --------------------
+  - it: "platform: openshift ile trino Route render edilir"
+    template: 08-routes-tls.yaml
+    set:
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: trino
+    asserts:
+      - equal:
+          path: kind
+          value: Route
+
+  - it: "platform: openshift iken 08b-ingress-tls.yaml hiçbir şey render etmez"
+    template: 08b-ingress-tls.yaml
+    set:
+      platform: openshift
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "platform: vanilla (varsayılan) ile 08-routes-tls.yaml hiçbir Route render etmez"
+    template: 08-routes-tls.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "platform: vanilla (varsayılan) ile trino Ingress render edilir; ingressClassName + host + tls doğru"
+    template: 08b-ingress-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: trino.apps.example.com
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: trino.apps.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: trino-tls
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: trino-coordinator
+
+  # -------------------- auth (Keycloak) --------------------
+  - it: "platform: openshift ile keycloak Route render edilir"
+    template: 10-keycloak.yaml
+    set:
+      platform: openshift
+      components.keycloak: true
+    documentSelector:
+      path: kind
+      value: Route
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak
+      - equal:
+          path: spec.host
+          value: auth.apps.example.com
+
+  - it: "platform: vanilla ile keycloak Route render edilmez"
+    template: 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: keycloak
+          any: true
+        not: true
+
+  - it: "platform: vanilla ile auth Ingress render edilir"
+    template: 08b-ingress-tls.yaml
+    set:
+      components.keycloak: true
+    documentSelector:
+      path: metadata.name
+      value: keycloak
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: auth.apps.example.com
+
+  # -------------------- console --------------------
+  - it: "platform: openshift ile console Route render edilir"
+    template: templates/console/console.yaml
+    set:
+      platform: openshift
+      components.console: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: lakehouse-console
+          any: true
+
+  - it: "platform: vanilla ile console Route render edilmez"
+    template: templates/console/console.yaml
+    set:
+      components.console: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: lakehouse-console
+          any: true
+        not: true
+
+  - it: "platform: vanilla ile console Ingress render edilir"
+    template: 08b-ingress-tls.yaml
+    set:
+      components.console: true
+    documentSelector:
+      path: metadata.name
+      value: lakehouse-console
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.rules[0].host
+          value: console.apps.example.com
+
+  # -------------------- kafka-ui --------------------
+  - it: "platform: openshift ile kafka-ui Route render edilir"
+    template: templates/console/kafka-ui.yaml
+    set:
+      platform: openshift
+      components.kafkaUi: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: kafka-ui
+          any: true
+
+  - it: "platform: vanilla ile kafka-ui Route render edilmez"
+    template: templates/console/kafka-ui.yaml
+    set:
+      components.kafkaUi: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: kafka-ui
+          any: true
+        not: true
+
+  - it: "platform: vanilla ile kafka-ui Ingress render edilir"
+    template: 08b-ingress-tls.yaml
+    set:
+      components.kafkaUi: true
+    documentSelector:
+      path: metadata.name
+      value: kafka-ui
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.rules[0].host
+          value: kafka-ui.apps.example.com
+
+  # -------------------- grafana (components.monitoring + routesTls) --------------------
+  - it: "platform: openshift ile grafana Route render edilir"
+    template: templates/monitoring/grafana.yaml
+    set:
+      platform: openshift
+      components.monitoring: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: grafana
+          any: true
+
+  - it: "platform: vanilla ile grafana Route render edilmez"
+    template: templates/monitoring/grafana.yaml
+    set:
+      components.monitoring: true
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: grafana
+          any: true
+        not: true
+
+  - it: "platform: vanilla ile grafana Ingress render edilir"
+    template: 08b-ingress-tls.yaml
+    set:
+      components.monitoring: true
+    documentSelector:
+      path: metadata.name
+      value: grafana
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: grafana.apps.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: grafana-tls
+
+  # -------------------- NetworkPolicy source-namespace selectors --------------------
+  - it: "platform: openshift ile allow-from-ingress-and-monitoring policy-group selector kullanır (değişmez)"
+    template: 00-namespace.yaml
+    set:
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: allow-from-ingress-and-monitoring
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels
+          value: {network.openshift.io/policy-group: ingress}
+      - equal:
+          path: spec.ingress[0].from[1].namespaceSelector.matchLabels
+          value: {network.openshift.io/policy-group: monitoring}
+
+  - it: "platform: vanilla (varsayılan) ile allow-from-ingress-and-monitoring metadata.name selector kullanır"
+    template: 00-namespace.yaml
+    documentSelector:
+      path: metadata.name
+      value: allow-from-ingress-and-monitoring
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels
+          value: {kubernetes.io/metadata.name: ingress-nginx}
+      - equal:
+          path: spec.ingress[0].from[1].namespaceSelector.matchLabels
+          value: {kubernetes.io/metadata.name: monitoring}
+
+  - it: "platform: openshift ile console-frontend-ingress policy-group selector kullanır (değişmez)"
+    template: templates/console/console.yaml
+    set:
+      platform: openshift
+      components.console: true
+    documentSelector:
+      path: metadata.name
+      value: console-frontend-ingress
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels
+          value: {network.openshift.io/policy-group: ingress}
+
+  - it: "platform: vanilla ile console-frontend-ingress metadata.name selector kullanır"
+    template: templates/console/console.yaml
+    set:
+      components.console: true
+    documentSelector:
+      path: metadata.name
+      value: console-frontend-ingress
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels
+          value: {kubernetes.io/metadata.name: ingress-nginx}
+
+  - it: "platform: openshift ile console-backend-egress DNS policy-group selector kullanır (değişmez)"
+    template: templates/console/console.yaml
+    set:
+      platform: openshift
+      components.console: true
+    documentSelector:
+      path: metadata.name
+      value: console-backend-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels
+          value: {network.openshift.io/policy-group: dns}
+
+  - it: "platform: vanilla ile console-backend-egress DNS metadata.name selector kullanır"
+    template: templates/console/console.yaml
+    set:
+      components.console: true
+    documentSelector:
+      path: metadata.name
+      value: console-backend-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels
+          value: {kubernetes.io/metadata.name: kube-system}

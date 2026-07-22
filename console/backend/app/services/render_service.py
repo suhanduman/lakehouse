@@ -1,0 +1,436 @@
+"""form -> CR: pure functions turning a `SourceSpec` into the same
+KafkaConnector/KafkaTopic dicts (+ namespace DDL) that sub-project A's
+`tools/templates/source-*.yaml` templates render by hand.
+
+No k8s/network calls here — every function is a pure dict/str builder so it
+can be unit-tested without a cluster. The API layer (later task) is
+responsible for actually `oc apply`-ing what these functions return.
+
+Template parity (sub-project A, read for this task):
+  - tools/templates/source-cdc-relational.yaml   (+ dbz-mssql-students.yaml)
+  - tools/templates/source-scheduled-jdbc.yaml    (+ jdbc-mssql-scheduled.yaml)
+  - tools/templates/source-cdc-mongo.yaml         (+ dbz-mongo-lms.yaml)
+  - tools/templates/kafkatopic.yaml
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Optional, Tuple
+
+from app.models import SourceSpec
+
+APICURIO_URL = "http://apicurio-registry:8080/apis/registry/v2"
+SCHEMA_HISTORY_BOOTSTRAP = "kafka-kafka-bootstrap:9093"
+DEFAULT_POLL_MS = "3600000"
+# Apicurio schema auto-register for every rendered Avro connector. Prod-safe
+# default: "false" — uncontrolled schema auto-registration is an anti-pattern
+# in prod (an unreviewed schema change would silently register a new/
+# incompatible version and can break downstream consumers); prod schemas are
+# deployed via CI/CD with backward-compat checks run against Apicurio BEFORE
+# rollout, so an unknown/unregistered schema at connector-start time should
+# fail fast instead. This module has no chart-values access (unlike
+# chart/templates/13-connectors.yaml, which reads
+# `.Values.connectors.schemaAutoRegister`), so this constant IS the contract
+# here — a dev/test deployment that wants auto-register=true overrides the
+# generated connector config (e.g. via the Console's edit-before-apply step)
+# after render_connector() returns it.
+SCHEMA_AUTO_REGISTER = "false"
+# DLQ topic replication factor for connectors that render one (mirrors
+# chart/templates/13-connectors.yaml's `errors.deadletterqueue.topic.
+# replication.factor`). Prod default: "3" (3+ broker cluster). A single-
+# broker/dev deployment (e.g. microk8s-ingest) must override the generated
+# config down to "1", same as `kafkaConnect.internalTopicReplicationFactor`
+# does chart-side — Connect auto-creates the DLQ topic with this RF, and
+# RF=3 fails on a <3-broker cluster ("Could not initialize dead letter
+# queue").
+DLQ_REPLICATION_FACTOR = "3"
+
+
+# --------------------------------------------------------------------------
+# Small pure helpers
+# --------------------------------------------------------------------------
+
+def bucket_name(target_ns: str) -> str:
+    """`src-<ns>` with `_` -> `-` (e.g. mssql_ogrenci -> src-mssql-ogrenci)."""
+    return f"src-{target_ns.replace('_', '-')}"
+
+
+def _cred(source: str, key: str) -> str:
+    """DirectoryConfigProvider placeholder, matching sub-project A's actual
+    templates (colon form: directory path, then `:`, then the filename==secret key):
+    `${directory:/mnt/external-configuration/<source>:<key>}`.
+    See tools/templates/source-cdc-relational.yaml.
+    """
+    return f"${{directory:/mnt/external-configuration/{source}:{key}}}"
+
+
+def _safe_ident(value: str) -> str:
+    """Sanitize a source name for use inside a Postgres slot/publication name
+    (Debezium/Postgres identifiers only allow [a-z0-9_])."""
+    return re.sub(r"[^0-9a-zA-Z]+", "_", value).lower()
+
+
+def _split_schema_table(table: str) -> Tuple[Optional[str], str]:
+    """'dbo.students' -> ('dbo', 'students'); 'enrollments' -> (None, 'enrollments')."""
+    if "." in table:
+        schema, name = table.split(".", 1)
+        return schema, name
+    return None, table
+
+
+def _jdbc_topic_parts(spec: SourceSpec) -> Tuple[str, str]:
+    """(topic.prefix, table.whitelist) for the scheduled-JDBC connector, matching
+    A's jdbc-mssql-scheduled.yaml: topic.prefix="jdbc.mssql1.dbo.", table.whitelist="courses".
+    """
+    schema, name = _split_schema_table(spec.table)
+    prefix = f"jdbc.{spec.source}." + (f"{schema}." if schema else "")
+    return prefix, name
+
+
+BRONZE_NAMESPACE_SUFFIX = "_raw"
+
+
+def _route_transform(target_ns: str, target_table: str) -> dict:
+    """`_target_table` InsertField$Value route SMT. Routes to the BRONZE namespace
+    (<ns>_raw) — the append-only sink lands the CDC change-log there; the
+    silver-merge Spark job MERGEs Bronze -> Silver (<ns>)."""
+    return {
+        "transforms.route.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.route.static.field": "_target_table",
+        "transforms.route.static.value": f"{target_ns}{BRONZE_NAMESPACE_SUFFIX}.{target_table}",
+    }
+
+
+def _tsconv() -> dict:
+    """Common SMT (every source): coerce __ts_ms to a Connect Timestamp so the
+    sink writes an Iceberg timestamp column (day() partition needs
+    timestamp) -- __ts_ms is both the MERGE ordering key and the Bronze
+    partition key (day(__ts_ms)). `__ts_ms` is the Debezium envelope/
+    processing time (≈ ingestion time), populated for every source."""
+    return {
+        "transforms.tsconv.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+        "transforms.tsconv.field": "__ts_ms",
+        "transforms.tsconv.target.type": "Timestamp",
+    }
+
+
+def _connector(name: str, klass: str, config: dict) -> dict:
+    # NB: no `metadata.namespace` here on purpose — the API layer
+    # (`app.services.k8s_service.K8sService._apply`) always applies this body
+    # via `create/patch_namespaced_custom_object(namespace=self.namespace, ...)`,
+    # i.e. the release/target namespace is supplied by the API call itself,
+    # not by the body. Stamping a hardcoded namespace into the body here
+    # would cause an API-side namespace mismatch (the body's namespace vs.
+    # the URL path's namespace) on any install whose namespace isn't the
+    # dev/POC default.
+    return {
+        "apiVersion": "kafka.strimzi.io/v1beta2",
+        "kind": "KafkaConnector",
+        "metadata": {
+            "name": name,
+            "labels": {"strimzi.io/cluster": "connect"},
+        },
+        "spec": {
+            "class": klass,
+            "tasksMax": 1,
+            "config": config,
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# topic_name / render_kafka_topic
+# --------------------------------------------------------------------------
+
+def topic_name(spec: SourceSpec) -> str:
+    """The Kafka topic a given source's data lands on, matching each connector
+    type's own topic-naming convention in A's concrete examples."""
+    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
+        # dbz-mssql-students.yaml: topic.prefix "cdc.mssql1" + table.include.list
+        # "dbo.students" -> topic "cdc.mssql1.dbo.students".
+        return f"cdc.{spec.source}.{spec.table}"
+    if spec.kind == "cdc" and spec.type == "mongo":
+        # dbz-mongo-lms.yaml: topic.prefix "mongo.lms" (mongo.<db>) + collection
+        # "enrollments" -> topic "mongo.lms.enrollments".
+        return f"mongo.{spec.db}.{spec.table}"
+    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
+        # jdbc-mssql-scheduled.yaml: topic.prefix "jdbc.mssql1.dbo." + table.whitelist
+        # "courses" (Aiven JDBC concatenates prefix+table directly, no extra dot).
+        prefix, name = _jdbc_topic_parts(spec)
+        return f"{prefix}{name}"
+    raise NotImplementedError(
+        f"topic_name: no Kafka topic for kind={spec.kind!r} type={spec.type!r} "
+        "(scheduled+mongo uses a Spark batch CronJob, see "
+        "tools/templates/source-scheduled-mongo-spark.yaml, and bypasses Kafka)"
+    )
+
+
+def render_kafka_topic(topic_name: str) -> dict:
+    """Matches tools/templates/kafkatopic.yaml field-for-field.
+
+    NB: no `metadata.namespace` here on purpose — see `_connector`'s
+    docstring/comment above; the API layer (`K8sService._apply`) supplies the
+    release/target namespace at apply time, not this rendered body.
+    """
+    return {
+        "apiVersion": "kafka.strimzi.io/v1beta2",
+        "kind": "KafkaTopic",
+        "metadata": {
+            "name": topic_name,
+            "labels": {"strimzi.io/cluster": "kafka"},
+        },
+        "spec": {
+            "partitions": 6,
+            "replicas": 3,
+            "config": {"retention.ms": "604800000", "cleanup.policy": "delete"},
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# render_namespace_ddl
+# --------------------------------------------------------------------------
+
+def render_namespace_ddl(target_ns: str, bucket: str) -> str:
+    return (
+        f"CREATE NAMESPACE IF NOT EXISTS lakehouse.{target_ns} "
+        f"WITH (location='s3://{bucket}/warehouse')"
+    )
+
+
+# --------------------------------------------------------------------------
+# render_connector — dispatch + per-(kind,type) builders
+# --------------------------------------------------------------------------
+
+def _schema_history_client_config(role: str) -> dict:
+    """producer/consumer SASL_SSL+SCRAM-SHA-512 config for Debezium's schema-history
+    internal client, matching source-cdc-relational.yaml / dbz-mssql-students.yaml
+    (only needed by SQL Server CDC — Postgres/Mongo don't use this mechanism)."""
+    prefix = f"schema.history.internal.{role}"
+    jaas_password = _cred("debezium-src", "password")
+    return {
+        f"{prefix}.security.protocol": "SASL_SSL",
+        f"{prefix}.sasl.mechanism": "SCRAM-SHA-512",
+        f"{prefix}.sasl.jaas.config": (
+            "org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="debezium-src" password="{jaas_password}";'
+        ),
+        f"{prefix}.ssl.truststore.location": "/mnt/external-configuration/kafka-ca/ca.p12",
+        f"{prefix}.ssl.truststore.password": _cred("kafka-ca", "ca.password"),
+        f"{prefix}.ssl.truststore.type": "PKCS12",
+    }
+
+
+def _render_cdc_relational(spec: SourceSpec) -> dict:
+    """cdc + mssql/pg -> Debezium source connector. Mirrors
+    tools/templates/source-cdc-relational.yaml (mssql branch is a direct
+    field-for-field match; pg branch follows the same shape using the equivalent
+    Debezium PostgreSQL connector config keys — A has no pg-specific template).
+    The pg branch maps to a wal_level=logical + replication slot + publication
+    prerequisite on the Postgres side.
+    """
+    tname = topic_name(spec)
+    prefix = f"cdc.{spec.source}"
+
+    config: dict = {
+        "database.hostname": spec.db_host,
+        "database.user": _cred(spec.source, "user"),
+        "database.password": _cred(spec.source, "pass"),
+        "topic.prefix": prefix,
+        "table.include.list": spec.table,
+    }
+
+    if spec.type == "mssql":
+        klass = "io.debezium.connector.sqlserver.SqlServerConnector"
+        config["database.port"] = "1433"
+        config["database.names"] = spec.db
+        config["database.encrypt"] = "true"
+
+        # Schema-history block — matches source-cdc-relational.yaml
+        # field-for-field. This is a Debezium SqlServer/MySQL/Oracle-only
+        # mechanism (it tracks DDL history in a separate internal Kafka
+        # topic); the Debezium Postgres connector has no equivalent — it
+        # tracks position via its logical replication slot instead (see the
+        # `slot.name`/`publication.name` config in the pg branch below), so
+        # these keys must NOT be emitted for pg.
+        config["schema.history.internal.kafka.bootstrap.servers"] = SCHEMA_HISTORY_BOOTSTRAP
+        config["schema.history.internal.kafka.topic"] = f"schema-history.{spec.source}"
+        config.update(_schema_history_client_config("producer"))
+        config.update(_schema_history_client_config("consumer"))
+    else:  # pg
+        klass = "io.debezium.connector.postgresql.PostgresConnector"
+        config["database.port"] = "5432"
+        config["database.dbname"] = spec.db
+        slot = _safe_ident(spec.source)
+        config["plugin.name"] = "pgoutput"
+        config["slot.name"] = f"debezium_{slot}"
+        config["publication.name"] = f"dbz_{slot}_pub"
+
+    config.update({
+        "key.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "key.converter.apicurio.registry.url": APICURIO_URL,
+        "value.converter.apicurio.registry.url": APICURIO_URL,
+        "key.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "value.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "transforms": "unwrap,route,tsconv",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.unwrap.drop.tombstones": "false",
+        # CDC metadata for the downstream silver-merge job: __op,__ts_ms,__lsn
+        # (+__deleted from delete.handling.mode=rewrite). pg exposes source.lsn;
+        # SQL Server exposes source.change_lsn.
+        "transforms.unwrap.add.fields": (
+            "op,ts_ms,source.change_lsn:lsn" if spec.type == "mssql"
+            else "op,ts_ms,source.lsn:lsn"
+        ),
+    })
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_tsconv())
+    config.update({
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{tname}.dlq",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    })
+
+    _, table_name = _split_schema_table(spec.table)
+    name = f"dbz-{spec.source}-{table_name}"
+    return _connector(name, klass, config)
+
+
+def _render_cdc_mongo(spec: SourceSpec) -> dict:
+    """cdc + mongo -> Debezium MongoDB connector. Mirrors
+    tools/templates/source-cdc-mongo.yaml / dbz-mongo-lms.yaml."""
+    tname = topic_name(spec)
+    prefix = f"mongo.{spec.db}"
+
+    config = {
+        "mongodb.connection.string": spec.mongo_uri,
+        "mongodb.user": _cred(spec.source, "user"),
+        "mongodb.password": _cred(spec.source, "pass"),
+        "topic.prefix": prefix,
+        "collection.include.list": f"{spec.db}.{spec.table}",
+        "capture.mode": "change_streams_update_full",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter.schemas.enable": "false",
+        "transforms": "unwrap,route,tsconv",
+        # Full CDC via Debezium's Mongo-specific unwrap SMT (the relational
+        # ExtractNewRecordState has no Mongo equivalent — change-stream events
+        # have a different envelope shape). Mirrors the relational unwrap's
+        # delete.handling.mode=rewrite/drop.tombstones=false so deletes survive
+        # as a tombstone-free __deleted=true record, and add.fields=op,ts_ms
+        # for the same downstream silver-merge CDC metadata contract.
+        "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.unwrap.drop.tombstones": "false",
+        "transforms.unwrap.add.fields": "op,ts_ms",
+    }
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_tsconv())
+    config.update({
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{tname}.dlq",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    })
+
+    name = f"dbz-{spec.source}-{spec.table}"
+    return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config)
+
+
+def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
+    """scheduled + mssql/pg -> Aiven JDBC source connector. Mirrors
+    tools/templates/source-scheduled-jdbc.yaml / jdbc-mssql-scheduled.yaml,
+    plus errors.tolerance/DLQ (mirroring the relational connector's DLQ
+    shape, see _render_cdc_relational above)."""
+    prefix, table_name = _jdbc_topic_parts(spec)
+    tname = topic_name(spec)
+
+    config: dict = {
+        "connection.url": spec.jdbc_url,
+        "connection.user": _cred(spec.source, "user"),
+        "connection.password": _cred(spec.source, "pass"),
+        # Can only run true delta ("timestamp+incrementing") when a timestamp
+        # column was supplied; otherwise fall back to incrementing-only.
+        "mode": "timestamp+incrementing" if spec.timestamp_col else "incrementing",
+        "incrementing.column.name": spec.incrementing_col,
+        "table.whitelist": table_name,
+        "topic.prefix": prefix,
+        "poll.interval.ms": str(spec.poll_ms) if spec.poll_ms else DEFAULT_POLL_MS,
+        "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "value.converter.apicurio.registry.url": APICURIO_URL,
+        "value.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        # JDBC has no CDC envelope (no __op/__deleted/__lsn) — this is a plain
+        # upsert-only poller, so __op/__deleted are synthesized as constants
+        # ("u"/"false": every polled row is an upsert of current state; this
+        # source can never observe a delete, see the scheduled+mongo Spark
+        # path for the one source kind that reconciles deletes out-of-band).
+        "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setop.static.field": "__op",
+        "transforms.setop.static.value": "u",
+        "transforms.setdel.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setdel.static.field": "__deleted",
+        "transforms.setdel.static.value": "false",
+    }
+    # Aiven's JDBC source connector (TimestampIncrementingTableQuerier) builds
+    # every SourceRecord via the 5-arg constructor `new SourceRecord(partition,
+    # offset, topic, schema, value)` -- it never passes a timestamp, so
+    # `SourceRecord.timestamp()` is always null. JDBC records therefore carry
+    # no source timestamp of their own.
+    #
+    # When running in timestamp+incrementing mode (a timestamp.column.name was
+    # supplied), __ts_ms is instead derived from that column -- the only
+    # JDBC-native source of event time. `tsfield` (ReplaceField$Value) renames
+    # <timestamp_col> -> __ts_ms in place (keeping its Timestamp value; the
+    # column becomes __ts_ms); `tsconv` then normalizes it to a Connect
+    # Timestamp (idempotent if already Timestamp, safe if it's date/other
+    # temporal).
+    if spec.timestamp_col:
+        config["timestamp.column.name"] = spec.timestamp_col
+        config["transforms"] = "route,setop,setdel,tsfield,tsconv"
+        config["transforms.tsfield.type"] = "org.apache.kafka.connect.transforms.ReplaceField$Value"
+        config["transforms.tsfield.renames"] = f"{spec.timestamp_col}:__ts_ms"
+        config.update(_tsconv())
+    else:
+        # incrementing-only mode (no timestamp column supplied): there is no
+        # JDBC-native event-time source at all, so __ts_ms is intentionally
+        # left unset -- do NOT add tsfield (nothing to rename from) or tsconv
+        # (it would throw on a missing __ts_ms field). This DEGRADES the
+        # Bronze day(__ts_ms) partition/TTL and the MERGE latest-per-key
+        # ordering for this source (both end up operating on a null
+        # __ts_ms); a timestamp column should be supplied for correct
+        # medallion behavior on JDBC sources.
+        config["transforms"] = "route,setop,setdel"
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update({
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{tname}.dlq",
+        "errors.deadletterqueue.context.headers.enable": "true",
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+    })
+
+    name = f"jdbc-{spec.source}-{table_name}"
+    return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
+
+
+def render_connector(spec: SourceSpec) -> dict:
+    """Dispatch on (spec.kind, spec.type) -> KafkaConnector dict.
+
+    scheduled+mongo is intentionally NOT handled here: that path is a Spark
+    SparkApplication+CronJob, not a KafkaConnector (see
+    tools/templates/source-scheduled-mongo-spark.yaml) — out of scope for
+    this function's contract.
+    """
+    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
+        return _render_cdc_relational(spec)
+    if spec.kind == "cdc" and spec.type == "mongo":
+        return _render_cdc_mongo(spec)
+    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
+        return _render_scheduled_jdbc(spec)
+    raise NotImplementedError(
+        f"render_connector: no KafkaConnector rendering for kind={spec.kind!r} "
+        f"type={spec.type!r} (scheduled+mongo uses a Spark CronJob, see "
+        "tools/templates/source-scheduled-mongo-spark.yaml)"
+    )

@@ -1,0 +1,164 @@
+# chart/tests/minio-bucket-init_test.yaml — helm-unittest suite for Product
+# Foundation Task 8: the optional dev/PoC/e2e MinIO component
+# (`components.minio`, DEFAULT FALSE — chart/templates/17-minio.yaml) and
+# the vendor-generic S3 bucket-init Job (`storage.createBuckets`, DEFAULT
+# TRUE — chart/templates/18-bucket-init.yaml, gated INDEPENDENTLY of MinIO
+# so it works against ANY S3 endpoint, not just the dev component).
+suite: MinIO (dev-only) + generic S3 bucket-init Job
+templates:
+  - 17-minio.yaml
+  - 18-bucket-init.yaml
+tests:
+  - it: default render (components.minio=false) creates NO MinIO Deployment/Service/PVC documents at all
+    template: 17-minio.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: default render (storage.createBuckets=true) creates the bucket-init Job with BOTH Helm and ArgoCD hook annotation sets
+    template: 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+          value: PostSync
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook-delete-policy"]
+          value: HookSucceeded
+
+  - it: bucket-init Job's env is sourced from storage.s3.secretName (default s3-credentials)
+    template: 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.name
+          value: s3-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[1].valueFrom.secretKeyRef.name
+          value: s3-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[2].valueFrom.secretKeyRef.name
+          value: s3-credentials
+
+  - it: bucket-init Job's args contain every default bucket (depo, ham-veri, nginx-web, backups) derived from the warehouse/checkpoint/backup values
+    template: 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/depo"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/ham-veri"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/nginx-web"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/backups"
+
+  - it: storage.createBuckets=false creates NO bucket-init Job
+    template: 18-bucket-init.yaml
+    set:
+      storage.createBuckets: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: components.minio=true renders the MinIO Deployment, Service, and PVC (3 documents)
+    template: 17-minio.yaml
+    set:
+      components.minio: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: minio
+          any: true
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          any: true
+
+  - it: components.minio=true Service is named minio and exposes port 9000
+    template: 17-minio.yaml
+    set:
+      components.minio: true
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: minio
+      - contains:
+          path: spec.ports
+          content: {name: api, port: 9000, targetPort: 9000}
+
+  - it: components.minio=true Deployment's MINIO_ROOT_USER/PASSWORD come from storage.s3.secretName (access-key-id/secret-access-key)
+    template: 17-minio.yaml
+    set:
+      components.minio: true
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.name
+          value: s3-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.key
+          value: access-key-id
+      - equal:
+          path: spec.template.spec.containers[0].env[1].valueFrom.secretKeyRef.name
+          value: s3-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[1].valueFrom.secretKeyRef.key
+          value: secret-access-key
+
+  - it: components.minio=true PVC OMITS storageClassName by default (empty = cluster default StorageClass)
+    template: 17-minio.yaml
+    set:
+      components.minio: true
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - notExists:
+          path: spec.storageClassName
+      - equal:
+          path: spec.resources.requests.storage
+          value: "20Gi"
+
+  - it: components.minio=true PVC renders storageClassName when minio.storage.storageClassName is set
+    template: 17-minio.yaml
+    set:
+      components.minio: true
+      minio.storage.storageClassName: fast-block
+    documentSelector:
+      path: kind
+      value: PersistentVolumeClaim
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast-block

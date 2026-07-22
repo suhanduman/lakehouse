@@ -1,0 +1,75 @@
+suite: monitoring-hooks
+templates:
+  - templates/03-kafka-strimzi.yaml
+  - templates/02-postgres-ha.yaml
+tests:
+  - it: monitoring açıkken Kafka CR metricsConfig taşır
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.monitoring: true
+      monitoring.targets.kafka.enabled: true
+    asserts:
+      - exists:
+          path: spec.kafka.metricsConfig
+    documentSelector:
+      path: kind
+      value: Kafka
+  - it: monitoring kapalıyken Kafka CR metricsConfig taşımaz
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.monitoring: false
+    asserts:
+      - notExists:
+          path: spec.kafka.metricsConfig
+    documentSelector:
+      path: kind
+      value: Kafka
+  - it: monitoring açıkken Kafka CR kafkaExporter taşır (consumer-lag kaynağı)
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.monitoring: true
+      monitoring.targets.kafka.enabled: true
+    asserts:
+      - exists:
+          path: spec.kafkaExporter
+      - equal:
+          path: spec.kafkaExporter.groupRegex
+          value: ".*"
+      - equal:
+          path: spec.kafkaExporter.topicRegex
+          value: ".*"
+    documentSelector:
+      path: kind
+      value: Kafka
+  - it: monitoring kapalıyken Kafka CR kafkaExporter taşımaz
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.monitoring: false
+    asserts:
+      - notExists:
+          path: spec.kafkaExporter
+    documentSelector:
+      path: kind
+      value: Kafka
+  - it: kafka target kapalıyken Kafka CR kafkaExporter taşımaz
+    template: templates/03-kafka-strimzi.yaml
+    set:
+      components.monitoring: true
+      monitoring.targets.kafka.enabled: false
+    asserts:
+      - notExists:
+          path: spec.kafkaExporter
+    documentSelector:
+      path: kind
+      value: Kafka
+  - it: monitoring kapalıyken CNPG enablePodMonitor false
+    template: templates/02-postgres-ha.yaml
+    set:
+      components.monitoring: false
+    asserts:
+      - equal:
+          path: spec.monitoring.enablePodMonitor
+          value: false
+    documentSelector:
+      path: metadata.name
+      value: pg-nessie

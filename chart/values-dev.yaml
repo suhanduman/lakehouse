@@ -1,0 +1,263 @@
+# values-dev.yaml — dev/PoC/e2e tier — NOT for production.
+#
+# Single-node/laptop/PoC/e2e sizing overlay. Layer OVER the chart defaults
+# (`chart/values.yaml`, which are already "medium-ish HA" by design — see
+# values-medium.yaml):
+#
+#   helm install lakehouse chart/ -f chart/values-dev.yaml -n <namespace>
+#
+# This is the shape the CI e2e suite installs. Every HA replica count drops
+# to 1 (no quorum/failover to worry about on one node), every Kafka
+# replication-factor knob drops to 1 (a single broker cannot serve RF=3 —
+# Strimzi refuses to reconcile Ready otherwise, see values-microk8s.yaml's
+# own note on this), PVC sizes shrink to laptop-friendly numbers, and the
+# in-cluster dev-only MinIO turns on so there is a real S3 endpoint with zero
+# external dependencies. NEVER use this file for a real/production install —
+# it has no redundancy anywhere and MinIO is single-replica/no-HA.
+#
+# Numbers below mirror the (customer-neutral parts of the) existing
+# `values-microk8s*.yaml` historical smoke-test overlays, generalized here
+# into the product's own supported dev tier (no `lakehouse-test` namespace,
+# no microk8s-specific storageClass, no registry IPs — those stay
+# environment-specific overrides layered on top of THIS file, not baked in).
+#
+# --- CI e2e compute budget -------------------------------------------------
+# The Phase-5 CI e2e suite installs THIS file on a GitHub Actions runner
+# (~4 vCPU / 16GB total, shared with the kind/k3d control plane + every
+# operator Pod already running there before this chart's own Pods even
+# schedule). Every resource override below exists to keep this chart's own
+# rendered `requests` total comfortably under that ceiling:
+#   TARGET: total rendered CPU requests < 3.5 vCPU, memory requests < 8Gi
+#   (steady-state Deployments/StatefulSets + Strimzi KafkaNodePool/
+#   KafkaConnect + CNPG Cluster + Keycloak CR — see chart/tests/
+#   sizing-tiers_test.sh's REQUESTS-SUM stage for the exact accounting,
+#   including what it deliberately excludes: one-shot Jobs and cron-
+#   scheduled ScheduledSparkApplications are bounded-duration bursts, not
+#   steady-state residents, so they're not counted against this budget).
+#
+# `components.nginxIngest` is DISABLED entirely (chart default: enabled) —
+# its continuous nginx-access Structured Streaming job is 3 vCPU/5Gi
+# requests on its own (1 driver + 2 executor instances), it's a separate
+# ingest path from the CDC/Debezium one this tier's e2e actually exercises,
+# and (unlike Zeppelin, see below) it has no Route/Ingress counterpart, so
+# disabling it can't leave a dangling reference.
+#
+# `components.zeppelin` STAYS ENABLED (chart default) and is instead
+# heavily SHRUNK (resources below): chart/templates/08b-ingress-tls.yaml's
+# `zeppelin` Ingress is NOT gated on `components.zeppelin` (a pre-existing
+# template gap outside this sizing-overlay's scope to fix — overlays only,
+# per this task's constraints) — with `components.routesTls` staying on
+# (chart default), disabling `components.zeppelin` alone renders a
+# dangling Ingress with no backing Service, which
+# `chart/scripts/helm-check.py --service-closure` correctly flags as a
+# FAIL. Shrinking instead of disabling avoids that regression entirely.
+
+# `platform` stays at the chart default (`vanilla`) — dev/e2e doesn't need
+# OpenShift Routes. The sizing-tiers test exercises this file under both
+# `platform: vanilla` and `platform: openshift` via `--set`, so no OpenShift-
+# specific values are needed here either way.
+
+components:
+  # In-cluster S3 for a throwaway dev/PoC/e2e cluster with no real S3
+  # endpoint available (see values.yaml's own `components.minio` comment for
+  # why this is DEFAULT FALSE everywhere else). `storage.createBuckets`
+  # (default true) then runs the bucket-init Job against this MinIO.
+  minio: true
+  # components.storage stays false (already the chart default) — dev/PoC
+  # doesn't need this chart's own opt-in vendor CSI StorageClasses either;
+  # the cluster's default StorageClass (empty storageClass fields below) is
+  # enough for a laptop/e2e cluster.
+  # Off entirely for the CI e2e compute budget (see header comment above) —
+  # not on the ingest path this tier's e2e exercises, and (unlike
+  # components.zeppelin) has no Ingress/Route counterpart to dangle.
+  nginxIngest: false
+
+postgres:
+  nessie:
+    instances: 1
+    storage:
+      size: 5Gi
+    walStorage:
+      size: 2Gi
+    # Shrunk from the chart default (1Gi/500m request) for the CI e2e
+    # compute budget (see header comment above).
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 250m
+      limits:
+        memory: 1Gi
+        cpu: "1"
+  apicurio:
+    instances: 1
+    storage:
+      size: 2Gi
+    walStorage:
+      size: 1Gi
+    resources:
+      requests:
+        cpu: 150m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  keycloak:
+    instances: 1
+    storage:
+      size: 2Gi
+    walStorage:
+      size: 1Gi
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 150m
+      limits:
+        memory: 512Mi
+        cpu: 500m
+
+apicurio:
+  replicas: 1
+
+kafka:
+  nodePools:
+    # Both pools explicitly pinned to dev-small requests (200m/512Mi each)
+    # for the CI e2e compute budget (see header comment above) — the
+    # controller pool's memory happens to already default to this exact
+    # value, but it's restated here so the intent is explicit, not
+    # incidental (and its cpu request is trimmed further, same as broker).
+    controller:
+      replicas: 1
+      storage:
+        size: 5Gi
+      resources:
+        requests: {memory: 512Mi, cpu: 200m}
+        limits: {memory: 768Mi, cpu: 500m}
+    broker:
+      replicas: 1
+      storage:
+        size: 20Gi
+      resources:
+        requests: {memory: 512Mi, cpu: 200m}
+        limits: {memory: 1Gi, cpu: "1"}
+  topics:
+    nginxAccess: {replicas: 1}
+    lmsEvents: {replicas: 1}
+    connectConfigs: {replicas: 1}
+    connectOffsets: {replicas: 1}
+    connectStatus: {replicas: 1}
+  # Single-broker cluster: every RF/min-ISR knob must be 1 (min.insync.
+  # replicas can never exceed the broker count, or every produce fails with
+  # NotEnoughReplicasException).
+  replication:
+    offsetsTopic: 1
+    txnStateLog: 1
+    txnStateLogMinIsr: 1
+    default: 1
+    minInsync: 1
+
+nessie:
+  replicas: 1
+  hpa:
+    minReplicas: 1
+    maxReplicas: 1
+
+trino:
+  # Trino coordinator replica count is NOT a values knob (chart/templates/
+  # 06-trino-ha.yaml hardcodes `replicas: 1` on the coordinator Deployment —
+  # single coordinator is standard Trino topology in every tier, not
+  # something this overlay needs to — or even can — set).
+  worker:
+    replicas: 1
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 250m
+      limits:
+        memory: 2Gi
+        cpu: "1"
+    hpa:
+      minReplicas: 1
+      maxReplicas: 1
+  coordinator:
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 250m
+      limits:
+        memory: 2Gi
+        cpu: "2"
+  # jvm.config's -Xmx must fit inside the (now much smaller) pod memory
+  # limits above, or the JVM OOMKills at startup.
+  memory:
+    jvmXmx: 1536M
+    queryMaxMemory: 2GB
+    queryMaxMemoryPerNodeCoordinator: 512MB
+    heapHeadroomPerNode: 256MB
+    queryMaxMemoryPerNodeWorker: 768MB
+  jvm:
+    g1HeapRegionSize: "16M"
+
+keycloak:
+  instances: 1
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+
+# Stays ENABLED (chart default) — see header comment for why this is
+# shrunk rather than disabled (avoids a pre-existing dangling-Ingress gap).
+zeppelin:
+  notebooks:
+    storage: 2Gi
+  resources:
+    requests:
+      memory: 384Mi
+      cpu: 150m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+
+console:
+  backend:
+    replicas: 1
+  frontend:
+    replicas: 1
+
+kafkaUi:
+  replicas: 1
+
+kafkaConnect:
+  replicas: 1
+  internalTopicReplicationFactor: 1
+  # Shrunk from the chart default (1 cpu/2Gi request) for the CI e2e
+  # compute budget (see header comment above).
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+
+sparkOperator:
+  maintenance:
+    # Short TTL: a dev/PoC/e2e cluster wants Bronze cleaned up fast, not
+    # the 30-day prod default piling up on tiny dev PVCs.
+    bronzeRetentionDays: 7
+    driver:
+      cores: 1
+      memory: 1G
+    executor:
+      cores: 1
+      instances: 1
+      memory: 1G
+  silverMerge:
+    driver: {cores: 1, memory: "1g"}
+    executor: {cores: 1, memory: "1g"}
+    # Dynamic-allocation ceiling (minExecutors stays 0, hardcoded in the
+    # template) — 1 keeps a single-node cluster from ever trying to schedule
+    # more Silver-merge executor pods than the node can fit.
+    maxExecutors: 1

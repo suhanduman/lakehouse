@@ -1,0 +1,13 @@
+# Bronze changelog table for the e2e CDC path — pre-created BEFORE any data
+# flows (tools/create_iceberg_table.py descriptor mode). `layer: bronze`
+# appends the fixed CDC metadata columns (__op/__ts_ms/__deleted/__lsn),
+# partitions by day(__ts_ms), targets the `rawdata` warehouse
+# (s3://ham-veri) and drops the identifier (append log has none).
+namespace: depo_raw
+table: customers
+layer: bronze
+identifier: []
+columns:
+  - {name: id, type: int, required: true}
+  - {name: name, type: string}
+  - {name: email, type: string}

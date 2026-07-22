@@ -1,0 +1,142 @@
+# nginx-access → lakehouse.web.access_log ingest. This template renders:
+#   - spark-nginx-streaming.yaml  → SparkApplication `nginx-streaming` +
+#     KafkaUser `spark-nginx` (this file — see 03-kafka-strimzi.yaml's own
+#     "KAPSAM NOTU" header comment, which explicitly defers spark-nginx here).
+#   - fluent-bit.conf / fluent-bit.service → packaged as a ConfigMap below,
+#     NOT run in-cluster. FluentBit is an agent installed on the external
+#     nginx VM hosts (not a pod this chart schedules) — the chart only ships
+#     the two files as data so an operator can pull them out and install them
+#     on those VMs (see NOTES.txt for the exact steps, mirroring
+#     prod-manifests/14-nginx-ingest/README.md).
+# Only parameterized + made namespace-aware. Gated by
+# `.Values.components.nginxIngest`.
+#
+# Service wiring (spec §3.1/§8):
+#   - Kafka bootstrap: prod-manifests/jobs/nginx_streaming.py (baked into the
+#     spark-py image, referenced via `local://` — NOT a chart template, see
+#     05-spark-operator.yaml's header comment for the same convention) hardcodes
+#     `kafka.bootstrap.servers=kafka-kafka-bootstrap:9093`. That literal is the
+#     SAME value `lakehouse.svc.kafkaBootstrap` resolves to (verified against
+#     _helpers.tpl's canonical-name header) on the `tls` (9093, SASL_SSL+SCRAM)
+#     listener from 03-kafka-strimzi.yaml — kept in lockstep by convention,
+#     not re-templated (the job file is not chart-owned).
+#   - Nessie catalog: the SparkApplication mounts the SAME shared `spark-conf`
+#     ConfigMap (`spark-defaults`, created once in 05-spark-operator.yaml)
+#     every other SparkApplication in this chart mounts — its Iceberg REST
+#     catalog URI is already wired via the `lakehouse.svc.nessie` helper
+#     there. Not duplicated here.
+#   - S3 checkpoint: the job's `checkpointLocation=s3://nginx-web/_checkpoints/
+#     access_log` is durable object storage (NOT emptyDir) — baked into the
+#     job script, preserved verbatim. `.Values.nginx.streaming.checkpointBucket`
+#     below mirrors this same constant for NOTES.txt's operator setup step
+#     only (see comment on that value — it is NOT read by the running job).
+{{- if .Values.components.nginxIngest }}
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: nginx-streaming
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: "local:///opt/spark/jobs/nginx_streaming.py"
+  sparkVersion: {{ .Values.versions.sparkVersion | quote }}
+  restartPolicy:
+    type: Always                 # streaming job; crash → restart
+    onFailureRetries: {{ .Values.nginx.streaming.restartPolicy.onFailureRetries }}
+  driver:
+    cores: {{ .Values.nginx.streaming.driver.cores }}
+    memory: {{ .Values.nginx.streaming.driver.memory | quote }}
+    serviceAccount: spark-driver
+    envFrom:
+    - secretRef: {name: {{ .Values.storage.s3.secretName }}}
+    volumeMounts:
+    - {name: spark-conf, mountPath: /opt/spark/conf}
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
+  executor:
+    cores: {{ .Values.nginx.streaming.executor.cores }}
+    instances: {{ .Values.nginx.streaming.executor.instances }}
+    memory: {{ .Values.nginx.streaming.executor.memory | quote }}
+    envFrom:
+    - secretRef: {name: {{ .Values.storage.s3.secretName }}}
+    volumeMounts:
+    - {name: spark-conf, mountPath: /opt/spark/conf}
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA
+  volumes:
+  - name: spark-conf
+    configMap: {name: spark-defaults}
+  - name: kafka-ca
+    secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
+  - name: spark-nginx-scram
+    secret: {secretName: spark-nginx}                                      # POC-DOĞRULA: Strimzi User Operator üretir (password)
+  monitoring:
+    exposeDriverMetrics: true
+    exposeExecutorMetrics: true
+---
+# Spark → Kafka nginx-access consumer'ı için SCRAM-SHA-512 KafkaUser (spec §10: SCRAM+TLS).
+# `strimzi.io/cluster: kafka` SABİT kalır (03-kafka-strimzi.yaml'daki Kafka CR
+# adıyla aynı convention — bkz. o dosyanın "kadar SABİT 'kafka'" yorumu).
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaUser
+metadata:
+  name: spark-nginx
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+    - {resource: {type: topic, name: nginx-access, patternType: literal}, operations: [Read, Describe]}
+    # Spark Structured Streaming default consumer group: spark-kafka-source-* → prefix "spark-" (lakehouse-ingest deseni)
+    - {resource: {type: group, name: "spark-", patternType: prefix}, operations: [Read]}
+---
+# FluentBit VM-agent artefaktları — kümede ÇALIŞMAZ (nginx host'larına kurulur,
+# bu chart yalnızca dosyaları taşır). ConfigMap olarak paketlenir ki chart
+# tek bir yerden (helm get / kubectl get configmap) dağıtılabilsin; NOTES.txt
+# kurulum adımlarını anlatır (bkz. prod-manifests/14-nginx-ingest/README.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentbit-vm-agent
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    app.kubernetes.io/component: fluentbit-vm-agent
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        5
+        Daemon       Off
+        Log_Level    info
+    [INPUT]
+        Name         tail
+        Path         /var/log/nginx/access.log
+        Tag          nginx.access
+        DB           /var/lib/fluent-bit/nginx.db
+    [OUTPUT]
+        Name                 kafka
+        Match                nginx.access
+        Brokers              {{ .Values.nginx.fluentbit.kafkaExternalBootstrap }}:443
+        Topics               nginx-access
+        rdkafka.security.protocol  SASL_SSL
+        rdkafka.sasl.mechanisms    SCRAM-SHA-512
+        rdkafka.sasl.username      fluentbit
+        rdkafka.sasl.password      {{ .Values.nginx.fluentbit.kafkaPassword }}
+        rdkafka.ssl.ca.location    /etc/fluent-bit/kafka-ca.crt
+  fluent-bit.service: |
+    [Unit]
+    Description=Fluent Bit (nginx -> Kafka lakehouse)
+    After=network-online.target
+    [Service]
+    ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
+    Restart=always
+    RestartSec=5
+    [Install]
+    WantedBy=multi-user.target
+{{- end }}

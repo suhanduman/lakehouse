@@ -1,0 +1,259 @@
+# microk8s smoke-test overlay — Lakehouse chart.
+#
+# NOT a supported deployment target (see README/Mimari Karar Belgesi — target
+# is OpenShift). This file exists ONLY to de-risk the Helm chart's core
+# ingest-slice wiring (CNPG Postgres <-> Nessie/Apicurio, Strimzi Kafka,
+# Trino catalogs, S3 buckets) against a REAL Kubernetes API server before
+# the same chart is exercised on OpenShift, per the POC-DOĞRULA plan. Layer
+# on top of values-prod.example.yaml:
+#
+#   helm install lakehouse ./chart -n lakehouse-test --create-namespace \
+#     -f chart/values-prod.example.yaml -f chart/values-microk8s.yaml \
+#     --kubeconfig kubeconfig.yaml
+#
+# Prereqs this file assumes are ALREADY on the cluster (not rendered by this
+# chart — see chart/templates/01-storage.yaml header for why StorageClasses
+# are chart-rendered normally, and the `components.storage: false` override
+# below for why they are NOT here):
+#   - Strimzi Kafka operator (helm install strimzi strimzi/strimzi-kafka-operator)
+#   - CloudNativePG operator (helm install cnpg cnpg/cloudnative-pg)
+#   - A MinIO (or other S3-compatible) endpoint reachable in-cluster, with
+#     buckets: depo, ham-veri, backups (see nessie.catalog.*.location /
+#     postgres.*.backup.destinationPath below — bucket NAMES themselves stay
+#     the chart defaults, only the endpoint changes here)
+#   - Manually created Secrets (this chart never generates secret material,
+#     see values.yaml's `secrets:` header comment):
+#       kubectl create secret generic s3-credentials \
+#         -n lakehouse-test \
+#         --from-literal=access-key-id=minioadmin \
+#         --from-literal=secret-access-key=minioadmin123 \
+#         --from-literal=endpoint=http://minio.lakehouse-test.svc:9000 \
+#         --from-literal=region=us-east-1
+#       kubectl create secret generic oidc-credentials -n lakehouse-test \
+#         --from-literal=issuer-url=http://keycloak-not-installed.invalid/realms/lakehouse \
+#         --from-literal=trino-client-id=trino \
+#         --from-literal=trino-client-secret=dummy
+#     (oidc-credentials is REQUIRED even with keycloak disabled — Nessie and
+#     Trino both read it unconditionally when `auth.oidc.enabled` is true.
+#     Its issuer-url is INTENTIONALLY non-resolving here since no IdP is
+#     deployed in this smoke test.)
+
+namespace: lakehouse-test
+
+# ResourceQuota's `services.nodeports` is hardcoded to 0 in values.yaml
+# ("Prod has no NodePort; Routes are used instead") — but THIS overlay sets
+# `kafka.externalListenerType: nodeport` below (no Route CRD on microk8s),
+# and Strimzi's own PATCH to create the per-listener NodePort Services is
+# then rejected by the quota itself: "exceeded quota: lakehouse-quota,
+# requested: services.nodeports=1, used: 0, limited: 0" — the Kafka CR sits
+# permanently NotReady with a KubernetesClientException condition. This is a
+# real, easy-to-miss coupling between `kafka.externalListenerType` and
+# `namespaceConfig.quota.serviceNodePorts` that the chart doesn't surface
+# anywhere (values.yaml offers `externalListenerType` as overridable "for
+# non-OpenShift envs" but never mentions this quota dependency).
+#
+# With `type: nodeport`, Strimzi creates ONE NodePort Service PER BROKER
+# (`kafka-broker-<id>`) PLUS the shared `kafka-kafka-external-bootstrap` —
+# i.e. brokers.replicas + 1 total. With `kafka.nodePools.broker.replicas: 3`
+# below that's 4 as a minimum; rounded up to 6 here for headroom.
+namespaceConfig:
+  quota:
+    serviceNodePorts: "6"
+
+global:
+  domain: lakehouse-test.local   # unused: routesTls disabled below (no Route CRD on microk8s)
+
+components:
+  # Core ingest slice under test.
+  storage: false      # Pure/PSO StorageClasses don't apply here; microk8s already
+                      # ships its own default StorageClass (microk8s-hostpath) —
+                      # every storageClass field below is repointed at it instead.
+  postgres: true      # pg-nessie + pg-apicurio. `pg-keycloak` is gated
+                      # independently by `components.keycloakDb` (defaults to
+                      # `components.keycloak`, false here), so it does NOT
+                      # render in this overlay.
+  kafka: true
+  nessie: true
+  apicurio: true
+  trino: true
+
+  # Everything below is OFF for this smoke test — either the operator/CRD/
+  # image isn't available on a bare microk8s box, or it's out of the CORE
+  # ingest-slice scope this overlay targets (see the inline comment on each
+  # flag for the specific reason).
+  sparkOperator: false    # no Spark Operator installed (not part of this smoke pass)
+  routesTls: false        # no OpenShift Route CRD on microk8s
+  zeppelin: false         # custom-built image (registry.apps.ocp.example.com/...), not available
+  keycloak: false         # no Keycloak Operator installed
+  kafkaConnect: false     # Strimzi spec.build needs a container registry to push the
+                          # built Connect image to; microk8s registry addon not enabled
+                          # here. OpenShift's internal registry covers this natively.
+  connectors:
+    enabled: false        # depends on Connect (above) being up
+    examples:
+      enabled: false
+  nginxIngest: false      # depends on Spark Operator (above)
+  console: false          # internally-built images not built/pushed anywhere reachable
+  kafkaUi: false          # same as console
+  consoleRoutesOidc: false
+  ai: false
+  superset: false
+  jupyter: false
+
+secrets:
+  # This overlay's own prereq steps (see header) create every named Secret
+  # by hand with `kubectl create secret` — matches `mode: manual` in the
+  # NOTES.txt guidance text. (No functional effect on rendered manifests;
+  # see values.yaml's `secrets:` comment — every Secret's rendering is
+  # identical either way except the 4 dev-convenience fields.)
+  mode: manual
+
+# `versions.strimziApi`/`versions.kafka`/`versions.kafkaMetadata` are NOT
+# overridden by this overlay (deliberately no `versions:` key here at all —
+# an empty/comment-only `versions:` mapping would parse as YAML `null` and,
+# on `helm template -f values-prod.example.yaml -f values-microk8s.yaml`,
+# WIPE OUT every other inherited `versions.*` key via Helm's override-merge
+# semantics). This overlay's operator (Strimzi 0.51.0) + Kafka build
+# combination (`v1` + `4.2.0` + `4.2-IV1`) is the CHART'S OWN DEFAULT (see
+# values.yaml's "COHERENT STRIMZI VERSION TRIPLE" comment). If this overlay
+# is ever pointed at a DIFFERENT Strimzi operator build, re-add a
+# `versions:` block here and re-pin `strimziApi`/`kafka`/`kafkaMetadata`
+# TOGETHER (see values.yaml's comment for why) — never override just one of
+# the three.
+
+# ---- CNPG Postgres clusters: repoint storageClass + backup endpoint, and
+# shrink to 1 instance / small volumes for a single-node microk8s smoke test.
+postgres:
+  nessie:
+    instances: 1
+    storage:
+      storageClass: microk8s-hostpath
+      size: 5Gi
+    walStorage:
+      storageClass: microk8s-hostpath
+      size: 2Gi
+    backup:
+      endpointURL: "http://minio.lakehouse-test.svc:9000"
+  apicurio:
+    instances: 1
+    storage:
+      storageClass: microk8s-hostpath
+      size: 2Gi
+    walStorage:
+      storageClass: microk8s-hostpath
+      size: 1Gi
+    backup:
+      endpointURL: "http://minio.lakehouse-test.svc:9000"
+  # pg-keycloak CNPG Cluster renders whenever components.postgres is true —
+  # NOT gated by components.keycloak (see chart/templates/10-keycloak.yaml
+  # header). Sized down since the Keycloak *app* itself is disabled and
+  # nothing will ever connect to it in this smoke test.
+  keycloak:
+    instances: 1
+    storage:
+      storageClass: microk8s-hostpath
+      size: 2Gi
+    walStorage:
+      storageClass: microk8s-hostpath
+      size: 1Gi
+    backup:
+      endpointURL: "http://minio.lakehouse-test.svc:9000"
+
+apicurio:
+  replicas: 1
+
+kafka:
+  # The microk8s test node (single node, ~11.5Gi allocatable memory) cannot
+  # fit 6 Kafka pods at the chart's prod-sized resource requests (controller
+  # 512Mi/broker 1Gi request each) stacked on top of 3 CNPG clusters +
+  # Nessie + Apicurio + Trino coordinator/worker — the remaining pods would
+  # sit Pending ("Insufficient memory"). Requests are shrunk below (still
+  # leaves real limits for burst) purely to fit a single small smoke-test
+  # node; not a chart bug, just node-sizing reality for RF=3's mandatory 6
+  # Kafka pods (see the replicas comment below) on a minimal box.
+  nodePools:
+    # NOT reduced to 1 replica like every other component here: the chart
+    # hardcodes `default.replication.factor: 3` / `min.insync.replicas: 2`
+    # cluster-wide plus RF=3 on every KafkaTopic (03-kafka-strimzi.yaml
+    # header: "LOAD-BEARING ... do NOT change without re-reading spec").
+    # With brokers.replicas=1 the Kafka CR goes permanently NotReady:
+    # "Kafka configuration option 'default.replication.factor' should be set
+    # to 1 because this cluster has only 1 Kafka broker(s)." — a
+    # single-broker Kafka is simply incompatible with this chart's fixed RF
+    # policy, in ANY environment, not just microk8s. 3 brokers is the
+    # practical minimum this chart's Kafka backbone can ever reconcile Ready
+    # with.
+    controller:
+      replicas: 3
+      storage:
+        size: 2Gi
+        class: microk8s-hostpath
+      resources:
+        requests: {memory: 256Mi, cpu: 100m}
+        limits: {memory: 512Mi, cpu: 500m}
+    broker:
+      replicas: 3
+      storage:
+        size: 5Gi
+        class: microk8s-hostpath
+      resources:
+        requests: {memory: 512Mi, cpu: 250m}
+        limits: {memory: 1Gi, cpu: "1"}
+  # `route` external listener type needs the OpenShift Route CRD, which
+  # Strimzi does not create itself and microk8s doesn't ship. `nodeport` is
+  # the closest non-OpenShift equivalent for smoke-testing the listener
+  # actually comes up (see kafka.strimzi.io Kafka CR spec.kafka.listeners).
+  externalListenerType: nodeport
+
+nessie:
+  replicas: 1
+  hpa:
+    minReplicas: 1
+    maxReplicas: 1
+
+trino:
+  # Dev-convenience path (see values.yaml's own comment on this field): a
+  # real value here makes chart/templates/06-trino-ha.yaml render the
+  # `trino-internal-secret` Secret inline instead of requiring a manual
+  # `kubectl create secret` step for it. 32+ chars, smoke-test only — never
+  # use this convenience path for a real environment.
+  internalSharedSecret: "microk8s-smoke-test-internal-secret-do-not-reuse"
+  # Shrunk from prod's 2Gi/4Gi requests — single small smoke-test node, see
+  # the kafka.nodePools comment above for the same reasoning.
+  coordinator:
+    resources:
+      requests: {memory: 512Mi, cpu: 250m}
+      limits: {memory: 2Gi, cpu: "2"}
+  worker:
+    replicas: 1
+    resources:
+      requests: {memory: 1Gi, cpu: 250m}
+      limits: {memory: 2Gi, cpu: "1"}
+    hpa:
+      minReplicas: 1
+      maxReplicas: 1
+  # jvm.config's -Xmx must fit inside the (now much smaller) pod memory
+  # limit above, or the JVM itself fails to start / gets OOMKilled.
+  memory:
+    jvmXmx: 1536M
+    queryMaxMemory: 2GB
+    queryMaxMemoryPerNodeCoordinator: 512MB
+    heapHeadroomPerNode: 256MB
+    queryMaxMemoryPerNodeWorker: 768MB
+
+# İzleme (D1): microk8s'te UWM YOKTUR. Test-only prometheus-operator kurulur
+# (bu chart'ın parçası DEĞİL). Grafana OIDC kapalı (anonim/admin login test
+# için yeterli). Thanos datasource microk8s'te erişilemez; canlı test yerel
+# prometheus'u datasource olarak --set ile geçici override eder.
+monitoring:
+  grafana:
+    oidc:
+      enabled: false
+
+prereqCheck:
+  # Left false: this smoke test installs Strimzi/CNPG via Helm (not OLM), so
+  # the OLM-CSV-shaped prereq-check-job.yaml hook doesn't apply here; the
+  # chart's `.Capabilities.APIVersions.Has` template-time check (see
+  # chart/templates/_prereq-check.tpl) already sees the real Strimzi/CNPG
+  # CRDs registered on this live cluster regardless of this flag.
+  enabled: false

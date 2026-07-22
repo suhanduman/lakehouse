@@ -1,0 +1,122 @@
+# CNPG (CloudNativePG) HA Postgres — Nessie metadata store. 3 instance,
+# 1 primary + 2 replica, automatic failover; WAL archive to S3;
+# backup + PITR — only parameterized + made namespace-aware. Gated by
+# `.Values.components.postgres` (also gates `pg-apicurio` in
+# 11-apicurio-registry.yaml — both CNPG clusters are one "postgres"
+# subsystem toggle).
+#
+# CNPG Operator OpenShift OperatorHub'dan önceden kurulu olmalı.
+#
+# CNPG Cluster adını taşıyan Secret'ları otomatik üretir:
+#   pg-nessie-app       — application user (Nessie bağlanacak)
+#   pg-nessie-superuser — superuser (operator kullanır)
+#
+# Service DNS: CNPG operatörü bu Cluster'ı reconcile ederken `pg-nessie-rw`
+# (+ `-ro`/`-r`) Service'lerini KENDİSİ üretir (chart bunları literal
+# `kind: Service` olarak render ETMEZ). Tüketiciler bu adı ASLA sabit
+# yazmaz — `lakehouse.svc.pgNessieRw` helper'ından okur (bkz. _helpers.tpl
+# ve chart/scripts/helm-check.py'nin CNPG-farkında servis-kapanış kontrolü).
+{{- if .Values.components.postgres }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-nessie
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  instances: {{ .Values.postgres.nessie.instances }}
+  # SAME pin as pg-apicurio (11-apicurio-registry.yaml) — both read
+  # `versions.cnpgPostgresImage` so the two CNPG clusters can never drift
+  # apart on Postgres version (parity hardening, sub-project A).
+  imageName: {{ .Values.versions.cnpgPostgresImage | quote }}
+
+  primaryUpdateStrategy: {{ .Values.postgres.nessie.primaryUpdateStrategy }}
+
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "1GB"
+      work_mem: "8MB"
+      wal_level: "replica"
+      max_wal_senders: "10"
+      archive_mode: "on"
+      # archive_timeout VARSAYILAN (0): yalnızca WAL dolduğunda arşivle.
+      # Düşük değerlere (örn. 60s) çekmek S3'e sürekli küçük obje
+      # akışı yaratır — IO yükü ve obje sayısı patlar. barman zaten zstd
+      # ile sıkıştırıyor; agresif timeout yerine sıkıştırmaya güvenin.
+    # NOT bir `postgresql.parameters` anahtarı — CNPG'nin GÜNCEL Cluster
+    # CRD'sinde (operator 1.30 / v1) `shared_preload_libraries` kendi
+    # top-level `[]string` alanına taşındı; `parameters` map'i içinde
+    # bırakmak admission webhook'undan "Can't set fixed configuration
+    # parameter" hatasıyla reddedilir (microk8s canlı smoke-test'te
+    # doğrulandı — bkz. .superpowers/sdd/microk8s-smoke-report.md Finding 5).
+    shared_preload_libraries: ["pg_stat_statements"]
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.nessie.database }}
+      owner: {{ .Values.postgres.nessie.owner }}
+
+  # storageClass empty (default) = the cluster's default StorageClass — CNPG
+  # only accepts an OMITTED field, not an empty string, so this template
+  # renders the key at all only when a real value is set (storage-neutrality
+  # convention, Product Foundation task 6.5).
+  storage:
+{{- with .Values.postgres.nessie.storage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+    size: {{ .Values.postgres.nessie.storage.size | quote }}
+
+  walStorage:
+{{- with .Values.postgres.nessie.walStorage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+    size: {{ .Values.postgres.nessie.walStorage.size | quote }}
+
+  # S3'e WAL + base backup
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgres.nessie.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.postgres.nessie.backup.endpointURL | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.storage.s3.secretName }}
+          key: access-key-id
+        secretAccessKey:
+          name: {{ .Values.storage.s3.secretName }}
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: {{ .Values.postgres.nessie.backup.walMaxParallel }}
+      data:
+        compression: gzip
+        jobs: {{ .Values.postgres.nessie.backup.dataJobs }}
+    retentionPolicy: {{ .Values.postgres.nessie.backup.retentionPolicy | quote }}
+
+  monitoring:
+    enablePodMonitor: {{ and .Values.components.monitoring .Values.monitoring.targets.postgres.enabled .Values.postgres.nessie.monitoring.enablePodMonitor }}
+
+  resources:
+    requests:
+      memory: {{ .Values.postgres.nessie.resources.requests.memory | quote }}
+      cpu: {{ .Values.postgres.nessie.resources.requests.cpu | quote }}
+    limits:
+      memory: {{ .Values.postgres.nessie.resources.limits.memory | quote }}
+      cpu: {{ .Values.postgres.nessie.resources.limits.cpu | quote }}
+---
+# Scheduled backup — her gece 02:00
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-nessie-daily-backup
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: "0 0 2 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: pg-nessie
+{{- end }}

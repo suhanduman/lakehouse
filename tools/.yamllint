@@ -1,0 +1,9 @@
+extends: default
+rules:
+  line-length: {max: 200, level: warning}
+  document-start: disable
+  comments: {min-spaces-from-content: 1}
+  truthy: {allowed-values: ["true", "false", "yes", "no"]}
+  indentation: {spaces: 2, indent-sequences: consistent, level: warning}
+  commas: {level: warning}
+  colons: {level: warning}

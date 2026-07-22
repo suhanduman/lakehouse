@@ -1,0 +1,51 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata: {name: "dbz-{{SOURCE}}-{{TABLE}}", namespace: example, labels: {strimzi.io/cluster: connect}}
+spec:
+  class: io.debezium.connector.sqlserver.SqlServerConnector
+  tasksMax: 1
+  config:
+    database.hostname: "{{DB_HOST}}"
+    database.port: "1433"
+    database.user: "${directory:/mnt/external-configuration/{{SOURCE}}:user}"
+    database.password: "${directory:/mnt/external-configuration/{{SOURCE}}:pass}"
+    database.names: "{{DB}}"
+    database.encrypt: "true"
+    topic.prefix: "{{TOPIC_PREFIX}}"
+    table.include.list: "{{TABLE}}"
+    schema.history.internal.kafka.bootstrap.servers: "kafka-kafka-bootstrap:9093"
+    schema.history.internal.kafka.topic: "schema-history.{{SOURCE}}"
+    # Schema-history client (ayrı producer/consumer) — 9093 SCRAM-SHA-512+TLS
+    # POC-DOĞRULA: truststore path/secret keys küme'de doğrulanacak
+    schema.history.internal.producer.security.protocol: SASL_SSL
+    schema.history.internal.producer.sasl.mechanism: SCRAM-SHA-512
+    schema.history.internal.producer.sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="debezium-src" password="${directory:/mnt/external-configuration/debezium-src:password}";'
+    schema.history.internal.producer.ssl.truststore.location: /mnt/external-configuration/kafka-ca/ca.p12
+    schema.history.internal.producer.ssl.truststore.password: ${directory:/mnt/external-configuration/kafka-ca:ca.password}
+    schema.history.internal.producer.ssl.truststore.type: PKCS12
+    schema.history.internal.consumer.security.protocol: SASL_SSL
+    schema.history.internal.consumer.sasl.mechanism: SCRAM-SHA-512
+    schema.history.internal.consumer.sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="debezium-src" password="${directory:/mnt/external-configuration/debezium-src:password}";'
+    schema.history.internal.consumer.ssl.truststore.location: /mnt/external-configuration/kafka-ca/ca.p12
+    schema.history.internal.consumer.ssl.truststore.password: ${directory:/mnt/external-configuration/kafka-ca:ca.password}
+    schema.history.internal.consumer.ssl.truststore.type: PKCS12
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    value.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
+    key.converter.apicurio.registry.auto-register: "{{AUTO_REGISTER}}"
+    value.converter.apicurio.registry.auto-register: "{{AUTO_REGISTER}}"
+    transforms: "unwrap,route,tsconv"
+    transforms.unwrap.type: "io.debezium.transforms.ExtractNewRecordState"
+    transforms.unwrap.delete.handling.mode: "rewrite"
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.unwrap.add.fields: "op,ts_ms,source.change_lsn:lsn"
+    transforms.route.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.route.static.field: "_target_table"
+    transforms.route.static.value: "{{TARGET_NS}}_raw.{{TARGET_TABLE}}"
+    transforms.tsconv.type: "org.apache.kafka.connect.transforms.TimestampConverter$Value"
+    transforms.tsconv.field: "__ts_ms"
+    transforms.tsconv.target.type: "Timestamp"
+    errors.tolerance: all
+    errors.deadletterqueue.topic.name: "{{TOPIC_PREFIX}}.{{TABLE}}.dlq"
+    errors.deadletterqueue.context.headers.enable: "true"
