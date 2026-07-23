@@ -55,3 +55,11 @@ def test_stream_kafka_registered_event_only():
 def test_allowed_dispositions_defaults_to_single():
     d = st.get("cdc", "pg")
     assert st.allowed_dispositions(d) == ("entity",)   # from .disposition, no .dispositions
+
+
+def test_batch_s3_registered_spark_batch():
+    d = st.get("batch", "s3")
+    assert d.lane == "spark-batch"
+    assert d.render_key == "s3-register"
+    assert d.topic_key == ""
+    assert d.required_fields == ("s3_bucket", "s3_prefix", "file_format", "cron")

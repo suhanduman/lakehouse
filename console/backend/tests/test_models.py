@@ -143,3 +143,30 @@ def test_stream_non_kafka_type_is_unregistered():
     # valid Literal combo, but it isn't registered -> registry KeyError path.
     with pytest.raises(ValidationError, match="unknown source"):
         SourceSpec(**_kafka(type="mssql"))
+
+
+def _s3(**over):
+    d = dict(source="ds1", kind="batch", type="s3", db="-", table="-",
+             target_ns="nyc", target_table="trips",
+             s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
+             cron="0 * * * *")
+    d.update(over)
+    return d
+
+
+def test_batch_s3_valid():
+    s = SourceSpec(**_s3())
+    assert s.file_format == "parquet"
+    assert s.cron == "0 * * * *"
+
+
+def test_batch_s3_requires_bucket_prefix_format_cron():
+    with pytest.raises(ValidationError, match="s3_bucket"):
+        SourceSpec(**_s3(s3_bucket=None))
+    with pytest.raises(ValidationError, match="cron"):
+        SourceSpec(**_s3(cron=None))
+
+
+def test_batch_s3_bad_format_rejected():
+    with pytest.raises(ValidationError):
+        SourceSpec(**_s3(file_format="csv"))   # not in the Literal
