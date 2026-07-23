@@ -714,6 +714,42 @@ her kaynak otomatik dahil olur.
   yanlış port/listener seçmek "connection refused" veya SASL auth hatası
   verir.
 
+### External-Kafka kaynak onboarding (event/stream tipi, dış Kafka)
+
+Bir `stream`+`kafka` kaynağı **dış** (customer/harici) bir Kafka kümesine
+işaret ediyorsa (`kafka_bootstrap` set — bkz. Plan B1 Task 2), dedike Iceberg
+sink connector'ı `consumer.override.*` ile kendi input consumer'ını o dış
+kümeye yönlendirir (`connector.client.config.override.policy: All`,
+`12-kafka-connect.yaml`, spec.config — Kafka 3.0+ varsayılanı, regresyona
+karşı burada açıkça set edilir). Onboarding'den ÖNCE operatörün sağlaması
+gereken iki önkoşul:
+
+1. **Kaynak başına SASL secret'ı (`user`/`pass`).** Add-source akışı,
+   kimlik bilgisi girildiğinde bu secret'ı otomatik oluşturur (CLI'da
+   `scaffold-source.sh`, Console'da add-source sihirbazı — aynı `_cred()`
+   mekanizması diğer kaynak tipleri için kullandığı gibi); operatörün elle
+   bir şey yapması gerekmez, yalnızca kimlik bilgisini (kullanıcı/parola)
+   sağlaması yeterlidir.
+2. **`ext-kafka-ca` truststore secret'ı — HER dış-Kafka kaynağı için
+   zorunlu, operatör tarafından onboarding'den ÖNCE provizyon edilir.**
+   Mevcut render (`_kafka_consumer_override`) dış Kafka için KOŞULSUZ olarak
+   `consumer.override.security.protocol=SASL_SSL` + `consumer.override.ssl.
+   truststore.*` üretir (yalnızca "özel CA" durumu değil — B1'de dış Kafka =
+   SASL_SSL varsayılır). Bu, `kafka-ca` ile AYNI mekanizmadır: bir PKCS12
+   truststore (`ca.p12`/`ca.password` anahtarları), `/mnt/external-configuration/
+   ext-kafka-ca` yoluna mount edilir; dış kümenin CA'sını (public/well-known
+   olsa bile bir `ca.p12` bundle'ı gerekir) taşır. Bu secret onboarding
+   öncesi cluster'da hazır olmalıdır — yoksa sink'in truststore referansı
+   çözülemez ve connector TLS handshake'inde FAILED'e düşer.
+   > **Follow-up (B1 kapsamı dışı, takip ediliyor):** (a) chart'a opsiyonel
+   > `ext-kafka-ca` volume/mount plumbing'i (bugün operatör manuel mount
+   > sağlamalı); (b) `security.protocol`/mekanizma parametrik hale getirme
+   > (SASL_PLAINTEXT / farklı SASL / TLS-yok dış küme desteği); (c) dış-Kafka
+   > yolunun canlı e2e doğrulaması (T7 yalnızca in-cluster'ı doğrular).
+
+Not: bu iki önkoşul customer-bağımsızdır — hiçbir gerçek müşteri adı/domain
+gerekmez, yalnızca genel `ext-kafka-ca` isimlendirme konvansiyonu kullanılır.
+
 ---
 
 ## 7. SSS / tuzaklar

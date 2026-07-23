@@ -70,6 +70,11 @@ spec:
     value.converter.schemas.enable: false
     config.providers: directory
     config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+    # Allow per-connector consumer.override.* — the existing-Kafka ingest sink
+    # (Console-rendered) reroutes its input consumer to an external customer
+    # Kafka via consumer.override.bootstrap.servers. `All` is the Kafka 3.0+
+    # default; set explicitly so it can't regress on a different broker build.
+    connector.client.config.override.policy: All
 {{- if .Values.kafkaConnect.image }}
   # Pre-built Connect image (prod-grade): every plugin — including the Apache
   # Iceberg sink runtime built from source — is baked in (images/connect/
