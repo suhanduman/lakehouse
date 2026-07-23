@@ -15,7 +15,7 @@ apply) by attempting create and falling back to patch on a 409 (Conflict)
 from __future__ import annotations
 
 import base64
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from kubernetes.client.exceptions import ApiException
 
@@ -86,7 +86,7 @@ class K8sService:
     def delete_topic(self, name: str) -> Dict[str, Any]:
         return self._delete(GROUP, VERSION, TOPIC_PLURAL, name)
 
-    def delete_spark_job(self, name: str) -> Dict[str, Any]:
+    def delete_spark_job(self, name: str) -> Optional[Dict[str, Any]]:
         try:
             return self._delete(SPARK_GROUP, SPARK_API_VERSION, SPARK_PLURAL, name)
         except ApiException as exc:

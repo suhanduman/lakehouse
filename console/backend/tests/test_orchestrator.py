@@ -689,6 +689,21 @@ def test_batch_s3_onboards_via_spark_job():
     assert fakes["k8s"].applied_spark_jobs
 
 
+def test_batch_s3_spark_job_failure_reports_failed_step_without_crashing():
+    # spark-job step raises (e.g. apply_spark_job k8s call blows up) -> the
+    # orchestrator's try/except must convert it to an ok=False StepResult
+    # named "spark-job", not propagate the exception.
+    orch, fakes = _orch_fakes(fail_on="spark-job")
+
+    res = orch.add_source(_s3_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is False
+    assert [s.name for s in res.steps] == ["spark-job"]
+    assert res.steps[-1].ok is False
+    assert "spark-job boom" in res.steps[-1].detail
+    assert fakes["k8s"].applied_spark_jobs == []
+
+
 def test_scheduled_mongo_still_rejected():
     # spark-batch lane WITHOUT a spark renderer (render_key == "") is still
     # rejected up front, exactly as before Plan B2.
