@@ -247,9 +247,14 @@ def get_orchestrator(
 ) -> AddSourceOrchestrator:
     """Real `AddSourceOrchestrator`, wired to the real K8s/S3/Trino/Iceberg
     providers above plus the `render_service` module. `iceberg` drives the CDC
-    table pre-create step (identifier field). Overridable in tests via
+    table pre-create step (identifier field). `spark_image`/`s3_secret_name`
+    (from `settings`) drive the spark-batch lane's single spark-job step
+    (Plan B2). Overridable in tests via
     `app.dependency_overrides[get_orchestrator]`."""
-    return AddSourceOrchestrator(k8s, s3, trino, render_service, iceberg=iceberg)
+    return AddSourceOrchestrator(
+        k8s, s3, trino, render_service, iceberg=iceberg,
+        spark_image=settings.spark_image, s3_secret_name=settings.s3_secret_name,
+    )
 
 
 def get_connect() -> ConnectService:
