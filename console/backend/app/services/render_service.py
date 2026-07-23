@@ -159,10 +159,16 @@ def _topic_scheduled_jdbc(spec: SourceSpec) -> str:
     return f"{prefix}{name}"
 
 
+def _topic_cdc_mysql(spec: SourceSpec) -> str:
+    # Debezium MySQL topic: <topic.prefix>.<database>.<table>.
+    return f"cdc.{spec.source}.{spec.db}.{spec.table}"
+
+
 _TOPICS = {
     "cdc-relational": _topic_cdc_relational,
     "cdc-mongo": _topic_cdc_mongo,
     "scheduled-jdbc": _topic_scheduled_jdbc,
+    "cdc-mysql": _topic_cdc_mysql,
 }
 
 
@@ -312,6 +318,62 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
     return _connector(name, klass, config)
 
 
+def _mysql_server_id(source: str) -> str:
+    # server.id must be cluster-unique and numeric. Derive a stable value from
+    # the source name (zlib.crc32 is deterministic) so re-rendering a source is
+    # idempotent and two DIFFERENT sources on one MySQL cluster stay distinct.
+    import zlib
+    return str(1000 + (zlib.crc32(source.encode()) % 4_000_000))
+
+
+def _render_cdc_mysql(spec: SourceSpec) -> dict:
+    """cdc + mysql (MySQL/MariaDB) -> Debezium MySqlConnector. Same schema-history
+    mechanism as SQL Server; the MySQL connector also serves MariaDB."""
+    tname = topic_name(spec)
+    prefix = f"cdc.{spec.source}"
+
+    config: dict = {
+        "database.hostname": spec.db_host,
+        "database.port": "3306",
+        "database.user": _cred(spec.source, "user"),
+        "database.password": _cred(spec.source, "pass"),
+        "database.server.id": _mysql_server_id(spec.source),
+        "database.include.list": spec.db,
+        "topic.prefix": prefix,
+        "table.include.list": f"{spec.db}.{spec.table}",
+        "schema.history.internal.kafka.bootstrap.servers": SCHEMA_HISTORY_BOOTSTRAP,
+        "schema.history.internal.kafka.topic": f"schema-history.{spec.source}",
+    }
+    config.update(_schema_history_client_config("producer"))
+    config.update(_schema_history_client_config("consumer"))
+    config.update({
+        "key.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "key.converter.apicurio.registry.url": APICURIO_URL,
+        "value.converter.apicurio.registry.url": APICURIO_URL,
+        "key.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "value.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "transforms": "unwrap,route,tsconv",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.unwrap.drop.tombstones": "false",
+        # MySQL LSN analogue: binlog position (source.pos, a long). Best-effort;
+        # the deterministic dedup tie-break is __kafka_offset (silver-merge), not __lsn.
+        "transforms.unwrap.add.fields": "op,ts_ms,source.pos:lsn",
+    })
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_tsconv())
+    config.update({
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{tname}.dlq",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    })
+
+    _, table_name = _split_schema_table(spec.table)
+    name = f"dbz-{spec.source}-{table_name}"
+    return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config)
+
+
 def _render_cdc_mongo(spec: SourceSpec) -> dict:
     """cdc + mongo -> Debezium MongoDB connector. Mirrors
     tools/templates/source-cdc-mongo.yaml / dbz-mongo-lms.yaml."""
@@ -432,6 +494,7 @@ _RENDERERS = {
     "cdc-relational": _render_cdc_relational,
     "cdc-mongo": _render_cdc_mongo,
     "scheduled-jdbc": _render_scheduled_jdbc,
+    "cdc-mysql": _render_cdc_mysql,
 }
 
 

@@ -98,3 +98,13 @@ def test_unknown_kind_type_is_rejected():
 def test_valid_spec_ok():
     s = SourceSpec(**_base())
     assert s.type == "pg"
+
+
+def test_cdc_mysql_requires_db_host():
+    with pytest.raises(ValidationError, match="db_host"):
+        SourceSpec(**_base(type="mysql", db_host=None))
+
+
+def test_cdc_mysql_valid():
+    s = SourceSpec(**_base(type="mysql"))
+    assert s.type == "mysql"

@@ -77,6 +77,8 @@ register(SourceType("cdc-pg", "cdc", "pg", "debezium-cdc", "entity",
                     ("db_host",), "cdc-relational", "cdc-relational"))
 register(SourceType("cdc-mongo", "cdc", "mongo", "debezium-cdc", "entity",
                     ("mongo_uri",), "cdc-mongo", "cdc-mongo"))
+register(SourceType("cdc-mysql", "cdc", "mysql", "debezium-cdc", "entity",
+                    ("db_host",), "cdc-mysql", "cdc-mysql"))
 register(SourceType("scheduled-jdbc-mssql", "scheduled", "mssql", "kafka-connect-source",
                     "entity", ("jdbc_url", "incrementing_col"), "scheduled-jdbc", "scheduled-jdbc"))
 register(SourceType("scheduled-jdbc-pg", "scheduled", "pg", "kafka-connect-source",

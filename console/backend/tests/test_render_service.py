@@ -42,6 +42,12 @@ def _scheduled_pg():
         incrementing_col="customer_id")
 
 
+def _mysql():
+    return SourceSpec(source="my1", kind="cdc", type="mysql", db="shop",
+                      table="orders", target_ns="depo", target_table="orders",
+                      db_host="mysqlhost")
+
+
 # --------------------------------------------------------------------------
 # bucket_name / render_namespace_ddl
 # --------------------------------------------------------------------------
@@ -283,6 +289,28 @@ def test_scheduled_jdbc_route_transform():
     assert cfg["transforms.tsfield.renames"] == "updated_at:__ts_ms"
     assert cfg["transforms.tsconv.field"] == "__ts_ms"
     assert "transforms.setts.timestamp.field" not in cfg
+
+
+# --------------------------------------------------------------------------
+# render_connector — CDC mysql/mariadb (Debezium MySqlConnector, Task 4)
+# --------------------------------------------------------------------------
+
+def test_mysql_topic_name():
+    assert r.topic_name(_mysql()) == "cdc.my1.shop.orders"
+
+
+def test_mysql_connector_shape():
+    body = r.render_connector(_mysql())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"] == "io.debezium.connector.mysql.MySqlConnector"
+    assert c["database.port"] == "3306"
+    assert c["database.include.list"] == "shop"
+    assert c["table.include.list"] == "shop.orders"
+    assert c["database.server.id"].isdigit()
+    assert c["transforms.route.static.value"] == "depo_raw.orders"
+    assert c["transforms.unwrap.add.fields"] == "op,ts_ms,source.pos:lsn"
+    assert c["schema.history.internal.kafka.topic"] == "schema-history.my1"
+    assert body["metadata"]["name"] == "dbz-my1-orders"
 
 
 def test_scheduled_pg_connector_mode_without_timestamp_col():

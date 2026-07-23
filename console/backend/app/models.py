@@ -27,12 +27,12 @@ class SourceSpec(BaseModel):
       - kind="scheduled", type="mongo"            -> requires `cron`
       - kind="scheduled", type in ("mssql", "pg") -> requires `jdbc_url` and `incrementing_col`
       - kind="cdc",       type="mongo"            -> requires `mongo_uri`
-      - kind="cdc",       type in ("mssql", "pg") -> requires `db_host`
+      - kind="cdc",       type in ("mssql", "pg", "mysql") -> requires `db_host`
     """
 
     source: str
     kind: Literal["cdc", "scheduled"]
-    type: Literal["mssql", "pg", "mongo"]  # extended in Task 4 via the registry
+    type: Literal["mssql", "pg", "mongo", "mysql"]
     db: str
     table: str
     target_ns: str
