@@ -41,6 +41,10 @@ BRONZE_METADATA_COLS = [
     {"name": "__ts_ms", "type": "timestamp"},
     {"name": "__deleted", "type": "string"},
     {"name": "__lsn", "type": "long"},
+    # Deterministic dedup tie-break: Kafka offset+partition of each record,
+    # inserted by the Iceberg sink's InsertField SMT (chart 13-connectors.yaml).
+    {"name": "__kafka_offset", "type": "long"},
+    {"name": "__kafka_partition", "type": "int"},
 ]
 
 # Bronze changelog partitioning: day(__ts_ms). Field name mirrors

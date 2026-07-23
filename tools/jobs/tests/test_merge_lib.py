@@ -88,6 +88,27 @@ def test_merge_sql_all_key_table_omits_update():
     assert "WHEN NOT MATCHED AND NOT CAST(s.__deleted AS BOOLEAN) THEN INSERT (id) VALUES (s.id)" in sql
 
 
+def test_metadata_cols_include_kafka_offset():
+    assert "__kafka_offset" in m.METADATA_COLS
+    assert "__kafka_partition" in m.METADATA_COLS
+
+
+def test_latest_per_key_orders_by_offset_last():
+    sql = m.latest_per_key_sql("bronze_inc", ["id"], ["id", "name"])
+    assert "ORDER BY __ts_ms DESC, __lsn DESC NULLS LAST, __kafka_offset DESC" in sql
+
+
+def test_kafka_offset_not_a_business_column():
+    plan = m.reconcile_plan(
+        {"id": "int", "name": "string", "__op": "string", "__ts_ms": "timestamp",
+         "__deleted": "string", "__lsn": "bigint", "__kafka_offset": "bigint",
+         "__kafka_partition": "int", "_target_table": "string"},
+        {"id": "int", "name": "string"},
+    )
+    assert plan.adds == []
+    assert plan.ok
+
+
 def test_ts_ms_excluded_from_silver_but_not_required_beyond_cdc_contract():
     # __ts_ms does double duty: MERGE ordering key AND (day(__ts_ms)) the
     # Bronze partition key -- but it's still just a Bronze metadata column,

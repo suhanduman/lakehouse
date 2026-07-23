@@ -17,7 +17,15 @@ from dataclasses import dataclass, field
 # Timestamp via the `tsconv` TimestampConverter SMT) is BOTH the MERGE ordering
 # key AND the Bronze partition key `day(__ts_ms)` — Bronze-only, excluded from
 # Silver like the other metadata columns.
-METADATA_COLS = ("__op", "__ts_ms", "__deleted", "__lsn", "_target_table")
+# `__kafka_offset`/`__kafka_partition` are stamped by the Iceberg sink's
+# InsertField SMT (chart/templates/13-connectors.yaml) from each record's
+# Kafka offset/partition. __lsn is null for Mongo/JDBC sources, so on a
+# __ts_ms tie the ordering was non-deterministic; Debezium keys by PK -> same
+# key -> same Kafka partition -> offset is monotonic per key, making
+# __kafka_offset a deterministic final tie-break in latest_per_key_sql's
+# ORDER BY. Bronze-only, excluded from Silver like the other metadata columns.
+METADATA_COLS = ("__op", "__ts_ms", "__deleted", "__lsn", "_target_table",
+                 "__kafka_offset", "__kafka_partition")
 
 # Iceberg-native safe (widening) numeric promotions, in the Spark type spellings
 # a DESCRIBE returns. Decimal precision-widen (same scale) handled separately.
@@ -92,13 +100,16 @@ def reconcile_plan(bronze: dict, silver: dict) -> ReconcilePlan:
 
 
 def latest_per_key_sql(bronze_fqn: str, id_cols: list, business_cols: list) -> str:
-    """Dedup the Bronze increment to the newest row per key (ORDER BY __ts_ms,__lsn)."""
+    """Dedup the Bronze increment to the newest row per key (ORDER BY __ts_ms,
+    __lsn NULLS LAST, __kafka_offset — __kafka_offset is the deterministic
+    final tie-break, since __lsn is null for Mongo/JDBC sources)."""
     part = ", ".join(id_cols)
     cols = ", ".join(business_cols + ["__deleted"])
     return (
         f"SELECT {cols} FROM ("
         f"SELECT {cols}, ROW_NUMBER() OVER ("
-        f"PARTITION BY {part} ORDER BY __ts_ms DESC, __lsn DESC) AS __rn "
+        f"PARTITION BY {part} ORDER BY __ts_ms DESC, __lsn DESC NULLS LAST, "
+        f"__kafka_offset DESC) AS __rn "
         f"FROM {bronze_fqn}) WHERE __rn = 1"
     )
 
