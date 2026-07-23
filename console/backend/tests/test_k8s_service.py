@@ -186,6 +186,80 @@ def test_delete_topic():
 
 
 # --------------------------------------------------------------------------
+# apply_spark_job / delete_spark_job — ScheduledSparkApplication CR
+# (group/version differ from the Strimzi ones used above)
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_k8s():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    return svc, fake
+
+
+def test_apply_spark_job_uses_spark_group(fake_k8s):
+    svc, api = fake_k8s
+    svc.apply_spark_job({"metadata": {"name": "s3-register-ds1-trips"}, "spec": {}})
+    call = api.created[-1]
+    assert call["group"] == "sparkoperator.k8s.io"
+    assert call["version"] == "v1beta2"
+    assert call["plural"] == "scheduledsparkapplications"
+    assert call["namespace"] == "example"
+    assert call["body"] == {"metadata": {"name": "s3-register-ds1-trips"}, "spec": {}}
+
+
+def test_apply_spark_job_falls_back_to_patch_on_409():
+    fake = FakeCustom(conflict_on_create=True)
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    body = {"metadata": {"name": "s3-register-ds1-trips"}, "spec": {}}
+
+    svc.apply_spark_job(body)
+
+    assert fake.created == []
+    assert len(fake.patched) == 1
+    patch_call = fake.patched[0]
+    assert patch_call["group"] == "sparkoperator.k8s.io"
+    assert patch_call["version"] == "v1beta2"
+    assert patch_call["plural"] == "scheduledsparkapplications"
+    assert patch_call["name"] == "s3-register-ds1-trips"
+    assert patch_call["body"] == body
+
+
+def test_delete_spark_job(fake_k8s):
+    svc, api = fake_k8s
+    svc.delete_spark_job("s3-register-ds1-trips")
+
+    assert len(api.deleted) == 1
+    assert api.deleted[0] == {
+        "group": "sparkoperator.k8s.io",
+        "version": "v1beta2",
+        "namespace": "example",
+        "plural": "scheduledsparkapplications",
+        "name": "s3-register-ds1-trips",
+    }
+
+
+def test_delete_spark_job_tolerates_404():
+    class NotFoundCustom(FakeCustom):
+        def delete_namespaced_custom_object(self, **kw):
+            raise ApiException(status=404, reason="NotFound")
+
+    svc = K8sService(custom_api=NotFoundCustom(), core_api=None, namespace=NAMESPACE)
+    assert svc.delete_spark_job("missing") is None
+
+
+def test_delete_spark_job_reraises_non_404_errors():
+    class ExplodingCustom(FakeCustom):
+        def delete_namespaced_custom_object(self, **kw):
+            raise ApiException(status=500, reason="Boom")
+
+    svc = K8sService(custom_api=ExplodingCustom(), core_api=None, namespace=NAMESPACE)
+    with pytest.raises(ApiException) as exc_info:
+        svc.delete_spark_job("s3-register-ds1-trips")
+    assert exc_info.value.status == 500
+
+
+# --------------------------------------------------------------------------
 # create_secret — base64 encodes values
 # --------------------------------------------------------------------------
 

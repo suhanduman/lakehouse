@@ -23,5 +23,11 @@ class Settings(BaseSettings):
     # `alg` header -- an attacker can set `alg: none` or swap to a weaker/HMAC
     # algorithm. jose only accepts a signature matching one of these.
     oidc_algorithms: List[str] = ["RS256"]
+    # Spark-batch lane (render_service.render_spark_job / ScheduledSparkApplication).
+    # Neutral in-cluster defaults consistent with the chart's spark-operator
+    # image/secret naming; override per-deployment via env (SPARK_IMAGE /
+    # S3_SECRET_NAME).
+    spark_image: str = "image-registry.openshift-image-registry.svc:5000/lakehouse/spark-py:1.0"
+    s3_secret_name: str = "s3-credentials"
 
 settings = Settings()

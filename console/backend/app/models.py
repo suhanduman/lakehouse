@@ -31,8 +31,8 @@ class SourceSpec(BaseModel):
     """
 
     source: str
-    kind: Literal["cdc", "scheduled", "stream"]
-    type: Literal["mssql", "pg", "mongo", "mysql", "kafka"]
+    kind: Literal["cdc", "scheduled", "stream", "batch"]
+    type: Literal["mssql", "pg", "mongo", "mysql", "kafka", "s3"]
     db: str
     table: str
     target_ns: str
@@ -47,6 +47,12 @@ class SourceSpec(BaseModel):
     cron: Optional[str] = None
     disposition: Optional[Literal["entity", "event"]] = None
     kafka_bootstrap: Optional[str] = None   # existing-Kafka: external brokers (None => in-cluster)
+
+    # batch/s3: platform's own S3 file-set registered as an Iceberg table via a
+    # scheduled Spark job (spark-batch lane). Schedule reuses `cron` above.
+    s3_bucket: Optional[str] = None
+    s3_prefix: Optional[str] = None
+    file_format: Optional[Literal["parquet", "json", "avro"]] = None
 
     # Iceberg tablo pre-create için hedef şema + PK: sink auto-create identifier
     # koymadığından tablo, connector'dan önce identifier field ile yaratılmalı —

@@ -45,17 +45,24 @@ result:
 verify_attempts / verify_delay / sleep are constructor-injectable so tests
 run with zero delay.
 
-Scope note: any source on the registry's spark-batch lane (today:
-scheduled+mongo — design doc 5.2b, a Spark SparkApplication+CronJob) does not
-go through Kafka at all, and render_service.topic_name/render_connector both
-raise NotImplementedError for that lane. Rather than let that
-NotImplementedError escape as an unhandled crash, this orchestrator checks
-`source_types.get(spec.kind, spec.type).lane` up front and returns a single
-clear StepResult failure for the whole spark-batch lane, before touching any
-resource. This is registry-driven (not a hard-coded (kind, type) check), so
-it generalizes to any future spark-batch source without an orchestrator
-change; kafka-connect-source sources (including stream+kafka) are NOT
-rejected here.
+Scope note (Plan B2): any source on the registry's spark-batch lane does not
+go through Kafka/medallion pre-create at all. This orchestrator checks
+`source_types.get(spec.kind, spec.type).lane` up front and branches on
+`descriptor.render_key`:
+  - render_key == "" (today: scheduled+mongo — design doc 5.2b, not yet
+    wired to a Spark renderer) -> a single clear "validate" StepResult
+    failure, before touching any resource. render_service.render_spark_job
+    would raise NotImplementedError for this descriptor; this check avoids
+    letting that escape as an unhandled crash.
+  - render_key set (today: batch-s3) -> a minimal ONE-step pipeline: render
+    the Spark CR (`render.render_spark_job`) and apply it
+    (`k8s.apply_spark_job`) — no secret/bucket/namespace/table(Bronze/
+    Silver)/topic/connector/verify; the Spark job itself owns writing its
+    output table.
+This is registry-driven (not a hard-coded (kind, type) check), so it
+generalizes to any future spark-batch source without an orchestrator change;
+kafka-connect-source sources (including stream+kafka) are NOT touched by
+either branch.
 
 Lane/disposition-aware steps (Plan B1): the secret step is skipped when
 `creds.user`/`creds.password` are both empty (in-cluster Kafka needs no
@@ -131,6 +138,8 @@ class AddSourceOrchestrator:
         verify_attempts: int = 5,
         verify_delay: float = 2.0,
         sleep: Callable[[float], None] = time.sleep,
+        spark_image: str = "",
+        s3_secret_name: str = "s3-credentials",
     ) -> None:
         self.k8s = k8s
         self.s3 = s3
@@ -142,23 +151,44 @@ class AddSourceOrchestrator:
         self.verify_attempts = max(1, verify_attempts)
         self.verify_delay = verify_delay
         self.sleep = sleep
+        # spark-batch lane (Plan B2): render_spark_job/apply_spark_job inputs.
+        self.spark_image = spark_image
+        self.s3_secret_name = s3_secret_name
 
     def add_source(self, spec: SourceSpec, creds: SourceCredentials) -> AddSourceResult:
         descriptor = source_types.get(spec.kind, spec.type)
         if descriptor.lane == "spark-batch":
-            return AddSourceResult(
-                steps=[
-                    StepResult(
-                        name="validate",
-                        ok=False,
-                        detail=(
-                            f"{descriptor.id} requires the Spark batch path, not yet "
-                            "supported in Console"
-                        ),
-                    )
-                ],
-                ok=False,
-            )
+            if not descriptor.render_key:
+                # No spark renderer wired for this source type yet (e.g.
+                # scheduled-mongo) -- reject up front, exactly as Plan B1.
+                return AddSourceResult(
+                    steps=[
+                        StepResult(
+                            name="validate",
+                            ok=False,
+                            detail=(
+                                f"{descriptor.id} requires the Spark batch path, not yet "
+                                "supported in Console"
+                            ),
+                        )
+                    ],
+                    ok=False,
+                )
+            # Spark-batch source WITH a spark renderer (e.g. batch-s3): a
+            # minimal, single-step pipeline -- render the Spark CR and apply
+            # it. Deliberately NO secret/bucket/namespace/table(Bronze/Silver)
+            # /topic/connector/verify: this lane doesn't touch Kafka or
+            # medallion pre-create at all, the Spark job itself owns writing
+            # its output table.
+            sb_steps: List[StepResult] = []
+            try:
+                body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
+                self.k8s.apply_spark_job(body)
+                sb_steps.append(StepResult(name="spark-job", ok=True, detail=body["metadata"]["name"]))
+                return AddSourceResult(steps=sb_steps, ok=True)
+            except Exception as exc:  # noqa: BLE001 - convert failure into a StepResult
+                sb_steps.append(StepResult(name="spark-job", ok=False, detail=str(exc)))
+                return AddSourceResult(steps=sb_steps, ok=False)
         disposition = spec.effective_disposition()
 
         steps: List[StepResult] = []

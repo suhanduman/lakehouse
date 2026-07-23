@@ -98,6 +98,14 @@ data:
   CONNECT_URL: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
   APICURIO_URL: {{ printf "http://%s:8080/apis/registry/v2" (include "lakehouse.svc.apicurio" .) | quote }}
   OIDC_AUDIENCE: {{ .Values.console.oidc.audience | quote }}
+  # Spark-batch lane (render_service.render_spark_job / ScheduledSparkApplication)
+  # — SAME single-source values as the chart's own Spark jobs
+  # (05-spark-operator.yaml): `.Values.global.imageRegistry`/`.Values.versions.
+  # sparkImageTag` for the image, `.Values.storage.s3.secretName` for the S3
+  # secret name the rendered CR must reference. Without these the backend
+  # falls back to config.py's neutral defaults (a non-existent image/secret).
+  SPARK_IMAGE: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
+  S3_SECRET_NAME: {{ .Values.storage.s3.secretName | quote }}
 
 ---
 # -------- Backend Deployment --------

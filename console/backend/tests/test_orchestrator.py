@@ -68,6 +68,7 @@ class FakeK8s:
         self.deleted_topics: List[str] = []
         self.applied_connectors: List[Dict[str, Any]] = []
         self.deleted_connectors: List[str] = []
+        self.applied_spark_jobs: List[Dict[str, Any]] = []
         self.status_calls: List[str] = []
         self.status_states = list(status_states) if status_states is not None else ["RUNNING"]
 
@@ -104,6 +105,12 @@ class FakeK8s:
     def delete_connector(self, name):
         self.calls.append(("delete_connector", name))
         self.deleted_connectors.append(name)
+
+    def apply_spark_job(self, body):
+        if self.fail_on == "spark-job":
+            raise RuntimeError("spark-job boom")
+        self.calls.append(("apply_spark_job", body["metadata"]["name"]))
+        self.applied_spark_jobs.append(body)
 
     def get_status(self, name):
         if self.fail_on == "verify":
@@ -657,6 +664,59 @@ def test_spark_batch_rejected_via_registry_not_hardcoded_detail():
     assert res.steps[0].name == "validate"
     # registry-driven detail names the descriptor id, not a hard-coded string.
     assert "scheduled-mongo requires the Spark batch path" in res.steps[0].detail
+
+
+def _s3_spec() -> SourceSpec:
+    return SourceSpec(
+        source="ds1", kind="batch", type="s3", db="-", table="-",
+        target_ns="nyc", target_table="trips",
+        s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
+        cron="0 * * * *",
+    )
+
+
+def test_batch_s3_onboards_via_spark_job():
+    # batch+s3 (registry-driven: spark-batch lane WITH a spark renderer,
+    # render_key="s3-register") -> minimal spark-job-only pipeline, no
+    # secret/bucket/namespace/table/topic/connector/verify at all.
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_s3_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert [s.name for s in res.steps] == ["spark-job"]
+    assert fakes["iceberg"].created_layers == []
+    assert fakes["k8s"].applied_spark_jobs
+
+
+def test_batch_s3_spark_job_failure_reports_failed_step_without_crashing():
+    # spark-job step raises (e.g. apply_spark_job k8s call blows up) -> the
+    # orchestrator's try/except must convert it to an ok=False StepResult
+    # named "spark-job", not propagate the exception.
+    orch, fakes = _orch_fakes(fail_on="spark-job")
+
+    res = orch.add_source(_s3_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is False
+    assert [s.name for s in res.steps] == ["spark-job"]
+    assert res.steps[-1].ok is False
+    assert "spark-job boom" in res.steps[-1].detail
+    assert fakes["k8s"].applied_spark_jobs == []
+
+
+def test_scheduled_mongo_still_rejected():
+    # spark-batch lane WITHOUT a spark renderer (render_key == "") is still
+    # rejected up front, exactly as before Plan B2.
+    orch, _fakes = _orch_fakes()
+    spec = SourceSpec(
+        source="m1", kind="scheduled", type="mongo", db="lms",
+        table="enr", target_ns="depo", target_table="enr", cron="0 * * * *",
+    )
+
+    res = orch.add_source(spec, SourceCredentials(user="u", password="p"))
+
+    assert res.ok is False
+    assert res.steps[0].name == "validate"
 
 
 def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():

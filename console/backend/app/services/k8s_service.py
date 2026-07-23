@@ -1,6 +1,7 @@
 """K8sService: thin CR CRUD wrapper over `kubernetes.client.CustomObjectsApi`
-(KafkaConnector/KafkaTopic — group `kafka.strimzi.io`, version `v1beta2`) and
-`kubernetes.client.CoreV1Api` (Secrets).
+(KafkaConnector/KafkaTopic — group `kafka.strimzi.io`, version `v1beta2`;
+ScheduledSparkApplication — group `sparkoperator.k8s.io`, version `v1beta2`)
+and `kubernetes.client.CoreV1Api` (Secrets).
 
 No cluster/network calls of its own — the constructor takes already-built api
 client objects, so the whole thing is unit-testable with a hand-rolled fake
@@ -14,7 +15,7 @@ apply) by attempting create and falling back to patch on a 409 (Conflict)
 from __future__ import annotations
 
 import base64
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from kubernetes.client.exceptions import ApiException
 
@@ -23,7 +24,12 @@ VERSION = "v1beta2"
 CONNECTOR_PLURAL = "kafkaconnectors"
 TOPIC_PLURAL = "kafkatopics"
 
+SPARK_GROUP = "sparkoperator.k8s.io"
+SPARK_API_VERSION = "v1beta2"
+SPARK_PLURAL = "scheduledsparkapplications"
+
 HTTP_CONFLICT = 409
+HTTP_NOT_FOUND = 404
 
 
 class K8sService:
@@ -40,16 +46,19 @@ class K8sService:
     # ----------------------------------------------------------------
 
     def apply_connector(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        return self._apply(CONNECTOR_PLURAL, body)
+        return self._apply(GROUP, VERSION, CONNECTOR_PLURAL, body)
 
     def apply_topic(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        return self._apply(TOPIC_PLURAL, body)
+        return self._apply(GROUP, VERSION, TOPIC_PLURAL, body)
 
-    def _apply(self, plural: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def apply_spark_job(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return self._apply(SPARK_GROUP, SPARK_API_VERSION, SPARK_PLURAL, body)
+
+    def _apply(self, group: str, version: str, plural: str, body: Dict[str, Any]) -> Dict[str, Any]:
         try:
             return self.custom_api.create_namespaced_custom_object(
-                group=GROUP,
-                version=VERSION,
+                group=group,
+                version=version,
                 namespace=self.namespace,
                 plural=plural,
                 body=body,
@@ -59,8 +68,8 @@ class K8sService:
                 raise
             name = body["metadata"]["name"]
             return self.custom_api.patch_namespaced_custom_object(
-                group=GROUP,
-                version=VERSION,
+                group=group,
+                version=version,
                 namespace=self.namespace,
                 plural=plural,
                 name=name,
@@ -72,15 +81,23 @@ class K8sService:
     # ----------------------------------------------------------------
 
     def delete_connector(self, name: str) -> Dict[str, Any]:
-        return self._delete(CONNECTOR_PLURAL, name)
+        return self._delete(GROUP, VERSION, CONNECTOR_PLURAL, name)
 
     def delete_topic(self, name: str) -> Dict[str, Any]:
-        return self._delete(TOPIC_PLURAL, name)
+        return self._delete(GROUP, VERSION, TOPIC_PLURAL, name)
 
-    def _delete(self, plural: str, name: str) -> Dict[str, Any]:
+    def delete_spark_job(self, name: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self._delete(SPARK_GROUP, SPARK_API_VERSION, SPARK_PLURAL, name)
+        except ApiException as exc:
+            if exc.status != HTTP_NOT_FOUND:
+                raise
+            return None
+
+    def _delete(self, group: str, version: str, plural: str, name: str) -> Dict[str, Any]:
         return self.custom_api.delete_namespaced_custom_object(
-            group=GROUP,
-            version=VERSION,
+            group=group,
+            version=version,
             namespace=self.namespace,
             plural=plural,
             name=name,

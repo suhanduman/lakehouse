@@ -98,3 +98,8 @@ register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "ent
 # disposition only in B1 (append-only; entity/upsert-from-Kafka is a later plan).
 register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "event",
                     (), "kafka-ingest", "", dispositions=("event",)))
+# S3 file-set -> Iceberg table (Spark-batch lane). Files already live in the
+# platform's own object store; a Console-driven Spark job full-refresh CTAS's
+# them into a queryable rawlake table. Not CDC/medallion — disposition is inert.
+register(SourceType("batch-s3", "batch", "s3", "spark-batch", "entity",
+                    ("s3_bucket", "s3_prefix", "file_format", "cron"), "s3-register", ""))

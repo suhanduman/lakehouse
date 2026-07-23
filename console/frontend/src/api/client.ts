@@ -30,8 +30,8 @@ export interface Source {
  * static union-typed select. */
 export interface SourceSpec {
   source: string;
-  kind: "cdc" | "scheduled" | "stream";
-  type: "mssql" | "pg" | "mongo" | "mysql" | "kafka";
+  kind: "cdc" | "scheduled" | "stream" | "batch";
+  type: "mssql" | "pg" | "mongo" | "mysql" | "kafka" | "s3";
   db: string;
   table: string;
   target_ns: string;
@@ -43,6 +43,9 @@ export interface SourceSpec {
   timestamp_col?: string;
   poll_ms?: number;
   cron?: string;
+  s3_bucket?: string;
+  s3_prefix?: string;
+  file_format?: "parquet" | "json" | "avro";
   disposition?: "entity" | "event";
   kafka_bootstrap?: string;
 }
