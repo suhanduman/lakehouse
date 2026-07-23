@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
+from app import source_types
 from app.deps import (
     get_k8s,
     get_orchestrator,
@@ -183,13 +184,20 @@ def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
         "connector": None,
         "kafka_topic": None,
     }
-    if spec.kind == "scheduled" and spec.type == "mongo":
+    descriptor = source_types.get(spec.kind, spec.type)
+    if descriptor.lane == "spark-batch":
         # Spark SparkApplication+CronJob path -- no KafkaConnector/KafkaTopic
         # to render (see render_service.render_connector's docstring).
         # connector/kafka_topic stay None rather than raising/500ing.
+        # Registry-driven (not hard-coded to scheduled+mongo) so any future
+        # spark-batch source type is handled the same way automatically.
         return preview
     preview["connector"] = render_service.render_connector(spec)
-    preview["kafka_topic"] = render_service.render_kafka_topic(render_service.topic_name(spec))
+    if descriptor.topic_key:
+        # Kafka-ingest (existing-Kafka) sources consume a pre-existing topic
+        # rather than owning one (descriptor.topic_key == ""), so there is no
+        # KafkaTopic CR to render for them -- kafka_topic stays None.
+        preview["kafka_topic"] = render_service.render_kafka_topic(render_service.topic_name(spec))
     return preview
 
 
@@ -202,6 +210,27 @@ def list_sources(
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, List[Dict[str, Any]]]:
     return {"sources": [_summary(item) for item in k8s.list_sources()]}
+
+
+# NB: registered BEFORE the `/{name}` GET below -- FastAPI/Starlette matches
+# routes in registration order, so if this came after `/{name}` a request for
+# `/api/sources/types` would be captured there instead (name="types" ->
+# 404 "source not found: types") rather than reaching this route.
+@router.get("/types", dependencies=[Depends(require_action(Action.READ))])
+def list_source_types() -> Dict[str, List[Dict[str, Any]]]:
+    """The source-type registry, for the add-source wizard to render itself
+    (types, required fields, lane/disposition) instead of hard-coding a
+    source-type list client-side."""
+    out = []
+    for d in source_types.all_types():
+        out.append({
+            "id": d.id, "kind": d.kind, "type": d.type, "lane": d.lane,
+            "disposition": d.disposition,
+            "dispositions": list(source_types.allowed_dispositions(d)),
+            "required_fields": list(d.required_fields),
+            "needs_bootstrap": d.type == "kafka",
+        })
+    return {"types": out}
 
 
 @router.get("/{name}", dependencies=[Depends(require_action(Action.READ))])

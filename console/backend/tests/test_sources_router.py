@@ -173,6 +173,14 @@ def client_as_analyst_with_fake_orch(fake_orchestrator) -> TestClient:
     return _client_as({Role.ANALYST}, orchestrator=fake_orchestrator)
 
 
+@pytest.fixture
+def client() -> TestClient:
+    # ANALYST covers both READ (/types) and SOURCE_CREATE (/preview) so the
+    # registry-API + preview-registry-routing tests below can share one
+    # fixture without tripping the authz gate on either route.
+    return _client_as({Role.ANALYST})
+
+
 # --------------------------------------------------------------------------
 # Create (POST /api/sources) -- SOURCE_CREATE
 # --------------------------------------------------------------------------
@@ -283,6 +291,37 @@ def test_preview_source_scheduled_mongo_has_no_connector_but_still_200():
     assert body["connector"] is None
     assert body["kafka_topic"] is None
     assert body["bucket"] == "src-lms-kayit"
+
+
+# --------------------------------------------------------------------------
+# Registry API (GET /api/sources/types) + preview registry-routing --
+# Plan B1 Task 4: the wizard renders itself from the registry, and preview's
+# spark-batch guard reads `source_types.get(...).lane` instead of a
+# hard-coded (kind, type) check.
+# --------------------------------------------------------------------------
+
+def test_get_source_types_lists_registry(client):
+    body = client.get("/api/sources/types").json()
+    ids = {t["id"] for t in body["types"]}
+    assert {"cdc-pg", "cdc-mysql", "stream-kafka"} <= ids
+    kafka = next(t for t in body["types"] if t["id"] == "stream-kafka")
+    assert kafka["lane"] == "kafka-connect-source"
+    assert kafka["dispositions"] == ["event"]
+    assert kafka["needs_bootstrap"] is True
+
+
+def test_preview_spark_batch_returns_no_connector(client):
+    spec = {"source": "m1", "kind": "scheduled", "type": "mongo", "db": "lms",
+            "table": "enr", "target_ns": "depo", "target_table": "enr", "cron": "0 * * * *"}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["connector"] is None
+
+
+def test_preview_kafka_ingest_renders_connector(client):
+    spec = {"source": "k1", "kind": "stream", "type": "kafka", "db": "ext",
+            "table": "orders-topic", "target_ns": "events", "target_table": "orders"}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["connector"]["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
 
 
 # --------------------------------------------------------------------------
