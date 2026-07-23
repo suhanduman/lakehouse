@@ -142,12 +142,14 @@ spec:
     mode: cluster
     image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
     mainApplicationFile: "local:///opt/spark/jobs/merge_cdc.py"
+    arguments: ["--max-parallel", {{ .Values.sparkOperator.silverMerge.mergeParallelism | quote }}]
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
     sparkConf:
       "spark.dynamicAllocation.enabled": "true"
       "spark.dynamicAllocation.shuffleTracking.enabled": "true"
       "spark.dynamicAllocation.minExecutors": "0"
       "spark.dynamicAllocation.maxExecutors": {{ .Values.sparkOperator.silverMerge.maxExecutors | quote }}
+      "spark.scheduler.mode": "FAIR"
     dynamicAllocation:
       enabled: true
       initialExecutors: 0

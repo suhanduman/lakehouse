@@ -114,6 +114,38 @@ def latest_per_key_sql(bronze_fqn: str, id_cols: list, business_cols: list) -> s
     )
 
 
+
+# --- optimistic-concurrency retry (parallel MERGE commits to one Nessie branch) ---
+# Narrow, specific spellings only -- bare "conflict"/"stale" over-match benign
+# non-retryable errors (e.g. "column name conflict").
+_CONFLICT_MARKERS = ("commit conflicts", "commitfailedexception",
+                     "commitstateunknownexception", "nessiereferenceconflict",
+                     "referenceconflictexception")
+
+
+def is_commit_conflict(exc: Exception) -> bool:
+    """True iff the exception looks like a Nessie/Iceberg optimistic-commit
+    conflict that is safe to retry (another thread advanced the branch)."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _CONFLICT_MARKERS)
+
+
+def run_with_retry(fn, *, attempts, is_retryable, sleep, base_delay=0.5):
+    """Call fn(); on a retryable exception, back off (base_delay * 2**i) and
+    retry up to `attempts` times. Re-raises the last exception on give-up or a
+    non-retryable error. Pure: `sleep` is injected so tests run at 0 delay."""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i == attempts - 1 or not is_retryable(e):
+                raise
+            sleep(base_delay * (2 ** i))
+    raise last  # unreachable
+
+
 def merge_sql(silver_fqn: str, src_view: str, id_cols: list, business_cols: list) -> str:
     on = " AND ".join(f"t.{c} = s.{c}" for c in id_cols)
     set_cols = [c for c in business_cols if c not in id_cols]

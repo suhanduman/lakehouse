@@ -121,3 +121,47 @@ def test_ts_ms_excluded_from_silver_but_not_required_beyond_cdc_contract():
     assert plan.adds == []                      # __ts_ms is NOT a business ADD
     # __ts_ms is part of the required CDC op-contract:
     assert m.has_cdc_metadata({"__op": "x", "__ts_ms": "y", "__deleted": "z"}) is True
+
+
+def test_is_commit_conflict_matches_nessie_and_iceberg():
+    assert m.is_commit_conflict(Exception("Requested commit conflicts with existing state"))
+    assert m.is_commit_conflict(Exception("org.apache.iceberg.exceptions.CommitFailedException: ..."))
+    assert m.is_commit_conflict(Exception("NessieReferenceConflictException"))
+    assert not m.is_commit_conflict(Exception("table not found"))
+
+
+def test_run_with_retry_retries_then_succeeds():
+    calls = {"n": 0}
+    slept = []
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Exception("commit conflicts with existing state")
+        return "ok"
+
+    out = m.run_with_retry(fn, attempts=5, is_retryable=m.is_commit_conflict,
+                            sleep=slept.append, base_delay=0.1)
+    assert out == "ok"
+    assert calls["n"] == 3
+    assert len(slept) == 2
+
+
+def test_run_with_retry_gives_up_and_raises_last():
+    def fn():
+        raise Exception("commit conflicts with existing state")
+    with pytest.raises(Exception, match="conflicts"):
+        m.run_with_retry(fn, attempts=3, is_retryable=m.is_commit_conflict,
+                          sleep=lambda s: None, base_delay=0.0)
+
+
+def test_run_with_retry_non_retryable_raises_immediately():
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise Exception("table not found")
+    with pytest.raises(Exception, match="not found"):
+        m.run_with_retry(fn, attempts=5, is_retryable=m.is_commit_conflict,
+                          sleep=lambda s: None)
+    assert calls["n"] == 1

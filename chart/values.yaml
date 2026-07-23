@@ -925,6 +925,7 @@ sparkOperator:
     driver: {cores: 1, memory: "1g"}
     executor: {cores: 1, memory: "1g"}
     maxExecutors: 4                    # Dynamic Allocation ceiling (minExecutors=0)
+    mergeParallelism: 4                # tables MERGEd concurrently (silver-merge --max-parallel)
 
 # Kafka Connect — single ingest plane, custom-built image. Replicas/resources are
 # values-driven; `spec.build.plugins` version pins live under `versions.*`
