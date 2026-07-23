@@ -152,6 +152,13 @@ class FakeIcebergOrch:
         self.created.append((namespace, table, tuple(identifier), layer))
         return f"{namespace}.{table}"
 
+    @property
+    def created_layers(self) -> List[str]:
+        """Convenience view over `created` for lane/disposition tests that only
+        care which layers were pre-created, not the full (ns, table, identifier,
+        layer) tuple — `layer` was already captured above, this just projects it."""
+        return [layer for (_ns, _table, _identifier, layer) in self.created]
+
 
 def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5) -> tuple:
     k8s = FakeK8s(fail_on=fail_on, status_states=status_states)
@@ -164,6 +171,16 @@ def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: in
         verify_attempts=verify_attempts, verify_delay=0.0, sleep=lambda _: None,
     )
     return orch, k8s, s3, trino
+
+
+def _orch_fakes(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5) -> tuple:
+    """Same as `_orch` but returns (orch, fakes-dict) — the shape the
+    lane/disposition tests below want (`fakes["iceberg"]`, `fakes["k8s"]`, ...).
+    No pytest fixture exists in this file (no conftest.py), so this is a plain
+    helper, not an `orchestrator_fakes` fixture (adapting the brief's snippet,
+    per the task instructions)."""
+    orch, k8s, s3, trino = _orch(fail_on=fail_on, status_states=status_states, verify_attempts=verify_attempts)
+    return orch, {"k8s": k8s, "s3": s3, "trino": trino, "iceberg": orch.iceberg}
 
 
 # --------------------------------------------------------------------------
@@ -558,6 +575,21 @@ def test_table_step_fails_loud_without_identifier_and_no_fallback():
     assert res.steps[-1].name == "table" and res.steps[-1].ok is False
 
 
+def test_table_step_entity_missing_requirements_creates_nothing_in_iceberg():
+    # Regression guard for the Critical fix: an entity source (cdc+mssql) with
+    # no columns/identifier must fail BEFORE any Iceberg write -- not create a
+    # metadata-only Bronze that later silently diverges from Silver on retry
+    # (create_table's bronze idempotency check compares identifier only, which
+    # is always []==[], so it would never notice missing business columns).
+    spec = CDC_MSSQL_SPEC.model_copy(update={"columns": None, "identifier": None})
+    orch, fakes = _orch_fakes()
+    res = orch.add_source(spec, CREDS)
+    assert res.ok is False
+    assert res.steps[-1].name == "table" and res.steps[-1].ok is False
+    assert fakes["iceberg"].created_layers == []  # nothing created -- Bronze included
+    assert fakes["k8s"].applied_connectors == [] and fakes["k8s"].applied_topics == []
+
+
 def test_rollback_on_table_failure_undoes_only_secret():
     orch, k8s, s3, trino = _orch(fail_on="table")
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
@@ -566,3 +598,76 @@ def test_rollback_on_table_failure_undoes_only_secret():
     # secret geri alındı; topic/connector hiç uygulanmadı (table connector'dan önce)
     assert k8s.deleted_secrets == ["mssql1"]
     assert k8s.applied_topics == [] and k8s.applied_connectors == []
+
+
+# --------------------------------------------------------------------------
+# Lane/disposition-aware orchestrator (Plan B1 Task 3): registry-driven
+# spark-batch reject + secret/topic skip + entity-only Silver.
+# --------------------------------------------------------------------------
+
+def _kafka_spec(**over) -> SourceSpec:
+    d = dict(
+        source="k1", kind="stream", type="kafka", db="ext", table="orders-topic",
+        target_ns="events", target_table="orders",
+    )
+    d.update(over)
+    return SourceSpec(**d)
+
+
+def test_kafka_event_skips_secret_topic_and_silver():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    assert "secret" not in names   # in-cluster: no creds -> no secret step
+    assert "topic" not in names    # existing topic: descriptor.topic_key == "" -> none created
+    assert names == ["bucket", "namespace", "table", "connector", "verify"]
+    # Bronze only (event disposition) -- no Silver create_table call at all.
+    assert fakes["iceberg"].created_layers == ["bronze"]
+
+
+def test_kafka_external_creds_creates_secret():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(
+        _kafka_spec(kafka_bootstrap="b:9093"), SourceCredentials(user="u", password="p")
+    )
+
+    assert res.ok is True
+    assert "secret" in [s.name for s in res.steps]
+    assert fakes["k8s"].created_secrets == [("k1", {"user": "u", "pass": "p"})]
+    # still no topic (kafka-ingest consumes an existing topic) and still Bronze-only.
+    assert "topic" not in [s.name for s in res.steps]
+    assert fakes["iceberg"].created_layers == ["bronze"]
+
+
+def test_spark_batch_rejected_via_registry_not_hardcoded_detail():
+    orch, _fakes = _orch_fakes()
+    spec = SourceSpec(
+        source="m1", kind="scheduled", type="mongo", db="lms",
+        table="enrollments", target_ns="depo", target_table="enr",
+        cron="0 * * * *",
+    )
+
+    res = orch.add_source(spec, SourceCredentials(user="u", password="p"))
+
+    assert res.ok is False
+    assert res.steps[0].name == "validate"
+    # registry-driven detail names the descriptor id, not a hard-coded string.
+    assert "scheduled-mongo requires the Spark batch path" in res.steps[0].detail
+
+
+def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():
+    # Guard against regressing the entity/CDC/JDBC path while adding the
+    # kafka-ingest skips above: secret+topic+Bronze+Silver must all still run.
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is True
+    assert [s.name for s in res.steps] == [
+        "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
+    ]
+    assert fakes["iceberg"].created_layers == ["bronze", "silver"]

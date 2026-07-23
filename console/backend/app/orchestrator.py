@@ -6,10 +6,13 @@ create_secret and S3Service.create_bucket already tolerate "already exists"
 — see their docstrings), so re-running add_source against an already-
 provisioned source is a cheap no-op all the way through.
 
-"table" (medallion CDC): pre-creates BOTH layers via IcebergService before
-the connector ever applies — Bronze (`<ns>_raw`, partitioned changelog, no
-identifier, rawdata warehouse) first, then Silver (`<ns>`, current-state,
-identifier/PK) — fail-loud on either.
+"table" (medallion): pre-creates via IcebergService before the connector
+ever applies. entity sources (CDC/JDBC) pre-create BOTH layers — Bronze
+(`<ns>_raw`, partitioned changelog, no identifier, rawdata warehouse) first,
+then Silver (`<ns>`, current-state, identifier/PK) — fail-loud on either.
+event sources (e.g. stream+kafka) pre-create Bronze ONLY, as a metadata
+skeleton (no identifier/columns required) — no Silver, so silver-merge skips
+them; see `SourceSpec.effective_disposition()`.
 
 Rollback: if any step raises, already-completed steps are undone in REVERSE
 order via a stack of undo callables, the failure is recorded as a
@@ -42,13 +45,27 @@ result:
 verify_attempts / verify_delay / sleep are constructor-injectable so tests
 run with zero delay.
 
-Scope note: scheduled+mongo does not go through Kafka at all (design doc
-5.2b — it's a Spark SparkApplication+CronJob), and render_service.topic_name/
-render_connector both raise NotImplementedError for that (kind, type) pair.
-Rather than let that NotImplementedError escape as an unhandled crash, this
-orchestrator scopes itself to the connector-based paths and returns a single
-clear StepResult failure for scheduled+mongo, up front, before touching any
-resource.
+Scope note: any source on the registry's spark-batch lane (today:
+scheduled+mongo — design doc 5.2b, a Spark SparkApplication+CronJob) does not
+go through Kafka at all, and render_service.topic_name/render_connector both
+raise NotImplementedError for that lane. Rather than let that
+NotImplementedError escape as an unhandled crash, this orchestrator checks
+`source_types.get(spec.kind, spec.type).lane` up front and returns a single
+clear StepResult failure for the whole spark-batch lane, before touching any
+resource. This is registry-driven (not a hard-coded (kind, type) check), so
+it generalizes to any future spark-batch source without an orchestrator
+change; kafka-connect-source sources (including stream+kafka) are NOT
+rejected here.
+
+Lane/disposition-aware steps (Plan B1): the secret step is skipped when
+`creds.user`/`creds.password` are both empty (in-cluster Kafka needs no
+external creds); the topic step is skipped when the descriptor's
+`topic_key == ""` (kafka-ingest consumes an existing topic, creates none);
+the table step always pre-creates Bronze but only pre-creates Silver — and
+only requires `spec.identifier`/`spec.columns` — when
+`spec.effective_disposition() == "entity"`. event sources get a Bronze-only
+skeleton (metadata columns + day(__ts_ms) partition; no business columns
+required) and are append-only (no Silver, so silver-merge skips them).
 """
 
 from __future__ import annotations
@@ -57,6 +74,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from app import source_types
 from app.models import SourceCredentials, SourceSpec
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX
 
@@ -126,20 +144,22 @@ class AddSourceOrchestrator:
         self.sleep = sleep
 
     def add_source(self, spec: SourceSpec, creds: SourceCredentials) -> AddSourceResult:
-        if spec.kind == "scheduled" and spec.type == "mongo":
+        descriptor = source_types.get(spec.kind, spec.type)
+        if descriptor.lane == "spark-batch":
             return AddSourceResult(
                 steps=[
                     StepResult(
                         name="validate",
                         ok=False,
                         detail=(
-                            "scheduled+mongo requires Spark batch path, not yet "
+                            f"{descriptor.id} requires the Spark batch path, not yet "
                             "supported in Console"
                         ),
                     )
                 ],
                 ok=False,
             )
+        disposition = spec.effective_disposition()
 
         steps: List[StepResult] = []
         rollback: List[Callable[[], None]] = []
@@ -168,15 +188,18 @@ class AddSourceOrchestrator:
                     pass
             return AddSourceResult(steps=steps, ok=False)
 
-        # 1. secret
-        secret_name = spec.source
+        # 1. secret -- skipped when no external creds are supplied (in-cluster
+        # Kafka needs none; external Kafka/DB creds -> secret created as before).
+        needs_secret = bool(creds.user) or bool(creds.password)
+        if needs_secret:
+            secret_name = spec.source
 
-        def _create_secret() -> Optional[str]:
-            self.k8s.create_secret(secret_name, {"user": creds.user, "pass": creds.password})
-            return None
+            def _create_secret() -> Optional[str]:
+                self.k8s.create_secret(secret_name, {"user": creds.user, "pass": creds.password})
+                return None
 
-        if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):
-            return fail()
+            if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):
+                return fail()
 
         # 2. bucket -- no undo pushed, see module docstring "Rollback scope"
         bucket = self.render.bucket_name(spec.target_ns)
@@ -216,44 +239,64 @@ class AddSourceOrchestrator:
                     "IcebergService enjekte edilmedi — tablo identifier field ile "
                     "pre-create edilemez (upsert append-only'e düşer)"
                 )
-            identifier = _resolve_identifier(spec)
-            if not identifier:
-                raise RuntimeError(
-                    f"{spec.kind}+{spec.type}: identifier (PK) gerekli — spec.identifier "
-                    "verin (sink auto-create identifier koymaz → upsert append-only)"
-                )
-            if not spec.columns:
-                raise RuntimeError(
-                    "spec.columns gerekli (tablo şeması) — Console form/discovery ile "
-                    "doldurun ya da create_iceberg_table.py kullanın"
-                )
-            cols = [c.model_dump() for c in spec.columns]
             # location=None: namespace + konumu yukarıdaki Trino adımı kurdu;
             # iceberg yalnızca tabloyu (identifier field ile) yaratır.
-            # Bronze ÖNCE (identifier=[] — IcebergService zaten bronze için
-            # zorluyor, burada açıkça de veriliyor okunabilirlik için).
+            cols = [c.model_dump() for c in spec.columns] if spec.columns else []
+            if disposition == "entity":
+                # Validate BEFORE any Iceberg write: a misconfigured entity
+                # source must create NOTHING (Plan A invariant).
+                # create_table's idempotency check (layer="bronze") compares
+                # only identifier fields — always []==[] → trivially equal —
+                # and never reconciles columns. If Bronze were created here
+                # first with empty/wrong columns, a later resubmit with the
+                # correct spec.columns would find the table "already exists"
+                # and silently skip adding the business columns -> permanent,
+                # silent Bronze/Silver schema divergence. So: check first,
+                # write second.
+                identifier = _resolve_identifier(spec)
+                if not identifier:
+                    raise RuntimeError(
+                        f"{spec.kind}+{spec.type}: identifier (PK) gerekli — spec.identifier "
+                        "verin (sink auto-create identifier koymaz → upsert append-only)"
+                    )
+                if not spec.columns:
+                    raise RuntimeError(
+                        "spec.columns gerekli (tablo şeması) — Console form/discovery ile "
+                        "doldurun ya da create_iceberg_table.py kullanın"
+                    )
+                bronze_fq = self.iceberg.create_table(
+                    f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
+                    location=None, layer="bronze",
+                )
+                silver_fq = self.iceberg.create_table(
+                    spec.target_ns, spec.target_table, cols, identifier,
+                    location=None, layer="silver",
+                )
+                return f"{bronze_fq} + {silver_fq} (identifier={identifier})"
+            # event/append-only: Bronze skeleton only (columns may be empty —
+            # metadata cols + day(__ts_ms) partition come from IcebergService
+            # itself; no business-column requirement here). No Silver ->
+            # silver-merge skips this source entirely.
             bronze_fq = self.iceberg.create_table(
                 f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
                 location=None, layer="bronze",
             )
-            silver_fq = self.iceberg.create_table(
-                spec.target_ns, spec.target_table, cols, identifier,
-                location=None, layer="silver",
-            )
-            return f"{bronze_fq} + {silver_fq} (identifier={identifier})"
+            return f"{bronze_fq} (event/append-only, no Silver)"
 
         if not run("table", _precreate_table):
             return fail()
 
-        # 4. topic
-        def _apply_topic() -> Optional[str]:
-            ctx["topic_name"] = self.render.topic_name(spec)
-            ctx["topic_body"] = self.render.render_kafka_topic(ctx["topic_name"])
-            self.k8s.apply_topic(ctx["topic_body"])
-            return None
+        # 4. topic -- skipped when the descriptor has no topic_key (kafka-ingest
+        # consumes an existing topic; creates none).
+        if descriptor.topic_key:
+            def _apply_topic() -> Optional[str]:
+                ctx["topic_name"] = self.render.topic_name(spec)
+                ctx["topic_body"] = self.render.render_kafka_topic(ctx["topic_name"])
+                self.k8s.apply_topic(ctx["topic_body"])
+                return None
 
-        if not run("topic", _apply_topic, lambda: self.k8s.delete_topic(ctx.get("topic_name"))):
-            return fail()
+            if not run("topic", _apply_topic, lambda: self.k8s.delete_topic(ctx.get("topic_name"))):
+                return fail()
 
         # 5. connector
         def _apply_connector() -> Optional[str]:

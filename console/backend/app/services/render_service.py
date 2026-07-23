@@ -22,6 +22,7 @@ from app.models import SourceSpec
 from app import source_types
 
 APICURIO_URL = "http://apicurio-registry:8080/apis/registry/v2"
+NESSIE_URI = "http://nessie:19120/iceberg/"   # in-cluster Nessie Iceberg REST (svc `nessie`)
 SCHEMA_HISTORY_BOOTSTRAP = "kafka-kafka-bootstrap:9093"
 DEFAULT_POLL_MS = "3600000"
 # Apicurio schema auto-register for every rendered Avro connector. Prod-safe
@@ -490,11 +491,113 @@ def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
     return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
 
 
+def _kafka_consumer_override(spec: SourceSpec) -> dict:
+    """External-Kafka consumer overrides. A Kafka Connect SINK normally reads
+    from the worker's own cluster; `consumer.override.*` (allowed by the
+    default connector.client.config.override.policy=All on Kafka 3.0+, set
+    explicitly in 12-kafka-connect.yaml) reroutes THIS sink's input consumer to
+    the customer's external brokers. Empty when spec.kafka_bootstrap is None
+    (reads the in-cluster Kafka)."""
+    if not spec.kafka_bootstrap:
+        return {}
+    user = _cred(spec.source, "user")
+    password = _cred(spec.source, "pass")
+    return {
+        "consumer.override.bootstrap.servers": spec.kafka_bootstrap,
+        "consumer.override.security.protocol": "SASL_SSL",
+        "consumer.override.sasl.mechanism": "SCRAM-SHA-512",
+        "consumer.override.sasl.jaas.config": (
+            "org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="{user}" password="{password}";'
+        ),
+        # TLS truststore for the external cluster's CA — mounted like kafka-ca;
+        # see Task 5 (external-Kafka TLS is a documented hardening prerequisite).
+        "consumer.override.ssl.truststore.location": "/mnt/external-configuration/ext-kafka-ca/ca.p12",
+        "consumer.override.ssl.truststore.password": _cred("ext-kafka-ca", "ca.password"),
+        "consumer.override.ssl.truststore.type": "PKCS12",
+    }
+
+
+def _render_kafka_ingest(spec: SourceSpec) -> dict:
+    """stream+kafka (event/append-only) -> a DEDICATED Iceberg sink KafkaConnector
+    that reads an existing topic (in-cluster or external) directly and lands an
+    append-only change-log in its own Bronze table. Separate from the shared
+    CDC/JDBC sinks; no message duplication. Bronze is pre-created as a metadata
+    skeleton by the orchestrator; evolve-schema adds business columns."""
+    name = f"kafka-ingest-{spec.source}-{spec.target_table}"
+    config: dict = {
+        "topics": spec.table,
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter.schemas.enable": "false",
+        # --- Nessie REST catalog + S3 (all deployment values via colon-form) ---
+        "iceberg.catalog.type": "rest",
+        "iceberg.catalog.uri": NESSIE_URI,
+        "iceberg.catalog.warehouse": "rawdata",
+        "iceberg.catalog.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+        "iceberg.catalog.s3.path-style-access": "true",
+        "iceberg.catalog.s3.endpoint": _cred("s3", "endpoint"),
+        "iceberg.catalog.s3.access-key-id": _cred("s3", "access-key-id"),
+        "iceberg.catalog.s3.secret-access-key": _cred("s3", "secret-access-key"),
+        # --- fan-out routing + auto-create/evolve (no upfront business schema) ---
+        "iceberg.tables.dynamic-enabled": "true",
+        "iceberg.tables.route-field": "_target_table",
+        "iceberg.tables.auto-create-enabled": "true",
+        "iceberg.tables.evolve-schema-enabled": "true",
+        "iceberg.control.commit.interval-ms": "60000",
+        # Control-group stability. This dedicated sink is Console-rendered, so
+        # (unlike the chart's shared sinks) it does NOT inherit
+        # `connectors.icebergSink.kafkaClientOverrides`. Without a long control
+        # consumer session/commit window, the sink's `cg-control-*` consumer
+        # flaps (JoinGroup UNKNOWN_MEMBER_ID) on a resource-constrained/single-
+        # worker Connect and every commit reports "committed to 0 table(s)" —
+        # rows never land in Bronze. These are Console-specific defaults tuned
+        # for a constrained/single-worker Connect (NOT synced to the chart's
+        # shared-sink `kafkaClientOverrides`, which differ per overlay) and are
+        # overridable via the Console edit-before-apply step. Verified necessary
+        # on constrained microk8s (Plan B1 Task 7).
+        "iceberg.control.commit.timeout-ms": "120000",
+        "iceberg.kafka.session.timeout.ms": "120000",
+        "iceberg.kafka.heartbeat.interval.ms": "15000",
+        "iceberg.kafka.request.timeout.ms": "130000",
+        "iceberg.kafka.max.poll.interval.ms": "300000",
+        # --- SMTs: route + synthesize medallion metadata (event: __op=u/__deleted=false) ---
+        "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
+        "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setop.static.field": "__op",
+        "transforms.setop.static.value": "u",
+        "transforms.setdel.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setdel.static.field": "__deleted",
+        "transforms.setdel.static.value": "false",
+        # __ts_ms from the Kafka record timestamp (there is no source event-time),
+        # then normalize to a Connect Timestamp for the day(__ts_ms) Bronze partition.
+        "transforms.tsms.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.tsms.timestamp.field": "__ts_ms",
+        "transforms.tsconv.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+        "transforms.tsconv.field": "__ts_ms",
+        "transforms.tsconv.target.type": "Timestamp",
+        # deterministic dedup tie-break metadata (parity with the Plan A sinks)
+        "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.kafkameta.offset.field": "__kafka_offset",
+        "transforms.kafkameta.partition.field": "__kafka_partition",
+        # --- errors / DLQ ---
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{name}.dlq",
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_kafka_consumer_override(spec))
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
+
+
 _RENDERERS = {
     "cdc-relational": _render_cdc_relational,
     "cdc-mongo": _render_cdc_mongo,
     "scheduled-jdbc": _render_scheduled_jdbc,
     "cdc-mysql": _render_cdc_mysql,
+    "kafka-ingest": _render_kafka_ingest,
 }
 
 

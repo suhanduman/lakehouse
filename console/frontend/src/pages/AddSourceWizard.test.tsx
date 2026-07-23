@@ -1,7 +1,58 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as client from "../api/client";
+import type { SourceTypeDescriptor } from "../api/client";
 import AddSourceWizard from "./AddSourceWizard";
+
+// Mirrors the live registry (console/backend/app/source_types.py) as of
+// Plan B1 Task 4 -- kept in sync so the wizard's default-path tests exercise
+// the same shape `GET /api/sources/types` really returns.
+const DEFAULT_SOURCE_TYPES: SourceTypeDescriptor[] = [
+  {
+    id: "cdc-mssql", kind: "cdc", type: "mssql", lane: "debezium-cdc",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["db_host"], needs_bootstrap: false,
+  },
+  {
+    id: "cdc-pg", kind: "cdc", type: "pg", lane: "debezium-cdc",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["db_host"], needs_bootstrap: false,
+  },
+  {
+    id: "cdc-mongo", kind: "cdc", type: "mongo", lane: "debezium-cdc",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["mongo_uri"], needs_bootstrap: false,
+  },
+  {
+    id: "cdc-mysql", kind: "cdc", type: "mysql", lane: "debezium-cdc",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["db_host"], needs_bootstrap: false,
+  },
+  {
+    id: "scheduled-jdbc-mssql", kind: "scheduled", type: "mssql", lane: "kafka-connect-source",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["jdbc_url", "incrementing_col"], needs_bootstrap: false,
+  },
+  {
+    id: "scheduled-jdbc-pg", kind: "scheduled", type: "pg", lane: "kafka-connect-source",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["jdbc_url", "incrementing_col"], needs_bootstrap: false,
+  },
+  {
+    id: "scheduled-mongo", kind: "scheduled", type: "mongo", lane: "spark-batch",
+    disposition: "entity", dispositions: ["entity"],
+    required_fields: ["cron"], needs_bootstrap: false,
+  },
+  {
+    id: "stream-kafka", kind: "stream", type: "kafka", lane: "kafka-connect-source",
+    disposition: "event", dispositions: ["event"],
+    required_fields: [], needs_bootstrap: true,
+  },
+];
+
+beforeEach(() => {
+  vi.spyOn(client, "getSourceTypes").mockResolvedValue(DEFAULT_SOURCE_TYPES);
+});
 
 const PREVIEW_RESPONSE = {
   bucket: "src-mssql-ogrenci",
@@ -29,11 +80,15 @@ function fillStep1() {
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
 }
 
-function fillStep2() {
+async function fillStep2() {
   fireEvent.change(screen.getByLabelText(/source name/i), {
     target: { value: "mssql1" },
   });
-  fireEvent.change(screen.getByLabelText(/database host/i), {
+  // db_host only renders once the registry fetch (kicked off on mount)
+  // resolves and the "cdc"+"mssql" descriptor is known to require it --
+  // findByLabelText polls, giving that microtask a chance to land.
+  const dbHost = await screen.findByLabelText(/database host/i);
+  fireEvent.change(dbHost, {
     target: { value: "mssql1.internal" },
   });
   fireEvent.change(screen.getByLabelText(/^username/i), {
@@ -67,7 +122,7 @@ function fillStep4() {
 
 async function fillThroughPreview() {
   fillStep1();
-  fillStep2();
+  await fillStep2();
   fillStep3();
   fillStep4();
   // Now on the preview step.
@@ -171,12 +226,53 @@ describe("AddSourceWizard", () => {
     render(<AddSourceWizard />);
 
     fillStep1();
-    fillStep2();
+    await fillStep2();
     fillStep3();
     fillStep4();
     fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
 
     expect(await screen.findByText(/boom/i)).toBeInTheDocument();
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("lists stream/kafka from the registry and shows a bootstrap field", async () => {
+    vi.spyOn(client, "getSourceTypes").mockResolvedValue([
+      {
+        id: "cdc-pg", kind: "cdc", type: "pg", lane: "debezium-cdc", disposition: "entity",
+        dispositions: ["entity"], required_fields: ["db_host"], needs_bootstrap: false,
+      },
+      {
+        id: "stream-kafka", kind: "stream", type: "kafka", lane: "kafka-connect-source",
+        disposition: "event", dispositions: ["event"], required_fields: [], needs_bootstrap: true,
+      },
+    ]);
+
+    render(<AddSourceWizard />);
+
+    // Type options come from the mocked registry, not a hard-coded
+    // mssql/scheduled/mongo list -- "scheduled" and "mssql" (the wizard's
+    // former hard-coded defaults) are absent from this two-entry registry.
+    await screen.findByRole("option", { name: /^stream$/i });
+    expect(screen.queryByRole("option", { name: /^scheduled$/i })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^kafka$/i });
+    expect(screen.queryByRole("option", { name: /^mssql$/i })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "kafka" } });
+
+    // Choosing the needs_bootstrap=true type surfaces the bootstrap input.
+    expect(
+      await screen.findByLabelText(/kafka bootstrap \(external, optional\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an error alert (and doesn't crash) when getSourceTypes fails on mount", async () => {
+    vi.spyOn(client, "getSourceTypes").mockRejectedValue(new Error("registry unreachable"));
+
+    render(<AddSourceWizard />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /failed to load source types: registry unreachable/i,
+    );
   });
 });

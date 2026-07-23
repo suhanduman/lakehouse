@@ -35,6 +35,7 @@ class SourceType:
     render_key: str                      # key into render_service._RENDERERS ("" => no KafkaConnector)
     topic_key: str                       # key into render_service._TOPICS ("" => no Kafka topic)
     plugin: Tuple[str, ...] = ()         # Strimzi spec.build artifact URLs (Plan B)
+    dispositions: Tuple[str, ...] = ()   # allowed set; empty => (disposition,)
 
 
 REGISTRY: Dict[Tuple[str, str], SourceType] = {}
@@ -45,6 +46,10 @@ def register(st: SourceType) -> SourceType:
     assert st.disposition in DISPOSITIONS, f"bad disposition {st.disposition!r}"
     REGISTRY[(st.kind, st.type)] = st
     return st
+
+
+def allowed_dispositions(st: "SourceType") -> Tuple[str, ...]:
+    return st.dispositions or (st.disposition,)
 
 
 def get(kind: str, type: str) -> SourceType:
@@ -88,3 +93,8 @@ register(SourceType("scheduled-jdbc-pg", "scheduled", "pg", "kafka-connect-sourc
 # exactly as today, and the orchestrator rejects it up front.
 register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "entity",
                     ("cron",), "", ""))
+# existing-Kafka: consume a topic (in-cluster or external) into its own Bronze
+# via a DEDICATED Iceberg sink (see render_service._render_kafka_ingest). event
+# disposition only in B1 (append-only; entity/upsert-from-Kafka is a later plan).
+register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "event",
+                    (), "kafka-ingest", "", dispositions=("event",)))

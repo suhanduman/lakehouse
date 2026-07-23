@@ -452,3 +452,56 @@ def test_renderers_cover_every_connector_source_type():
             assert d.render_key in r._RENDERERS
         if d.topic_key:
             assert d.topic_key in r._TOPICS
+
+
+# --------------------------------------------------------------------------
+# stream+kafka (Plan B1) -> dedicated Iceberg sink KafkaConnector
+# --------------------------------------------------------------------------
+
+def _kafka(**over):
+    from app.models import SourceSpec
+    d = dict(source="k1", kind="stream", type="kafka", db="ext", table="orders-topic",
+             target_ns="events", target_table="orders")
+    d.update(over)
+    return SourceSpec(**d)
+
+
+def test_kafka_ingest_internal_no_consumer_override():
+    body = r.render_connector(_kafka())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
+    assert c["topics"] == "orders-topic"
+    assert c["iceberg.catalog.uri"] == "http://nessie:19120/iceberg/"
+    assert c["iceberg.catalog.warehouse"] == "rawdata"
+    assert c["iceberg.catalog.s3.endpoint"] == "${directory:/mnt/external-configuration/s3:endpoint}"
+    assert c["iceberg.tables.route-field"] == "_target_table"
+    assert c["iceberg.tables.evolve-schema-enabled"] == "true"
+    assert c["transforms.route.static.value"] == "events_raw.orders"
+    assert c["transforms.setop.static.value"] == "u"
+    assert c["transforms.kafkameta.offset.field"] == "__kafka_offset"
+    assert not any(k.startswith("consumer.override.") for k in c)   # internal => no override
+    assert body["metadata"]["name"] == "kafka-ingest-k1-orders"
+
+
+def test_kafka_ingest_external_has_consumer_override_and_creds():
+    body = r.render_connector(_kafka(kafka_bootstrap="broker.customer:9093"))
+    c = body["spec"]["config"]
+    assert c["consumer.override.bootstrap.servers"] == "broker.customer:9093"
+    assert c["consumer.override.security.protocol"] == "SASL_SSL"
+    assert "${directory:/mnt/external-configuration/k1:pass}" in c["consumer.override.sasl.jaas.config"]
+
+
+def test_kafka_ingest_registered():
+    assert "kafka-ingest" in r._RENDERERS
+
+
+def test_kafka_ingest_has_control_group_overrides():
+    # Console-rendered dedicated sink must carry the iceberg.kafka.* control-group
+    # timeout overrides (Plan B1 Task 7: without them the cg-control consumer flaps
+    # on a constrained Connect and commits report "0 table(s)" — rows never land).
+    c = r.render_connector(_kafka())["spec"]["config"]
+    assert c["iceberg.control.commit.timeout-ms"] == "120000"
+    assert c["iceberg.kafka.session.timeout.ms"] == "120000"
+    assert c["iceberg.kafka.heartbeat.interval.ms"] == "15000"
+    assert c["iceberg.kafka.request.timeout.ms"] == "130000"
+    assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"

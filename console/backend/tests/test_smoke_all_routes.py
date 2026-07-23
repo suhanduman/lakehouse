@@ -163,6 +163,7 @@ def admin_client() -> TestClient:
 ENDPOINTS: List[Dict[str, Any]] = [
     {"method": "GET", "template": "/healthz", "path": "/healthz"},
     {"method": "GET", "template": "/api/sources", "path": "/api/sources"},
+    {"method": "GET", "template": "/api/sources/types", "path": "/api/sources/types"},
     {
         "method": "POST",
         "template": "/api/sources",
