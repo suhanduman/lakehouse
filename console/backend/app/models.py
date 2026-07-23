@@ -59,7 +59,7 @@ class SourceSpec(BaseModel):
         try:
             descriptor = source_types.get(self.kind, self.type)
         except KeyError as e:
-            raise ValueError(str(e))  # -> "unknown source (kind=..., type=...)"
+            raise ValueError(str(e)) from e  # -> "unknown source (kind=..., type=...)"
         missing = [f for f in descriptor.required_fields if not getattr(self, f)]
         if missing:
             raise ValueError(

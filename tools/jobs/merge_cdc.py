@@ -277,7 +277,6 @@ def run(spark, args) -> int:
 
     # ---- normal tick: parallel per-table MERGE, aggregate non-zero exit ----
     from concurrent.futures import ThreadPoolExecutor
-    import threading
 
     pairs = []
     for bronze_fqn, silver_fqn in _discover_bronze(spark, args):

@@ -37,7 +37,7 @@ name: release
 # further action, the packaged/published chart's DEFAULTS would still point
 # at `chart/values.yaml`'s in-repo placeholders (`global.imageRegistry:
 # image-registry.openshift-image-registry.svc:5000/lakehouse`, `versions.
-# {connect,consoleBackend,consoleFrontend}ImageTag: "1.0"`), i.e. NOT the
+# {connect,spark,consoleBackend,consoleFrontend}ImageTag: "1.0"`), i.e. NOT the
 # images this same workflow just built and pushed to ghcr.io. The `chart`
 # job below rewrites its checked-out (workspace-only, never committed) copy
 # of `chart/values.yaml` with `yq` before packaging, so the OCI chart's
@@ -129,6 +129,9 @@ jobs:
           - name: iceberg-tools
             dockerfile: images/iceberg-tools/Dockerfile
             image: iceberg-tools
+          - name: spark-py
+            dockerfile: images/spark-py/Dockerfile
+            image: spark-py
           - name: console-backend
             dockerfile: console/backend/Dockerfile
             image: console-backend
@@ -188,7 +191,8 @@ jobs:
             .global.imageRegistry = strenv(REGISTRY) |
             .versions.connectImageTag = strenv(RELEASE_VERSION) |
             .versions.consoleBackendImageTag = strenv(RELEASE_VERSION) |
-            .versions.consoleFrontendImageTag = strenv(RELEASE_VERSION)
+            .versions.consoleFrontendImageTag = strenv(RELEASE_VERSION) |
+            .versions.sparkImageTag = strenv(RELEASE_VERSION)
           ' chart/values.yaml
 
       - name: helm package
