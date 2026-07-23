@@ -31,8 +31,8 @@ class SourceSpec(BaseModel):
     """
 
     source: str
-    kind: Literal["cdc", "scheduled"]
-    type: Literal["mssql", "pg", "mongo", "mysql"]
+    kind: Literal["cdc", "scheduled", "stream"]
+    type: Literal["mssql", "pg", "mongo", "mysql", "kafka"]
     db: str
     table: str
     target_ns: str
@@ -45,6 +45,8 @@ class SourceSpec(BaseModel):
     timestamp_col: Optional[str] = None
     poll_ms: Optional[int] = None
     cron: Optional[str] = None
+    disposition: Optional[Literal["entity", "event"]] = None
+    kafka_bootstrap: Optional[str] = None   # existing-Kafka: external brokers (None => in-cluster)
 
     # Iceberg tablo pre-create için hedef şema + PK: sink auto-create identifier
     # koymadığından tablo, connector'dan önce identifier field ile yaratılmalı —
@@ -66,7 +68,17 @@ class SourceSpec(BaseModel):
                 f"{self.kind}+{self.type} requires {list(descriptor.required_fields)} "
                 f"(missing: {', '.join(missing)})"
             )
+        if self.disposition is not None:
+            allowed = source_types.allowed_dispositions(descriptor)
+            if self.disposition not in allowed:
+                raise ValueError(
+                    f"{self.kind}+{self.type} disposition must be one of {list(allowed)} "
+                    f"(got {self.disposition!r})"
+                )
         return self
+
+    def effective_disposition(self) -> str:
+        return self.disposition or source_types.get(self.kind, self.type).disposition
 
 
 class SourceCredentials(BaseModel):

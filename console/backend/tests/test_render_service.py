@@ -447,8 +447,14 @@ def test_render_connector_dispatches_via_registry():
 
 def test_renderers_cover_every_connector_source_type():
     from app import source_types as st
+    # "kafka-ingest" (stream+kafka) is registered ahead of its renderer by
+    # design: Plan B1 Task 1 adds the registry entry only (see
+    # source_types.py's stream-kafka comment); a later Plan B task adds
+    # render_service._render_kafka_ingest. Remove this exception once that
+    # renderer lands and _RENDERERS["kafka-ingest"] exists.
+    PENDING_RENDER_KEYS = {"kafka-ingest"}
     for d in st.all_types():
-        if d.render_key:
+        if d.render_key and d.render_key not in PENDING_RENDER_KEYS:
             assert d.render_key in r._RENDERERS
         if d.topic_key:
             assert d.topic_key in r._TOPICS

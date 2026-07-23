@@ -108,3 +108,38 @@ def test_cdc_mysql_requires_db_host():
 def test_cdc_mysql_valid():
     s = SourceSpec(**_base(type="mysql"))
     assert s.type == "mysql"
+
+
+def _kafka(**over):
+    d = dict(source="k1", kind="stream", type="kafka", db="ext", table="orders-topic",
+             target_ns="events", target_table="orders")
+    d.update(over)
+    return d
+
+
+def test_stream_kafka_valid_defaults_event():
+    s = SourceSpec(**_kafka())
+    assert s.effective_disposition() == "event"
+    assert s.kafka_bootstrap is None
+
+
+def test_stream_kafka_external_bootstrap():
+    s = SourceSpec(**_kafka(kafka_bootstrap="broker.customer:9093"))
+    assert s.kafka_bootstrap == "broker.customer:9093"
+
+
+def test_disposition_entity_rejected_for_event_only_type():
+    with pytest.raises(ValidationError, match="disposition"):
+        SourceSpec(**_kafka(disposition="entity"))   # stream-kafka allows only event in B1
+
+
+def test_cdc_pg_still_entity():
+    s = SourceSpec(**_base())          # from Plan A's test helper
+    assert s.effective_disposition() == "entity"
+
+
+def test_stream_non_kafka_type_is_unregistered():
+    # Extending the `type` Literal to include "kafka" makes stream+mssql a
+    # valid Literal combo, but it isn't registered -> registry KeyError path.
+    with pytest.raises(ValidationError, match="unknown source"):
+        SourceSpec(**_kafka(type="mssql"))

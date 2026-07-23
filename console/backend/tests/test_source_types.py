@@ -42,3 +42,16 @@ def test_type_names_are_distinct_and_cover_existing():
 def test_get_unknown_raises():
     with pytest.raises(KeyError):
         st.get("cdc", "nope")
+
+
+def test_stream_kafka_registered_event_only():
+    d = st.get("stream", "kafka")
+    assert d.lane == "kafka-connect-source"
+    assert d.render_key == "kafka-ingest"
+    assert d.topic_key == ""            # consumes an existing topic; creates none
+    assert st.allowed_dispositions(d) == ("event",)
+
+
+def test_allowed_dispositions_defaults_to_single():
+    d = st.get("cdc", "pg")
+    assert st.allowed_dispositions(d) == ("entity",)   # from .disposition, no .dispositions
