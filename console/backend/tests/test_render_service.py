@@ -394,3 +394,33 @@ def test_jdbc_synthesizes_op_and_deleted_upsert_only():
     assert cfg["transforms.tsfield.renames"] == "updated_at:__ts_ms"
     assert "transforms.setts.timestamp.field" not in cfg
     assert "ingestts" not in cfg["transforms"]
+
+
+# --------------------------------------------------------------------------
+# Registry-driven dispatch (render_service reads app.source_types instead of
+# hard-coded kind/type if/elif chains)
+# --------------------------------------------------------------------------
+
+def _pg():
+    return SourceSpec(source="pg1", kind="cdc", type="pg", db="appdb",
+                      table="public.orders", target_ns="depo", target_table="orders",
+                      db_host="h")
+
+
+def test_topic_name_dispatches_via_registry():
+    assert r.topic_name(_pg()) == "cdc.pg1.public.orders"
+
+
+def test_render_connector_dispatches_via_registry():
+    body = r.render_connector(_pg())
+    assert body["spec"]["class"] == "io.debezium.connector.postgresql.PostgresConnector"
+    assert body["metadata"]["name"] == "dbz-pg1-orders"
+
+
+def test_renderers_cover_every_connector_source_type():
+    from app import source_types as st
+    for d in st.all_types():
+        if d.render_key:
+            assert d.render_key in r._RENDERERS
+        if d.topic_key:
+            assert d.topic_key in r._TOPICS

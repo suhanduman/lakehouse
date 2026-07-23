@@ -19,6 +19,7 @@ import re
 from typing import Optional, Tuple
 
 from app.models import SourceSpec
+from app import source_types
 
 APICURIO_URL = "http://apicurio-registry:8080/apis/registry/v2"
 SCHEMA_HISTORY_BOOTSTRAP = "kafka-kafka-bootstrap:9093"
@@ -143,27 +144,39 @@ def _connector(name: str, klass: str, config: dict) -> dict:
 # topic_name / render_kafka_topic
 # --------------------------------------------------------------------------
 
+def _topic_cdc_relational(spec: SourceSpec) -> str:
+    # dbz-mssql-students.yaml: topic.prefix "cdc.<source>" + table.include.list
+    # "dbo.students" -> "cdc.<source>.dbo.students".
+    return f"cdc.{spec.source}.{spec.table}"
+
+
+def _topic_cdc_mongo(spec: SourceSpec) -> str:
+    return f"mongo.{spec.db}.{spec.table}"
+
+
+def _topic_scheduled_jdbc(spec: SourceSpec) -> str:
+    prefix, name = _jdbc_topic_parts(spec)
+    return f"{prefix}{name}"
+
+
+_TOPICS = {
+    "cdc-relational": _topic_cdc_relational,
+    "cdc-mongo": _topic_cdc_mongo,
+    "scheduled-jdbc": _topic_scheduled_jdbc,
+}
+
+
 def topic_name(spec: SourceSpec) -> str:
     """The Kafka topic a given source's data lands on, matching each connector
     type's own topic-naming convention in A's concrete examples."""
-    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
-        # dbz-mssql-students.yaml: topic.prefix "cdc.mssql1" + table.include.list
-        # "dbo.students" -> topic "cdc.mssql1.dbo.students".
-        return f"cdc.{spec.source}.{spec.table}"
-    if spec.kind == "cdc" and spec.type == "mongo":
-        # dbz-mongo-lms.yaml: topic.prefix "mongo.lms" (mongo.<db>) + collection
-        # "enrollments" -> topic "mongo.lms.enrollments".
-        return f"mongo.{spec.db}.{spec.table}"
-    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
-        # jdbc-mssql-scheduled.yaml: topic.prefix "jdbc.mssql1.dbo." + table.whitelist
-        # "courses" (Aiven JDBC concatenates prefix+table directly, no extra dot).
-        prefix, name = _jdbc_topic_parts(spec)
-        return f"{prefix}{name}"
-    raise NotImplementedError(
-        f"topic_name: no Kafka topic for kind={spec.kind!r} type={spec.type!r} "
-        "(scheduled+mongo uses a Spark batch CronJob, see "
-        "tools/templates/source-scheduled-mongo-spark.yaml, and bypasses Kafka)"
-    )
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _TOPICS.get(descriptor.topic_key)
+    if fn is None:
+        raise NotImplementedError(
+            f"topic_name: no Kafka topic for {descriptor.id} "
+            f"(lane={descriptor.lane}); the spark-batch lane bypasses Kafka"
+        )
+    return fn(spec)
 
 
 def render_kafka_topic(topic_name: str) -> dict:
@@ -415,22 +428,24 @@ def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
     return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
 
 
-def render_connector(spec: SourceSpec) -> dict:
-    """Dispatch on (spec.kind, spec.type) -> KafkaConnector dict.
+_RENDERERS = {
+    "cdc-relational": _render_cdc_relational,
+    "cdc-mongo": _render_cdc_mongo,
+    "scheduled-jdbc": _render_scheduled_jdbc,
+}
 
-    scheduled+mongo is intentionally NOT handled here: that path is a Spark
-    SparkApplication+CronJob, not a KafkaConnector (see
-    tools/templates/source-scheduled-mongo-spark.yaml) — out of scope for
-    this function's contract.
-    """
-    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
-        return _render_cdc_relational(spec)
-    if spec.kind == "cdc" and spec.type == "mongo":
-        return _render_cdc_mongo(spec)
-    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
-        return _render_scheduled_jdbc(spec)
-    raise NotImplementedError(
-        f"render_connector: no KafkaConnector rendering for kind={spec.kind!r} "
-        f"type={spec.type!r} (scheduled+mongo uses a Spark CronJob, see "
-        "tools/templates/source-scheduled-mongo-spark.yaml)"
-    )
+
+def render_connector(spec: SourceSpec) -> dict:
+    """Dispatch on the source-type registry -> KafkaConnector dict.
+
+    The spark-batch lane (e.g. scheduled+mongo) has no render_key and is
+    intentionally not a KafkaConnector — it raises NotImplementedError, and
+    the orchestrator rejects it up front (see orchestrator module docstring)."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _RENDERERS.get(descriptor.render_key)
+    if fn is None:
+        raise NotImplementedError(
+            f"render_connector: no KafkaConnector rendering for {descriptor.id} "
+            f"(lane={descriptor.lane}); the spark-batch lane uses a Spark CronJob"
+        )
+    return fn(spec)
