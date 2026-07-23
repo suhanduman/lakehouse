@@ -615,3 +615,62 @@ def render_connector(spec: SourceSpec) -> dict:
             f"(lane={descriptor.lane}); the spark-batch lane uses a Spark CronJob"
         )
     return fn(spec)
+
+
+# --------------------------------------------------------------------------
+# render_spark_job — dispatch + per-render_key builders (spark-batch lane)
+# --------------------------------------------------------------------------
+
+SPARK_VERSION = "3.5.1"   # matches chart versions.sparkVersion (spark-py image)
+
+
+def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
+    """batch+s3 -> a ScheduledSparkApplication that, on spec.cron, full-refresh
+    CTAS's the files under s3a://<bucket>/<prefix> into rawlake.<ns>.<table>
+    (Iceberg). Register once; each tick re-derives the table (CREATE OR
+    REPLACE) so newly-arrived files stay query-visible. Mirrors the chart's
+    ScheduledSparkApplication shape (05-spark-operator.yaml)."""
+    name = f"s3-register-{spec.source}-{spec.target_table}"
+    target = f"rawlake.{spec.target_ns}.{spec.target_table}"
+    envfrom = [{"secretRef": {"name": s3_secret_name}}]
+    mounts = [{"name": "spark-conf", "mountPath": "/opt/spark/conf"}]
+    return {
+        "apiVersion": "sparkoperator.k8s.io/v1beta2",
+        "kind": "ScheduledSparkApplication",
+        "metadata": {"name": name},   # namespace supplied by the API layer (see _connector)
+        "spec": {
+            "schedule": spec.cron,
+            "concurrencyPolicy": "Forbid",
+            "template": {
+                "type": "Python",
+                "mode": "cluster",
+                "image": spark_image,
+                "sparkVersion": SPARK_VERSION,
+                "mainApplicationFile": "local:///opt/spark/jobs/s3_register_table.py",
+                "arguments": ["--bucket", spec.s3_bucket, "--prefix", spec.s3_prefix,
+                              "--format", spec.file_format, "--target", target],
+                "restartPolicy": {"type": "Never"},
+                "driver": {"cores": 1, "memory": "1g", "serviceAccount": "spark-driver",
+                           "envFrom": envfrom, "volumeMounts": mounts},
+                "executor": {"cores": 1, "instances": 1, "memory": "1g",
+                             "envFrom": envfrom, "volumeMounts": mounts},
+                "volumes": [{"name": "spark-conf", "configMap": {"name": "spark-defaults"}}],
+            },
+        },
+    }
+
+
+_SPARK_RENDERERS = {"s3-register": _render_s3_register}
+
+
+def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
+    """Dispatch on the source-type registry -> ScheduledSparkApplication dict
+    (spark-batch lane). A spark-batch source with no spark renderer wired yet
+    (e.g. scheduled-mongo, render_key="") raises NotImplementedError."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _SPARK_RENDERERS.get(descriptor.render_key)
+    if fn is None:
+        raise NotImplementedError(
+            f"render_spark_job: no Spark-batch renderer for {descriptor.id} (lane={descriptor.lane})"
+        )
+    return fn(spec, spark_image, s3_secret_name)

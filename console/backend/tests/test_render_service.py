@@ -447,14 +447,13 @@ def test_render_connector_dispatches_via_registry():
 
 def test_renderers_cover_every_connector_source_type():
     from app import source_types as st
-    # batch-s3 (Plan B2 Task 1) registers render_key="s3-register" as a forward
-    # reference: the model+registry slice ships before the render function,
-    # which lands in a later Plan B2 task alongside this renderer. Every other
-    # registered render_key must already be wired.
-    _pending_renderer = {"s3-register"}
+    # Every registered render_key must be wired into EITHER the KafkaConnector
+    # dispatch table (_RENDERERS) or the Spark-batch dispatch table
+    # (_SPARK_RENDERERS) -- e.g. batch-s3's "s3-register" is a Spark renderer
+    # (ScheduledSparkApplication, render_spark_job), not a KafkaConnector.
     for d in st.all_types():
-        if d.render_key and d.render_key not in _pending_renderer:
-            assert d.render_key in r._RENDERERS
+        if d.render_key:
+            assert d.render_key in r._RENDERERS or d.render_key in r._SPARK_RENDERERS
         if d.topic_key:
             assert d.topic_key in r._TOPICS
 
@@ -510,3 +509,36 @@ def test_kafka_ingest_has_control_group_overrides():
     assert c["iceberg.kafka.heartbeat.interval.ms"] == "15000"
     assert c["iceberg.kafka.request.timeout.ms"] == "130000"
     assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"
+
+
+# --------------------------------------------------------------------------
+# render_spark_job / _render_s3_register (Plan B2 Task 2: spark-batch lane,
+# separate ScheduledSparkApplication dispatch from the KafkaConnector one)
+# --------------------------------------------------------------------------
+
+def _s3_spec():
+    return SourceSpec(source="ds1", kind="batch", type="s3", db="-", table="-",
+                      target_ns="nyc", target_table="trips",
+                      s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
+                      cron="0 * * * *")
+
+
+def test_render_spark_job_s3_register():
+    body = r.render_spark_job(_s3_spec(), spark_image="reg/spark-py:9", s3_secret_name="s3-credentials")
+    assert body["apiVersion"] == "sparkoperator.k8s.io/v1beta2"
+    assert body["kind"] == "ScheduledSparkApplication"
+    assert body["spec"]["schedule"] == "0 * * * *"
+    tmpl = body["spec"]["template"]
+    assert tmpl["image"] == "reg/spark-py:9"
+    assert tmpl["mainApplicationFile"] == "local:///opt/spark/jobs/s3_register_table.py"
+    assert tmpl["arguments"] == ["--bucket", "ham-veri", "--prefix", "raw/",
+                                 "--format", "parquet", "--target", "rawlake.nyc.trips"]
+    assert tmpl["driver"]["envFrom"][0]["secretRef"]["name"] == "s3-credentials"
+    assert body["metadata"]["name"] == "s3-register-ds1-trips"
+
+
+def test_render_spark_job_rejects_non_spark_renderer():
+    spec = SourceSpec(source="m1", kind="scheduled", type="mongo", db="lms",
+                      table="enr", target_ns="depo", target_table="enr", cron="0 * * * *")
+    with pytest.raises(NotImplementedError):
+        r.render_spark_job(spec, spark_image="x", s3_secret_name="y")
