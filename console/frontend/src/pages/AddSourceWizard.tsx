@@ -1,15 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   createSource,
+  getSourceTypes,
   previewSource,
   type CreateSourceResult,
   type SourceCredentials,
   type SourceSpec,
+  type SourceTypeDescriptor,
 } from "../api/client";
 
 /**
  * Multi-step "add source" form, per docs/superpowers/sdd/task-12-brief.md:
- *   1. tip seç (cdc/scheduled x mssql/pg/mongo)
+ *   1. tip seç -- registry-driven (Plan B1 Task 6): fetched from
+ *      `GET /api/sources/types` (app/source_types.py) rather than a
+ *      hard-coded cdc/scheduled x mssql/pg/mongo list, so a new descriptor
+ *      registered on the backend (e.g. stream/kafka) shows up here with no
+ *      frontend edit.
  *   2. bağlantı + credential
  *   3. tablo/kolon + delta/cdc opsiyon
  *   4. hedef ns/table
@@ -18,12 +24,33 @@ import {
  *
  * Field visibility per step 2/3 mirrors app.models.SourceSpec's own
  * kind/type-conditional requirements (see `_validate_kind_type_requirements`
- * in console/backend/app/models.py) so the assembled spec is accepted by the
- * backend without a second round-trip of 422s.
+ * in console/backend/app/models.py) -- driven here by the *selected
+ * descriptor's* `required_fields` (from the registry) rather than
+ * hard-coded (kind, type) conditionals, plus a small built-in map from
+ * field name -> {step, label} for the fields the form knows how to render.
+ * The disposition selector (shown when the descriptor allows more than one
+ * disposition) and the `kafka_bootstrap` field (shown when the descriptor
+ * is `needs_bootstrap`) are likewise descriptor-driven so the assembled
+ * spec is accepted by the backend without a second round-trip of 422s.
  */
 
 type Kind = SourceSpec["kind"];
 type Type = SourceSpec["type"];
+type Disposition = "" | NonNullable<SourceSpec["disposition"]>;
+
+/** Field name (app.models.SourceSpec attribute) -> where/how the wizard
+ * renders an input for it, keyed by the exact strings that show up in a
+ * descriptor's `required_fields`. A required field name the registry
+ * introduces that isn't in this map still renders -- as a generic input,
+ * via `unknownRequiredFields`/`extraFields` below -- rather than silently
+ * vanishing. */
+const FIELD_META: Record<string, { step: 2 | 3; label: string }> = {
+  db_host: { step: 2, label: "Database host" },
+  mongo_uri: { step: 2, label: "Mongo URI" },
+  jdbc_url: { step: 2, label: "JDBC URL" },
+  incrementing_col: { step: 3, label: "Incrementing column" },
+  cron: { step: 3, label: "Cron schedule" },
+};
 
 interface FormState {
   source: string;
@@ -42,6 +69,12 @@ interface FormState {
   target_table: string;
   user: string;
   password: string;
+  disposition: Disposition;
+  kafka_bootstrap: string;
+  // Values for any required field the registry lists that FIELD_META
+  // doesn't know a dedicated input for -- keeps a brand-new source type
+  // fully usable (not just visible) without a frontend edit.
+  extraFields: Record<string, string>;
 }
 
 const INITIAL_STATE: FormState = {
@@ -61,7 +94,22 @@ const INITIAL_STATE: FormState = {
   target_table: "",
   user: "",
   password: "",
+  disposition: "",
+  kafka_bootstrap: "",
+  extraFields: {},
 };
+
+/** Field names buildSpec/the form render a dedicated, labeled input for.
+ * Anything in a descriptor's required_fields outside this set falls back
+ * to a generic input (see `extraFields`) instead of silently not
+ * rendering. */
+const KNOWN_SPEC_FIELDS = new Set(["db_host", "mongo_uri", "jdbc_url", "incrementing_col", "cron"]);
+
+/** "some_field" -> "Some field", for the generic-fallback input's label. */
+function humanizeFieldName(field: string): string {
+  const spaced = field.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 const STEP_TITLES = [
   "1. Source type",
@@ -74,9 +122,15 @@ const STEP_TITLES = [
 
 const LAST_STEP = STEP_TITLES.length;
 
-/** form -> app.models.SourceSpec, including only the kind/type-relevant
- * optional fields (mirrors render_service's own dispatch on (kind, type)). */
-function buildSpec(form: FormState): SourceSpec {
+/** form -> app.models.SourceSpec, including only the fields the *selected
+ * descriptor* actually requires (mirrors render_service's own dispatch on
+ * (kind, type), but reads the requirement from the registry descriptor
+ * instead of re-deriving it from a hard-coded (kind, type) conditional).
+ * `disposition`/`kafka_bootstrap` -- like the optional `timestamp_col`/
+ * `poll_ms` companions -- are included only when the user actually set
+ * them, so an unset override doesn't get sent and clobber the backend's
+ * own default (see SourceSpec.effective_disposition()). */
+function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined): SourceSpec {
   const spec: SourceSpec = {
     source: form.source,
     kind: form.kind,
@@ -86,14 +140,17 @@ function buildSpec(form: FormState): SourceSpec {
     target_ns: form.target_ns,
     target_table: form.target_table,
   };
-  if (form.kind === "cdc" && form.type !== "mongo") {
+  const required = descriptor?.required_fields ?? [];
+  if (required.includes("db_host")) {
     spec.db_host = form.db_host;
   }
-  if (form.kind === "cdc" && form.type === "mongo") {
+  if (required.includes("mongo_uri")) {
     spec.mongo_uri = form.mongo_uri;
   }
-  if (form.kind === "scheduled" && form.type !== "mongo") {
+  if (required.includes("jdbc_url")) {
     spec.jdbc_url = form.jdbc_url;
+  }
+  if (required.includes("incrementing_col")) {
     spec.incrementing_col = form.incrementing_col;
     if (form.timestamp_col) {
       spec.timestamp_col = form.timestamp_col;
@@ -102,8 +159,19 @@ function buildSpec(form: FormState): SourceSpec {
       spec.poll_ms = Number(form.poll_ms);
     }
   }
-  if (form.kind === "scheduled" && form.type === "mongo") {
+  if (required.includes("cron")) {
     spec.cron = form.cron;
+  }
+  for (const field of required) {
+    if (!KNOWN_SPEC_FIELDS.has(field) && form.extraFields[field]) {
+      (spec as unknown as Record<string, unknown>)[field] = form.extraFields[field];
+    }
+  }
+  if (form.disposition) {
+    spec.disposition = form.disposition;
+  }
+  if (form.kafka_bootstrap) {
+    spec.kafka_bootstrap = form.kafka_bootstrap;
   }
   return spec;
 }
@@ -120,6 +188,9 @@ export default function AddSourceWizard() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
 
+  const [types, setTypes] = useState<SourceTypeDescriptor[]>([]);
+  const [typesError, setTypesError] = useState<string | null>(null);
+
   const [preview, setPreview] = useState<any>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -128,8 +199,73 @@ export default function AddSourceWizard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
 
+  // Fetch the source-type registry once on mount -- the whole point of
+  // this task is that Step 1's options, and steps 2/3's field visibility,
+  // come from here rather than a hard-coded list.
+  useEffect(() => {
+    let cancelled = false;
+    getSourceTypes()
+      .then((descriptors) => {
+        if (!cancelled) {
+          setTypes(descriptors);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setTypesError(errorMessage(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Unique kinds, and the types available under the currently-selected
+  // kind, in registry order (not alphabetized/hard-coded).
+  const kinds: string[] = [];
+  for (const t of types) {
+    if (!kinds.includes(t.kind)) {
+      kinds.push(t.kind);
+    }
+  }
+  const typesForKind: string[] = [];
+  for (const t of types) {
+    if (t.kind === form.kind && !typesForKind.includes(t.type)) {
+      typesForKind.push(t.type);
+    }
+  }
+  const selectedDescriptor = types.find((t) => t.kind === form.kind && t.type === form.type);
+  const requiredFields = selectedDescriptor?.required_fields ?? [];
+  const unknownRequiredFields = requiredFields.filter((f) => !KNOWN_SPEC_FIELDS.has(f));
+  const showDisposition = (selectedDescriptor?.dispositions.length ?? 0) > 1;
+  const showKafkaBootstrap = selectedDescriptor?.needs_bootstrap ?? false;
+
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function setExtraField(field: string, value: string) {
+    setForm((prev) => ({ ...prev, extraFields: { ...prev.extraFields, [field]: value } }));
+  }
+
+  // Switching kind/type can change which dispositions/fields are valid (or
+  // make the disposition selector / kafka_bootstrap input disappear) --
+  // reset any explicit override so a stale choice never rides along into
+  // buildSpec() for the new type (e.g. a kafka_bootstrap value entered
+  // under stream/kafka must not survive a switch back to cdc/mssql).
+  function handleKindChange(newKind: string) {
+    const firstType = types.find((t) => t.kind === newKind)?.type ?? form.type;
+    setForm((prev) => ({
+      ...prev,
+      kind: newKind as Kind,
+      type: firstType as Type,
+      disposition: "",
+      kafka_bootstrap: "",
+    }));
+  }
+
+  function handleTypeChange(newType: string) {
+    setForm((prev) => ({ ...prev, type: newType as Type, disposition: "", kafka_bootstrap: "" }));
   }
 
   function goNext() {
@@ -144,7 +280,7 @@ export default function AddSourceWizard() {
     setPreviewError(null);
     setPreviewLoading(true);
     try {
-      const result = await previewSource(buildSpec(form));
+      const result = await previewSource(buildSpec(form, selectedDescriptor));
       setPreview(result);
     } catch (err) {
       setPreview(null);
@@ -166,7 +302,7 @@ export default function AddSourceWizard() {
       // with `ok: false` in the body (see client.createSource's
       // docstring), so `result.ok` -- not just "the request didn't
       // throw" -- decides success vs. failure here.
-      const result = await createSource(buildSpec(form), buildCredentials(form));
+      const result = await createSource(buildSpec(form, selectedDescriptor), buildCredentials(form));
       setSubmitResult(result);
     } catch (err) {
       setSubmitResult(null);
@@ -183,15 +319,19 @@ export default function AddSourceWizard() {
 
       {step === 1 && (
         <fieldset>
+          {typesError && <p role="alert">Failed to load source types: {typesError}</p>}
           <div>
             <label htmlFor="kind">Kind</label>
             <select
               id="kind"
               value={form.kind}
-              onChange={(e) => set("kind", e.target.value as Kind)}
+              onChange={(e) => handleKindChange(e.target.value)}
             >
-              <option value="cdc">cdc</option>
-              <option value="scheduled">scheduled</option>
+              {kinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
             </select>
           </div>
           <div>
@@ -199,13 +339,42 @@ export default function AddSourceWizard() {
             <select
               id="type"
               value={form.type}
-              onChange={(e) => set("type", e.target.value as Type)}
+              onChange={(e) => handleTypeChange(e.target.value)}
             >
-              <option value="mssql">mssql</option>
-              <option value="pg">pg</option>
-              <option value="mongo">mongo</option>
+              {typesForKind.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
             </select>
           </div>
+          {showDisposition && (
+            <div>
+              <label htmlFor="disposition">Disposition</label>
+              <select
+                id="disposition"
+                value={form.disposition}
+                onChange={(e) => set("disposition", e.target.value as Disposition)}
+              >
+                <option value="">(default: {selectedDescriptor?.disposition})</option>
+                {selectedDescriptor?.dispositions.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {showKafkaBootstrap && (
+            <div>
+              <label htmlFor="kafka_bootstrap">Kafka bootstrap (external, optional)</label>
+              <input
+                id="kafka_bootstrap"
+                value={form.kafka_bootstrap}
+                onChange={(e) => set("kafka_bootstrap", e.target.value)}
+              />
+            </div>
+          )}
           <button type="button" onClick={goNext}>
             Next
           </button>
@@ -222,9 +391,9 @@ export default function AddSourceWizard() {
               onChange={(e) => set("source", e.target.value)}
             />
           </div>
-          {form.kind === "cdc" && form.type !== "mongo" && (
+          {requiredFields.includes("db_host") && (
             <div>
-              <label htmlFor="db_host">Database host</label>
+              <label htmlFor="db_host">{FIELD_META.db_host.label}</label>
               <input
                 id="db_host"
                 value={form.db_host}
@@ -232,9 +401,9 @@ export default function AddSourceWizard() {
               />
             </div>
           )}
-          {form.kind === "cdc" && form.type === "mongo" && (
+          {requiredFields.includes("mongo_uri") && (
             <div>
-              <label htmlFor="mongo_uri">Mongo URI</label>
+              <label htmlFor="mongo_uri">{FIELD_META.mongo_uri.label}</label>
               <input
                 id="mongo_uri"
                 value={form.mongo_uri}
@@ -242,9 +411,9 @@ export default function AddSourceWizard() {
               />
             </div>
           )}
-          {form.kind === "scheduled" && form.type !== "mongo" && (
+          {requiredFields.includes("jdbc_url") && (
             <div>
-              <label htmlFor="jdbc_url">JDBC URL</label>
+              <label htmlFor="jdbc_url">{FIELD_META.jdbc_url.label}</label>
               <input
                 id="jdbc_url"
                 value={form.jdbc_url}
@@ -252,6 +421,16 @@ export default function AddSourceWizard() {
               />
             </div>
           )}
+          {unknownRequiredFields.map((field) => (
+            <div key={field}>
+              <label htmlFor={`extra-${field}`}>{humanizeFieldName(field)}</label>
+              <input
+                id={`extra-${field}`}
+                value={form.extraFields[field] ?? ""}
+                onChange={(e) => setExtraField(field, e.target.value)}
+              />
+            </div>
+          ))}
           <div>
             <label htmlFor="user">Username</label>
             <input
@@ -292,10 +471,10 @@ export default function AddSourceWizard() {
               onChange={(e) => set("table", e.target.value)}
             />
           </div>
-          {form.kind === "scheduled" && form.type !== "mongo" && (
+          {requiredFields.includes("incrementing_col") && (
             <>
               <div>
-                <label htmlFor="incrementing_col">Incrementing column</label>
+                <label htmlFor="incrementing_col">{FIELD_META.incrementing_col.label}</label>
                 <input
                   id="incrementing_col"
                   value={form.incrementing_col}
@@ -320,9 +499,9 @@ export default function AddSourceWizard() {
               </div>
             </>
           )}
-          {form.kind === "scheduled" && form.type === "mongo" && (
+          {requiredFields.includes("cron") && (
             <div>
-              <label htmlFor="cron">Cron schedule</label>
+              <label htmlFor="cron">{FIELD_META.cron.label}</label>
               <input
                 id="cron"
                 value={form.cron}

@@ -23,11 +23,15 @@ export interface Source {
   state: string | null;
 }
 
-/** Mirrors app.models.SourceSpec. */
+/** Mirrors app.models.SourceSpec. `kind`/`type` are widened to cover every
+ * (kind, type) pair the backend registry (app/source_types.py) knows about
+ * -- not just the three the wizard used to hard-code -- since the wizard
+ * now renders its option list from `getSourceTypes()` rather than a
+ * static union-typed select. */
 export interface SourceSpec {
   source: string;
-  kind: "cdc" | "scheduled";
-  type: "mssql" | "pg" | "mongo";
+  kind: "cdc" | "scheduled" | "stream";
+  type: "mssql" | "pg" | "mongo" | "mysql" | "kafka";
   db: string;
   table: string;
   target_ns: string;
@@ -39,6 +43,25 @@ export interface SourceSpec {
   timestamp_col?: string;
   poll_ms?: number;
   cron?: string;
+  disposition?: "entity" | "event";
+  kafka_bootstrap?: string;
+}
+
+/** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
+ * per entry (itself projected from `app.source_types.SourceType`): the
+ * single source of truth for which (kind, type) pairs exist, what fields
+ * each requires, which Bronze->Silver dispositions it allows, and whether
+ * it needs an external Kafka bootstrap. The add-source wizard renders its
+ * type list and per-type fields from this instead of a hard-coded list. */
+export interface SourceTypeDescriptor {
+  id: string;
+  kind: string;
+  type: string;
+  lane: string;
+  disposition: "entity" | "event";
+  dispositions: ("entity" | "event")[];
+  required_fields: string[];
+  needs_bootstrap: boolean;
 }
 
 /** Mirrors app.models.SourceCredentials. */
@@ -129,6 +152,15 @@ export async function listSources(): Promise<Source[]> {
 /** GET /api/sources/{name} -> a single source's summary. */
 export async function getSource(name: string): Promise<Source> {
   return request<Source>(`/sources/${encodeURIComponent(name)}`);
+}
+
+/** GET /api/sources/types -> the source-type registry (app.source_types),
+ * for the add-source wizard to render its kind/type list, per-type
+ * required fields, disposition options, and bootstrap requirement instead
+ * of hard-coding them. */
+export async function getSourceTypes(): Promise<SourceTypeDescriptor[]> {
+  const data = await request<{ types: SourceTypeDescriptor[] }>("/sources/types");
+  return data.types;
 }
 
 /** POST /api/sources -> register + provision a new source.
