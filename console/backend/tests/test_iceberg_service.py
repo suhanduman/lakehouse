@@ -34,6 +34,7 @@ class FakeCatalog:
         self.created = []          # [(fq, schema)]
         self.partition_specs = []  # [(fq, partition_spec)] — bronze day(__ts_ms)
         self.namespaces = []       # [(ns, properties)]
+        self.table_properties = {}  # {fq: properties} — Iceberg CREATE-time table properties
 
     def create_namespace(self, namespace, properties=None):
         self.namespaces.append((namespace, properties))
@@ -44,9 +45,10 @@ class FakeCatalog:
     def load_table(self, fq):
         return FakeTable(self.existing[fq.split(".")[-1]])
 
-    def create_table(self, fq, schema=None, partition_spec=None):
+    def create_table(self, fq, schema=None, partition_spec=None, properties=None):
         self.created.append((fq, schema))
         self.partition_specs.append((fq, partition_spec))
+        self.table_properties[fq] = properties or {}
         self.existing[fq.split(".")[-1]] = list(schema.identifier_field_names())
         return FakeTable(schema.identifier_field_names())
 
@@ -201,3 +203,33 @@ def test_create_table_bronze_layer_empty_identifier_does_not_raise():
     _svc(cat).create_table(
         "depo_raw", "t", [{"name": "id", "type": "int"}], identifier=[], layer="bronze"
     )  # must not raise
+
+
+# --------------------------------------------------------------------------
+# Storage defaults: 128MiB target-file-size (all layers) + Silver
+# copy-on-write trio (entity/upsert, read-heavy + MERGE-written). Mirrors
+# tools/create_iceberg_table.py's properties dict in lockstep.
+# --------------------------------------------------------------------------
+
+def test_silver_table_created_with_cow_and_target_file_size():
+    cat = FakeCatalog()
+    fq = _svc(cat).create_table(
+        "depo", "orders",
+        [{"name": "id", "type": "int"}, {"name": "n", "type": "string"}],
+        identifier=["id"],
+    )
+    props = cat.table_properties[fq]
+    assert props["write.merge.mode"] == "copy-on-write"
+    assert props["write.update.mode"] == "copy-on-write"
+    assert props["write.delete.mode"] == "copy-on-write"
+    assert props["write.target-file-size-bytes"] == "134217728"
+
+
+def test_bronze_table_created_with_target_file_size():
+    cat = FakeCatalog()
+    fq = _svc(cat).create_table(
+        "depo_raw", "orders", [{"name": "id", "type": "int"}], identifier=[], layer="bronze"
+    )
+    props = cat.table_properties[fq]
+    assert props["write.target-file-size-bytes"] == "134217728"
+    assert "write.merge.mode" not in props  # Bronze is append-only, no merge mode

@@ -41,12 +41,21 @@ BRONZE_METADATA_COLS = [
     {"name": "__ts_ms", "type": "timestamp"},
     {"name": "__deleted", "type": "string"},
     {"name": "__lsn", "type": "long"},
+    # Deterministic dedup tie-break: Kafka offset+partition of each record,
+    # inserted by the Iceberg sink's InsertField SMT (chart 13-connectors.yaml).
+    {"name": "__kafka_offset", "type": "long"},
+    {"name": "__kafka_partition", "type": "int"},
 ]
 
 # Bronze changelog partitioning: day(__ts_ms). Field name mirrors
 # tools/create_iceberg_table.py's _build_partition_spec (f"{column}_day").
 _BRONZE_PARTITION_COL = "__ts_ms"
 _BRONZE_WAREHOUSE = "rawdata"
+
+# Storage defaults applied at CREATE time via pyiceberg `properties=` (kept in
+# lockstep with tools/create_iceberg_table.py — same constant, same CoW trio).
+# 128 MiB bounds small-file growth for maintenance compaction (ALL layers).
+_TARGET_FILE_SIZE_BYTES = "134217728"  # 128 MiB — bounds small-file growth; see spec storage note.
 
 
 # JDBC/SQL (Trino tip adları dahil) → kanonik Iceberg tipi. Kalan her şey → string.
@@ -207,8 +216,16 @@ class IcebergService:
                     f"tabloyu düşürüp yeniden yaratın."
                 )
             return fq
+        properties = {"write.target-file-size-bytes": _TARGET_FILE_SIZE_BYTES}
+        if layer == "silver":
+            # entity/upsert Silver: read-heavy (Trino) + MERGE-written -> copy-on-write.
+            properties.update({
+                "write.merge.mode": "copy-on-write",
+                "write.update.mode": "copy-on-write",
+                "write.delete.mode": "copy-on-write",
+            })
         if partition_spec is not None:
-            cat.create_table(fq, schema=schema, partition_spec=partition_spec)
+            cat.create_table(fq, schema=schema, partition_spec=partition_spec, properties=properties)
         else:
-            cat.create_table(fq, schema=schema)
+            cat.create_table(fq, schema=schema, properties=properties)
         return fq

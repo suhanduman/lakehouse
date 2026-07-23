@@ -19,6 +19,7 @@ import re
 from typing import Optional, Tuple
 
 from app.models import SourceSpec
+from app import source_types
 
 APICURIO_URL = "http://apicurio-registry:8080/apis/registry/v2"
 SCHEMA_HISTORY_BOOTSTRAP = "kafka-kafka-bootstrap:9093"
@@ -143,27 +144,45 @@ def _connector(name: str, klass: str, config: dict) -> dict:
 # topic_name / render_kafka_topic
 # --------------------------------------------------------------------------
 
+def _topic_cdc_relational(spec: SourceSpec) -> str:
+    # dbz-mssql-students.yaml: topic.prefix "cdc.<source>" + table.include.list
+    # "dbo.students" -> "cdc.<source>.dbo.students".
+    return f"cdc.{spec.source}.{spec.table}"
+
+
+def _topic_cdc_mongo(spec: SourceSpec) -> str:
+    return f"mongo.{spec.db}.{spec.table}"
+
+
+def _topic_scheduled_jdbc(spec: SourceSpec) -> str:
+    prefix, name = _jdbc_topic_parts(spec)
+    return f"{prefix}{name}"
+
+
+def _topic_cdc_mysql(spec: SourceSpec) -> str:
+    # Debezium MySQL topic: <topic.prefix>.<database>.<table>.
+    return f"cdc.{spec.source}.{spec.db}.{spec.table}"
+
+
+_TOPICS = {
+    "cdc-relational": _topic_cdc_relational,
+    "cdc-mongo": _topic_cdc_mongo,
+    "scheduled-jdbc": _topic_scheduled_jdbc,
+    "cdc-mysql": _topic_cdc_mysql,
+}
+
+
 def topic_name(spec: SourceSpec) -> str:
     """The Kafka topic a given source's data lands on, matching each connector
     type's own topic-naming convention in A's concrete examples."""
-    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
-        # dbz-mssql-students.yaml: topic.prefix "cdc.mssql1" + table.include.list
-        # "dbo.students" -> topic "cdc.mssql1.dbo.students".
-        return f"cdc.{spec.source}.{spec.table}"
-    if spec.kind == "cdc" and spec.type == "mongo":
-        # dbz-mongo-lms.yaml: topic.prefix "mongo.lms" (mongo.<db>) + collection
-        # "enrollments" -> topic "mongo.lms.enrollments".
-        return f"mongo.{spec.db}.{spec.table}"
-    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
-        # jdbc-mssql-scheduled.yaml: topic.prefix "jdbc.mssql1.dbo." + table.whitelist
-        # "courses" (Aiven JDBC concatenates prefix+table directly, no extra dot).
-        prefix, name = _jdbc_topic_parts(spec)
-        return f"{prefix}{name}"
-    raise NotImplementedError(
-        f"topic_name: no Kafka topic for kind={spec.kind!r} type={spec.type!r} "
-        "(scheduled+mongo uses a Spark batch CronJob, see "
-        "tools/templates/source-scheduled-mongo-spark.yaml, and bypasses Kafka)"
-    )
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _TOPICS.get(descriptor.topic_key)
+    if fn is None:
+        raise NotImplementedError(
+            f"topic_name: no Kafka topic for {descriptor.id} "
+            f"(lane={descriptor.lane}); the spark-batch lane bypasses Kafka"
+        )
+    return fn(spec)
 
 
 def render_kafka_topic(topic_name: str) -> dict:
@@ -299,6 +318,62 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
     return _connector(name, klass, config)
 
 
+def _mysql_server_id(source: str) -> str:
+    # server.id must be cluster-unique and numeric. Derive a stable value from
+    # the source name (zlib.crc32 is deterministic) so re-rendering a source is
+    # idempotent and two DIFFERENT sources on one MySQL cluster stay distinct.
+    import zlib
+    return str(1000 + (zlib.crc32(source.encode()) % 4_000_000))
+
+
+def _render_cdc_mysql(spec: SourceSpec) -> dict:
+    """cdc + mysql (MySQL/MariaDB) -> Debezium MySqlConnector. Same schema-history
+    mechanism as SQL Server; the MySQL connector also serves MariaDB."""
+    tname = topic_name(spec)
+    prefix = f"cdc.{spec.source}"
+
+    config: dict = {
+        "database.hostname": spec.db_host,
+        "database.port": "3306",
+        "database.user": _cred(spec.source, "user"),
+        "database.password": _cred(spec.source, "pass"),
+        "database.server.id": _mysql_server_id(spec.source),
+        "database.include.list": spec.db,
+        "topic.prefix": prefix,
+        "table.include.list": f"{spec.db}.{spec.table}",
+        "schema.history.internal.kafka.bootstrap.servers": SCHEMA_HISTORY_BOOTSTRAP,
+        "schema.history.internal.kafka.topic": f"schema-history.{spec.source}",
+    }
+    config.update(_schema_history_client_config("producer"))
+    config.update(_schema_history_client_config("consumer"))
+    config.update({
+        "key.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+        "key.converter.apicurio.registry.url": APICURIO_URL,
+        "value.converter.apicurio.registry.url": APICURIO_URL,
+        "key.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "value.converter.apicurio.registry.auto-register": SCHEMA_AUTO_REGISTER,
+        "transforms": "unwrap,route,tsconv",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.unwrap.drop.tombstones": "false",
+        # MySQL LSN analogue: binlog position (source.pos, a long). Best-effort;
+        # the deterministic dedup tie-break is __kafka_offset (silver-merge), not __lsn.
+        "transforms.unwrap.add.fields": "op,ts_ms,source.pos:lsn",
+    })
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_tsconv())
+    config.update({
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{tname}.dlq",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    })
+
+    _, table_name = _split_schema_table(spec.table)
+    name = f"dbz-{spec.source}-{table_name}"
+    return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config)
+
+
 def _render_cdc_mongo(spec: SourceSpec) -> dict:
     """cdc + mongo -> Debezium MongoDB connector. Mirrors
     tools/templates/source-cdc-mongo.yaml / dbz-mongo-lms.yaml."""
@@ -415,22 +490,25 @@ def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
     return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
 
 
-def render_connector(spec: SourceSpec) -> dict:
-    """Dispatch on (spec.kind, spec.type) -> KafkaConnector dict.
+_RENDERERS = {
+    "cdc-relational": _render_cdc_relational,
+    "cdc-mongo": _render_cdc_mongo,
+    "scheduled-jdbc": _render_scheduled_jdbc,
+    "cdc-mysql": _render_cdc_mysql,
+}
 
-    scheduled+mongo is intentionally NOT handled here: that path is a Spark
-    SparkApplication+CronJob, not a KafkaConnector (see
-    tools/templates/source-scheduled-mongo-spark.yaml) — out of scope for
-    this function's contract.
-    """
-    if spec.kind == "cdc" and spec.type in ("mssql", "pg"):
-        return _render_cdc_relational(spec)
-    if spec.kind == "cdc" and spec.type == "mongo":
-        return _render_cdc_mongo(spec)
-    if spec.kind == "scheduled" and spec.type in ("mssql", "pg"):
-        return _render_scheduled_jdbc(spec)
-    raise NotImplementedError(
-        f"render_connector: no KafkaConnector rendering for kind={spec.kind!r} "
-        f"type={spec.type!r} (scheduled+mongo uses a Spark CronJob, see "
-        "tools/templates/source-scheduled-mongo-spark.yaml)"
-    )
+
+def render_connector(spec: SourceSpec) -> dict:
+    """Dispatch on the source-type registry -> KafkaConnector dict.
+
+    The spark-batch lane (e.g. scheduled+mongo) has no render_key and is
+    intentionally not a KafkaConnector — it raises NotImplementedError, and
+    the orchestrator rejects it up front (see orchestrator module docstring)."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _RENDERERS.get(descriptor.render_key)
+    if fn is None:
+        raise NotImplementedError(
+            f"render_connector: no KafkaConnector rendering for {descriptor.id} "
+            f"(lane={descriptor.lane}); the spark-batch lane uses a Spark CronJob"
+        )
+    return fn(spec)

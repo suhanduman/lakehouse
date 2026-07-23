@@ -68,6 +68,14 @@ spec:
   class: org.apache.iceberg.connect.IcebergSinkConnector
   tasksMax: {{ .Values.connectors.icebergSink.tasksMax | default 1 }}
   config:
+    # Deterministic dedup tie-break (silver-merge): stamp each record's Kafka
+    # offset + partition into Bronze. InsertField's offset/partition fields are
+    # sink-only Connect record metadata. Debezium keys by PK -> same key -> same
+    # partition -> offset monotonic per key -> the MERGE's final ORDER BY key.
+    transforms: "kafkameta"
+    transforms.kafkameta.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.kafkameta.offset.field: "__kafka_offset"
+    transforms.kafkameta.partition.field: "__kafka_partition"
     # AVRO (Apicurio) sources only — relational CDC (cdc.*) + scheduled JDBC
     # (jdbc.*). Mongo (mongo.*) is JSON, NOT Avro: one Connect sink has a SINGLE
     # value.converter, so a JSON source cannot share this Avro sink. Mongo needs
@@ -138,6 +146,14 @@ spec:
   class: org.apache.iceberg.connect.IcebergSinkConnector
   tasksMax: {{ .Values.connectors.icebergSink.tasksMax | default 1 }}
   config:
+    # Deterministic dedup tie-break (silver-merge): stamp each record's Kafka
+    # offset + partition into Bronze. InsertField's offset/partition fields are
+    # sink-only Connect record metadata. Debezium keys by PK -> same key -> same
+    # partition -> offset monotonic per key -> the MERGE's final ORDER BY key.
+    transforms: "kafkameta"
+    transforms.kafkameta.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+    transforms.kafkameta.offset.field: "__kafka_offset"
+    transforms.kafkameta.partition.field: "__kafka_partition"
     # Mongo (mongo.*) is JSON, NOT Avro (see the topics.regex comment on
     # iceberg-sink-cdc above) — a separate sink with JsonConverter, since one
     # Connect sink can only have a single value.converter.

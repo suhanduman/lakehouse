@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 
 try:
@@ -45,6 +46,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "(omit to clear -> next run re-reads from the beginning).")
     p.add_argument("--restate", metavar="NS.TABLE",
                    help="Silver identifier; truncate Silver + clear watermark, then exit.")
+    p.add_argument("--max-parallel", type=int, default=4,
+                   help="max tables MERGEd concurrently (ThreadPoolExecutor over a "
+                        "FAIR-scheduled shared Spark session).")
     return p.parse_args(argv)
 
 
@@ -175,6 +179,14 @@ def _merge_one(spark, bronze_fqn: str, silver_fqn: str) -> dict:
     """Reconcile + incremental read + dedup + MERGE + advance watermark for one
     table. Returns an audit dict. Raises on conflict / SQL error (caught by loop)."""
     t0 = time.time()
+    # Spark temp views live in the shared session catalog, NOT thread-local --
+    # two concurrent _merge_one calls on the same SparkSession would otherwise
+    # clobber each other's fixed-name views. Suffix by thread identity so each
+    # concurrent invocation gets its own view names.
+    _sfx = f"{threading.get_ident()}"
+    bronze_view = f"bronze_inc_{_sfx}"
+    src_view = f"src_latest_{_sfx}"
+
     bronze_schema = _describe(spark, bronze_fqn)
     if not ml.has_cdc_metadata(bronze_schema):
         raise SkipTable(
@@ -193,17 +205,17 @@ def _merge_one(spark, bronze_fqn: str, silver_fqn: str) -> dict:
     start = _get_prop(spark, silver_fqn, WATERMARK_PROP)
     end = _current_snapshot(spark, bronze_fqn)
     inc = _read_increment(spark, bronze_fqn, start)
-    inc.createOrReplaceTempView("bronze_inc")
+    inc.createOrReplaceTempView(bronze_view)
 
-    spark.sql(ml.latest_per_key_sql("bronze_inc", id_cols, business_cols)) \
-        .createOrReplaceTempView("src_latest")
-    increment_rows = spark.table("src_latest").count()
+    spark.sql(ml.latest_per_key_sql(bronze_view, id_cols, business_cols)) \
+        .createOrReplaceTempView(src_view)
+    increment_rows = spark.table(src_view).count()
     deleted_rows = spark.sql(
-        "SELECT count(*) c FROM src_latest WHERE CAST(__deleted AS BOOLEAN)"
+        f"SELECT count(*) c FROM {src_view} WHERE CAST(__deleted AS BOOLEAN)"
     ).collect()[0]["c"]
 
     if increment_rows:
-        spark.sql(ml.merge_sql(silver_fqn, "src_latest", id_cols, business_cols))
+        spark.sql(ml.merge_sql(silver_fqn, src_view, id_cols, business_cols))
     if end is not None:
         _set_prop(spark, silver_fqn, WATERMARK_PROP, end)
 
@@ -237,6 +249,10 @@ def _silver_exists(spark, silver_fqn: str) -> bool:
         return False
 
 
+def _log_skip_missing(bronze_fqn: str, silver_fqn: str) -> None:
+    print(f"[skip] {bronze_fqn}: Silver {silver_fqn} not pre-created yet")
+
+
 def run(spark, args) -> int:
     _ensure_audit(spark)
 
@@ -259,30 +275,57 @@ def run(spark, args) -> int:
         print(f"[recovery] {fqn}: restated (Silver emptied, watermark cleared)")
         return 0
 
-    # ---- normal tick: resilient serial loop, aggregate non-zero exit ----
-    failures = 0
+    # ---- normal tick: parallel per-table MERGE, aggregate non-zero exit ----
+    from concurrent.futures import ThreadPoolExecutor
+
+    pairs = []
     for bronze_fqn, silver_fqn in _discover_bronze(spark, args):
-        if not _silver_exists(spark, silver_fqn):
-            print(f"[skip] {bronze_fqn}: Silver {silver_fqn} not pre-created yet")
-            continue
+        if _silver_exists(spark, silver_fqn):
+            pairs.append((bronze_fqn, silver_fqn))
+        else:
+            _log_skip_missing(bronze_fqn, silver_fqn)
+
+    lock = threading.Lock()
+    failures = {"n": 0}
+
+    def _safe_audit(**row):
+        # An audit write must never abort the batch: a Nessie commit conflict
+        # on the shared lakehouse.ops.merge_runs table is exactly what retry
+        # exists for, but if it ultimately still fails, log and move on rather
+        # than propagate out of _do (which would cancel/abort remaining tables).
         try:
-            row = _merge_one(spark, bronze_fqn, silver_fqn)
-            _audit(spark, **row)
+            ml.run_with_retry(lambda: _audit(spark, **row),
+                              attempts=5, is_retryable=ml.is_commit_conflict, sleep=time.sleep)
+        except Exception as e:  # noqa: BLE001 - an audit write must never abort the batch
+            print(f"[warn] audit write failed for {row.get('table_name')}: {e}", file=sys.stderr)
+
+    def _do(pair):
+        bronze_fqn, silver_fqn = pair
+        # FAIR scheduler pool per table -> concurrent MERGEs share resources fairly.
+        spark.sparkContext.setLocalProperty("spark.scheduler.pool", f"merge-{silver_fqn}")
+        try:
+            row = ml.run_with_retry(
+                lambda: _merge_one(spark, bronze_fqn, silver_fqn),
+                attempts=5, is_retryable=ml.is_commit_conflict, sleep=time.sleep)
+            _safe_audit(**row)
             print(f"[ok] {silver_fqn}: +{row['increment_rows']} (del {row['deleted_rows']}) "
                   f"{row['duration_s']}s")
         except SkipTable as e:  # not a failure — must not affect the aggregate exit code
-            _audit(spark, table_name=silver_fqn, start_snapshot=None, end_snapshot=None,
-                   increment_rows=None, deleted_rows=None, status="skipped",
-                   error=str(e)[:2000], duration_s=0.0)
+            _safe_audit(table_name=silver_fqn, start_snapshot=None, end_snapshot=None,
+                        increment_rows=None, deleted_rows=None, status="skipped",
+                        error=str(e)[:2000], duration_s=0.0)
             print(f"[skip] {silver_fqn}: {e}")
-            continue
-        except Exception as e:  # per-table isolation; watermark NOT advanced
-            failures += 1
-            _audit(spark, table_name=silver_fqn, start_snapshot=None, end_snapshot=None,
-                   increment_rows=None, deleted_rows=None, status="failed",
-                   error=str(e)[:2000], duration_s=0.0)
+        except Exception as e:  # noqa: BLE001 - per-table isolation; watermark NOT advanced
+            with lock:
+                failures["n"] += 1
+            _safe_audit(table_name=silver_fqn, start_snapshot=None, end_snapshot=None,
+                        increment_rows=None, deleted_rows=None, status="failed",
+                        error=str(e)[:2000], duration_s=0.0)
             print(f"[FAIL] {silver_fqn}: {e}", file=sys.stderr)
-    return 1 if failures else 0
+
+    with ThreadPoolExecutor(max_workers=max(1, args.max_parallel)) as pool:
+        list(pool.map(_do, pairs))
+    return 1 if failures["n"] else 0
 
 
 def main() -> int:

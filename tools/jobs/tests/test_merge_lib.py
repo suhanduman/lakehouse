@@ -88,6 +88,27 @@ def test_merge_sql_all_key_table_omits_update():
     assert "WHEN NOT MATCHED AND NOT CAST(s.__deleted AS BOOLEAN) THEN INSERT (id) VALUES (s.id)" in sql
 
 
+def test_metadata_cols_include_kafka_offset():
+    assert "__kafka_offset" in m.METADATA_COLS
+    assert "__kafka_partition" in m.METADATA_COLS
+
+
+def test_latest_per_key_orders_by_offset_last():
+    sql = m.latest_per_key_sql("bronze_inc", ["id"], ["id", "name"])
+    assert "ORDER BY __ts_ms DESC, __lsn DESC NULLS LAST, __kafka_offset DESC" in sql
+
+
+def test_kafka_offset_not_a_business_column():
+    plan = m.reconcile_plan(
+        {"id": "int", "name": "string", "__op": "string", "__ts_ms": "timestamp",
+         "__deleted": "string", "__lsn": "bigint", "__kafka_offset": "bigint",
+         "__kafka_partition": "int", "_target_table": "string"},
+        {"id": "int", "name": "string"},
+    )
+    assert plan.adds == []
+    assert plan.ok
+
+
 def test_ts_ms_excluded_from_silver_but_not_required_beyond_cdc_contract():
     # __ts_ms does double duty: MERGE ordering key AND (day(__ts_ms)) the
     # Bronze partition key -- but it's still just a Bronze metadata column,
@@ -100,3 +121,47 @@ def test_ts_ms_excluded_from_silver_but_not_required_beyond_cdc_contract():
     assert plan.adds == []                      # __ts_ms is NOT a business ADD
     # __ts_ms is part of the required CDC op-contract:
     assert m.has_cdc_metadata({"__op": "x", "__ts_ms": "y", "__deleted": "z"}) is True
+
+
+def test_is_commit_conflict_matches_nessie_and_iceberg():
+    assert m.is_commit_conflict(Exception("Requested commit conflicts with existing state"))
+    assert m.is_commit_conflict(Exception("org.apache.iceberg.exceptions.CommitFailedException: ..."))
+    assert m.is_commit_conflict(Exception("NessieReferenceConflictException"))
+    assert not m.is_commit_conflict(Exception("table not found"))
+
+
+def test_run_with_retry_retries_then_succeeds():
+    calls = {"n": 0}
+    slept = []
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Exception("commit conflicts with existing state")
+        return "ok"
+
+    out = m.run_with_retry(fn, attempts=5, is_retryable=m.is_commit_conflict,
+                            sleep=slept.append, base_delay=0.1)
+    assert out == "ok"
+    assert calls["n"] == 3
+    assert len(slept) == 2
+
+
+def test_run_with_retry_gives_up_and_raises_last():
+    def fn():
+        raise Exception("commit conflicts with existing state")
+    with pytest.raises(Exception, match="conflicts"):
+        m.run_with_retry(fn, attempts=3, is_retryable=m.is_commit_conflict,
+                          sleep=lambda s: None, base_delay=0.0)
+
+
+def test_run_with_retry_non_retryable_raises_immediately():
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise Exception("table not found")
+    with pytest.raises(Exception, match="not found"):
+        m.run_with_retry(fn, attempts=5, is_retryable=m.is_commit_conflict,
+                          sleep=lambda s: None)
+    assert calls["n"] == 1

@@ -49,9 +49,10 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------
 # Stage 2 — assemble the Connect image: Strimzi Kafka base + all plugins baked.
-# Base MUST match the running Strimzi operator's Kafka image
-# (Strimzi 0.51.0 / Kafka 4.2.0). Other plugins fetched from Maven/GitHub at
-# IMAGE-build time (not cluster-build time) — pinned to chart versions.
+# Baked Debezium connectors: sqlserver, postgres, mongodb, mysql. Other plugins
+# fetched from Maven/GitHub at IMAGE-build time (not cluster-build time) — pinned
+# to chart versions. Base MUST match the running Strimzi operator's Kafka image
+# (Strimzi 0.51.0 / Kafka 4.2.0).
 # ---------------------------------------------------------------------------
 FROM quay.io/strimzi/kafka:0.51.0-kafka-4.2.0
 ARG DEBEZIUM_VERSION=2.7.3
@@ -62,13 +63,15 @@ ARG APICURIO_VERSION=2.6.5
 USER root
 RUN set -eux; \
     P=/opt/kafka/plugins; \
-    mkdir -p "$P/debezium-sqlserver" "$P/debezium-postgres" "$P/debezium-mongodb" "$P/aiven-jdbc" "$P/apicurio-avro-converter" "$P/iceberg"; \
+    mkdir -p "$P/debezium-sqlserver" "$P/debezium-postgres" "$P/debezium-mongodb" "$P/debezium-mysql" "$P/aiven-jdbc" "$P/apicurio-avro-converter" "$P/iceberg"; \
     cd "$P/debezium-sqlserver"; \
     curl -fL -o d.zip "https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}.Final/debezium-connector-sqlserver-${DEBEZIUM_VERSION}.Final-plugin.zip"; unzip -o d.zip; rm d.zip; \
     cd "$P/debezium-postgres"; \
     curl -fL -o d.zip "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/${DEBEZIUM_VERSION}.Final/debezium-connector-postgres-${DEBEZIUM_VERSION}.Final-plugin.zip"; unzip -o d.zip; rm d.zip; \
     cd "$P/debezium-mongodb"; \
     curl -fL -o d.zip "https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/${DEBEZIUM_VERSION}.Final/debezium-connector-mongodb-${DEBEZIUM_VERSION}.Final-plugin.zip"; unzip -o d.zip; rm d.zip; \
+    cd "$P/debezium-mysql"; \
+    curl -fL -o d.zip "https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}.Final/debezium-connector-mysql-${DEBEZIUM_VERSION}.Final-plugin.zip"; unzip -o d.zip; rm d.zip; \
     cd "$P/aiven-jdbc"; \
     curl -fL -o a.zip "https://github.com/Aiven-Open/jdbc-connector-for-apache-kafka/releases/download/v${AIVEN_JDBC_VERSION}/jdbc-connector-for-apache-kafka-${AIVEN_JDBC_VERSION}.zip"; unzip -o a.zip; rm a.zip; \
     curl -fL -o "mssql-jdbc.jar" "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/${MSSQL_JDBC_VERSION}/mssql-jdbc-${MSSQL_JDBC_VERSION}.jar"; \

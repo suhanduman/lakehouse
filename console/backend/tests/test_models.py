@@ -78,3 +78,33 @@ def test_source_credentials_roundtrip():
 
 def test_delete_mode_literal_values():
     assert DeleteMode.__args__ == ("pipeline_only", "with_data")
+
+
+def _base(**over):
+    d = dict(source="s1", kind="cdc", type="pg", db="appdb", table="public.t",
+             target_ns="depo", target_table="t", db_host="h")
+    d.update(over)
+    return d
+
+
+def test_unknown_kind_type_is_rejected():
+    # A (kind,type) not in the registry must be rejected before field checks.
+    # type Literal blocks truly-unknown types at parse time; this asserts the
+    # registry path raises for a missing required field with the new message.
+    with pytest.raises(ValidationError, match="requires"):
+        SourceSpec(**_base(db_host=None))
+
+
+def test_valid_spec_ok():
+    s = SourceSpec(**_base())
+    assert s.type == "pg"
+
+
+def test_cdc_mysql_requires_db_host():
+    with pytest.raises(ValidationError, match="db_host"):
+        SourceSpec(**_base(type="mysql", db_host=None))
+
+
+def test_cdc_mysql_valid():
+    s = SourceSpec(**_base(type="mysql"))
+    assert s.type == "mysql"

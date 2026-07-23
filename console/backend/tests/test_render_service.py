@@ -42,6 +42,12 @@ def _scheduled_pg():
         incrementing_col="customer_id")
 
 
+def _mysql():
+    return SourceSpec(source="my1", kind="cdc", type="mysql", db="shop",
+                      table="orders", target_ns="depo", target_table="orders",
+                      db_host="mysqlhost")
+
+
 # --------------------------------------------------------------------------
 # bucket_name / render_namespace_ddl
 # --------------------------------------------------------------------------
@@ -285,6 +291,28 @@ def test_scheduled_jdbc_route_transform():
     assert "transforms.setts.timestamp.field" not in cfg
 
 
+# --------------------------------------------------------------------------
+# render_connector — CDC mysql/mariadb (Debezium MySqlConnector, Task 4)
+# --------------------------------------------------------------------------
+
+def test_mysql_topic_name():
+    assert r.topic_name(_mysql()) == "cdc.my1.shop.orders"
+
+
+def test_mysql_connector_shape():
+    body = r.render_connector(_mysql())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"] == "io.debezium.connector.mysql.MySqlConnector"
+    assert c["database.port"] == "3306"
+    assert c["database.include.list"] == "shop"
+    assert c["table.include.list"] == "shop.orders"
+    assert c["database.server.id"].isdigit()
+    assert c["transforms.route.static.value"] == "depo_raw.orders"
+    assert c["transforms.unwrap.add.fields"] == "op,ts_ms,source.pos:lsn"
+    assert c["schema.history.internal.kafka.topic"] == "schema-history.my1"
+    assert body["metadata"]["name"] == "dbz-my1-orders"
+
+
 def test_scheduled_pg_connector_mode_without_timestamp_col():
     # No timestamp_col supplied -> can't use timestamp+incrementing mode.
     cfg = r.render_connector(_scheduled_pg())["spec"]["config"]
@@ -394,3 +422,33 @@ def test_jdbc_synthesizes_op_and_deleted_upsert_only():
     assert cfg["transforms.tsfield.renames"] == "updated_at:__ts_ms"
     assert "transforms.setts.timestamp.field" not in cfg
     assert "ingestts" not in cfg["transforms"]
+
+
+# --------------------------------------------------------------------------
+# Registry-driven dispatch (render_service reads app.source_types instead of
+# hard-coded kind/type if/elif chains)
+# --------------------------------------------------------------------------
+
+def _pg():
+    return SourceSpec(source="pg1", kind="cdc", type="pg", db="appdb",
+                      table="public.orders", target_ns="depo", target_table="orders",
+                      db_host="h")
+
+
+def test_topic_name_dispatches_via_registry():
+    assert r.topic_name(_pg()) == "cdc.pg1.public.orders"
+
+
+def test_render_connector_dispatches_via_registry():
+    body = r.render_connector(_pg())
+    assert body["spec"]["class"] == "io.debezium.connector.postgresql.PostgresConnector"
+    assert body["metadata"]["name"] == "dbz-pg1-orders"
+
+
+def test_renderers_cover_every_connector_source_type():
+    from app import source_types as st
+    for d in st.all_types():
+        if d.render_key:
+            assert d.render_key in r._RENDERERS
+        if d.topic_key:
+            assert d.topic_key in r._TOPICS

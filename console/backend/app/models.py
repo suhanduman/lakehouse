@@ -5,6 +5,8 @@ from typing import List, Optional
 from pydantic import BaseModel, model_validator
 from typing_extensions import Literal
 
+from app import source_types
+
 DeleteMode = Literal["pipeline_only", "with_data"]
 
 
@@ -25,12 +27,12 @@ class SourceSpec(BaseModel):
       - kind="scheduled", type="mongo"            -> requires `cron`
       - kind="scheduled", type in ("mssql", "pg") -> requires `jdbc_url` and `incrementing_col`
       - kind="cdc",       type="mongo"            -> requires `mongo_uri`
-      - kind="cdc",       type in ("mssql", "pg") -> requires `db_host`
+      - kind="cdc",       type in ("mssql", "pg", "mysql") -> requires `db_host`
     """
 
     source: str
     kind: Literal["cdc", "scheduled"]
-    type: Literal["mssql", "pg", "mongo"]
+    type: Literal["mssql", "pg", "mongo", "mysql"]
     db: str
     table: str
     target_ns: str
@@ -54,22 +56,16 @@ class SourceSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_kind_type_requirements(self) -> "SourceSpec":
-        if self.kind == "scheduled" and self.type == "mongo":
-            if not self.cron:
-                raise ValueError("scheduled+mongo requires 'cron'")
-        elif self.kind == "scheduled" and self.type in ("mssql", "pg"):
-            missing = [f for f in ("jdbc_url", "incrementing_col") if not getattr(self, f)]
-            if missing:
-                raise ValueError(
-                    f"scheduled+{self.type} requires 'jdbc_url' and 'incrementing_col' "
-                    f"(missing: {', '.join(missing)})"
-                )
-        elif self.kind == "cdc" and self.type == "mongo":
-            if not self.mongo_uri:
-                raise ValueError("cdc+mongo requires 'mongo_uri'")
-        elif self.kind == "cdc" and self.type in ("mssql", "pg"):
-            if not self.db_host:
-                raise ValueError(f"cdc+{self.type} requires 'db_host'")
+        try:
+            descriptor = source_types.get(self.kind, self.type)
+        except KeyError as e:
+            raise ValueError(str(e)) from e  # -> "unknown source (kind=..., type=...)"
+        missing = [f for f in descriptor.required_fields if not getattr(self, f)]
+        if missing:
+            raise ValueError(
+                f"{self.kind}+{self.type} requires {list(descriptor.required_fields)} "
+                f"(missing: {', '.join(missing)})"
+            )
         return self
 
 

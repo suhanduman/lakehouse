@@ -62,6 +62,12 @@ from pyiceberg.types import (
 )
 
 # Kanonik Iceberg tip adları → pyiceberg tip nesnesi.
+# Storage defaults applied at CREATE time via pyiceberg `properties=` (kept in
+# lockstep with console/backend/app/services/iceberg_service.py — same
+# constant, same CoW trio). 128 MiB bounds small-file growth for maintenance
+# compaction (ALL layers).
+_TARGET_FILE_SIZE_BYTES = "134217728"  # 128 MiB — bounds small-file growth; see spec storage note.
+
 _ICEBERG_TYPES = {
     "int": IntegerType(),
     "long": LongType(),
@@ -87,6 +93,10 @@ BRONZE_METADATA_COLS = [
     {"name": "__ts_ms", "type": "timestamp"},
     {"name": "__deleted", "type": "string"},
     {"name": "__lsn", "type": "long"},
+    # Deterministic dedup tie-break: Kafka offset+partition of each record,
+    # inserted by the Iceberg sink's InsertField SMT (chart 13-connectors.yaml).
+    {"name": "__kafka_offset", "type": "long"},
+    {"name": "__kafka_partition", "type": "int"},
 ]
 
 
@@ -251,10 +261,13 @@ def _ns_exists(cat: RestCatalog, namespace: str) -> bool:
 
 
 def _ensure_table(cat: RestCatalog, namespace: str, table: str, schema: Schema,
-                   partition_spec: PartitionSpec) -> int:
+                   partition_spec: PartitionSpec, properties: dict) -> int:
     """Namespace + tabloyu (identifier field'lı) yaratır. Tablo varsa identifier
     field'ları doğrular; uyuşmazsa 1 döner (fail-loud). Dönüş kodları:
-    0=yaratıldı, 2=zaten uyumlu (no-op), 1=FATAL uyumsuzluk."""
+    0=yaratıldı, 2=zaten uyumlu (no-op), 1=FATAL uyumsuzluk.
+
+    `properties`: CREATE anında set edilen Iceberg tablo property'leri (128MB
+    target-file-size ALL layers; Silver'a ek olarak CoW trio) — bkz. main()."""
     fq = f"{namespace}.{table}"
     want = set(schema.identifier_field_names())
     try:
@@ -275,7 +288,7 @@ def _ensure_table(cat: RestCatalog, namespace: str, table: str, schema: Schema,
             return 1
         print(f"OK (no-op): '{fq}' zaten doğru identifier ile mevcut: {sorted(have)}")
         return 2
-    cat.create_table(fq, schema=schema, partition_spec=partition_spec)
+    cat.create_table(fq, schema=schema, partition_spec=partition_spec, properties=properties)
     got = sorted(cat.load_table(fq).schema().identifier_field_names())
     if set(got) != want:
         print(f"FATAL: '{fq}' yaratıldı ama identifier set edilemedi (got={got})", file=sys.stderr)
@@ -354,14 +367,25 @@ def main() -> int:
 
     schema = _build_schema(columns, identifier)
     partition_spec = _build_partition_spec(schema, partition_col)
+    # Storage defaults (kept in lockstep with console/backend's
+    # IcebergService.create_table — same constant, same CoW trio).
+    properties = {"write.target-file-size-bytes": _TARGET_FILE_SIZE_BYTES}
+    if args.layer == "silver":
+        # entity/upsert Silver: read-heavy (Trino) + MERGE-written -> copy-on-write.
+        properties.update({
+            "write.merge.mode": "copy-on-write",
+            "write.update.mode": "copy-on-write",
+            "write.delete.mode": "copy-on-write",
+        })
     if args.dry_run:
         print(f"layer={args.layer} warehouse={args.warehouse or 'default'} "
               f"namespace={namespace} table={table} identifier={identifier}")
         print(f"partition={[f.name for f in partition_spec.fields] or 'unpartitioned'}")
+        print(f"properties={properties}")
         print(schema)
         return 0
     cat = _load_catalog(args)
-    rc = _ensure_table(cat, namespace, table, schema, partition_spec)
+    rc = _ensure_table(cat, namespace, table, schema, partition_spec, properties)
     return 0 if rc in (0, 2) else 1
 
 

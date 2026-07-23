@@ -1,0 +1,44 @@
+import pytest
+from app import source_types as st
+
+
+def test_existing_pairs_registered():
+    # The five source kinds that exist today must be present with correct lanes.
+    expected = {
+        ("cdc", "mssql"): ("debezium-cdc", "entity", "cdc-relational"),
+        ("cdc", "pg"): ("debezium-cdc", "entity", "cdc-relational"),
+        ("cdc", "mongo"): ("debezium-cdc", "entity", "cdc-mongo"),
+        ("scheduled", "mssql"): ("kafka-connect-source", "entity", "scheduled-jdbc"),
+        ("scheduled", "pg"): ("kafka-connect-source", "entity", "scheduled-jdbc"),
+        ("scheduled", "mongo"): ("spark-batch", "entity", ""),
+    }
+    for (kind, typ), (lane, disp, render_key) in expected.items():
+        d = st.get(kind, typ)
+        assert d.lane == lane
+        assert d.disposition == disp
+        assert d.render_key == render_key
+
+
+def test_required_fields_match_todays_validation():
+    assert st.get("cdc", "mssql").required_fields == ("db_host",)
+    assert st.get("cdc", "pg").required_fields == ("db_host",)
+    assert st.get("cdc", "mongo").required_fields == ("mongo_uri",)
+    assert st.get("scheduled", "mssql").required_fields == ("jdbc_url", "incrementing_col")
+    assert st.get("scheduled", "mongo").required_fields == ("cron",)
+
+
+def test_every_lane_and_disposition_is_valid():
+    for d in st.all_types():
+        assert d.lane in st.LANES
+        assert d.disposition in st.DISPOSITIONS
+
+
+def test_type_names_are_distinct_and_cover_existing():
+    names = st.type_names()
+    assert set(names) >= {"mssql", "pg", "mongo"}
+    assert len(names) == len(set(names))
+
+
+def test_get_unknown_raises():
+    with pytest.raises(KeyError):
+        st.get("cdc", "nope")

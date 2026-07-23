@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_bronze_metadata_cols_exact_types():
     cols = {d["name"]: d["type"] for d in c.BRONZE_METADATA_COLS}
     assert cols == {"__op": "string", "__ts_ms": "timestamp", "__deleted": "string",
-                    "__lsn": "long"}
+                    "__lsn": "long", "__kafka_offset": "long", "__kafka_partition": "int"}
 
 
 def test_build_partition_spec_day_ts_ms():
