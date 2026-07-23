@@ -50,7 +50,13 @@ const FIELD_META: Record<string, { step: 2 | 3; label: string }> = {
   jdbc_url: { step: 2, label: "JDBC URL" },
   incrementing_col: { step: 3, label: "Incrementing column" },
   cron: { step: 3, label: "Cron schedule" },
+  s3_bucket: { step: 2, label: "S3 bucket" },
+  s3_prefix: { step: 2, label: "S3 prefix" },
 };
+
+/** Options for the `file_format` select (batch/s3's fourth required
+ * field) -- mirrors app.models.SourceSpec.file_format's literal union. */
+const FILE_FORMAT_OPTIONS = ["parquet", "json", "avro"] as const;
 
 interface FormState {
   source: string;
@@ -65,6 +71,9 @@ interface FormState {
   timestamp_col: string;
   poll_ms: string;
   cron: string;
+  s3_bucket: string;
+  s3_prefix: string;
+  file_format: string;
   target_ns: string;
   target_table: string;
   user: string;
@@ -90,6 +99,9 @@ const INITIAL_STATE: FormState = {
   timestamp_col: "",
   poll_ms: "",
   cron: "",
+  s3_bucket: "",
+  s3_prefix: "",
+  file_format: "",
   target_ns: "",
   target_table: "",
   user: "",
@@ -103,7 +115,16 @@ const INITIAL_STATE: FormState = {
  * Anything in a descriptor's required_fields outside this set falls back
  * to a generic input (see `extraFields`) instead of silently not
  * rendering. */
-const KNOWN_SPEC_FIELDS = new Set(["db_host", "mongo_uri", "jdbc_url", "incrementing_col", "cron"]);
+const KNOWN_SPEC_FIELDS = new Set([
+  "db_host",
+  "mongo_uri",
+  "jdbc_url",
+  "incrementing_col",
+  "cron",
+  "s3_bucket",
+  "s3_prefix",
+  "file_format",
+]);
 
 /** "some_field" -> "Some field", for the generic-fallback input's label. */
 function humanizeFieldName(field: string): string {
@@ -161,6 +182,15 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   }
   if (required.includes("cron")) {
     spec.cron = form.cron;
+  }
+  if (required.includes("s3_bucket")) {
+    spec.s3_bucket = form.s3_bucket;
+  }
+  if (required.includes("s3_prefix")) {
+    spec.s3_prefix = form.s3_prefix;
+  }
+  if (required.includes("file_format")) {
+    spec.file_format = form.file_format as SourceSpec["file_format"];
   }
   for (const field of required) {
     if (!KNOWN_SPEC_FIELDS.has(field) && form.extraFields[field]) {
@@ -419,6 +449,43 @@ export default function AddSourceWizard() {
                 value={form.jdbc_url}
                 onChange={(e) => set("jdbc_url", e.target.value)}
               />
+            </div>
+          )}
+          {requiredFields.includes("s3_bucket") && (
+            <div>
+              <label htmlFor="s3_bucket">{FIELD_META.s3_bucket.label}</label>
+              <input
+                id="s3_bucket"
+                value={form.s3_bucket}
+                onChange={(e) => set("s3_bucket", e.target.value)}
+              />
+            </div>
+          )}
+          {requiredFields.includes("s3_prefix") && (
+            <div>
+              <label htmlFor="s3_prefix">{FIELD_META.s3_prefix.label}</label>
+              <input
+                id="s3_prefix"
+                value={form.s3_prefix}
+                onChange={(e) => set("s3_prefix", e.target.value)}
+              />
+            </div>
+          )}
+          {requiredFields.includes("file_format") && (
+            <div>
+              <label htmlFor="file_format">File format</label>
+              <select
+                id="file_format"
+                value={form.file_format}
+                onChange={(e) => set("file_format", e.target.value)}
+              >
+                <option value="">(select a format)</option>
+                {FILE_FORMAT_OPTIONS.map((fmt) => (
+                  <option key={fmt} value={fmt}>
+                    {fmt}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           {unknownRequiredFields.map((field) => (
