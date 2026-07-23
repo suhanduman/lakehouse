@@ -1,13 +1,17 @@
 # images/spark-py/Dockerfile
 # First-party Spark image for the platform's SparkApplications
-# (iceberg-maintenance, silver-merge). Stock Spark base + job code baked via
-# local:// (unchanged) + all Iceberg/AWS/Kafka jars BAKED at build time.
+# (iceberg-maintenance, silver-merge, s3-register-table). Stock Spark base +
+# job code baked via local:// (unchanged) + all Iceberg/AWS/Kafka/Avro jars
+# BAKED at build time.
 #
 # WHY: chart spark-defaults previously set `spark.jars.packages`, which makes
 # Spark resolve these jars from Maven via Ivy on EVERY job start — a runtime
 # network dependency (fails air-gapped, slow cold-start, a day-2 risk). Baking
 # them makes jobs reproducible + offline-by-default. The coordinate set below
-# is IDENTICAL to the old spark.jars.packages, so runtime behavior is unchanged.
+# started IDENTICAL to the old spark.jars.packages (runtime behavior
+# unchanged); spark-avro was added on top for s3_register_table.py's
+# `SELECT * FROM avro.\`...\`` full-refresh CTAS path (parquet/json are
+# built into Spark, Avro is not).
 #
 # All versions MUST match chart .Values.versions.* (single source of truth).
 # Build (from repo root):
@@ -37,6 +41,7 @@ RUN set -eux; \
 software.amazon.awssdk:bundle:${AWS_SDK_BUNDLE},\
 software.amazon.awssdk:url-connection-client:${AWS_SDK_BUNDLE},\
 org.apache.spark:spark-sql-kafka-0-10_2.12:${SPARK_VERSION},\
+org.apache.spark:spark-avro_2.12:${SPARK_VERSION},\
 org.apache.hadoop:hadoop-aws:${HADOOP_AWS}"; \
     echo "print('spark-py: baking dependency jars')" > /tmp/bake.py; \
     "$SPARK_HOME/bin/spark-submit" --packages "$PKGS" \
