@@ -18,9 +18,13 @@ Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yaml`, which:
 
    (`<owner>` = the GitHub org/user the repo lives under.) The pinned
    internally-built Spark image (`versions.sparkImageTag` in
-   `chart/values.yaml`) has no Dockerfile in this repo yet and is not built
-   by this workflow — it's produced by whatever internal-registry pipeline
-   the target cluster already uses.
+   `chart/values.yaml`) is now first-party too — built from
+   `images/spark-py/Dockerfile` (same baked-jars, no-runtime-Ivy pattern as
+   `images/connect/Dockerfile`) — but this workflow does not build/push it
+   yet (its `images` job matrix does not include `spark-py`); until that
+   wiring lands, `spark-py` is still produced out-of-band from that
+   Dockerfile by whatever registry pipeline the target cluster already uses.
+   See "Known limitation" below.
 
 2. **Packages and pushes the Helm chart as an OCI artifact**:
    `helm package chart --version X.Y.Z --app-version X.Y.Z`, then
@@ -94,18 +98,22 @@ chart before publishing it (see "Image/chart coherence" below), so
 resolve to the exact ghcr.io images this same release published, at this
 exact version — no `--set` needed for those three.
 
-> **Known limitation — `spark-py` is bring-your-own.** This release does
-> **not** build or publish a `spark-py` image (no Dockerfile exists in this
-> repo yet for it — tracked as an Ingestion-productization follow-up). The
-> packaged chart's `global.imageRegistry` is baked to
-> `ghcr.io/<owner>/lakehouse`, so a **plain default install of the released
-> OCI chart will `ImagePullBackOff`** on every Spark
-> `SparkApplication`/`ScheduledSparkApplication` (silver-merge, maintenance,
-> `nginx-ingest`) — they resolve to
+> **Known limitation — `spark-py` is first-party but not yet in this
+> workflow's build matrix.** `spark-py` is now a first-party image, built
+> from `images/spark-py/Dockerfile` (a stock Spark base with the Iceberg/AWS/
+> Kafka/hadoop-aws jars baked in at build time — no runtime Ivy resolution;
+> the versions baked MUST match `chart/values.yaml`'s `versions:` block —
+> same convention as `images/connect/Dockerfile`). This release, however,
+> does **not yet** build or publish it (the `images` job's matrix in
+> `.github/workflows/release.yaml` does not include `spark-py` — tracked as
+> an Ingestion-productization follow-up). The packaged chart's
+> `global.imageRegistry` is baked to `ghcr.io/<owner>/lakehouse`, so a
+> **plain default install of the released OCI chart will `ImagePullBackOff`**
+> on every Spark `SparkApplication`/`ScheduledSparkApplication` (silver-merge,
+> maintenance, `nginx-ingest`) — they resolve to
 > `ghcr.io/<owner>/lakehouse/spark-py:1.0`, an image that was never pushed.
-> Before installing, build your own `spark-py` image (Spark base image +
-> the `iceberg`/`aws-sdk`/`hadoop-aws` jar versions `chart/values.yaml`'s
-> `versions:` block pins) and either:
+> Before installing, build `images/spark-py/Dockerfile` yourself (its default
+> build args already match `chart/values.yaml`'s `versions:` block) and either:
 > - push it to `ghcr.io/<owner>/lakehouse/spark-py:<your-tag>` (the same
 >   registry this release already wired) and override only the tag:
 >   ```bash

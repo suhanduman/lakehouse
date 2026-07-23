@@ -56,7 +56,8 @@ metadata:
   namespace: {{ include "lakehouse.namespace" . }}
 data:
   spark-defaults.conf: |
-    spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:{{ .Values.versions.icebergSparkRuntime }},software.amazon.awssdk:bundle:{{ .Values.versions.awsSdkBundle }},software.amazon.awssdk:url-connection-client:{{ .Values.versions.awsSdkBundle }},org.apache.spark:spark-sql-kafka-0-10_2.12:{{ .Values.versions.sparkVersion }},org.apache.hadoop:hadoop-aws:{{ .Values.versions.hadoopAws }}
+    # Iceberg/AWS/Kafka jars are BAKED into the spark-py image (images/spark-py/
+    # Dockerfile) — no runtime spark.jars.packages / Ivy resolution.
     spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
 
     # KRITIK: Dynamic allocation Kubernetes üzerinde çalışırken executor
