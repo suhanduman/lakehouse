@@ -546,6 +546,22 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
         "iceberg.control.commit.interval-ms": "60000",
+        # Control-group stability. This dedicated sink is Console-rendered, so
+        # (unlike the chart's shared sinks) it does NOT inherit
+        # `connectors.icebergSink.kafkaClientOverrides`. Without a long control
+        # consumer session/commit window, the sink's `cg-control-*` consumer
+        # flaps (JoinGroup UNKNOWN_MEMBER_ID) on a resource-constrained/single-
+        # worker Connect and every commit reports "committed to 0 table(s)" —
+        # rows never land in Bronze. These are Console-specific defaults tuned
+        # for a constrained/single-worker Connect (NOT synced to the chart's
+        # shared-sink `kafkaClientOverrides`, which differ per overlay) and are
+        # overridable via the Console edit-before-apply step. Verified necessary
+        # on constrained microk8s (Plan B1 Task 7).
+        "iceberg.control.commit.timeout-ms": "120000",
+        "iceberg.kafka.session.timeout.ms": "120000",
+        "iceberg.kafka.heartbeat.interval.ms": "15000",
+        "iceberg.kafka.request.timeout.ms": "130000",
+        "iceberg.kafka.max.poll.interval.ms": "300000",
         # --- SMTs: route + synthesize medallion metadata (event: __op=u/__deleted=false) ---
         "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
         "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",

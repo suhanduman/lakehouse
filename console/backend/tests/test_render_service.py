@@ -493,3 +493,15 @@ def test_kafka_ingest_external_has_consumer_override_and_creds():
 
 def test_kafka_ingest_registered():
     assert "kafka-ingest" in r._RENDERERS
+
+
+def test_kafka_ingest_has_control_group_overrides():
+    # Console-rendered dedicated sink must carry the iceberg.kafka.* control-group
+    # timeout overrides (Plan B1 Task 7: without them the cg-control consumer flaps
+    # on a constrained Connect and commits report "0 table(s)" — rows never land).
+    c = r.render_connector(_kafka())["spec"]["config"]
+    assert c["iceberg.control.commit.timeout-ms"] == "120000"
+    assert c["iceberg.kafka.session.timeout.ms"] == "120000"
+    assert c["iceberg.kafka.heartbeat.interval.ms"] == "15000"
+    assert c["iceberg.kafka.request.timeout.ms"] == "130000"
+    assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"
