@@ -331,7 +331,11 @@ class AddSourceOrchestrator:
                 self.k8s.apply_topic(ctx["topic_body"])
                 return None
 
-            if not run("topic", _apply_topic, lambda: self.k8s.delete_topic(ctx.get("topic_name"))):
+            if not run(
+                "topic",
+                _apply_topic,
+                lambda: self.k8s.delete_topic(ctx.get("topic_body", {}).get("metadata", {}).get("name")),
+            ):
                 return fail()
 
         # 5. connector
