@@ -172,17 +172,31 @@ class K8sService:
         )
 
     # ----------------------------------------------------------------
-    # list_sources — all KafkaConnector CRs in the namespace
+    # list_sources — KafkaConnector CRs + ScheduledSparkApplication CRs in
+    # the namespace, each tagged with its own "kind" so callers can tell
+    # them apart. Tolerates the spark-operator CRD being absent from the
+    # cluster (returns just connectors in that case).
     # ----------------------------------------------------------------
 
-    def list_sources(self) -> List[Dict[str, Any]]:
-        response = self.custom_api.list_namespaced_custom_object(
-            group=GROUP,
-            version=VERSION,
-            namespace=self.namespace,
-            plural=CONNECTOR_PLURAL,
+    def _list(self, group: str, version: str, plural: str) -> List[Dict[str, Any]]:
+        resp = self.custom_api.list_namespaced_custom_object(
+            group=group, version=version, namespace=self.namespace, plural=plural,
         )
-        return response.get("items", [])
+        return resp.get("items", [])
+
+    def list_sources(self) -> List[Dict[str, Any]]:
+        connectors = self._list(GROUP, VERSION, CONNECTOR_PLURAL)
+        for c in connectors:
+            c["kind"] = "KafkaConnector"
+        try:
+            sparks = self._list(SPARK_GROUP, SPARK_API_VERSION, SPARK_PLURAL)
+        except ApiException as exc:
+            if exc.status != HTTP_NOT_FOUND:
+                raise
+            sparks = []   # spark-operator CRD not installed on this cluster
+        for s in sparks:
+            s["kind"] = "ScheduledSparkApplication"
+        return connectors + sparks
 
     # ----------------------------------------------------------------
     # get_status — `.status.connectorStatus` of one KafkaConnector CR
@@ -197,3 +211,21 @@ class K8sService:
             name=name,
         )
         return obj.get("status", {}).get("connectorStatus", {})
+
+    # ----------------------------------------------------------------
+    # get_spark_status / set_spark_suspended — status + suspend toggle for
+    # one ScheduledSparkApplication CR
+    # ----------------------------------------------------------------
+
+    def get_spark_status(self, name: str) -> Dict[str, Any]:
+        obj = self.custom_api.get_namespaced_custom_object(
+            group=SPARK_GROUP, version=SPARK_API_VERSION, namespace=self.namespace,
+            plural=SPARK_PLURAL, name=name,
+        )
+        return obj.get("status", {})
+
+    def set_spark_suspended(self, name: str, suspended: bool) -> Dict[str, Any]:
+        return self.custom_api.patch_namespaced_custom_object(
+            group=SPARK_GROUP, version=SPARK_API_VERSION, namespace=self.namespace,
+            plural=SPARK_PLURAL, name=name, body={"spec": {"suspend": suspended}},
+        )

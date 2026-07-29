@@ -24,15 +24,32 @@ NAMESPACE = "example"
 class FakeCustom:
     """Records every call; create_namespaced_custom_object can be told to
     raise a 409 (already-exists) once, to exercise the apply->patch fallback.
+
+    `connectors`/`sparks` seed the items returned by
+    list_namespaced_custom_object, keyed on the `plural` arg (kafkaconnectors
+    vs scheduledsparkapplications); `spark_crd_absent` makes the spark list
+    call raise a 404 instead, to exercise list_sources' CRD-not-installed
+    tolerance. `last_patch` records the most recent
+    patch_namespaced_custom_object call for assertions.
     """
 
-    def __init__(self, conflict_on_create: bool = False):
+    def __init__(
+        self,
+        conflict_on_create: bool = False,
+        connectors: list | None = None,
+        sparks: list | None = None,
+        spark_crd_absent: bool = False,
+    ):
         self.conflict_on_create = conflict_on_create
+        self.connectors = connectors
+        self.sparks = sparks
+        self.spark_crd_absent = spark_crd_absent
         self.created = []
         self.patched = []
         self.deleted = []
         self.list_calls = []
         self.get_calls = []
+        self.last_patch = None
         self.list_response = {"items": [{"metadata": {"name": "dbz-x"}}]}
         self.get_response = {
             "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}}
@@ -46,6 +63,7 @@ class FakeCustom:
 
     def patch_namespaced_custom_object(self, **kw):
         self.patched.append(kw)
+        self.last_patch = kw
         return kw["body"]
 
     def delete_namespaced_custom_object(self, **kw):
@@ -53,7 +71,15 @@ class FakeCustom:
         return {}
 
     def list_namespaced_custom_object(self, **kw):
+        plural = kw["plural"]
+        if plural == "scheduledsparkapplications":
+            if self.spark_crd_absent:
+                raise ApiException(status=404, reason="NotFound")
+            self.list_calls.append(kw)
+            return {"items": self.sparks if self.sparks is not None else []}
         self.list_calls.append(kw)
+        if self.connectors is not None:
+            return {"items": self.connectors}
         return self.list_response
 
     def get_namespaced_custom_object(self, **kw):
@@ -356,8 +382,7 @@ def test_list_sources_returns_items():
     svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
     result = svc.list_sources()
 
-    assert result == [{"metadata": {"name": "dbz-x"}}]
-    assert len(fake.list_calls) == 1
+    assert result == [{"metadata": {"name": "dbz-x"}, "kind": "KafkaConnector"}]
     assert fake.list_calls[0]["plural"] == "kafkaconnectors"
     assert fake.list_calls[0]["namespace"] == "example"
 
@@ -367,6 +392,26 @@ def test_list_sources_empty_when_no_items():
     fake.list_response = {}
     svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
     assert svc.list_sources() == []
+
+
+def test_list_sources_merges_and_tags_both_kinds():
+    fake = FakeCustom(connectors=[{"metadata": {"name": "dbz-a"}}],
+                       sparks=[{"metadata": {"name": "s3-register-b"}}])
+    items = K8sService(fake, FakeCore(), "ns").list_sources()
+    kinds = {i["metadata"]["name"]: i["kind"] for i in items}
+    assert kinds == {"dbz-a": "KafkaConnector", "s3-register-b": "ScheduledSparkApplication"}
+
+
+def test_list_sources_tolerates_missing_spark_crd():
+    fake = FakeCustom(connectors=[{"metadata": {"name": "dbz-a"}}], spark_crd_absent=True)
+    assert [i["metadata"]["name"] for i in K8sService(fake, FakeCore(), "ns").list_sources()] == ["dbz-a"]
+
+
+def test_set_spark_suspended_patches_suspend():
+    fake = FakeCustom()
+    K8sService(fake, FakeCore(), "ns").set_spark_suspended("s3-register-b", True)
+    assert fake.last_patch["body"] == {"spec": {"suspend": True}}
+    assert fake.last_patch["plural"] == "scheduledsparkapplications"
 
 
 # --------------------------------------------------------------------------
