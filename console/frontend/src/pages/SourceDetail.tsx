@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DeleteModal, { type Role } from "../components/DeleteModal";
 import {
+  editSparkSource,
   getSource,
   getStatus,
   pauseSource,
@@ -9,6 +10,7 @@ import {
   resumeSource,
   type DeleteSourceResult,
   type Source,
+  type SourceSpec,
   type StatusEntry,
 } from "../api/client";
 
@@ -44,6 +46,13 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [editing, setEditing] = useState(false);
   const [configText, setConfigText] = useState("{}");
   const [editError, setEditError] = useState<string | null>(null);
+
+  // Spark-batch edit form fields (source.cr_kind === "ScheduledSparkApplication"),
+  // seeded from source.spark when the Edit button is clicked.
+  const [cron, setCron] = useState("");
+  const [s3Bucket, setS3Bucket] = useState("");
+  const [s3Prefix, setS3Prefix] = useState("");
+  const [fileFormat, setFileFormat] = useState("");
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleted, setDeleted] = useState<DeleteSourceResult | null>(null);
@@ -118,6 +127,43 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     }
   }
 
+  async function handleSaveSparkEdit() {
+    if (!source?.spark) return;
+    setEditError(null);
+    setActionPending(true);
+    try {
+      const spec: SourceSpec = {
+        source: source.spark.source,
+        kind: "batch",
+        type: "s3",
+        db: "-",
+        table: "-",
+        target_ns: source.spark.target_ns,
+        target_table: source.spark.target_table,
+        s3_bucket: s3Bucket,
+        s3_prefix: s3Prefix,
+        file_format: fileFormat as SourceSpec["file_format"],
+        cron,
+      };
+      await editSparkSource(name, spec);
+      setEditing(false);
+    } catch (err) {
+      setEditError(errorMessage(err));
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  function handleToggleEdit() {
+    if (!editing && source?.cr_kind === "ScheduledSparkApplication" && source.spark) {
+      setCron(source.spark.cron);
+      setS3Bucket(source.spark.s3_bucket);
+      setS3Prefix(source.spark.s3_prefix);
+      setFileFormat(source.spark.file_format);
+    }
+    setEditing((v) => !v);
+  }
+
   function handleDeleted(result: DeleteSourceResult) {
     setDeleteModalOpen(false);
     setDeleted(result);
@@ -150,7 +196,7 @@ export default function SourceDetail({ role }: SourceDetailProps) {
 
       {actionError && <p role="alert">{actionError}</p>}
 
-      <button type="button" onClick={() => setEditing((v) => !v)} disabled={actionPending}>
+      <button type="button" onClick={handleToggleEdit} disabled={actionPending}>
         Edit
       </button>
       {source.paused ? (
@@ -166,22 +212,58 @@ export default function SourceDetail({ role }: SourceDetailProps) {
         Delete source
       </button>
 
-      {editing && (
+      {editing && source.cr_kind === "ScheduledSparkApplication" ? (
         <div>
-          <label htmlFor="config-json">Config (JSON)</label>
-          <textarea
-            id="config-json"
-            value={configText}
-            onChange={(e) => setConfigText(e.target.value)}
+          <label htmlFor="spark-cron">Cron</label>
+          <input id="spark-cron" value={cron} onChange={(e) => setCron(e.target.value)} />
+
+          <label htmlFor="spark-s3-bucket">S3 Bucket</label>
+          <input
+            id="spark-s3-bucket"
+            value={s3Bucket}
+            onChange={(e) => setS3Bucket(e.target.value)}
           />
+
+          <label htmlFor="spark-s3-prefix">S3 Prefix</label>
+          <input
+            id="spark-s3-prefix"
+            value={s3Prefix}
+            onChange={(e) => setS3Prefix(e.target.value)}
+          />
+
+          <label htmlFor="spark-file-format">File Format</label>
+          <input
+            id="spark-file-format"
+            value={fileFormat}
+            onChange={(e) => setFileFormat(e.target.value)}
+          />
+
           {editError && <p role="alert">{editError}</p>}
-          <button type="button" onClick={handleSaveEdit} disabled={actionPending}>
+          <button type="button" onClick={handleSaveSparkEdit} disabled={actionPending}>
             Save
           </button>
           <button type="button" onClick={() => setEditing(false)} disabled={actionPending}>
             Cancel
           </button>
         </div>
+      ) : (
+        editing && (
+          <div>
+            <label htmlFor="config-json">Config (JSON)</label>
+            <textarea
+              id="config-json"
+              value={configText}
+              onChange={(e) => setConfigText(e.target.value)}
+            />
+            {editError && <p role="alert">{editError}</p>}
+            <button type="button" onClick={handleSaveEdit} disabled={actionPending}>
+              Save
+            </button>
+            <button type="button" onClick={() => setEditing(false)} disabled={actionPending}>
+              Cancel
+            </button>
+          </div>
+        )
       )}
 
       {deleteModalOpen && (

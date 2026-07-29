@@ -14,13 +14,26 @@ const BASE = "/api";
 
 export type DeleteMode = "pipeline_only" | "with_data";
 
-/** Mirrors app.routers.sources._summary(): the KafkaConnector CR projected
- * down to what the console UI needs. */
+/** Mirrors app.routers.sources._summary(): the KafkaConnector/
+ * ScheduledSparkApplication CR projected down to what the console UI needs.
+ * `cr_kind` distinguishes the two ("KafkaConnector" | "ScheduledSparkApplication");
+ * `spark` carries the round-tripped spark-batch annotation fields (`null`
+ * for connectors). */
 export interface Source {
   name: string;
   class: string;
   paused: boolean;
   state: string | null;
+  cr_kind: string;
+  spark?: {
+    source: string;
+    target_ns: string;
+    target_table: string;
+    s3_bucket: string;
+    s3_prefix: string;
+    file_format: string;
+    cron: string;
+  } | null;
 }
 
 /** Mirrors app.models.SourceSpec. `kind`/`type` are widened to cover every
@@ -208,6 +221,17 @@ export async function patchSource(
   return request<{ ok: boolean; name: string }>(`/sources/${encodeURIComponent(name)}`, {
     method: "PATCH",
     body: JSON.stringify({ config }),
+  });
+}
+
+/** PATCH /api/sources/{name} with a full spec -> re-render a spark-batch source. */
+export async function editSparkSource(
+  name: string,
+  spec: SourceSpec,
+): Promise<{ ok: boolean; name: string }> {
+  return request<{ ok: boolean; name: string }>(`/sources/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ spec }),
   });
 }
 

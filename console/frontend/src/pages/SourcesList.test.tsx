@@ -11,12 +11,14 @@ describe("SourcesList", () => {
         class: "io.debezium.connector.sqlserver.SqlServerConnector",
         paused: false,
         state: "RUNNING",
+        cr_kind: "KafkaConnector",
       },
       {
         name: "jdbc-pg-grades",
         class: "io.confluent.connect.jdbc.JdbcSourceConnector",
         paused: true,
         state: "PAUSED",
+        cr_kind: "KafkaConnector",
       },
     ]);
 
@@ -29,6 +31,40 @@ describe("SourcesList", () => {
     expect(
       screen.getByText("io.debezium.connector.sqlserver.SqlServerConnector"),
     ).toBeInTheDocument();
+  });
+
+  it("distinguishes spark-batch sources from connectors via cr_kind", async () => {
+    vi.spyOn(client, "listSources").mockResolvedValue([
+      {
+        name: "dbz-mssql1-students",
+        class: "io.debezium.connector.sqlserver.SqlServerConnector",
+        paused: false,
+        state: "RUNNING",
+        cr_kind: "KafkaConnector",
+      },
+      {
+        name: "s3-batch-invoices",
+        class: "ScheduledSparkApplication",
+        paused: false,
+        state: "Ready",
+        cr_kind: "ScheduledSparkApplication",
+        spark: {
+          source: "s3-batch-invoices",
+          target_ns: "rawlake",
+          target_table: "invoices",
+          s3_bucket: "raw-bucket",
+          s3_prefix: "invoices/",
+          file_format: "parquet",
+          cron: "0 * * * *",
+        },
+      },
+    ]);
+
+    render(<SourcesList />);
+
+    expect(await screen.findByText("dbz-mssql1-students")).toBeInTheDocument();
+    expect(screen.getByText("s3-batch-invoices")).toBeInTheDocument();
+    expect(screen.getByText("Spark Batch")).toBeInTheDocument();
   });
 
   it("shows an error message when the API call fails", async () => {

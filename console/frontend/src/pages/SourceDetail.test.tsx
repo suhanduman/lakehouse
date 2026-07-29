@@ -12,6 +12,26 @@ const SOURCE: client.Source = {
   class: "io.debezium.connector.sqlserver.SqlServerConnector",
   paused: false,
   state: "RUNNING",
+  cr_kind: "KafkaConnector",
+};
+
+const SPARK_SOURCE_NAME = "s3-batch-invoices";
+
+const SPARK_SOURCE: client.Source = {
+  name: SPARK_SOURCE_NAME,
+  class: "ScheduledSparkApplication",
+  paused: false,
+  state: "Ready",
+  cr_kind: "ScheduledSparkApplication",
+  spark: {
+    source: SPARK_SOURCE_NAME,
+    target_ns: "rawlake",
+    target_table: "invoices",
+    s3_bucket: "raw-bucket",
+    s3_prefix: "invoices/",
+    file_format: "parquet",
+    cron: "0 * * * *",
+  },
 };
 
 const STATUS: client.StatusResponse = {
@@ -28,9 +48,9 @@ const STATUS: client.StatusResponse = {
   reachable: true,
 };
 
-function renderDetail(role: Role) {
+function renderDetail(role: Role, sourceName: string = SOURCE_NAME) {
   return render(
-    <MemoryRouter initialEntries={[`/sources/${SOURCE_NAME}`]}>
+    <MemoryRouter initialEntries={[`/sources/${sourceName}`]}>
       <Routes>
         <Route path="/sources/:name" element={<SourceDetail role={role} />} />
         {/* Deleting navigates back to "/" -- give it somewhere to land so
@@ -143,6 +163,74 @@ describe("SourceDetail", () => {
 
     await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith(SOURCE_NAME));
     expect(await screen.findByRole("button", { name: /^resume$/i })).toBeInTheDocument();
+  });
+
+  it("shows the JSON config textarea for a connector source and saves via patchSource", async () => {
+    mockLoad();
+    const patchSpy = vi
+      .spyOn(client, "patchSource")
+      .mockResolvedValue({ ok: true, name: SOURCE_NAME });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+
+    expect(await screen.findByLabelText(/config \(json\)/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/cron/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/config \(json\)/i), {
+      target: { value: '{"foo":"bar"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledWith(SOURCE_NAME, { foo: "bar" }));
+  });
+
+  it("shows a prefilled field form for a spark-batch source and saves via editSparkSource", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SPARK_SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue({ connectors: [], reachable: true });
+    const editSparkSpy = vi
+      .spyOn(client, "editSparkSource")
+      .mockResolvedValue({ ok: true, name: SPARK_SOURCE_NAME });
+
+    renderDetail("ADMIN", SPARK_SOURCE_NAME);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+
+    expect(screen.queryByLabelText(/config \(json\)/i)).not.toBeInTheDocument();
+
+    const cronInput = (await screen.findByLabelText(/cron/i)) as HTMLInputElement;
+    const bucketInput = screen.getByLabelText(/s3 bucket/i) as HTMLInputElement;
+    const prefixInput = screen.getByLabelText(/s3 prefix/i) as HTMLInputElement;
+    const formatInput = screen.getByLabelText(/file format/i) as HTMLInputElement;
+
+    expect(cronInput.value).toBe("0 * * * *");
+    expect(bucketInput.value).toBe("raw-bucket");
+    expect(prefixInput.value).toBe("invoices/");
+    expect(formatInput.value).toBe("parquet");
+
+    fireEvent.change(cronInput, { target: { value: "*/15 * * * *" } });
+    fireEvent.change(bucketInput, { target: { value: "new-bucket" } });
+    fireEvent.change(prefixInput, { target: { value: "new-invoices/" } });
+    fireEvent.change(formatInput, { target: { value: "json" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(editSparkSpy).toHaveBeenCalledWith(SPARK_SOURCE_NAME, {
+        source: SPARK_SOURCE_NAME,
+        kind: "batch",
+        type: "s3",
+        db: "-",
+        table: "-",
+        target_ns: "rawlake",
+        target_table: "invoices",
+        s3_bucket: "new-bucket",
+        s3_prefix: "new-invoices/",
+        file_format: "json",
+        cron: "*/15 * * * *",
+      }),
+    );
   });
 
   it("shows an error message when the source fails to load", async () => {
