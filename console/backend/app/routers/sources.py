@@ -35,7 +35,7 @@ from app.orchestrator import AddSourceOrchestrator
 from app.services import render_service
 from app.services.authz import Action
 from app.services.k8s_service import K8sService
-from app.services.render_service import BRONZE_NAMESPACE_SUFFIX
+from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
 from app.services.s3_service import S3Service
 from app.services.trino_service import TrinoService
 
@@ -57,20 +57,47 @@ class PreviewSourceRequest(BaseModel):
 
 
 class PatchSourceRequest(BaseModel):
-    config: Dict[str, Any]
+    config: Optional[Dict[str, Any]] = None
+    spec: Optional[SourceSpec] = None
+
+
+_SPARK_ANN = "lakehouse.solus.dev/"
 
 
 def _summary(item: Dict[str, Any]) -> Dict[str, Any]:
-    """KafkaConnector CR dict -> the small shape the console UI needs (name,
-    connector class, paused flag, reconciled state)."""
+    """CR dict (KafkaConnector or ScheduledSparkApplication) -> the small
+    shape the console UI needs (name, class, paused flag, reconciled state,
+    `cr_kind`, and -- for spark sources -- the round-tripped `spark`
+    annotation fields; `None` for connectors)."""
+    kind = item.get("kind") or "KafkaConnector"
     metadata = item.get("metadata") or {}
     spec = item.get("spec") or {}
+    if kind == "ScheduledSparkApplication":
+        ann = metadata.get("annotations") or {}
+        return {
+            "name": metadata.get("name"),
+            "class": "ScheduledSparkApplication",
+            "paused": bool(spec.get("suspend")),
+            "state": (item.get("status") or {}).get("scheduleState"),
+            "cr_kind": kind,
+            "spark": {
+                "source": ann.get(f"{_SPARK_ANN}source"),
+                "target_ns": ann.get(f"{_SPARK_ANN}target-ns"),
+                "target_table": ann.get(f"{_SPARK_ANN}target-table"),
+                "s3_bucket": ann.get(f"{_SPARK_ANN}s3-bucket"),
+                "s3_prefix": ann.get(f"{_SPARK_ANN}s3-prefix"),
+                "file_format": ann.get(f"{_SPARK_ANN}file-format"),
+                "cron": ann.get(f"{_SPARK_ANN}cron"),
+            },
+        }
     connector_status = (item.get("status") or {}).get("connectorStatus") or {}
     return {
         "name": metadata.get("name"),
         "class": spec.get("class"),
         "paused": spec.get("state") == "paused",
         "state": (connector_status.get("connector") or {}).get("state"),
+        "cr_kind": "KafkaConnector",
+        "spark": None,
     }
 
 
@@ -128,6 +155,26 @@ def _topic_from_config(config: Dict[str, Any]) -> Optional[str]:
     if "table.whitelist" in config:
         return f"{prefix}{config['table.whitelist']}"
     return None
+
+
+def _kind_of(cr: Dict[str, Any]) -> str:
+    return cr.get("kind") or "KafkaConnector"
+
+
+def _spark_target(cr: Dict[str, Any]) -> Tuple[str, str]:
+    """(target_ns, target_table) for a spark source, from its round-trip
+    annotations, falling back to parsing `--target rawlake.<ns>.<tbl>` from the
+    CR's spark arguments."""
+    ann = (cr.get("metadata") or {}).get("annotations") or {}
+    ns, tbl = ann.get(f"{_SPARK_ANN}target-ns"), ann.get(f"{_SPARK_ANN}target-table")
+    if ns and tbl:
+        return ns, tbl
+    args = ((cr.get("spec") or {}).get("template") or {}).get("arguments") or []
+    if "--target" in args:
+        _, ns, tbl = args[args.index("--target") + 1].split(".", 2)   # rawlake.<ns>.<tbl>
+        return ns, tbl
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                        detail="cannot resolve spark target ns/table -- refusing with_data teardown")
 
 
 # --------------------------------------------------------------------------
@@ -250,8 +297,17 @@ def edit_source(
     name: str,
     payload: PatchSourceRequest,
     k8s: K8sService = Depends(get_k8s),
+    orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
-    k8s.patch_connector(name, payload.config)
+    cr = _find_source(k8s, name)
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        if payload.spec is None:
+            raise HTTPException(status_code=400, detail="spark source edit requires `spec`")
+        orchestrator.edit_spark_source(payload.spec)
+    else:
+        if payload.config is None:
+            raise HTTPException(status_code=400, detail="connector edit requires `config`")
+        k8s.patch_connector(name, payload.config)
     return {"ok": True, "name": name}
 
 
@@ -260,7 +316,11 @@ def pause_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
-    k8s.set_paused(name, True)
+    cr = _find_source(k8s, name)
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, True)
+    else:
+        k8s.set_paused(name, True)
     return {"ok": True, "name": name, "paused": True}
 
 
@@ -269,7 +329,11 @@ def resume_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
-    k8s.set_paused(name, False)
+    cr = _find_source(k8s, name)
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, False)
+    else:
+        k8s.set_paused(name, False)
     return {"ok": True, "name": name, "paused": False}
 
 
@@ -295,6 +359,18 @@ def delete_source(
     from `render_service.bucket_name(ns)`.
     """
     cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.delete_spark_job(name)
+        if mode != "with_data":
+            return {"ok": True, "name": name, "mode": mode}
+        ns, table = _spark_target(cr)
+        fqn = f"rawlake.{ns}.{table}"          # batch lane -> rawlake, no Silver
+        bucket = render_service.bucket_name(ns)
+        trino.drop_table(fqn)
+        s3.empty_bucket(bucket)
+        return {"ok": True, "name": name, "mode": mode, "dropped_table": fqn,
+                "emptied_bucket": bucket, "deleted_topic": None}   # spark-batch: no topic
+
     k8s.delete_connector(name)
     if mode != "with_data":
         return {"ok": True, "name": name, "mode": mode}
@@ -304,7 +380,7 @@ def delete_source(
     bucket = render_service.bucket_name(ns)
     topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
     if topic:
-        k8s.delete_topic(topic)
+        k8s.delete_topic(_k8s_topic_name(topic))   # delete by CR name (Task 1 sanitized it)
     trino.drop_table(fqn)
     s3.empty_bucket(bucket)
     return {

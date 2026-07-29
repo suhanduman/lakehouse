@@ -765,6 +765,17 @@ def _http_spec(**over) -> SourceSpec:
     return SourceSpec(**d)
 
 
+def test_edit_spark_source_rerenders_and_applies():
+    orch, fakes = _orch_fakes()
+    spec = SourceSpec(source="s1", kind="batch", type="s3", db="-", table="-",
+        target_ns="ext", target_table="orders", s3_bucket="b2", s3_prefix="p2/",
+        file_format="parquet", cron="5 * * * *")
+    orch.edit_spark_source(spec)
+    applied = fakes["k8s"].applied_spark_jobs[-1]
+    assert applied["metadata"]["name"] == "s3-register-s1-orders"
+    assert "--bucket" in applied["spec"]["template"]["arguments"]
+
+
 def test_http_entity_creates_topic_bronze_and_silver():
     orch, fakes = _orch_fakes()
     spec = _http_spec(
