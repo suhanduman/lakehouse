@@ -155,6 +155,12 @@ class AddSourceOrchestrator:
         self.spark_image = spark_image
         self.s3_secret_name = s3_secret_name
 
+    def edit_spark_source(self, spec: SourceSpec) -> dict:
+        """Re-render the ScheduledSparkApplication from an updated spec and
+        apply it (create-or-patch; the CR name is stable across an edit)."""
+        body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
+        return self.k8s.apply_spark_job(body)
+
     def add_source(self, spec: SourceSpec, creds: SourceCredentials) -> AddSourceResult:
         descriptor = source_types.get(spec.kind, spec.type)
         if descriptor.lane == "spark-batch":
@@ -325,7 +331,11 @@ class AddSourceOrchestrator:
                 self.k8s.apply_topic(ctx["topic_body"])
                 return None
 
-            if not run("topic", _apply_topic, lambda: self.k8s.delete_topic(ctx.get("topic_name"))):
+            if not run(
+                "topic",
+                _apply_topic,
+                lambda: self.k8s.delete_topic(ctx.get("topic_body", {}).get("metadata", {}).get("name")),
+            ):
                 return fail()
 
         # 5. connector

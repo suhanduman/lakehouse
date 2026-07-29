@@ -270,6 +270,34 @@ def test_rollback_on_connector_failure_deletes_topic_and_secret():
     assert len(trino.ddls) == 1
 
 
+def test_rollback_deletes_topic_by_sanitized_cr_name_not_raw_name():
+    # Regression guard: render_kafka_topic sanitizes metadata.name (RFC1123-safe
+    # CR name, e.g. '_' -> '-') while the real Kafka topic keeps its raw form.
+    # The topic step's rollback undo must delete the CR by that same sanitized
+    # name -- deleting by the raw topic name would 404 against a real cluster
+    # and leave the KafkaTopic CR orphaned after a failed-add rollback.
+    spec = CDC_MSSQL_SPEC.model_copy(update={"table": "dbo.order_items", "target_table": "order_items"})
+    raw_topic = render_service.topic_name(spec)
+    sanitized_cr_name = render_service.render_kafka_topic(raw_topic)["metadata"]["name"]
+    assert "_" in raw_topic
+    assert sanitized_cr_name != raw_topic
+    assert sanitized_cr_name.endswith("order-items")
+
+    orch, k8s, s3, trino = _orch(fail_on="connector")
+
+    res = orch.add_source(spec, CREDS)
+
+    assert res.ok is False
+    # topic step itself succeeded (applied under the sanitized CR name); the
+    # LATER connector step is what fails and triggers rollback.
+    assert [s.name for s in res.steps] == [
+        "secret", "bucket", "namespace", "table", "topic", "connector",
+    ]
+    assert res.steps[-2].name == "topic" and res.steps[-2].ok is True
+
+    assert k8s.deleted_topics == [sanitized_cr_name]
+
+
 def test_rollback_on_verify_failed_state_deletes_connector_topic_secret():
     # get_status reports FAILED -> verify step fails -> full rollback.
     orch, k8s, s3, trino = _orch(status_states=["FAILED"])
@@ -763,6 +791,17 @@ def _http_spec(**over) -> SourceSpec:
     )
     d.update(over)
     return SourceSpec(**d)
+
+
+def test_edit_spark_source_rerenders_and_applies():
+    orch, fakes = _orch_fakes()
+    spec = SourceSpec(source="s1", kind="batch", type="s3", db="-", table="-",
+        target_ns="ext", target_table="orders", s3_bucket="b2", s3_prefix="p2/",
+        file_format="parquet", cron="5 * * * *")
+    orch.edit_spark_source(spec)
+    applied = fakes["k8s"].applied_spark_jobs[-1]
+    assert applied["metadata"]["name"] == "s3-register-s1-orders"
+    assert "--bucket" in applied["spec"]["template"]["arguments"]
 
 
 def test_http_entity_creates_topic_bronze_and_silver():

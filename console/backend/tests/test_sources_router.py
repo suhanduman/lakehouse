@@ -21,6 +21,7 @@ from app.deps import (
 )
 from app.main import app
 from app.orchestrator import AddSourceResult, StepResult
+from app.services import render_service
 from app.services.authz import Role
 
 VALID_SPEC = {
@@ -54,6 +55,34 @@ CONNECTOR_CR = {
     "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
 }
 
+# A ScheduledSparkApplication CR shaped like render_service.render_spark_job's
+# output for a batch+s3 source (`_render_s3_register`): stable name
+# `s3-register-<source>-<target_table>`, round-trip annotations under
+# render_service.SPARK_ANNOTATION_PREFIX, plus spec.suspend/spec.template.
+SPARK_CR = {
+    "kind": "ScheduledSparkApplication",
+    "metadata": {
+        "name": "s3-register-s1-orders",
+        "annotations": {
+            "lakehouse.solus.dev/source": "s1",
+            "lakehouse.solus.dev/target-ns": "ext",
+            "lakehouse.solus.dev/target-table": "orders",
+            "lakehouse.solus.dev/s3-bucket": "b",
+            "lakehouse.solus.dev/s3-prefix": "p/",
+            "lakehouse.solus.dev/file-format": "parquet",
+            "lakehouse.solus.dev/cron": "0 * * * *",
+        },
+    },
+    "spec": {
+        "suspend": False,
+        "template": {
+            "arguments": ["--bucket", "b", "--prefix", "p/", "--format", "parquet",
+                          "--target", "rawlake.ext.orders"],
+        },
+    },
+    "status": {"scheduleState": "Scheduled"},
+}
+
 
 # --------------------------------------------------------------------------
 # Fakes -- hand-rolled doubles for K8sService / S3Service / TrinoService /
@@ -67,6 +96,8 @@ class FakeK8s:
         self.paused_calls: List[tuple] = []
         self.deleted_connectors: List[str] = []
         self.deleted_topics: List[str] = []
+        self.spark_suspended_calls: List[tuple] = []
+        self.deleted_spark_jobs: List[str] = []
 
     def list_sources(self):
         return self._sources
@@ -82,6 +113,12 @@ class FakeK8s:
 
     def delete_topic(self, name):
         self.deleted_topics.append(name)
+
+    def set_spark_suspended(self, name, suspended):
+        self.spark_suspended_calls.append((name, suspended))
+
+    def delete_spark_job(self, name):
+        self.deleted_spark_jobs.append(name)
 
 
 class FakeS3:
@@ -104,6 +141,7 @@ class FakeOrchestrator:
     def __init__(self, ok: bool = True):
         self.ok = ok
         self.calls: List[tuple] = []
+        self.edit_spark_calls: List[Any] = []
 
     def add_source(self, spec, creds):
         self.calls.append((spec, creds))
@@ -111,6 +149,10 @@ class FakeOrchestrator:
             steps=[StepResult(name="secret", ok=True), StepResult(name="verify", ok=self.ok)],
             ok=self.ok,
         )
+
+    def edit_spark_source(self, spec):
+        self.edit_spark_calls.append(spec)
+        return {"ok": True}
 
 
 class ExplodingProvider:
@@ -349,6 +391,26 @@ def test_unauthorized_delete_with_data_does_not_build_providers():
     assert r.status_code == 403
 
 
+def test_summary_spark_shape():
+    from app.routers.sources import _summary
+    item = {"kind": "ScheduledSparkApplication",
+            "metadata": {"name": "s3-register-s1-orders",
+                         "annotations": {"lakehouse.solus.dev/source": "s1",
+                                         "lakehouse.solus.dev/s3-bucket": "b",
+                                         "lakehouse.solus.dev/target-ns": "ext",
+                                         "lakehouse.solus.dev/target-table": "orders",
+                                         "lakehouse.solus.dev/s3-prefix": "p/",
+                                         "lakehouse.solus.dev/file-format": "parquet",
+                                         "lakehouse.solus.dev/cron": "0 * * * *"}},
+            "spec": {"suspend": True},
+            "status": {"scheduleState": "Scheduled"}}
+    s = _summary(item)
+    assert s["cr_kind"] == "ScheduledSparkApplication"
+    assert s["paused"] is True
+    assert s["state"] == "Scheduled"
+    assert s["spark"]["s3_bucket"] == "b" and s["spark"]["cron"] == "0 * * * *"
+
+
 # --------------------------------------------------------------------------
 # List / get -- READ
 # --------------------------------------------------------------------------
@@ -418,6 +480,42 @@ def test_pause_forbidden_for_student(client_as_student):
 
 
 # --------------------------------------------------------------------------
+# Kind-aware pause/edit/delete -- ScheduledSparkApplication (batch/s3) source
+# gets parity with KafkaConnector sources, dispatched on `cr["kind"]`.
+# --------------------------------------------------------------------------
+
+def test_pause_spark_uses_suspend():
+    k8s = FakeK8s(sources=[SPARK_CR])
+    client = _client_as({Role.ANALYST}, k8s=k8s)
+
+    r = client.post("/api/sources/s3-register-s1-orders/pause")
+
+    assert r.status_code == 200
+    assert r.json()["paused"] is True
+    assert k8s.spark_suspended_calls == [("s3-register-s1-orders", True)]
+    assert k8s.paused_calls == []  # connector-specific call NOT fired
+
+
+def test_edit_spark_rerenders():
+    orch = FakeOrchestrator()
+    k8s = FakeK8s(sources=[SPARK_CR])
+    client = _client_as({Role.ANALYST}, k8s=k8s, orchestrator=orch)
+    spec_payload = {
+        "source": "s1", "kind": "batch", "type": "s3", "db": "-", "table": "-",
+        "target_ns": "ext", "target_table": "orders", "s3_bucket": "b2",
+        "s3_prefix": "p2/", "file_format": "parquet", "cron": "5 * * * *",
+    }
+
+    r = client.patch("/api/sources/s3-register-s1-orders", json={"spec": spec_payload})
+
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "name": "s3-register-s1-orders"}
+    assert len(orch.edit_spark_calls) == 1
+    assert orch.edit_spark_calls[0].source == "s1"
+    assert k8s.patched == []  # connector-specific call NOT fired
+
+
+# --------------------------------------------------------------------------
 # Delete -- per-mode authz gate + with_data teardown (Imp4) + 404 (Minor7)
 # --------------------------------------------------------------------------
 
@@ -475,6 +573,66 @@ def test_delete_pipeline_only_forbidden_for_student(client_as_student):
 def test_delete_invalid_mode_is_422(client_as_admin):
     r = client_as_admin.delete("/api/sources/dbz-x?mode=nonsense")
     assert r.status_code == 422
+
+
+def test_delete_spark_pipeline_only():
+    k8s, s3, trino = FakeK8s(sources=[SPARK_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/s3-register-s1-orders?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "name": "s3-register-s1-orders", "mode": "pipeline_only"}
+    assert k8s.deleted_spark_jobs == ["s3-register-s1-orders"]
+    assert k8s.deleted_connectors == []
+    # pipeline_only must NOT touch data: no drop_table/empty_bucket/delete_topic.
+    assert trino.dropped == []
+    assert s3.emptied == []
+    assert k8s.deleted_topics == []
+
+
+def test_delete_spark_with_data_drops_rawlake():
+    k8s, s3, trino = FakeK8s(sources=[SPARK_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/s3-register-s1-orders?mode=with_data")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["dropped_table"] == "rawlake.ext.orders"
+    assert body["emptied_bucket"] == render_service.bucket_name("ext")
+    assert body["deleted_topic"] is None  # spark-batch: no topic at all
+    assert trino.dropped == ["rawlake.ext.orders"]
+    assert s3.emptied == [render_service.bucket_name("ext")]
+    assert k8s.deleted_topics == []  # no delete_topic call for a spark source
+    assert k8s.deleted_spark_jobs == ["s3-register-s1-orders"]
+
+
+def test_delete_connector_topic_uses_sanitized_cr_name():
+    # Regression: a connector's data topic containing '_' must be deleted by
+    # its sanitized KafkaTopic CR name (Task 1's _k8s_topic_name), not the raw
+    # topic string -- Strimzi's KafkaTopic CR name must be RFC1123-safe.
+    cr = {
+        "metadata": {"name": "dbz-s1-orders"},
+        "spec": {
+            "class": "io.debezium.connector.sqlserver.SqlServerConnector",
+            "config": {
+                "topic.prefix": "cdc.s1",
+                "table.include.list": "order_items",
+                "transforms.route.static.value": "s1_raw.order_items",
+            },
+        },
+        "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
+    }
+    k8s, s3, trino = FakeK8s(sources=[cr]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/dbz-s1-orders?mode=with_data")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deleted_topic"] == "cdc.s1.order_items"  # real topic in the response
+    assert k8s.deleted_topics == ["cdc.s1.order-items"]   # deleted by sanitized CR name
 
 
 def test_delete_missing_source_is_404_for_admin():

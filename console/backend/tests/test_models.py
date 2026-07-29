@@ -194,3 +194,25 @@ def test_stream_rabbitmq_valid():
     s = SourceSpec(source="r1", kind="stream", type="rabbitmq", db="-", table="-",
                    target_ns="q", target_table="orders", rabbitmq_uri="amqp://h", rabbitmq_queue="orders")
     assert s.rabbitmq_queue == "orders"
+
+
+# --------------------------------------------------------------------------
+# `source` RFC1123-label validator (Task 1)
+# --------------------------------------------------------------------------
+
+def _base_source(**over):
+    d = dict(source="s1", kind="cdc", type="mssql", db="school", table="dbo.students",
+             target_ns="ns", target_table="t", db_host="h")
+    d.update(over)
+    return d
+
+
+def test_source_rejects_non_rfc1123():
+    for bad in ("My_Source", "src_1", "UPPER", "-lead", "trail-", "has space"):
+        with pytest.raises(ValidationError):
+            SourceSpec(**_base_source(source=bad))
+
+
+def test_source_accepts_rfc1123():
+    for ok in ("mssql1", "k1", "src-1", "a", "a1-b2"):
+        assert SourceSpec(**_base_source(source=ok)).source == ok
