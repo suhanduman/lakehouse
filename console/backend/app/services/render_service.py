@@ -55,8 +55,8 @@ DLQ_REPLICATION_FACTOR = "3"
 # --------------------------------------------------------------------------
 
 def bucket_name(target_ns: str) -> str:
-    """`src-<ns>` with `_` -> `-` (e.g. mssql_ogrenci -> src-mssql-ogrenci)."""
-    return f"src-{target_ns.replace('_', '-')}"
+    """`src-<ns>`, RFC1123-safe (e.g. mssql_ogrenci -> src-mssql-ogrenci)."""
+    return _k8s_name("src", target_ns)
 
 
 def _cred(source: str, key: str) -> str:
@@ -72,6 +72,26 @@ def _safe_ident(value: str) -> str:
     """Sanitize a source name for use inside a Postgres slot/publication name
     (Debezium/Postgres identifiers only allow [a-z0-9_])."""
     return re.sub(r"[^0-9a-zA-Z]+", "_", value).lower()
+
+
+def _k8s_name(*parts: str) -> str:
+    """RFC1123-label-safe k8s object name: join parts with '-', lowercase,
+    replace any run of invalid chars with a single '-', trim leading/trailing
+    '-', cap at 63. Clean lowercase-alnum-'-' inputs pass through unchanged."""
+    joined = "-".join(p for p in parts if p)
+    s = re.sub(r"[^a-z0-9-]+", "-", joined.lower())
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s[:63].strip("-")
+
+
+def _k8s_topic_name(topic: str) -> str:
+    """RFC1123-subdomain-safe KafkaTopic CR name: keep '.' (valid + meaningful
+    in Kafka topic names), lowercase, invalid runs -> '-', trim. Used as the CR
+    metadata.name; the real (possibly '_'/uppercase) topic goes in spec.topicName
+    when it differs (see render_kafka_topic)."""
+    s = re.sub(r"[^a-z0-9.-]+", "-", topic.lower())
+    s = re.sub(r"-{2,}", "-", s).strip("-.")
+    return s[:253]
 
 
 def _split_schema_table(table: str) -> Tuple[Optional[str], str]:
@@ -209,19 +229,29 @@ def render_kafka_topic(topic_name: str) -> dict:
     NB: no `metadata.namespace` here on purpose — see `_connector`'s
     docstring/comment above; the API layer (`K8sService._apply`) supplies the
     release/target namespace at apply time, not this rendered body.
+
+    `metadata.name` is sanitized to an RFC1123-subdomain-safe CR name via
+    `_k8s_topic_name`; when that differs from the real Kafka topic (e.g. it
+    contains `_` or uppercase), the real topic is preserved in `spec.topicName`
+    (Strimzi's KafkaTopic honors `spec.topicName` when it differs from
+    `metadata.name`).
     """
+    cr_name = _k8s_topic_name(topic_name)
+    spec: dict = {
+        "partitions": 6,
+        "replicas": 3,
+        "config": {"retention.ms": "604800000", "cleanup.policy": "delete"},
+    }
+    if cr_name != topic_name:
+        spec["topicName"] = topic_name
     return {
         "apiVersion": "kafka.strimzi.io/v1beta2",
         "kind": "KafkaTopic",
         "metadata": {
-            "name": topic_name,
+            "name": cr_name,
             "labels": {"strimzi.io/cluster": "kafka"},
         },
-        "spec": {
-            "partitions": 6,
-            "replicas": 3,
-            "config": {"retention.ms": "604800000", "cleanup.policy": "delete"},
-        },
+        "spec": spec,
     }
 
 
@@ -332,7 +362,7 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
     })
 
     _, table_name = _split_schema_table(spec.table)
-    name = f"dbz-{spec.source}-{table_name}"
+    name = _k8s_name("dbz", spec.source, table_name)
     return _connector(name, klass, config)
 
 
@@ -388,7 +418,7 @@ def _render_cdc_mysql(spec: SourceSpec) -> dict:
     })
 
     _, table_name = _split_schema_table(spec.table)
-    name = f"dbz-{spec.source}-{table_name}"
+    name = _k8s_name("dbz", spec.source, table_name)
     return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config)
 
 
@@ -429,7 +459,7 @@ def _render_cdc_mongo(spec: SourceSpec) -> dict:
         "errors.deadletterqueue.context.headers.enable": "true",
     })
 
-    name = f"dbz-{spec.source}-{spec.table}"
+    name = _k8s_name("dbz", spec.source, spec.table)
     return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config)
 
 
@@ -504,7 +534,7 @@ def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
         "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
     })
 
-    name = f"jdbc-{spec.source}-{table_name}"
+    name = _k8s_name("jdbc", spec.source, table_name)
     return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
 
 
@@ -541,7 +571,7 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
     append-only change-log in its own Bronze table. Separate from the shared
     CDC/JDBC sinks; no message duplication. Bronze is pre-created as a metadata
     skeleton by the orchestrator; evolve-schema adds business columns."""
-    name = f"kafka-ingest-{spec.source}-{spec.target_table}"
+    name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
     config: dict = {
         "topics": spec.table,
         "key.converter": "org.apache.kafka.connect.json.JsonConverter",
@@ -671,7 +701,7 @@ def _render_camel_http(spec: SourceSpec) -> dict:
     """stream+http -> Camel `http-source` Kamelet KC source. Polls spec.http_url
     every spec.poll_ms ms (Kamelet default 10000 when unset) and produces JSON
     to http.<source>.<table>."""
-    name = f"http-{spec.source}-{spec.target_table}"
+    name = _k8s_name("http", spec.source, spec.target_table)
     config = {
         "topics": topic_name(spec),
         "camel.kamelet.http-source.url": spec.http_url,
@@ -694,7 +724,7 @@ def _render_camel_mqtt(spec: SourceSpec) -> dict:
     v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
     the orchestrator's secret step must run (creds supplied) or these refs dangle at
     startup. Anonymous-broker support (omit creds) is a follow-up (live-verify)."""
-    name = f"mqtt-{spec.source}-{spec.target_table}"
+    name = _k8s_name("mqtt", spec.source, spec.target_table)
     config = {
         "topics": topic_name(spec),
         "camel.kamelet.mqtt-source.brokerUrl": spec.mqtt_broker,
@@ -720,7 +750,7 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
     v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
     the orchestrator's secret step must run (creds supplied) or these refs dangle at
     startup. Anonymous-broker support (omit creds) is a follow-up (live-verify)."""
-    name = f"rabbitmq-{spec.source}-{spec.target_table}"
+    name = _k8s_name("rabbitmq", spec.source, spec.target_table)
     parts = urlsplit(spec.rabbitmq_uri)
     config = {
         "topics": topic_name(spec),
@@ -772,6 +802,11 @@ def render_connector(spec: SourceSpec) -> dict:
 # --------------------------------------------------------------------------
 
 SPARK_VERSION = "3.5.1"   # matches chart versions.sparkVersion (spark-py image)
+# Annotation namespace stamped on rendered Spark CRs so the Console's
+# edit/list views can round-trip the SourceSpec fields that produced a given
+# ScheduledSparkApplication (the CR spec itself has no room for e.g. the
+# logical `source`/`target_ns` that produced it).
+SPARK_ANNOTATION_PREFIX = "lakehouse.solus.dev/"
 
 
 def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
@@ -780,14 +815,25 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str)
     (Iceberg). Register once; each tick re-derives the table (CREATE OR
     REPLACE) so newly-arrived files stay query-visible. Mirrors the chart's
     ScheduledSparkApplication shape (05-spark-operator.yaml)."""
-    name = f"s3-register-{spec.source}-{spec.target_table}"
+    name = _k8s_name("s3-register", spec.source, spec.target_table)
     target = f"rawlake.{spec.target_ns}.{spec.target_table}"
     envfrom = [{"secretRef": {"name": s3_secret_name}}]
     mounts = [{"name": "spark-conf", "mountPath": "/opt/spark/conf"}]
     return {
         "apiVersion": "sparkoperator.k8s.io/v1beta2",
         "kind": "ScheduledSparkApplication",
-        "metadata": {"name": name},   # namespace supplied by the API layer (see _connector)
+        "metadata": {
+            "name": name,
+            "annotations": {
+                f"{SPARK_ANNOTATION_PREFIX}source": spec.source,
+                f"{SPARK_ANNOTATION_PREFIX}target-ns": spec.target_ns,
+                f"{SPARK_ANNOTATION_PREFIX}target-table": spec.target_table,
+                f"{SPARK_ANNOTATION_PREFIX}s3-bucket": spec.s3_bucket,
+                f"{SPARK_ANNOTATION_PREFIX}s3-prefix": spec.s3_prefix,
+                f"{SPARK_ANNOTATION_PREFIX}file-format": spec.file_format,
+                f"{SPARK_ANNOTATION_PREFIX}cron": spec.cron,
+            },
+        },   # namespace supplied by the API layer (see _connector)
         "spec": {
             "schedule": spec.cron,
             "concurrencyPolicy": "Forbid",

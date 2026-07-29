@@ -627,3 +627,42 @@ def test_camel_sources_have_dlq():
         assert "kafkameta" not in c["transforms"]
         assert c["transforms.setop.static.value"] == "u"
         assert c["transforms.setdel.static.value"] == "false"
+
+
+# --------------------------------------------------------------------------
+# RFC1123-safe CR names (_k8s_name / _k8s_topic_name) — Task 1
+# --------------------------------------------------------------------------
+
+def test_k8s_name_sanitizes_and_joins():
+    assert r._k8s_name("s3-register", "src1", "order_items") == "s3-register-src1-order-items"
+    assert r._k8s_name("dbz", "MyDB", "dbo.Students") == "dbz-mydb-dbo-students"
+    assert r._k8s_name("x", "__weird__") == "x-weird"          # collapsed + trimmed
+    assert len(r._k8s_name("a" * 80)) <= 63
+    assert r._k8s_name("http", "h1", "prices") == "http-h1-prices"   # clean input unchanged
+
+
+def test_existing_clean_names_unchanged():
+    from app.models import SourceSpec
+    c = r.render_connector(SourceSpec(source="mssql1", kind="cdc", type="mssql", db="school",
+        table="dbo.students", target_ns="mssql_ogrenci", target_table="students", db_host="h"))
+    assert c["metadata"]["name"] == "dbz-mssql1-students"          # unchanged for clean input
+
+
+def test_topic_cr_name_valid_and_preserves_real_topic():
+    body = r.render_kafka_topic("cdc.src1.order_items")
+    assert body["metadata"]["name"] == "cdc.src1.order-items"      # CR name RFC1123
+    assert body["spec"]["topicName"] == "cdc.src1.order_items"     # real topic preserved
+    clean = r.render_kafka_topic("cdc.src1.dbo.students")
+    assert clean["metadata"]["name"] == "cdc.src1.dbo.students"
+    assert "topicName" not in clean["spec"]
+
+
+def test_s3_register_stamps_roundtrip_annotations():
+    from app.models import SourceSpec
+    spec = SourceSpec(source="s1", kind="batch", type="s3", db="-", table="-",
+        target_ns="ext", target_table="orders", s3_bucket="b", s3_prefix="p/",
+        file_format="parquet", cron="0 * * * *")
+    ann = r.render_spark_job(spec, "img:1", "s3-credentials")["metadata"]["annotations"]
+    assert ann["lakehouse.solus.dev/source"] == "s1"
+    assert ann["lakehouse.solus.dev/s3-bucket"] == "b"
+    assert ann["lakehouse.solus.dev/cron"] == "0 * * * *"

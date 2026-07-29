@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing_extensions import Literal
 
 from app import source_types
@@ -70,6 +70,17 @@ class SourceSpec(BaseModel):
     # `incrementing_col` (scheduled) veya `_id` (mongo) fallback'ini dener.
     columns: Optional[List[ColumnSpec]] = None
     identifier: Optional[List[str]] = None
+
+    @field_validator("source")
+    @classmethod
+    def _source_is_rfc1123_label(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", v):
+            raise ValueError(
+                "source must be an RFC1123 label (lowercase letters, digits, '-'; "
+                f"must start/end alphanumeric) — got {v!r}"
+            )
+        return v
 
     @model_validator(mode="after")
     def _validate_kind_type_requirements(self) -> "SourceSpec":
