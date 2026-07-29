@@ -63,3 +63,11 @@ def test_batch_s3_registered_spark_batch():
     assert d.render_key == "s3-register"
     assert d.topic_key == ""
     assert d.required_fields == ("s3_bucket", "s3_prefix", "file_format", "cron")
+
+
+def test_b3_lanes_registered():
+    for typ, disp in [("http", ("event", "entity")), ("mqtt", ("event",)), ("rabbitmq", ("event",))]:
+        d = st.get("stream", typ)
+        assert d.lane == "kafka-connect-source"
+        assert d.render_key and d.topic_key           # they create a topic + a connector
+        assert st.allowed_dispositions(d) == disp
