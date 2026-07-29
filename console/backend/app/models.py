@@ -32,7 +32,7 @@ class SourceSpec(BaseModel):
 
     source: str
     kind: Literal["cdc", "scheduled", "stream", "batch"]
-    type: Literal["mssql", "pg", "mongo", "mysql", "kafka", "s3"]
+    type: Literal["mssql", "pg", "mongo", "mysql", "kafka", "s3", "http", "mqtt", "rabbitmq"]
     db: str
     table: str
     target_ns: str
@@ -53,6 +53,15 @@ class SourceSpec(BaseModel):
     s3_bucket: Optional[str] = None
     s3_prefix: Optional[str] = None
     file_format: Optional[Literal["parquet", "json", "avro"]] = None
+
+    # stream/http, stream/mqtt, stream/rabbitmq: Apache Camel Kafka SOURCE
+    # connectors (Plan B3), kafka-connect-source lane. poll_ms above is
+    # reused for HTTP's poll period.
+    http_url: Optional[str] = None
+    mqtt_broker: Optional[str] = None
+    mqtt_topic: Optional[str] = None
+    rabbitmq_uri: Optional[str] = None
+    rabbitmq_queue: Optional[str] = None
 
     # Iceberg tablo pre-create için hedef şema + PK: sink auto-create identifier
     # koymadığından tablo, connector'dan önce identifier field ile yaratılmalı —

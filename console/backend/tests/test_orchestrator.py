@@ -731,3 +731,51 @@ def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():
         "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
     ]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]
+
+
+def _mqtt_spec(**over) -> SourceSpec:
+    d = dict(
+        source="m1", kind="stream", type="mqtt", db="-", table="-",
+        target_ns="iot", target_table="sensors",
+        mqtt_broker="tcp://mosquitto:1883", mqtt_topic="sensors/#",
+    )
+    d.update(over)
+    return SourceSpec(**d)
+
+
+def test_mqtt_event_creates_topic_and_bronze_no_secret_no_silver():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_mqtt_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    assert "secret" not in names   # no creds supplied -> no secret step
+    # Camel source DOES create its own topic (topic_key set) -- unlike stream/kafka.
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    assert fakes["iceberg"].created_layers == ["bronze"]   # event -> Bronze only, no Silver
+
+
+def _http_spec(**over) -> SourceSpec:
+    d = dict(
+        source="h1", kind="stream", type="http", db="-", table="-",
+        target_ns="ext", target_table="prices", http_url="https://api.x/p",
+    )
+    d.update(over)
+    return SourceSpec(**d)
+
+
+def test_http_entity_creates_topic_bronze_and_silver():
+    orch, fakes = _orch_fakes()
+    spec = _http_spec(
+        disposition="entity",   # stream-http allows event OR entity
+        columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="price", type="double")],
+        identifier=["id"],
+    )
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver

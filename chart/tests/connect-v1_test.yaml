@@ -147,11 +147,23 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.build.plugins
-          count: 6
+          count: 9
       - equal:
           path: spec.build.plugins[1].name
           value: debezium-postgres
       - matchRegex:
           path: spec.build.plugins[1].artifacts[0].url
           pattern: "debezium-connector-postgres"
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: build plugins include camel-http-source (declarative-build path must match the pre-built connect image, which bakes the Camel connectors — images/connect/Dockerfile)
+    asserts:
+      - contains:
+          path: spec.build.plugins
+          content:
+            name: camel-http-source
+          any: true
+      - matchRegex:
+          path: spec.build.plugins[6].artifacts[0].url
+          pattern: "camel-http-source-kafka-connector"
     documentSelector: {path: kind, value: KafkaConnect}

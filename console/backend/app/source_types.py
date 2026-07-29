@@ -103,3 +103,15 @@ register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "
 # them into a queryable rawlake table. Not CDC/medallion — disposition is inert.
 register(SourceType("batch-s3", "batch", "s3", "spark-batch", "entity",
                     ("s3_bucket", "s3_prefix", "file_format", "cron"), "s3-register", ""))
+# stream/http, stream/mqtt, stream/rabbitmq (Plan B3): Apache Camel Kafka
+# SOURCE connectors on the kafka-connect-source lane. Unlike stream-kafka
+# (which consumes an existing topic and creates none), these lanes DO create
+# their own Kafka topic (render_key == topic_key == "camel-<proto>") in
+# addition to the KafkaConnector. HTTP may land as event or entity data;
+# MQTT/RabbitMQ are event-only (append-only) in B3.
+register(SourceType("stream-http", "stream", "http", "kafka-connect-source", "event",
+                    ("http_url",), "camel-http", "camel-http", dispositions=("event", "entity")))
+register(SourceType("stream-mqtt", "stream", "mqtt", "kafka-connect-source", "event",
+                    ("mqtt_broker", "mqtt_topic"), "camel-mqtt", "camel-mqtt", dispositions=("event",)))
+register(SourceType("stream-rabbitmq", "stream", "rabbitmq", "kafka-connect-source", "event",
+                    ("rabbitmq_uri", "rabbitmq_queue"), "camel-rabbitmq", "camel-rabbitmq", dispositions=("event",)))

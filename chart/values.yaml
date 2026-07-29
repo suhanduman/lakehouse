@@ -551,6 +551,11 @@ versions:
   postgresqlJdbc: "42.7.4"          # org.postgresql:postgresql (bundled into the aiven-jdbc plugin dir)
   icebergKafkaConnect: "1.6.1"      # org.apache.iceberg:iceberg-kafka-connect-runtime (sink plugin)
   apicurioConverter: "2.6.5"        # io.apicurio apicurio-registry-distro-connect-converter (".Final" suffix appended in template)
+  # Apache Camel Kafka Connector source-connector pin (http-source /
+  # mqtt-source / spring-rabbitmq-source), baked into the connect image
+  # (images/connect/Dockerfile, ARG CAMEL_KC_VERSION). Backs the Console
+  # stream/http, stream/mqtt, stream/rabbitmq source types (Plan B3).
+  camelKafkaConnector: "4.10.3"
   # chart/templates/09-zeppelin.yaml: custom image (apache/zeppelin + Spark
   # binary baked in at build time — see that template's header comment for
   # the Dockerfile). Independent release cadence from `sparkImageTag` above

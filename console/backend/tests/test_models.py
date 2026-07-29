@@ -170,3 +170,27 @@ def test_batch_s3_requires_bucket_prefix_format_cron():
 def test_batch_s3_bad_format_rejected():
     with pytest.raises(ValidationError):
         SourceSpec(**_s3(file_format="csv"))   # not in the Literal
+
+
+def _http(**o):
+    d = dict(source="h1", kind="stream", type="http", db="-", table="-",
+             target_ns="ext", target_table="prices", http_url="https://api.example/x")
+    d.update(o)
+    return d
+
+
+def test_stream_http_requires_url():
+    with pytest.raises(ValidationError, match="http_url"):
+        SourceSpec(**_http(http_url=None))
+
+
+def test_stream_mqtt_requires_broker_topic():
+    with pytest.raises(ValidationError, match="mqtt_broker"):
+        SourceSpec(source="m1", kind="stream", type="mqtt", db="-", table="-",
+                   target_ns="iot", target_table="sensors", mqtt_topic="t")
+
+
+def test_stream_rabbitmq_valid():
+    s = SourceSpec(source="r1", kind="stream", type="rabbitmq", db="-", table="-",
+                   target_ns="q", target_table="orders", rabbitmq_uri="amqp://h", rabbitmq_queue="orders")
+    assert s.rabbitmq_queue == "orders"

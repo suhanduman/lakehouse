@@ -49,9 +49,12 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------
 # Stage 2 — assemble the Connect image: Strimzi Kafka base + all plugins baked.
-# Baked Debezium connectors: sqlserver, postgres, mongodb, mysql. Other plugins
-# fetched from Maven/GitHub at IMAGE-build time (not cluster-build time) — pinned
-# to chart versions. Base MUST match the running Strimzi operator's Kafka image
+# Baked Debezium connectors: sqlserver, postgres, mongodb, mysql. Also bakes
+# the three Apache Camel Kafka Connector source connectors (camel-http-source,
+# camel-mqtt-source, camel-spring-rabbitmq-source) backing the Console
+# stream/http|mqtt|rabbitmq source types. Other plugins fetched from
+# Maven/GitHub at IMAGE-build time (not cluster-build time) — pinned to chart
+# versions. Base MUST match the running Strimzi operator's Kafka image
 # (Strimzi 0.51.0 / Kafka 4.2.0).
 # ---------------------------------------------------------------------------
 FROM quay.io/strimzi/kafka:0.51.0-kafka-4.2.0
@@ -60,10 +63,11 @@ ARG AIVEN_JDBC_VERSION=6.10.0
 ARG MSSQL_JDBC_VERSION=12.8.1.jre11
 ARG PG_JDBC_VERSION=42.7.4
 ARG APICURIO_VERSION=2.6.5
+ARG CAMEL_KC_VERSION=4.10.3
 USER root
 RUN set -eux; \
     P=/opt/kafka/plugins; \
-    mkdir -p "$P/debezium-sqlserver" "$P/debezium-postgres" "$P/debezium-mongodb" "$P/debezium-mysql" "$P/aiven-jdbc" "$P/apicurio-avro-converter" "$P/iceberg"; \
+    mkdir -p "$P/debezium-sqlserver" "$P/debezium-postgres" "$P/debezium-mongodb" "$P/debezium-mysql" "$P/aiven-jdbc" "$P/apicurio-avro-converter" "$P/iceberg" "$P/camel-http-source" "$P/camel-mqtt-source" "$P/camel-spring-rabbitmq-source"; \
     cd "$P/debezium-sqlserver"; \
     curl -fL -o d.zip "https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/${DEBEZIUM_VERSION}.Final/debezium-connector-sqlserver-${DEBEZIUM_VERSION}.Final-plugin.zip"; unzip -o d.zip; rm d.zip; \
     cd "$P/debezium-postgres"; \
@@ -77,7 +81,13 @@ RUN set -eux; \
     curl -fL -o "mssql-jdbc.jar" "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/${MSSQL_JDBC_VERSION}/mssql-jdbc-${MSSQL_JDBC_VERSION}.jar"; \
     curl -fL -o "postgresql.jar" "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PG_JDBC_VERSION}/postgresql-${PG_JDBC_VERSION}.jar"; \
     cd "$P/apicurio-avro-converter"; \
-    curl -fL -o c.zip "https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/${APICURIO_VERSION}.Final/apicurio-registry-distro-connect-converter-${APICURIO_VERSION}.Final.zip"; unzip -o c.zip; rm c.zip
+    curl -fL -o c.zip "https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/${APICURIO_VERSION}.Final/apicurio-registry-distro-connect-converter-${APICURIO_VERSION}.Final.zip"; unzip -o c.zip; rm c.zip; \
+    cd "$P/camel-http-source"; \
+    curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-http-source-kafka-connector/${CAMEL_KC_VERSION}/camel-http-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz; \
+    cd "$P/camel-mqtt-source"; \
+    curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-mqtt-source-kafka-connector/${CAMEL_KC_VERSION}/camel-mqtt-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz; \
+    cd "$P/camel-spring-rabbitmq-source"; \
+    curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-source-kafka-connector/${CAMEL_KC_VERSION}/camel-spring-rabbitmq-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz
 # Iceberg runtime built in stage 1.
 COPY --from=iceberg-build /plugins/iceberg /opt/kafka/plugins/iceberg
 

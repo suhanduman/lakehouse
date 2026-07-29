@@ -48,6 +48,21 @@ const DEFAULT_SOURCE_TYPES: SourceTypeDescriptor[] = [
     disposition: "event", dispositions: ["event"],
     required_fields: [], needs_bootstrap: true,
   },
+  {
+    id: "stream-http", kind: "stream", type: "http", lane: "kafka-connect-source",
+    disposition: "event", dispositions: ["event", "entity"],
+    required_fields: ["http_url"], needs_bootstrap: false,
+  },
+  {
+    id: "stream-mqtt", kind: "stream", type: "mqtt", lane: "kafka-connect-source",
+    disposition: "event", dispositions: ["event"],
+    required_fields: ["mqtt_broker", "mqtt_topic"], needs_bootstrap: false,
+  },
+  {
+    id: "stream-rabbitmq", kind: "stream", type: "rabbitmq", lane: "kafka-connect-source",
+    disposition: "event", dispositions: ["event"],
+    required_fields: ["rabbitmq_uri", "rabbitmq_queue"], needs_bootstrap: false,
+  },
 ];
 
 beforeEach(() => {
@@ -308,5 +323,37 @@ describe("AddSourceWizard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /failed to load source types: registry unreachable/i,
     );
+  });
+
+  it("shows broker + topic fields for stream/mqtt", async () => {
+    vi.spyOn(client, "getSourceTypes").mockResolvedValue([
+      { id: "stream-mqtt", kind: "stream", type: "mqtt", lane: "kafka-connect-source", disposition: "event",
+        dispositions: ["event"], required_fields: ["mqtt_broker", "mqtt_topic"], needs_bootstrap: false },
+    ]);
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^mqtt$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "mqtt" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(await screen.findByLabelText(/mqtt broker/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/mqtt topic/i)).toBeInTheDocument();
+  });
+
+  it("shows a URL field and event/entity disposition for stream/http", async () => {
+    vi.spyOn(client, "getSourceTypes").mockResolvedValue([
+      { id: "stream-http", kind: "stream", type: "http", lane: "kafka-connect-source", disposition: "event",
+        dispositions: ["event", "entity"], required_fields: ["http_url"], needs_bootstrap: false },
+    ]);
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^http$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "http" } });
+    // stream-http has 2 dispositions -> selector renders on step 1
+    expect(await screen.findByLabelText(/disposition/i)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /^entity$/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(await screen.findByLabelText(/http url/i)).toBeInTheDocument();
   });
 });
