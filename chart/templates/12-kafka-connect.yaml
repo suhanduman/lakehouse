@@ -120,6 +120,15 @@ spec:
       - name: apicurio-avro-converter
         artifacts:
           - {type: zip, url: {{ printf "https://repo1.maven.org/maven2/io/apicurio/apicurio-registry-distro-connect-converter/%s.Final/apicurio-registry-distro-connect-converter-%s.Final.zip" .Values.versions.apicurioConverter .Values.versions.apicurioConverter | quote }}}
+      - name: camel-http-source
+        artifacts:
+          - {type: tgz, url: {{ printf "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-http-source-kafka-connector/%s/camel-http-source-kafka-connector-%s-package.tar.gz" .Values.versions.camelKafkaConnector .Values.versions.camelKafkaConnector | quote }}}
+      - name: camel-mqtt-source
+        artifacts:
+          - {type: tgz, url: {{ printf "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-mqtt-source-kafka-connector/%s/camel-mqtt-source-kafka-connector-%s-package.tar.gz" .Values.versions.camelKafkaConnector .Values.versions.camelKafkaConnector | quote }}}
+      - name: camel-spring-rabbitmq-source
+        artifacts:
+          - {type: tgz, url: {{ printf "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-source-kafka-connector/%s/camel-spring-rabbitmq-source-kafka-connector-%s-package.tar.gz" .Values.versions.camelKafkaConnector .Values.versions.camelKafkaConnector | quote }}}
 {{- end }}
   resources:
     requests:

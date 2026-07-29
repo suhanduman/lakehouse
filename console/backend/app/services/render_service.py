@@ -633,14 +633,15 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
 def _camel_medallion_config(spec: SourceSpec, name: str) -> dict:
     """JSON (schemaless) converters + medallion-metadata SMT chain + DLQ shared
     by all three Camel source connectors. Mirrors the SMT/DLQ block of
-    `_render_kafka_ingest` so both event lanes synthesize identical Bronze
-    metadata (__op=u, __deleted=false, __ts_ms, __kafka_offset/partition)."""
+    `_render_kafka_ingest` (minus kafkameta — see the note below) so the event
+    lanes synthesize identical Bronze metadata (__op=u, __deleted=false,
+    __ts_ms); __kafka_offset/__kafka_partition are stamped by the shared sink."""
     config = {
         "key.converter": "org.apache.kafka.connect.json.JsonConverter",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
         "key.converter.schemas.enable": "false",
         "value.converter.schemas.enable": "false",
-        "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
+        "transforms": "route,setop,setdel,tsms,tsconv",
         "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.setop.static.field": "__op",
         "transforms.setop.static.value": "u",
@@ -649,9 +650,13 @@ def _camel_medallion_config(spec: SourceSpec, name: str) -> dict:
         "transforms.setdel.static.value": "false",
         "transforms.tsms.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.tsms.timestamp.field": "__ts_ms",
-        "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
-        "transforms.kafkameta.offset.field": "__kafka_offset",
-        "transforms.kafkameta.partition.field": "__kafka_partition",
+        # NB: no source-side `kafkameta` SMT. These are Kafka *source* connectors
+        # (records have null Kafka offset/partition), and the shared JSON Iceberg
+        # sink (chart 13-connectors.yaml) applies `transforms: kafkameta` itself,
+        # stamping __kafka_offset/__kafka_partition of the Bronze-input topic — the
+        # values silver-merge uses. (Caveat: Camel sources set no PK-based Kafka
+        # message key, so same-PK records may spread across partitions on the
+        # http.*/mqtt.*/amqp.* topic; __ts_ms stays the primary silver-merge order.)
         "errors.tolerance": "all",
         "errors.deadletterqueue.topic.name": f"{name}.dlq",
         "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
@@ -684,7 +689,11 @@ def _render_camel_http(spec: SourceSpec) -> dict:
 def _render_camel_mqtt(spec: SourceSpec) -> dict:
     """stream+mqtt -> Camel `mqtt-source` Kamelet KC source. Subscribes
     spec.mqtt_topic on spec.mqtt_broker and produces JSON to mqtt.<source>.<table>.
-    Broker creds via DirectoryConfigProvider colon-form (mounted secret <source>)."""
+    Broker creds via DirectoryConfigProvider colon-form (mounted secret <source>).
+
+    v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
+    the orchestrator's secret step must run (creds supplied) or these refs dangle at
+    startup. Anonymous-broker support (omit creds) is a follow-up (live-verify)."""
     name = f"mqtt-{spec.source}-{spec.target_table}"
     config = {
         "topics": topic_name(spec),
@@ -706,7 +715,11 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
     Consumes spec.rabbitmq_queue on the broker parsed from spec.rabbitmq_uri and
     produces JSON to amqp.<source>.<table>. The Kamelet requires exchangeName;
     for a pure queue-consumer we pass the queue name and leave autoDeclare at its
-    default (false) — queue/exchange must pre-exist (live-verify, Task 6)."""
+    default (false) — queue/exchange must pre-exist (live-verify, Task 6).
+
+    v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
+    the orchestrator's secret step must run (creds supplied) or these refs dangle at
+    startup. Anonymous-broker support (omit creds) is a follow-up (live-verify)."""
     name = f"rabbitmq-{spec.source}-{spec.target_table}"
     parts = urlsplit(spec.rabbitmq_uri)
     config = {

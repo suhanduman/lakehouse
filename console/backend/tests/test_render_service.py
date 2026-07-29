@@ -576,7 +576,6 @@ def test_camel_http_render():
     assert body["spec"]["class"].startswith("org.apache.camel.kafkaconnector.httpsource")
     assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
     assert c["transforms.route.static.value"] == "ext_raw.prices"
-    assert c["transforms.kafkameta.offset.field"] == "__kafka_offset"
 
 
 def test_camel_http_topic_and_endpoint_config():
@@ -620,11 +619,11 @@ def test_camel_rabbitmq_render():
     assert r.topic_name(_rabbitmq()) == "amqp.r1.orders"
 
 
-def test_camel_sources_have_dlq_and_kafkameta():
+def test_camel_sources_have_dlq():
     for spec in (_http(), _mqtt(), _rabbitmq()):
         c = r.render_connector(spec)["spec"]["config"]
         assert c["errors.tolerance"] == "all"
         assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
-        assert c["transforms.kafkameta.partition.field"] == "__kafka_partition"
+        assert "kafkameta" not in c["transforms"]
         assert c["transforms.setop.static.value"] == "u"
         assert c["transforms.setdel.static.value"] == "false"
