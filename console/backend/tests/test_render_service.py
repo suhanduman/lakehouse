@@ -447,21 +447,14 @@ def test_render_connector_dispatches_via_registry():
 
 def test_renderers_cover_every_connector_source_type():
     from app import source_types as st
-    # stream-http/mqtt/rabbitmq (Plan B3 Task 1) register render_key/topic_key
-    # "camel-http"/"camel-mqtt"/"camel-rabbitmq" as forward references: the
-    # model+registry slice ships before their Camel renderers, which land in
-    # Plan B3 Task 2. TASK 2 MUST REMOVE THIS EXCEPTION once those renderers
-    # (and their _TOPICS entries) are registered. Every other registered
-    # render_key/topic_key must already be wired.
-    _pending = {"camel-http", "camel-mqtt", "camel-rabbitmq"}
     # Every registered render_key must be wired into EITHER the KafkaConnector
     # dispatch table (_RENDERERS) or the Spark-batch dispatch table
     # (_SPARK_RENDERERS) -- e.g. batch-s3's "s3-register" is a Spark renderer
     # (ScheduledSparkApplication, render_spark_job), not a KafkaConnector.
     for d in st.all_types():
-        if d.render_key and d.render_key not in _pending:
+        if d.render_key:
             assert d.render_key in r._RENDERERS or d.render_key in r._SPARK_RENDERERS
-        if d.topic_key and d.topic_key not in _pending:
+        if d.topic_key:
             assert d.topic_key in r._TOPICS
 
 
@@ -549,3 +542,89 @@ def test_render_spark_job_rejects_non_spark_renderer():
                       table="enr", target_ns="depo", target_table="enr", cron="0 * * * *")
     with pytest.raises(NotImplementedError):
         r.render_spark_job(spec, spark_image="x", s3_secret_name="y")
+
+
+# --------------------------------------------------------------------------
+# stream+http/mqtt/rabbitmq (Plan B3 Task 2) -> Apache Camel Kafka SOURCE
+# connectors producing JSON to their own Kafka topic + synthesized medallion
+# metadata, landing in Bronze via the shared JSON Iceberg sink.
+# --------------------------------------------------------------------------
+
+def _http():
+    from app.models import SourceSpec
+    return SourceSpec(source="h1", kind="stream", type="http", db="-", table="-",
+                      target_ns="ext", target_table="prices", http_url="https://api.x/p", poll_ms=60000)
+
+
+def _mqtt():
+    from app.models import SourceSpec
+    return SourceSpec(source="m1", kind="stream", type="mqtt", db="-", table="-",
+                      target_ns="iot", target_table="sensors",
+                      mqtt_broker="tcp://mosquitto:1883", mqtt_topic="sensors/#")
+
+
+def _rabbitmq():
+    from app.models import SourceSpec
+    return SourceSpec(source="r1", kind="stream", type="rabbitmq", db="-", table="-",
+                      target_ns="orders_ext", target_table="orders",
+                      rabbitmq_uri="amqp://rabbitmq.default:5672/", rabbitmq_queue="orders-q")
+
+
+def test_camel_http_render():
+    body = r.render_connector(_http())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"].startswith("org.apache.camel.kafkaconnector.httpsource")
+    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
+    assert c["transforms.route.static.value"] == "ext_raw.prices"
+    assert c["transforms.kafkameta.offset.field"] == "__kafka_offset"
+
+
+def test_camel_http_topic_and_endpoint_config():
+    body = r.render_connector(_http())
+    c = body["spec"]["config"]
+    assert body["metadata"]["name"] == "http-h1-prices"
+    assert c["topics"] == "http.h1.prices"
+    assert c["camel.kamelet.http-source.url"] == "https://api.x/p"
+    assert c["camel.kamelet.http-source.period"] == "60000"
+    assert r.topic_name(_http()) == "http.h1.prices"
+
+
+def test_camel_mqtt_and_rabbitmq_registered():
+    assert "camel-mqtt" in r._RENDERERS and "camel-rabbitmq" in r._RENDERERS
+
+
+def test_camel_mqtt_render():
+    body = r.render_connector(_mqtt())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"] == "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector"
+    assert body["metadata"]["name"] == "mqtt-m1-sensors"
+    assert c["topics"] == "mqtt.m1.sensors"
+    assert c["camel.kamelet.mqtt-source.brokerUrl"] == "tcp://mosquitto:1883"
+    assert c["camel.kamelet.mqtt-source.topic"] == "sensors/#"
+    assert c["camel.kamelet.mqtt-source.username"] == "${directory:/mnt/external-configuration/m1:user}"
+    assert c["transforms.route.static.value"] == "iot_raw.sensors"
+    assert r.topic_name(_mqtt()) == "mqtt.m1.sensors"
+
+
+def test_camel_rabbitmq_render():
+    body = r.render_connector(_rabbitmq())
+    c = body["spec"]["config"]
+    assert body["spec"]["class"] == \
+        "org.apache.camel.kafkaconnector.springrabbitmqsource.CamelSpringrabbitmqsourceSourceConnector"
+    assert body["metadata"]["name"] == "rabbitmq-r1-orders"
+    assert c["topics"] == "amqp.r1.orders"
+    assert c["camel.kamelet.spring-rabbitmq-source.host"] == "rabbitmq.default"
+    assert c["camel.kamelet.spring-rabbitmq-source.port"] == "5672"
+    assert c["camel.kamelet.spring-rabbitmq-source.queues"] == "orders-q"
+    assert c["transforms.route.static.value"] == "orders_ext_raw.orders"
+    assert r.topic_name(_rabbitmq()) == "amqp.r1.orders"
+
+
+def test_camel_sources_have_dlq_and_kafkameta():
+    for spec in (_http(), _mqtt(), _rabbitmq()):
+        c = r.render_connector(spec)["spec"]["config"]
+        assert c["errors.tolerance"] == "all"
+        assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
+        assert c["transforms.kafkameta.partition.field"] == "__kafka_partition"
+        assert c["transforms.setop.static.value"] == "u"
+        assert c["transforms.setdel.static.value"] == "false"

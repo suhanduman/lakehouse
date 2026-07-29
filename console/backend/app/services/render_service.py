@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional, Tuple
+from urllib.parse import urlsplit
 
 from app.models import SourceSpec
 from app import source_types
@@ -165,11 +166,27 @@ def _topic_cdc_mysql(spec: SourceSpec) -> str:
     return f"cdc.{spec.source}.{spec.db}.{spec.table}"
 
 
+def _topic_camel_http(spec: SourceSpec) -> str:
+    return f"http.{spec.source}.{spec.target_table}"
+
+
+def _topic_camel_mqtt(spec: SourceSpec) -> str:
+    return f"mqtt.{spec.source}.{spec.target_table}"
+
+
+def _topic_camel_rabbitmq(spec: SourceSpec) -> str:
+    # RabbitMQ/AMQP topic prefix is `amqp` (protocol), not `rabbitmq`.
+    return f"amqp.{spec.source}.{spec.target_table}"
+
+
 _TOPICS = {
     "cdc-relational": _topic_cdc_relational,
     "cdc-mongo": _topic_cdc_mongo,
     "scheduled-jdbc": _topic_scheduled_jdbc,
     "cdc-mysql": _topic_cdc_mysql,
+    "camel-http": _topic_camel_http,
+    "camel-mqtt": _topic_camel_mqtt,
+    "camel-rabbitmq": _topic_camel_rabbitmq,
 }
 
 
@@ -592,12 +609,132 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
     return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
 
 
+# --------------------------------------------------------------------------
+# Camel Kafka SOURCE connectors — stream+http/mqtt/rabbitmq (Plan B3)
+# --------------------------------------------------------------------------
+# Apache Camel Kamelet-based Kafka *source* connectors (baked into the prebuilt
+# Connect image, Task 3). Each polls/subscribes its protocol and PRODUCES JSON
+# to its own topic (http.*/mqtt.*/amqp.*), applying the same medallion-metadata
+# SMT chain the dedicated sink uses so the shared JSON Iceberg sink (chart
+# 13-connectors.yaml, regex widened in Task 4) lands it in Bronze via
+# `_target_table`. Event disposition (append-only): __op=u, __deleted=false,
+# __ts_ms synthesized from the record. Kamelet config keys verified against
+# camel.apache.org/camel-kamelets/latest (http-source / mqtt-source /
+# spring-rabbitmq-source).
+#
+# KNOWN LIVE-VERIFY RISKS (Task 6, not unit-testable here):
+#   (1) Camel KC source records may be String-valued; InsertField$Value SMTs
+#       need a schemaless Map. If the SMTs don't apply at runtime, a Camel
+#       body-unmarshal / converter tweak will be needed.
+#   (2) `topics` as the destination-topic key for a Camel *source* connector,
+#       and spring-rabbitmq-source `exchangeName` (defaulted to the queue name
+#       for pure queue-consume with autoDeclare=false) both need live confirm.
+
+def _camel_medallion_config(spec: SourceSpec, name: str) -> dict:
+    """JSON (schemaless) converters + medallion-metadata SMT chain + DLQ shared
+    by all three Camel source connectors. Mirrors the SMT/DLQ block of
+    `_render_kafka_ingest` so both event lanes synthesize identical Bronze
+    metadata (__op=u, __deleted=false, __ts_ms, __kafka_offset/partition)."""
+    config = {
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter.schemas.enable": "false",
+        "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
+        "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setop.static.field": "__op",
+        "transforms.setop.static.value": "u",
+        "transforms.setdel.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.setdel.static.field": "__deleted",
+        "transforms.setdel.static.value": "false",
+        "transforms.tsms.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.tsms.timestamp.field": "__ts_ms",
+        "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.kafkameta.offset.field": "__kafka_offset",
+        "transforms.kafkameta.partition.field": "__kafka_partition",
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{name}.dlq",
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+    config.update(_tsconv())
+    config.update(_route_transform(spec.target_ns, spec.target_table))
+    return config
+
+
+def _render_camel_http(spec: SourceSpec) -> dict:
+    """stream+http -> Camel `http-source` Kamelet KC source. Polls spec.http_url
+    every spec.poll_ms ms (Kamelet default 10000 when unset) and produces JSON
+    to http.<source>.<table>."""
+    name = f"http-{spec.source}-{spec.target_table}"
+    config = {
+        "topics": topic_name(spec),
+        "camel.kamelet.http-source.url": spec.http_url,
+    }
+    if spec.poll_ms is not None:
+        config["camel.kamelet.http-source.period"] = str(spec.poll_ms)
+    config.update(_camel_medallion_config(spec, name))
+    return _connector(
+        name,
+        "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector",
+        config,
+    )
+
+
+def _render_camel_mqtt(spec: SourceSpec) -> dict:
+    """stream+mqtt -> Camel `mqtt-source` Kamelet KC source. Subscribes
+    spec.mqtt_topic on spec.mqtt_broker and produces JSON to mqtt.<source>.<table>.
+    Broker creds via DirectoryConfigProvider colon-form (mounted secret <source>)."""
+    name = f"mqtt-{spec.source}-{spec.target_table}"
+    config = {
+        "topics": topic_name(spec),
+        "camel.kamelet.mqtt-source.brokerUrl": spec.mqtt_broker,
+        "camel.kamelet.mqtt-source.topic": spec.mqtt_topic,
+        "camel.kamelet.mqtt-source.username": _cred(spec.source, "user"),
+        "camel.kamelet.mqtt-source.password": _cred(spec.source, "pass"),
+    }
+    config.update(_camel_medallion_config(spec, name))
+    return _connector(
+        name,
+        "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
+        config,
+    )
+
+
+def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
+    """stream+rabbitmq -> Camel `spring-rabbitmq-source` Kamelet KC source.
+    Consumes spec.rabbitmq_queue on the broker parsed from spec.rabbitmq_uri and
+    produces JSON to amqp.<source>.<table>. The Kamelet requires exchangeName;
+    for a pure queue-consumer we pass the queue name and leave autoDeclare at its
+    default (false) — queue/exchange must pre-exist (live-verify, Task 6)."""
+    name = f"rabbitmq-{spec.source}-{spec.target_table}"
+    parts = urlsplit(spec.rabbitmq_uri)
+    config = {
+        "topics": topic_name(spec),
+        "camel.kamelet.spring-rabbitmq-source.host": parts.hostname or "",
+        "camel.kamelet.spring-rabbitmq-source.port": str(parts.port) if parts.port else "5672",
+        "camel.kamelet.spring-rabbitmq-source.queues": spec.rabbitmq_queue,
+        "camel.kamelet.spring-rabbitmq-source.exchangeName": spec.rabbitmq_queue,
+        "camel.kamelet.spring-rabbitmq-source.username": _cred(spec.source, "user"),
+        "camel.kamelet.spring-rabbitmq-source.password": _cred(spec.source, "pass"),
+    }
+    config.update(_camel_medallion_config(spec, name))
+    return _connector(
+        name,
+        "org.apache.camel.kafkaconnector.springrabbitmqsource.CamelSpringrabbitmqsourceSourceConnector",
+        config,
+    )
+
+
 _RENDERERS = {
     "cdc-relational": _render_cdc_relational,
     "cdc-mongo": _render_cdc_mongo,
     "scheduled-jdbc": _render_scheduled_jdbc,
     "cdc-mysql": _render_cdc_mysql,
     "kafka-ingest": _render_kafka_ingest,
+    "camel-http": _render_camel_http,
+    "camel-mqtt": _render_camel_mqtt,
+    "camel-rabbitmq": _render_camel_rabbitmq,
 }
 
 
