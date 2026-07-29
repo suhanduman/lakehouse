@@ -52,6 +52,11 @@ const FIELD_META: Record<string, { step: 2 | 3; label: string }> = {
   cron: { step: 3, label: "Cron schedule" },
   s3_bucket: { step: 2, label: "S3 bucket" },
   s3_prefix: { step: 2, label: "S3 prefix" },
+  http_url: { step: 2, label: "HTTP URL" },
+  mqtt_broker: { step: 2, label: "MQTT broker URL" },
+  mqtt_topic: { step: 2, label: "MQTT topic" },
+  rabbitmq_uri: { step: 2, label: "RabbitMQ URI" },
+  rabbitmq_queue: { step: 2, label: "RabbitMQ queue" },
 };
 
 /** Options for the `file_format` select (batch/s3's fourth required
@@ -74,6 +79,11 @@ interface FormState {
   s3_bucket: string;
   s3_prefix: string;
   file_format: string;
+  http_url: string;
+  mqtt_broker: string;
+  mqtt_topic: string;
+  rabbitmq_uri: string;
+  rabbitmq_queue: string;
   target_ns: string;
   target_table: string;
   user: string;
@@ -102,6 +112,11 @@ const INITIAL_STATE: FormState = {
   s3_bucket: "",
   s3_prefix: "",
   file_format: "",
+  http_url: "",
+  mqtt_broker: "",
+  mqtt_topic: "",
+  rabbitmq_uri: "",
+  rabbitmq_queue: "",
   target_ns: "",
   target_table: "",
   user: "",
@@ -124,6 +139,11 @@ const KNOWN_SPEC_FIELDS = new Set([
   "s3_bucket",
   "s3_prefix",
   "file_format",
+  "http_url",
+  "mqtt_broker",
+  "mqtt_topic",
+  "rabbitmq_uri",
+  "rabbitmq_queue",
 ]);
 
 /** "some_field" -> "Some field", for the generic-fallback input's label. */
@@ -191,6 +211,24 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   }
   if (required.includes("file_format")) {
     spec.file_format = form.file_format as SourceSpec["file_format"];
+  }
+  if (required.includes("http_url")) {
+    spec.http_url = form.http_url;
+    if (form.poll_ms) {
+      spec.poll_ms = Number(form.poll_ms);
+    }
+  }
+  if (required.includes("mqtt_broker")) {
+    spec.mqtt_broker = form.mqtt_broker;
+  }
+  if (required.includes("mqtt_topic")) {
+    spec.mqtt_topic = form.mqtt_topic;
+  }
+  if (required.includes("rabbitmq_uri")) {
+    spec.rabbitmq_uri = form.rabbitmq_uri;
+  }
+  if (required.includes("rabbitmq_queue")) {
+    spec.rabbitmq_queue = form.rabbitmq_queue;
   }
   for (const field of required) {
     if (!KNOWN_SPEC_FIELDS.has(field) && form.extraFields[field]) {
@@ -469,6 +507,42 @@ export default function AddSourceWizard() {
                 value={form.s3_prefix}
                 onChange={(e) => set("s3_prefix", e.target.value)}
               />
+            </div>
+          )}
+          {requiredFields.includes("http_url") && (
+            <>
+              <div>
+                <label htmlFor="http_url">{FIELD_META.http_url.label}</label>
+                <input id="http_url" value={form.http_url} onChange={(e) => set("http_url", e.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="poll_ms">Poll interval (ms, optional)</label>
+                <input id="poll_ms" value={form.poll_ms} onChange={(e) => set("poll_ms", e.target.value)} />
+              </div>
+            </>
+          )}
+          {requiredFields.includes("mqtt_broker") && (
+            <div>
+              <label htmlFor="mqtt_broker">{FIELD_META.mqtt_broker.label}</label>
+              <input id="mqtt_broker" value={form.mqtt_broker} onChange={(e) => set("mqtt_broker", e.target.value)} />
+            </div>
+          )}
+          {requiredFields.includes("mqtt_topic") && (
+            <div>
+              <label htmlFor="mqtt_topic">{FIELD_META.mqtt_topic.label}</label>
+              <input id="mqtt_topic" value={form.mqtt_topic} onChange={(e) => set("mqtt_topic", e.target.value)} />
+            </div>
+          )}
+          {requiredFields.includes("rabbitmq_uri") && (
+            <div>
+              <label htmlFor="rabbitmq_uri">{FIELD_META.rabbitmq_uri.label}</label>
+              <input id="rabbitmq_uri" value={form.rabbitmq_uri} onChange={(e) => set("rabbitmq_uri", e.target.value)} />
+            </div>
+          )}
+          {requiredFields.includes("rabbitmq_queue") && (
+            <div>
+              <label htmlFor="rabbitmq_queue">{FIELD_META.rabbitmq_queue.label}</label>
+              <input id="rabbitmq_queue" value={form.rabbitmq_queue} onChange={(e) => set("rabbitmq_queue", e.target.value)} />
             </div>
           )}
           {requiredFields.includes("file_format") && (

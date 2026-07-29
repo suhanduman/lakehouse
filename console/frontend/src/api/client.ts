@@ -31,7 +31,7 @@ export interface Source {
 export interface SourceSpec {
   source: string;
   kind: "cdc" | "scheduled" | "stream" | "batch";
-  type: "mssql" | "pg" | "mongo" | "mysql" | "kafka" | "s3";
+  type: "mssql" | "pg" | "mongo" | "mysql" | "kafka" | "s3" | "http" | "mqtt" | "rabbitmq";
   db: string;
   table: string;
   target_ns: string;
@@ -46,6 +46,11 @@ export interface SourceSpec {
   s3_bucket?: string;
   s3_prefix?: string;
   file_format?: "parquet" | "json" | "avro";
+  http_url?: string;
+  mqtt_broker?: string;
+  mqtt_topic?: string;
+  rabbitmq_uri?: string;
+  rabbitmq_queue?: string;
   disposition?: "entity" | "event";
   kafka_bootstrap?: string;
 }
