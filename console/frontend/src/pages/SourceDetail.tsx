@@ -27,6 +27,12 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Options for the spark edit form's `file_format` select -- mirrors
+ * AddSourceWizard's FILE_FORMAT_OPTIONS / app.models.SourceSpec.file_format's
+ * literal union, so the field can only ever hold one of these three values
+ * (no free-text "csv"/"orc" reaching the PATCH body). */
+const FILE_FORMAT_OPTIONS = ["parquet", "json", "avro"] as const;
+
 /**
  * Source detail view, per docs/superpowers/sdd/task-13-brief.md: shows the
  * connector's config/status/lag/dlq (Source <- getSource, lag/dlq <-
@@ -52,7 +58,7 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [cron, setCron] = useState("");
   const [s3Bucket, setS3Bucket] = useState("");
   const [s3Prefix, setS3Prefix] = useState("");
-  const [fileFormat, setFileFormat] = useState("");
+  const [fileFormat, setFileFormat] = useState<SourceSpec["file_format"]>("parquet");
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleted, setDeleted] = useState<DeleteSourceResult | null>(null);
@@ -142,7 +148,7 @@ export default function SourceDetail({ role }: SourceDetailProps) {
         target_table: source.spark.target_table,
         s3_bucket: s3Bucket,
         s3_prefix: s3Prefix,
-        file_format: fileFormat as SourceSpec["file_format"],
+        file_format: fileFormat,
         cron,
       };
       await editSparkSource(name, spec);
@@ -159,7 +165,12 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       setCron(source.spark.cron);
       setS3Bucket(source.spark.s3_bucket);
       setS3Prefix(source.spark.s3_prefix);
-      setFileFormat(source.spark.file_format);
+      // source.spark.file_format is the round-tripped backend annotation
+      // value (typed as plain `string` on Source since it mirrors the raw
+      // CR annotation) -- narrowing here is safe because it was only ever
+      // written by a prior spec that already passed through this same
+      // constrained select.
+      setFileFormat(source.spark.file_format as SourceSpec["file_format"]);
     }
     setEditing((v) => !v);
   }
@@ -232,11 +243,17 @@ export default function SourceDetail({ role }: SourceDetailProps) {
           />
 
           <label htmlFor="spark-file-format">File Format</label>
-          <input
+          <select
             id="spark-file-format"
             value={fileFormat}
-            onChange={(e) => setFileFormat(e.target.value)}
-          />
+            onChange={(e) => setFileFormat(e.target.value as SourceSpec["file_format"])}
+          >
+            {FILE_FORMAT_OPTIONS.map((fmt) => (
+              <option key={fmt} value={fmt}>
+                {fmt}
+              </option>
+            ))}
+          </select>
 
           {editError && <p role="alert">{editError}</p>}
           <button type="button" onClick={handleSaveSparkEdit} disabled={actionPending}>

@@ -202,17 +202,23 @@ describe("SourceDetail", () => {
     const cronInput = (await screen.findByLabelText(/cron/i)) as HTMLInputElement;
     const bucketInput = screen.getByLabelText(/s3 bucket/i) as HTMLInputElement;
     const prefixInput = screen.getByLabelText(/s3 prefix/i) as HTMLInputElement;
-    const formatInput = screen.getByLabelText(/file format/i) as HTMLInputElement;
+    const formatSelect = screen.getByLabelText(/file format/i) as HTMLSelectElement;
 
     expect(cronInput.value).toBe("0 * * * *");
     expect(bucketInput.value).toBe("raw-bucket");
     expect(prefixInput.value).toBe("invoices/");
-    expect(formatInput.value).toBe("parquet");
+    expect(formatSelect.value).toBe("parquet");
+
+    // The file_format field is a constrained <select>, not free text -- assert
+    // exactly the three valid formats are offered (no room for an invalid
+    // "csv"/"orc" value to reach the PATCH body).
+    const formatOptions = Array.from(formatSelect.options).map((o) => o.value);
+    expect(formatOptions).toEqual(["parquet", "json", "avro"]);
 
     fireEvent.change(cronInput, { target: { value: "*/15 * * * *" } });
     fireEvent.change(bucketInput, { target: { value: "new-bucket" } });
     fireEvent.change(prefixInput, { target: { value: "new-invoices/" } });
-    fireEvent.change(formatInput, { target: { value: "json" } });
+    fireEvent.change(formatSelect, { target: { value: "json" } });
 
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
