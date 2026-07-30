@@ -347,11 +347,14 @@ metadata:
 # pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
 # referans verir, job dosyalarını TAŞIMAZ.
 #
-# Service wiring (spec §3.1/§8): spark-defaults'ın Iceberg REST catalog URI'si
-# Nessie'nin Service'ini, Nessie'nin kendisinin (04-nessie-ha.yaml) ve
-# Trino'nun (06-trino-ha.yaml) kullandığı AYNI `lakehouse.svc.nessie`
-# helper'ından çözer — namespace-içi kısa ad, `/iceberg/` path (Trino'nun
-# REST catalog path'i ile birebir aynı, `/v1` yok).
+# Service wiring (spec §3.1/§8): the inline `sparkConf` below (via the
+# `lakehouse.spark.baseConf` helper, chart/templates/_helpers.tpl) resolves
+# its Iceberg REST catalog URI through the SAME `lakehouse.svc.nessie`
+# helper Nessie'nin kendisinin (04-nessie-ha.yaml) ve Trino'nun
+# (06-trino-ha.yaml) kullandığı AYNI helper — namespace-içi kısa ad,
+# `/iceberg/` path (Trino'nun REST catalog path'i ile birebir aynı, `/v1`
+# yok). (Was resolved via a mounted `spark-defaults` ConfigMap; retired —
+# spark-operator v2.x auto-mounts its own config at /opt/spark/conf.)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -461,45 +464,6 @@ data:
       - pattern: kafka.(\w+)<type=(.+), name=(.+)><>Value
         name: kafka_$1_$2_$3
         type: GAUGE
----
-# Source: lakehouse/templates/05-spark-operator.yaml
-# Paylaşılan Spark config — tüm SparkApplication'lar mount eder.
-# PoC spark.yaml ile aynı iki catalog (lakehouse + rawlake).
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: spark-defaults
-  namespace: example
-data:
-  spark-defaults.conf: |
-    # Iceberg/AWS/Kafka jars are BAKED into the spark-py image (images/spark-py/
-    # Dockerfile) — no runtime spark.jars.packages / Ivy resolution.
-    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-
-    # KRITIK: Dynamic allocation Kubernetes üzerinde çalışırken executor
-    # scale-down olduğunda shuffle verisi kaybolur → job crash. External
-    # Shuffle Service K8s'te yok; Spark 3.5'in içindeki "Shuffle Tracking"
-    # mekanizması executor'ı shuffle verisi okunmayı bekleyen süre
-    # (timeout) boyunca canlı tutar. Bu iki satır üretim için zorunludur.
-    spark.dynamicAllocation.shuffleTracking.enabled=true
-    spark.dynamicAllocation.shuffleTracking.timeout=3600s
-
-    spark.hadoop.fs.s3a.path.style.access=true
-    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
-    # endpoint ve region pod env'den (s3-credentials Secret) gelir:
-    # AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-
-    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.lakehouse.uri=http://nessie:19120/iceberg/
-    spark.sql.catalog.lakehouse.warehouse=s3://depo/warehouse
-    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-
-    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.rawlake.uri=http://nessie:19120/iceberg/
-    spark.sql.catalog.rawlake.warehouse=rawdata
-    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
 ---
 # Source: lakehouse/templates/06-trino-ha.yaml
 # Trino HA — Coordinator + N Worker + OIDC + internal-communication auth.
@@ -4210,29 +4174,52 @@ spec:
     image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/spark-py:1.0"
     mainApplicationFile: "local:///opt/spark/jobs/iceberg_maintenance.py"
     sparkVersion: "3.5.1"
+    sparkConf:
+      spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      spark.jars.ivy: "/tmp/.ivy2"
+      spark.hadoop.fs.s3a.path.style.access: "true"
+      spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+      spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+      spark.sql.catalog.lakehouse.uri: "http://nessie:19120/iceberg/"
+      spark.sql.catalog.lakehouse.warehouse: "s3://depo/warehouse"
+      spark.sql.catalog.lakehouse.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+      spark.sql.catalog.rawlake: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.rawlake.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+      spark.sql.catalog.rawlake.uri: "http://nessie:19120/iceberg/"
+      spark.sql.catalog.rawlake.warehouse: "rawdata"
+      spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
     driver:
       cores: 1
+      coreLimit: "1200m"
       memory: "2G"
       serviceAccount: spark-driver
-      env: [{name: BRONZE_RETENTION_DAYS, value: "30"}]
-      envFrom: [{secretRef: {name: s3-credentials}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+      env:
+      - {name: BRONZE_RETENTION_DAYS, value: "30"}
+      - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+      - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+      - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+      - {name: HOME, value: /tmp}
     executor:
       cores: 2
+      coreLimit: "2400m"
       instances: 4
       memory: "4G"
-      env: [{name: BRONZE_RETENTION_DAYS, value: "30"}]
-      envFrom: [{secretRef: {name: s3-credentials}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
-    volumes:
-    - name: spark-conf
-      configMap: {name: spark-defaults}
+      env:
+      - {name: BRONZE_RETENTION_DAYS, value: "30"}
+      - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+      - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+      - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+      - {name: HOME, value: /tmp}
 ---
 # Source: lakehouse/templates/05-spark-operator.yaml
 # Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
 # jobs/merge_cdc.py rawlake'teki her `<ns>_raw` namespace'ini keşfeder, Silver'a
 # MERGE eder. Yeni kaynak eklenince manifest değişmez. Dynamic Allocation +
-# shuffle-tracking (spark-defaults'ta) ile executor'lar tablo başına elastik.
+# shuffle-tracking (bu CR'ın kendi `sparkConf`'unda, aşağıda) ile executor'lar
+# tablo başına elastik.
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
 metadata:
@@ -4249,8 +4236,23 @@ spec:
     arguments: ["--max-parallel", "4"]
     sparkVersion: "3.5.1"
     sparkConf:
+      spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      spark.jars.ivy: "/tmp/.ivy2"
+      spark.hadoop.fs.s3a.path.style.access: "true"
+      spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+      spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+      spark.sql.catalog.lakehouse.uri: "http://nessie:19120/iceberg/"
+      spark.sql.catalog.lakehouse.warehouse: "s3://depo/warehouse"
+      spark.sql.catalog.lakehouse.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+      spark.sql.catalog.rawlake: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.rawlake.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+      spark.sql.catalog.rawlake.uri: "http://nessie:19120/iceberg/"
+      spark.sql.catalog.rawlake.warehouse: "rawdata"
+      spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
       "spark.dynamicAllocation.enabled": "true"
       "spark.dynamicAllocation.shuffleTracking.enabled": "true"
+      "spark.dynamicAllocation.shuffleTracking.timeout": "3600s"
       "spark.dynamicAllocation.minExecutors": "0"
       "spark.dynamicAllocation.maxExecutors": "8"
       "spark.scheduler.mode": "FAIR"
@@ -4261,18 +4263,25 @@ spec:
       maxExecutors: 8
     driver:
       cores: 1
+      coreLimit: "1200m"
       memory: "1g"
       serviceAccount: spark-driver
-      envFrom: [{secretRef: {name: s3-credentials}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+      env:
+      - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+      - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+      - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+      - {name: HOME, value: /tmp}
     executor:
       cores: 1
+      coreLimit: "1200m"
       memory: "1g"
-      envFrom: [{secretRef: {name: s3-credentials}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
-    volumes:
-    - name: spark-conf
-      configMap: {name: spark-defaults}
+      env:
+      - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+      - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+      - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+      - {name: HOME, value: /tmp}
 ---
 # Source: lakehouse/templates/monitoring/servicemonitors.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -4388,11 +4397,13 @@ spec:
 #     _helpers.tpl's canonical-name header) on the `tls` (9093, SASL_SSL+SCRAM)
 #     listener from 03-kafka-strimzi.yaml — kept in lockstep by convention,
 #     not re-templated (the job file is not chart-owned).
-#   - Nessie catalog: the SparkApplication mounts the SAME shared `spark-conf`
-#     ConfigMap (`spark-defaults`, created once in 05-spark-operator.yaml)
-#     every other SparkApplication in this chart mounts — its Iceberg REST
-#     catalog URI is already wired via the `lakehouse.svc.nessie` helper
-#     there. Not duplicated here.
+#   - Nessie catalog: the SparkApplication carries the SAME inline `sparkConf`
+#     base (via the `lakehouse.spark.baseConf` helper, chart/templates/
+#     _helpers.tpl) every other Spark job in this chart uses — its Iceberg
+#     REST catalog URI is already wired via the `lakehouse.svc.nessie` helper
+#     there. Not duplicated here. (Was a mounted `spark-defaults` ConfigMap;
+#     spark-operator v2.x auto-mounts its own config at /opt/spark/conf, so
+#     that ConfigMap collided and was retired — see 05-spark-operator.yaml.)
 #   - S3 checkpoint: the job's `checkpointLocation=s3://nginx-web/_checkpoints/
 #     access_log` is durable object storage (NOT emptyDir) — baked into the
 #     job script, preserved verbatim. `.Values.nginx.streaming.checkpointBucket`
@@ -4411,32 +4422,53 @@ spec:
   imagePullPolicy: IfNotPresent
   mainApplicationFile: "local:///opt/spark/jobs/nginx_streaming.py"
   sparkVersion: "3.5.1"
+  sparkConf:
+    spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    spark.jars.ivy: "/tmp/.ivy2"
+    spark.hadoop.fs.s3a.path.style.access: "true"
+    spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+    spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
+    spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+    spark.sql.catalog.lakehouse.uri: "http://nessie:19120/iceberg/"
+    spark.sql.catalog.lakehouse.warehouse: "s3://depo/warehouse"
+    spark.sql.catalog.lakehouse.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+    spark.sql.catalog.rawlake: "org.apache.iceberg.spark.SparkCatalog"
+    spark.sql.catalog.rawlake.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+    spark.sql.catalog.rawlake.uri: "http://nessie:19120/iceberg/"
+    spark.sql.catalog.rawlake.warehouse: "rawdata"
+    spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
   restartPolicy:
     type: Always                 # streaming job; crash → restart
     onFailureRetries: 5
   driver:
     cores: 1
+    coreLimit: "1200m"
     memory: "1G"
     serviceAccount: spark-driver
-    envFrom:
-    - secretRef: {name: s3-credentials}
+    env:
+    - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+    - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+    - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+    - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+    - {name: HOME, value: /tmp}
     volumeMounts:
-    - {name: spark-conf, mountPath: /opt/spark/conf}
     - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
     - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
   executor:
     cores: 1
+    coreLimit: "1200m"
     instances: 2
     memory: "2G"
-    envFrom:
-    - secretRef: {name: s3-credentials}
+    env:
+    - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
+    - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+    - {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
+    - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: s3-credentials, key: region}}}
+    - {name: HOME, value: /tmp}
     volumeMounts:
-    - {name: spark-conf, mountPath: /opt/spark/conf}
     - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA
     - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA
   volumes:
-  - name: spark-conf
-    configMap: {name: spark-defaults}
   - name: kafka-ca
     secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
   - name: spark-nginx-scram

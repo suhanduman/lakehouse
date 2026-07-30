@@ -11,11 +11,14 @@
 # pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
 # referans verir, job dosyalarını TAŞIMAZ.
 #
-# Service wiring (spec §3.1/§8): spark-defaults'ın Iceberg REST catalog URI'si
-# Nessie'nin Service'ini, Nessie'nin kendisinin (04-nessie-ha.yaml) ve
-# Trino'nun (06-trino-ha.yaml) kullandığı AYNI `lakehouse.svc.nessie`
-# helper'ından çözer — namespace-içi kısa ad, `/iceberg/` path (Trino'nun
-# REST catalog path'i ile birebir aynı, `/v1` yok).
+# Service wiring (spec §3.1/§8): the inline `sparkConf` below (via the
+# `lakehouse.spark.baseConf` helper, chart/templates/_helpers.tpl) resolves
+# its Iceberg REST catalog URI through the SAME `lakehouse.svc.nessie`
+# helper Nessie'nin kendisinin (04-nessie-ha.yaml) ve Trino'nun
+# (06-trino-ha.yaml) kullandığı AYNI helper — namespace-içi kısa ad,
+# `/iceberg/` path (Trino'nun REST catalog path'i ile birebir aynı, `/v1`
+# yok). (Was resolved via a mounted `spark-defaults` ConfigMap; retired —
+# spark-operator v2.x auto-mounts its own config at /opt/spark/conf.)
 {{- if .Values.components.sparkOperator }}
 apiVersion: v1
 kind: ServiceAccount
@@ -92,7 +95,8 @@ spec:
 # Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
 # jobs/merge_cdc.py rawlake'teki her `<ns>_raw` namespace'ini keşfeder, Silver'a
 # MERGE eder. Yeni kaynak eklenince manifest değişmez. Dynamic Allocation +
-# shuffle-tracking (spark-defaults'ta) ile executor'lar tablo başına elastik.
+# shuffle-tracking (bu CR'ın kendi `sparkConf`'unda, aşağıda) ile executor'lar
+# tablo başına elastik.
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
 metadata:
