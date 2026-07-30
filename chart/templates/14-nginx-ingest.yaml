@@ -20,11 +20,13 @@
 #     _helpers.tpl's canonical-name header) on the `tls` (9093, SASL_SSL+SCRAM)
 #     listener from 03-kafka-strimzi.yaml — kept in lockstep by convention,
 #     not re-templated (the job file is not chart-owned).
-#   - Nessie catalog: the SparkApplication mounts the SAME shared `spark-conf`
-#     ConfigMap (`spark-defaults`, created once in 05-spark-operator.yaml)
-#     every other SparkApplication in this chart mounts — its Iceberg REST
-#     catalog URI is already wired via the `lakehouse.svc.nessie` helper
-#     there. Not duplicated here.
+#   - Nessie catalog: the SparkApplication carries the SAME inline `sparkConf`
+#     base (via the `lakehouse.spark.baseConf` helper, chart/templates/
+#     _helpers.tpl) every other Spark job in this chart uses — its Iceberg
+#     REST catalog URI is already wired via the `lakehouse.svc.nessie` helper
+#     there. Not duplicated here. (Was a mounted `spark-defaults` ConfigMap;
+#     spark-operator v2.x auto-mounts its own config at /opt/spark/conf, so
+#     that ConfigMap collided and was retired — see 05-spark-operator.yaml.)
 #   - S3 checkpoint: the job's `checkpointLocation=s3://nginx-web/_checkpoints/
 #     access_log` is durable object storage (NOT emptyDir) — baked into the
 #     job script, preserved verbatim. `.Values.nginx.streaming.checkpointBucket`
@@ -44,32 +46,32 @@ spec:
   imagePullPolicy: IfNotPresent
   mainApplicationFile: "local:///opt/spark/jobs/nginx_streaming.py"
   sparkVersion: {{ .Values.versions.sparkVersion | quote }}
+  sparkConf:
+{{ include "lakehouse.spark.baseConf" . | indent 4 }}
   restartPolicy:
     type: Always                 # streaming job; crash → restart
     onFailureRetries: {{ .Values.nginx.streaming.restartPolicy.onFailureRetries }}
   driver:
     cores: {{ .Values.nginx.streaming.driver.cores }}
+    coreLimit: {{ printf "%dm" (mul .Values.nginx.streaming.driver.cores 1200) | quote }}
     memory: {{ .Values.nginx.streaming.driver.memory | quote }}
     serviceAccount: spark-driver
-    envFrom:
-    - secretRef: {name: {{ .Values.storage.s3.secretName }}}
+    env:
+{{ include "lakehouse.spark.awsEnv" . | indent 4 }}
     volumeMounts:
-    - {name: spark-conf, mountPath: /opt/spark/conf}
     - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
     - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
   executor:
     cores: {{ .Values.nginx.streaming.executor.cores }}
+    coreLimit: {{ printf "%dm" (mul .Values.nginx.streaming.executor.cores 1200) | quote }}
     instances: {{ .Values.nginx.streaming.executor.instances }}
     memory: {{ .Values.nginx.streaming.executor.memory | quote }}
-    envFrom:
-    - secretRef: {name: {{ .Values.storage.s3.secretName }}}
+    env:
+{{ include "lakehouse.spark.awsEnv" . | indent 4 }}
     volumeMounts:
-    - {name: spark-conf, mountPath: /opt/spark/conf}
     - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA
     - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA
   volumes:
-  - name: spark-conf
-    configMap: {name: spark-defaults}
   - name: kafka-ca
     secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
   - name: spark-nginx-scram
