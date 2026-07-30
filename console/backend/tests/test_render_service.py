@@ -499,6 +499,18 @@ def test_kafka_ingest_registered():
     assert "kafka-ingest" in r._RENDERERS
 
 
+def test_kafka_ingest_sink_unchanged_after_refactor():
+    from app.models import SourceSpec
+    c = r.render_connector(SourceSpec(source="k1", kind="stream", type="kafka", db="ext",
+        table="orders-topic", target_ns="events", target_table="orders"))["spec"]["config"]
+    assert c["topics"] == "orders-topic"
+    assert c["iceberg.catalog.warehouse"] == "rawdata"
+    assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+    assert c["transforms.route.static.value"] == "events_raw.orders"
+    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
+    assert c["errors.deadletterqueue.topic.name"] == "kafka-ingest-k1-orders.dlq"
+
+
 def test_kafka_ingest_has_control_group_overrides():
     # Console-rendered dedicated sink must carry the iceberg.kafka.* control-group
     # timeout overrides (Plan B1 Task 7: without them the cg-control consumer flaps
@@ -574,8 +586,12 @@ def test_camel_http_render():
     body = r.render_connector(_http())
     c = body["spec"]["config"]
     assert body["spec"]["class"].startswith("org.apache.camel.kafkaconnector.httpsource")
-    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
-    assert c["transforms.route.static.value"] == "ext_raw.prices"
+    # Raw-JSON source (byte[]): NO SMTs here -- the medallion transform (incl.
+    # the route SMT) runs on the dedicated sink (render_camel_sink), not the
+    # source. See 2026-07-30-b3-camel-sink-side-transform.
+    assert c["value.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert c["key.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert "transforms" not in c
 
 
 def test_camel_http_topic_and_endpoint_config():
@@ -601,7 +617,9 @@ def test_camel_mqtt_render():
     assert c["camel.kamelet.mqtt-source.brokerUrl"] == "tcp://mosquitto:1883"
     assert c["camel.kamelet.mqtt-source.topic"] == "sensors/#"
     assert c["camel.kamelet.mqtt-source.username"] == "${directory:/mnt/external-configuration/m1:user}"
-    assert c["transforms.route.static.value"] == "iot_raw.sensors"
+    # Raw-JSON source (byte[]): NO SMTs -- route SMT runs on render_camel_sink.
+    assert c["value.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert "transforms" not in c
     assert r.topic_name(_mqtt()) == "mqtt.m1.sensors"
 
 
@@ -615,18 +633,37 @@ def test_camel_rabbitmq_render():
     assert c["camel.kamelet.spring-rabbitmq-source.host"] == "rabbitmq.default"
     assert c["camel.kamelet.spring-rabbitmq-source.port"] == "5672"
     assert c["camel.kamelet.spring-rabbitmq-source.queues"] == "orders-q"
-    assert c["transforms.route.static.value"] == "orders_ext_raw.orders"
+    # Raw-JSON source (byte[]): NO SMTs -- route SMT runs on render_camel_sink.
+    assert c["value.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert "transforms" not in c
     assert r.topic_name(_rabbitmq()) == "amqp.r1.orders"
 
 
-def test_camel_sources_have_dlq():
+def test_camel_sources_are_raw_json_byte_arrays():
+    # All three Camel lanes are raw-JSON sources: ByteArrayConverter key+value,
+    # no SMTs, no DLQ on the source itself (the medallion transform + DLQ now
+    # live on the dedicated sink -- see test_camel_sinks_have_dlq_and_route).
     for spec in (_http(), _mqtt(), _rabbitmq()):
         c = r.render_connector(spec)["spec"]["config"]
+        assert c["value.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+        assert c["key.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+        assert "transforms" not in c
+        assert "errors.tolerance" not in c
+
+
+def test_camel_sinks_have_dlq_and_route():
+    for spec, ns_table in (
+        (_http(), "ext_raw.prices"), (_mqtt(), "iot_raw.sensors"), (_rabbitmq(), "orders_ext_raw.orders"),
+    ):
+        c = r.render_camel_sink(spec)["spec"]["config"]
         assert c["errors.tolerance"] == "all"
         assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
-        assert "kafkameta" not in c["transforms"]
+        assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+        assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+        assert c["transforms.route.static.value"] == ns_table
         assert c["transforms.setop.static.value"] == "u"
         assert c["transforms.setdel.static.value"] == "false"
+        assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
 
 
 # --------------------------------------------------------------------------
@@ -655,6 +692,43 @@ def test_topic_cr_name_valid_and_preserves_real_topic():
     clean = r.render_kafka_topic("cdc.src1.dbo.students")
     assert clean["metadata"]["name"] == "cdc.src1.dbo.students"
     assert "topicName" not in clean["spec"]
+
+
+def test_camel_http_source_is_raw_json_no_smts():
+    from app.models import SourceSpec
+    c = r.render_connector(SourceSpec(source="h1", kind="stream", type="http", db="-", table="-",
+        target_ns="ext", target_table="prices", http_url="https://api.x/p", poll_ms=5000))["spec"]["config"]
+    assert c["value.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert c["key.converter"] == "org.apache.kafka.connect.converters.ByteArrayConverter"
+    assert "transforms" not in c
+    assert "camel.source.unmarshal" not in c
+    assert c["camel.kamelet.http-source.url"] == "https://api.x/p"
+    assert c["topics"] == "http.h1.prices"
+
+
+def test_camel_sink_renders_iceberg_sink_with_route_and_dlq():
+    from app.models import SourceSpec
+    spec = SourceSpec(source="h1", kind="stream", type="http", db="-", table="-",
+        target_ns="ext", target_table="prices", http_url="https://api.x/p")
+    sink = r.render_camel_sink(spec); c = sink["spec"]["config"]
+    assert sink["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
+    assert c["topics"] == "http.h1.prices"
+    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
+    assert c["transforms.route.static.value"] == "ext_raw.prices"
+    assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+    assert c["errors.deadletterqueue.topic.name"] == "http.h1.prices.dlq"
+    assert sink["metadata"]["name"] == "http-h1-prices-sink"
+
+
+def test_has_dedicated_sink_and_dispatch():
+    from app.models import SourceSpec
+    http = SourceSpec(source="h1", kind="stream", type="http", db="-", table="-",
+        target_ns="ext", target_table="prices", http_url="https://api.x/p")
+    kafka = SourceSpec(source="k1", kind="stream", type="kafka", db="ext", table="t",
+        target_ns="ev", target_table="o")
+    assert r.has_dedicated_sink(http) is True
+    assert r.has_dedicated_sink(kafka) is False
+    assert r.render_sink(http)["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
 
 
 def test_s3_register_stamps_roundtrip_annotations():
