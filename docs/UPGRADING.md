@@ -50,8 +50,7 @@ The current pinned set:
 | `trinoImage` | `trinodb/trino:439` | Trino |
 | `sparkImageTag` | `1.0` | Internally-built Spark image tag (bronze ingest, Iceberg maintenance, silver-merge) |
 | `sparkVersion` | `3.5.1` | Apache Spark |
-| `icebergSparkRuntime` | `1.5.2` | `org.apache.iceberg:iceberg-spark-runtime-3.5_2.12` |
-| `awsSdkBundle` | `2.25.11` | `software.amazon.awssdk:bundle` / `:url-connection-client` |
+| `icebergSparkRuntime` | `1.5.2` | `org.apache.iceberg:iceberg-spark-runtime-3.5_2.12` AND `:iceberg-aws-bundle` (version-matched AWS SDK v2 for S3FileIO — single-sourced by the iceberg version, no independent `awsSdkBundle`) |
 | `hadoopAws` | `3.3.4` | `org.apache.hadoop:hadoop-aws` |
 | `connectImageTag` | `1.0` | Internally-built Kafka Connect image tag |
 | `debezium` | `2.7.3` | `io.debezium` connectors (sqlserver/mongodb, `.Final` suffix appended in-template) |

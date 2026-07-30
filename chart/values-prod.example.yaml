@@ -162,7 +162,6 @@ versions:
   sparkImageTag: "1.0"
   sparkVersion: "3.5.1"
   icebergSparkRuntime: "1.5.2"
-  awsSdkBundle: "2.25.11"
   hadoopAws: "3.3.4"
   connectImageTag: "1.0"
   debezium: "2.7.3"
