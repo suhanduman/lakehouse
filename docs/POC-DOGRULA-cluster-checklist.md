@@ -12,7 +12,7 @@ dokümanı (`docs/egitim/ingest-omurgasi-egitim.md`).
 
 ## A. Sürüm & imaj
 - [ ] Strimzi `KafkaConnect.spec.build` custom imajı derleniyor ve internal registry'ye push oluyor (`connect-build-push-secret` mevcut).
-- [ ] Plugin sürümleri erişilebilir + Kafka 3.7.0 ile uyumlu: Debezium 2.7.3.Final (sqlserver+mongodb), Aiven JDBC 6.10.0, mssql-jdbc 12.8.1.jre11, postgresql 42.7.4, Iceberg kafka-connect-runtime 1.11.0, Apicurio converter 2.6.5.Final.
+- [ ] Plugin sürümleri erişilebilir + Kafka 3.7.0 ile uyumlu: Debezium 2.7.3.Final (sqlserver+mongodb), Aiven JDBC 6.10.0, mssql-jdbc 12.8.1.jre11, postgresql 42.7.4, Iceberg kafka-connect-runtime 1.9.0, Apicurio converter 2.6.5.Final.
 - [ ] Kafka broker ve Connect `version` **3.7.0** hizalı (Strimzi operator support matrix).
 - [ ] Apicurio Registry imajı (3.0.6) — **v3 env değişken adları** (`APICURIO_*`) kullanılan sürümle doğru (v2'den farklı).
 

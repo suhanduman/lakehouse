@@ -107,7 +107,7 @@ spec:
     iceberg.tables.auto-create-enabled: "true"
     iceberg.tables.evolve-schema-enabled: "true"
     # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
-    # exists — verified against apache-iceberg-1.11.0 source). This sink writes the
+    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
     # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
     # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
     # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
@@ -180,7 +180,7 @@ spec:
     iceberg.tables.auto-create-enabled: "true"
     iceberg.tables.evolve-schema-enabled: "true"
     # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
-    # exists — verified against apache-iceberg-1.11.0 source). This sink writes the
+    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
     # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
     # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
     # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.

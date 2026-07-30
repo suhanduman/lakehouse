@@ -12,7 +12,7 @@
 #
 # Build (from repo root):
 #   docker build -f images/connect/Dockerfile \
-#     --build-arg ICEBERG_VERSION=1.11.0 \
+#     --build-arg ICEBERG_VERSION=1.9.0 \
 #     -t <registry>/connect-lakehouse:1.0 .
 # All plugin versions MUST match chart `.Values.versions.*`.
 
@@ -24,14 +24,14 @@
 # exists from Iceberg 1.7.x (1.6.x shipped the connector but no runtime dist
 # module). The Apache sink is append-only: it lands the raw CDC change-log in
 # Bronze and current-state upsert happens downstream in the silver-merge Spark
-# job, so no in-sink CDC transform module is needed. Pinned to 1.11.0,
+# job, so no in-sink CDC transform module is needed. Pinned to 1.9.0,
 # independent of the query-side Iceberg version.
-ARG ICEBERG_VERSION=1.11.0
+ARG ICEBERG_VERSION=1.9.0
 FROM eclipse-temurin:17-jdk AS iceberg-build
 ARG ICEBERG_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends git unzip ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-# Pinned to the exact Apache release tag (refs/tags/apache-iceberg-1.11.0).
+# Pinned to the exact Apache release tag (refs/tags/apache-iceberg-1.9.0).
 RUN git clone --depth 1 --branch "apache-iceberg-${ICEBERG_VERSION}" https://github.com/apache/iceberg.git .
 # Build the Kafka Connect runtime distribution (skip tests). settings.gradle
 # renames the module to `iceberg-kafka-connect-runtime` under parent

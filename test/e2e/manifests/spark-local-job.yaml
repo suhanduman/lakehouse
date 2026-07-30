@@ -15,7 +15,7 @@
 #
 # Catalog wiring mirrors the chart's spark-defaults ConfigMap (lakehouse ->
 # default `warehouse` at s3://depo/warehouse, rawlake -> `rawdata`), with
-# the Iceberg runtime at 1.11.0 to match the Connect sink built from source
+# the Iceberg runtime at 1.9.0 to match the Connect sink built from source
 # (images/connect/Dockerfile) — the version pair proven live for the MERGE.
 apiVersion: batch/v1
 kind: Job
@@ -44,7 +44,7 @@ spec:
         # maintenance dies with 'No FileSystem for scheme "s3"' (live kind-e2e
         # finding, 2026-07-22). Same package set as the chart's spark-defaults.
         - --packages
-        - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0,org.apache.hadoop:hadoop-aws:3.3.4
+        - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.0,org.apache.iceberg:iceberg-aws-bundle:1.9.0,org.apache.hadoop:hadoop-aws:3.3.4
         # apache/spark runs as a non-root user with no writable HOME — ivy
         # needs an absolute, writable cache dir or spark-submit dies with
         # "basedir must be absolute: ?/.ivy2/local".
