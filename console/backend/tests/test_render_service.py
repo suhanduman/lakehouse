@@ -541,10 +541,15 @@ def _s3_spec():
 
 def test_render_spark_job_s3_register():
     body = r.render_spark_job(_s3_spec(), spark_image="reg/spark-py:9", s3_secret_name="s3-credentials")
+    assert body["apiVersion"] == "sparkoperator.k8s.io/v1beta2"
     assert body["kind"] == "ScheduledSparkApplication"
+    assert body["metadata"]["name"] == "s3-register-ds1-trips"
+    assert body["spec"]["schedule"] == "0 * * * *"
     tmpl = body["spec"]["template"]
     assert tmpl["mainApplicationFile"] == "local:///opt/spark/jobs/s3_register_table.py"
     assert tmpl["image"] == "reg/spark-py:9"
+    assert tmpl["arguments"] == ["--bucket", "ham-veri", "--prefix", "raw/",
+                                 "--format", "parquet", "--target", "rawlake.nyc.trips"]
     # F1: no mounted spark-defaults; config is inline sparkConf
     assert "volumes" not in tmpl and "volumeMounts" not in tmpl.get("driver", {})
     sc = tmpl["sparkConf"]
