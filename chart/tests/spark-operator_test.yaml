@@ -36,7 +36,7 @@ tests:
           path: 'spec.template.sparkConf["spark.dynamicAllocation.maxExecutors"]'
           value: "4"
 
-  - it: silver-merge uses the shared spark-driver ServiceAccount and spark-defaults ConfigMap
+  - it: silver-merge uses the shared spark-driver ServiceAccount, coreLimit, and mapped AWS creds env (no envFrom)
     template: templates/05-spark-operator.yaml
     documentSelector:
       path: metadata.name
@@ -45,9 +45,36 @@ tests:
       - equal:
           path: spec.template.driver.serviceAccount
           value: spark-driver
+      - isNotEmpty:
+          path: spec.template.driver.coreLimit
+      - notExists:
+          path: spec.template.driver.envFrom
+      - contains:
+          path: spec.template.driver.env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: s3-credentials
+                key: access-key-id
+
+  - it: no spark-defaults ConfigMap renders from this template (spark-operator v2.x owns /opt/spark/conf; F1)
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: spark-defaults
+        not: true
+
+  - it: iceberg-maintenance carries the base sparkConf (rawlake catalog warehouse == "rawdata")
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
       - equal:
-          path: spec.template.volumes[0].configMap.name
-          value: spark-defaults
+          path: 'spec.template.sparkConf["spark.sql.catalog.rawlake.warehouse"]'
+          value: "rawdata"
 
   - it: silver-merge is gated off by sparkOperator.silverMerge.enabled=false
     set:
@@ -61,10 +88,10 @@ tests:
           name: silver-merge
         not: true
 
-  - it: iceberg-maintenance still renders alongside silver-merge (SA, Role, RoleBinding, ConfigMap + 2 ScheduledSparkApplications)
+  - it: iceberg-maintenance still renders alongside silver-merge (SA, Role, RoleBinding + 2 ScheduledSparkApplications, no ConfigMap)
     asserts:
       - hasDocuments:
-          count: 6
+          count: 5
       - containsDocument:
           kind: ScheduledSparkApplication
           apiVersion: sparkoperator.k8s.io/v1beta2

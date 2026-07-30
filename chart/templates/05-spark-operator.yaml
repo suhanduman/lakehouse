@@ -47,44 +47,6 @@ roleRef:
   name: spark-driver-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Paylaşılan Spark config — tüm SparkApplication'lar mount eder.
-# PoC spark.yaml ile aynı iki catalog (lakehouse + rawlake).
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: spark-defaults
-  namespace: {{ include "lakehouse.namespace" . }}
-data:
-  spark-defaults.conf: |
-    # Iceberg/AWS/Kafka jars are BAKED into the spark-py image (images/spark-py/
-    # Dockerfile) — no runtime spark.jars.packages / Ivy resolution.
-    spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-
-    # KRITIK: Dynamic allocation Kubernetes üzerinde çalışırken executor
-    # scale-down olduğunda shuffle verisi kaybolur → job crash. External
-    # Shuffle Service K8s'te yok; Spark 3.5'in içindeki "Shuffle Tracking"
-    # mekanizması executor'ı shuffle verisi okunmayı bekleyen süre
-    # (timeout) boyunca canlı tutar. Bu iki satır üretim için zorunludur.
-    spark.dynamicAllocation.shuffleTracking.enabled=true
-    spark.dynamicAllocation.shuffleTracking.timeout=3600s
-
-    spark.hadoop.fs.s3a.path.style.access=true
-    spark.hadoop.fs.s3a.aws.credentials.provider=com.amazonaws.auth.EnvironmentVariableCredentialsProvider
-    # endpoint ve region pod env'den ({{ .Values.storage.s3.secretName }} Secret) gelir:
-    # AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-
-    spark.sql.catalog.lakehouse=org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.lakehouse.catalog-impl=org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
-    spark.sql.catalog.lakehouse.warehouse={{ .Values.nessie.catalog.warehouse.location }}
-    spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-
-    spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/
-    spark.sql.catalog.rawlake.warehouse=rawdata
-    spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
----
 # Iceberg bakım — saatlik compaction + snapshot expire + orphan-file temizliği.
 # jobs/iceberg_maintenance.py DİNAMİK: hardcoded tablo YOK. Script önce
 # lakehouse ve rawlake kataloglarındaki tüm namespace/tablo çiftlerini
@@ -107,23 +69,24 @@ spec:
     image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
     mainApplicationFile: "local:///opt/spark/jobs/iceberg_maintenance.py"
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
+    sparkConf:
+{{ include "lakehouse.spark.baseConf" . | indent 6 }}
     driver:
       cores: {{ .Values.sparkOperator.maintenance.driver.cores }}
+      coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.maintenance.driver.cores 1200) | quote }}
       memory: {{ .Values.sparkOperator.maintenance.driver.memory | quote }}
       serviceAccount: spark-driver
-      env: [{name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}]
-      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+      env:
+      - {name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}
+{{ include "lakehouse.spark.awsEnv" . | indent 6 }}
     executor:
       cores: {{ .Values.sparkOperator.maintenance.executor.cores }}
+      coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.maintenance.executor.cores 1200) | quote }}
       instances: {{ .Values.sparkOperator.maintenance.executor.instances }}
       memory: {{ .Values.sparkOperator.maintenance.executor.memory | quote }}
-      env: [{name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}]
-      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
-    volumes:
-    - name: spark-conf
-      configMap: {name: spark-defaults}
+      env:
+      - {name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}
+{{ include "lakehouse.spark.awsEnv" . | indent 6 }}
 ---
 {{- if .Values.sparkOperator.silverMerge.enabled }}
 # Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
@@ -146,8 +109,10 @@ spec:
     arguments: ["--max-parallel", {{ .Values.sparkOperator.silverMerge.mergeParallelism | quote }}]
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
     sparkConf:
+{{ include "lakehouse.spark.baseConf" . | indent 6 }}
       "spark.dynamicAllocation.enabled": "true"
       "spark.dynamicAllocation.shuffleTracking.enabled": "true"
+      "spark.dynamicAllocation.shuffleTracking.timeout": "3600s"
       "spark.dynamicAllocation.minExecutors": "0"
       "spark.dynamicAllocation.maxExecutors": {{ .Values.sparkOperator.silverMerge.maxExecutors | quote }}
       "spark.scheduler.mode": "FAIR"
@@ -158,17 +123,16 @@ spec:
       maxExecutors: {{ .Values.sparkOperator.silverMerge.maxExecutors }}
     driver:
       cores: {{ .Values.sparkOperator.silverMerge.driver.cores }}
+      coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.silverMerge.driver.cores 1200) | quote }}
       memory: {{ .Values.sparkOperator.silverMerge.driver.memory | quote }}
       serviceAccount: spark-driver
-      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
+      env:
+{{ include "lakehouse.spark.awsEnv" . | indent 6 }}
     executor:
       cores: {{ .Values.sparkOperator.silverMerge.executor.cores }}
+      coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.silverMerge.executor.cores 1200) | quote }}
       memory: {{ .Values.sparkOperator.silverMerge.executor.memory | quote }}
-      envFrom: [{secretRef: {name: {{ .Values.storage.s3.secretName }}}}]
-      volumeMounts: [{name: spark-conf, mountPath: /opt/spark/conf}]
-    volumes:
-    - name: spark-conf
-      configMap: {name: spark-defaults}
+      env:
+{{ include "lakehouse.spark.awsEnv" . | indent 6 }}
 {{- end }}
 {{- end }}
