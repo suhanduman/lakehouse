@@ -499,7 +499,10 @@ def test_kafka_ingest_registered():
     assert "kafka-ingest" in r._RENDERERS
 
 
-def test_kafka_ingest_sink_unchanged_after_refactor():
+def test_kafka_ingest_sink_pins_post_control_topic_fix_output():
+    # Pins _render_kafka_ingest's rendered output post the per-connector
+    # control-topic fix (Finding 1): every key from before the fix, PLUS the
+    # new iceberg.control.topic key this fix adds.
     from app.models import SourceSpec
     c = r.render_connector(SourceSpec(source="k1", kind="stream", type="kafka", db="ext",
         table="orders-topic", target_ns="events", target_table="orders"))["spec"]["config"]
@@ -509,6 +512,7 @@ def test_kafka_ingest_sink_unchanged_after_refactor():
     assert c["transforms.route.static.value"] == "events_raw.orders"
     assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
     assert c["errors.deadletterqueue.topic.name"] == "kafka-ingest-k1-orders.dlq"
+    assert c["iceberg.control.topic"] == "control-kafka-ingest-k1-orders"
 
 
 def test_kafka_ingest_has_control_group_overrides():
@@ -718,6 +722,10 @@ def test_camel_sink_renders_iceberg_sink_with_route_and_dlq():
     assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
     assert c["errors.deadletterqueue.topic.name"] == "http.h1.prices.dlq"
     assert sink["metadata"]["name"] == "http-h1-prices-sink"
+    # Finding 1: each dedicated sink gets its OWN control topic (not the shared
+    # "control-iceberg") so concurrent dedicated sinks can't cross-read each
+    # other's control events.
+    assert c["iceberg.control.topic"] == "control-http-h1-prices-sink"
 
 
 def test_has_dedicated_sink_and_dispatch():

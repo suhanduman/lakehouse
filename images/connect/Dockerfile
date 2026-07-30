@@ -97,6 +97,11 @@ RUN set -eux; \
 # to the worker's runtime connect-json (exactly how the Iceberg sink resolves
 # JsonConverter). Verified live: stale jar present -> Camel source NotReady/
 # ConfigException; removed -> RUNNING. (Live-verify finding, 2026-07-30.)
+# NOTE (2026-07-30, post sink-side-transform): the Camel SOURCE connectors now
+# use ByteArrayConverter, not JsonConverter (see render_service.py's
+# _render_camel_http/_mqtt/_rabbitmq), so this `rm` is defensive hygiene against
+# the stale jar rather than a fix for an active source-side failure -- kept in
+# case a future change re-adds JsonConverter to a Camel source.
 # Iceberg runtime built in stage 1.
 COPY --from=iceberg-build /plugins/iceberg /opt/kafka/plugins/iceberg
 

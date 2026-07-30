@@ -258,9 +258,9 @@ spec:
       - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
       - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
       - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
-      - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel HTTP source (B3) produce + shared JSON sink consume + .dlq
-      - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel MQTT source (B3) produce + shared JSON sink consume + .dlq
-      - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel RabbitMQ source (B3) produce + shared JSON sink consume + .dlq
+      - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel HTTP source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
+      - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel MQTT source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
+      - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel RabbitMQ source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
       - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
       - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
       # Iceberg sink exactly-once: coordinator/worker transactional producers

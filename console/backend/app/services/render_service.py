@@ -565,13 +565,22 @@ def _kafka_consumer_override(spec: SourceSpec) -> dict:
     }
 
 
-def _iceberg_sink_config(topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
+def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
     """Shared dedicated-Iceberg-sink config: JSON (schemaless) converters +
     Nessie/S3 rawdata catalog + fan-out route/auto-create/evolve + control-group
     stability + medallion SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) +
     DLQ. Used by _render_kafka_ingest (stream/kafka) and render_camel_sink (Camel
     lanes). value.converter deserializes JSON to a Map BEFORE the SMTs, so
-    InsertField$Value works on the Map (unlike a Camel source's byte[] value)."""
+    InsertField$Value works on the Map (unlike a Camel source's byte[] value).
+
+    `name` is this sink's own KafkaConnector name (e.g. "kafka-ingest-k1-orders"
+    or "http-h1-prices-sink") and is used to derive a PER-CONNECTOR
+    `iceberg.control.topic` ("control-<name>"). Without this, every dedicated
+    sink defaults to the connector's shared "control-iceberg" topic; two
+    concurrent dedicated sinks would then cross-read each other's control
+    events (commit-request/commit-response) and can silently commit 0 rows.
+    The chart's `control` ACL prefix already covers `control-*`, so no ACL
+    change is needed for this."""
     config: dict = {
         "topics": topics,
         "key.converter": "org.apache.kafka.connect.json.JsonConverter",
@@ -590,6 +599,7 @@ def _iceberg_sink_config(topics: str, target_ns: str, target_table: str, dlq_nam
         "iceberg.tables.route-field": "_target_table",
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
+        "iceberg.control.topic": _k8s_topic_name(f"control-{name}"),
         "iceberg.control.commit.interval-ms": "60000",
         # Control-group stability. This dedicated sink is Console-rendered, so
         # (unlike the chart's shared sinks) it does NOT inherit
@@ -634,7 +644,7 @@ def _iceberg_sink_config(topics: str, target_ns: str, target_table: str, dlq_nam
 def _render_kafka_ingest(spec: SourceSpec) -> dict:
     """stream+kafka (event) -> DEDICATED Iceberg sink reading an existing topic."""
     name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
-    config = _iceberg_sink_config(spec.table, spec.target_ns, spec.target_table, f"{name}.dlq")
+    config = _iceberg_sink_config(name, spec.table, spec.target_ns, spec.target_table, f"{name}.dlq")
     config.update(_kafka_consumer_override(spec))
     return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
 
@@ -741,7 +751,7 @@ def render_camel_sink(spec: SourceSpec) -> dict:
     topic = topic_name(spec)
     src_name = render_connector(spec)["metadata"]["name"]
     name = _k8s_name(src_name, "sink")
-    config = _iceberg_sink_config(topic, spec.target_ns, spec.target_table, f"{topic}.dlq")
+    config = _iceberg_sink_config(name, topic, spec.target_ns, spec.target_table, f"{topic}.dlq")
     return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
 
 
