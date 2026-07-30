@@ -7,6 +7,11 @@ trino==0.329.*
 # Iceberg tablo pre-create (IcebergService → Nessie REST). CDC upsert identifier
 # field'ı için tablo yaratımı Trino DDL yerine pyiceberg ile yapılır (F bulgusu).
 pyiceberg[s3fs]==0.10.*
+# Cap s3fs: pyiceberg's [s3fs] extra pulls s3fs unbounded, and s3fs >=2025.x
+# needs aiobotocore >=3, whose exactly-pinned botocore conflicts with
+# boto3==1.35.* below (ResolutionImpossible on a fresh resolve). s3fs 2024.12
+# uses aiobotocore 2.17 → botocore 1.35.x, which aligns with boto3 1.35.
+s3fs<2025
 boto3==1.35.*
 httpx==0.27.*
 authlib==1.3.*
