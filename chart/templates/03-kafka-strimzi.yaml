@@ -11,7 +11,7 @@
 #     authentication.type: scram-sha-512 (type itself is values-driven for
 #     non-OpenShift envs; auth stays scram-sha-512 always).
 #   - every KafkaUser ACL below: `connect`'s ingest-namespace ACLs
-#     (cdc./jdbc./mongo./control/iceberg + connect-cluster- + `connect` group prefix;
+#     (cdc./jdbc./mongo./http./mqtt./amqp./control/iceberg + connect-cluster- + `connect` group prefix;
 #     bkz. connect KafkaUser notu), `debezium-src`'s
 #     `schema-history.` prefix, `fluentbit`'s write-only `nginx-access`,
 #     `lakehouse-ingest`'s nginx-access/lms-events + `spark-` group prefix.
@@ -258,6 +258,9 @@ spec:
       - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
       - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
       - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
+      - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel HTTP source (B3) produce + shared JSON sink consume + .dlq
+      - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel MQTT source (B3) produce + shared JSON sink consume + .dlq
+      - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel RabbitMQ source (B3) produce + shared JSON sink consume + .dlq
       - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
       - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
       # Iceberg sink exactly-once: coordinator/worker transactional producers

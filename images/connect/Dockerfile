@@ -87,7 +87,16 @@ RUN set -eux; \
     cd "$P/camel-mqtt-source"; \
     curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-mqtt-source-kafka-connector/${CAMEL_KC_VERSION}/camel-mqtt-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz; \
     cd "$P/camel-spring-rabbitmq-source"; \
-    curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-source-kafka-connector/${CAMEL_KC_VERSION}/camel-spring-rabbitmq-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz
+    curl -fL -o c.tgz "https://repo1.maven.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-source-kafka-connector/${CAMEL_KC_VERSION}/camel-spring-rabbitmq-source-kafka-connector-${CAMEL_KC_VERSION}-package.tar.gz"; tar xzf c.tgz --strip-components=1; rm c.tgz; \
+    rm -f "$P"/camel-http-source/connect-json-*.jar "$P"/camel-mqtt-source/connect-json-*.jar "$P"/camel-spring-rabbitmq-source/connect-json-*.jar
+# Camel KC 4.10.3 bundles connect-json-3.6.1.jar in each connector package; under
+# Kafka Connect plugin isolation that STALE converter shadows the runtime's
+# connect-json (Kafka 4.2.0) and cannot instantiate against the 4.2.0 Converter
+# interface -> `key/value.converter=JsonConverter` fails with "Could not
+# instantiate class". Removing the bundled copy makes the Camel plugin fall back
+# to the worker's runtime connect-json (exactly how the Iceberg sink resolves
+# JsonConverter). Verified live: stale jar present -> Camel source NotReady/
+# ConfigException; removed -> RUNNING. (Live-verify finding, 2026-07-30.)
 # Iceberg runtime built in stage 1.
 COPY --from=iceberg-build /plugins/iceberg /opt/kafka/plugins/iceberg
 
