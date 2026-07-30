@@ -352,6 +352,20 @@ class AddSourceOrchestrator:
         ):
             return fail()
 
+        # 5b. dedicated sink -- Camel lanes produce raw JSON at the source; the
+        # medallion transform runs on this per-source Iceberg sink (spec
+        # 2026-07-30-b3-camel-sink-side-transform). Lanes without a dedicated
+        # sink (kafka-ingest IS a sink) skip this.
+        if self.render.has_dedicated_sink(spec):
+            def _apply_sink() -> Optional[str]:
+                ctx["sink_body"] = self.render.render_sink(spec)
+                ctx["sink_name"] = ctx["sink_body"]["metadata"]["name"]
+                self.k8s.apply_connector(ctx["sink_body"])
+                return None
+            if not run("sink", _apply_sink,
+                       lambda: self.k8s.delete_connector(ctx.get("sink_name"))):
+                return fail()
+
         # 6. verify -- bounded poll for RUNNING (spec §4 step 6); see docstring.
         def _verify() -> Optional[str]:
             name = ctx.get("connector_name")

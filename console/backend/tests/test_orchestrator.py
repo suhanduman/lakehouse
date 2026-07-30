@@ -780,7 +780,8 @@ def test_mqtt_event_creates_topic_and_bronze_no_secret_no_silver():
     names = [s.name for s in res.steps]
     assert "secret" not in names   # no creds supplied -> no secret step
     # Camel source DOES create its own topic (topic_key set) -- unlike stream/kafka.
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze"]   # event -> Bronze only, no Silver
 
 
@@ -804,6 +805,28 @@ def test_edit_spark_source_rerenders_and_applies():
     assert "--bucket" in applied["spec"]["template"]["arguments"]
 
 
+def test_camel_http_applies_source_and_dedicated_sink():
+    orch, fakes = _orch_fakes()
+    spec = _http_spec()
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    assert "connector" in names and "sink" in names
+    applied = [b["metadata"]["name"] for b in fakes["k8s"].applied_connectors]
+    assert "http-h1-prices" in applied and "http-h1-prices-sink" in applied
+
+
+def test_kafka_ingest_has_no_separate_sink_step():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert "sink" not in [s.name for s in res.steps]
+
+
 def test_http_entity_creates_topic_bronze_and_silver():
     orch, fakes = _orch_fakes()
     spec = _http_spec(
@@ -816,5 +839,6 @@ def test_http_entity_creates_topic_bronze_and_silver():
 
     assert res.ok is True
     names = [s.name for s in res.steps]
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
