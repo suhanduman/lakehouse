@@ -156,12 +156,8 @@ spec:
     transforms.kafkameta.partition.field: "__kafka_partition"
     # Mongo (mongo.*) is JSON, NOT Avro (see the topics.regex comment on
     # iceberg-sink-cdc above) — a separate sink with JsonConverter, since one
-    # Connect sink can only have a single value.converter. This sink now also
-    # serves the B3 Camel JSON lanes (http.*/mqtt.*/amqp.*) alongside Mongo
-    # CDC: those source connectors emit plain JSON via the same JsonConverter
-    # and set `_target_table` via their own `route` SMT, so they fan out
-    # through this sink's existing dynamic routing with no other config change.
-    topics.regex: "mongo\\..*|http\\..*|mqtt\\..*|amqp\\..*"
+    # Connect sink can only have a single value.converter.
+    topics.regex: "mongo\\..*"
     key.converter: org.apache.kafka.connect.json.JsonConverter
     value.converter: org.apache.kafka.connect.json.JsonConverter
     key.converter.schemas.enable: "false"

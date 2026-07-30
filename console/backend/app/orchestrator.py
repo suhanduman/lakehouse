@@ -45,6 +45,20 @@ result:
 verify_attempts / verify_delay / sleep are constructor-injectable so tests
 run with zero delay.
 
+For Camel lanes (a dedicated sink alongside the source, see step 5b below),
+verify polls BOTH `ctx["connector_name"]` (the source) and `ctx["sink_name"]`
+(the dedicated sink), applying the same RUNNING/FAILED/pending classification
+to each independently. This matters because for these lanes the SINK — not
+the source — is what actually writes to Bronze (it deserializes the source's
+raw JSON and applies the medallion SMTs); a source that reaches RUNNING while
+its sink is stuck or FAILED would otherwise report `ok=True` while silently
+writing no data. Either one reporting FAILED fails the whole verify step
+(full rollback, including the sink); either one still pending after all
+attempts (with the other RUNNING or also pending) yields the same
+ok=True/PENDING outcome as the single-target case. Lanes without a dedicated
+sink (`ctx` has no "sink_name") behave exactly as before — only the source is
+polled.
+
 Scope note (Plan B2): any source on the registry's spark-batch lane does not
 go through Kafka/medallion pre-create at all. This orchestrator checks
 `source_types.get(spec.kind, spec.type).lane` up front and branches on
@@ -352,14 +366,30 @@ class AddSourceOrchestrator:
         ):
             return fail()
 
+        # 5b. dedicated sink -- Camel lanes produce raw JSON at the source; the
+        # medallion transform runs on this per-source Iceberg sink (spec
+        # 2026-07-30-b3-camel-sink-side-transform). Lanes without a dedicated
+        # sink (kafka-ingest IS a sink) skip this.
+        if self.render.has_dedicated_sink(spec):
+            def _apply_sink() -> Optional[str]:
+                ctx["sink_body"] = self.render.render_sink(spec)
+                ctx["sink_name"] = ctx["sink_body"]["metadata"]["name"]
+                self.k8s.apply_connector(ctx["sink_body"])
+                return None
+            if not run("sink", _apply_sink,
+                       lambda: self.k8s.delete_connector(ctx.get("sink_name"))):
+                return fail()
+
         # 6. verify -- bounded poll for RUNNING (spec §4 step 6); see docstring.
-        def _verify() -> Optional[str]:
-            name = ctx.get("connector_name")
+        # For Camel lanes (dedicated sink present via ctx["sink_name"]) both
+        # the source AND the sink are polled -- the sink is what actually
+        # writes to Bronze, so a stuck/FAILED sink must fail this step too.
+        def _poll_until_running(name: Optional[str]) -> str:
             for attempt in range(self.verify_attempts):
                 status = self.k8s.get_status(name)
                 state = (status or {}).get("connector", {}).get("state")
                 if state == "RUNNING":
-                    return None
+                    return ""
                 if state == "FAILED":
                     raise RuntimeError(f"connector {name} reported FAILED state")
                 # pending / status not yet populated -> wait and retry
@@ -369,6 +399,15 @@ class AddSourceOrchestrator:
             # pending. Do NOT roll back a connector that simply hasn't
             # reconciled to RUNNING yet.
             return VERIFY_PENDING_DETAIL
+
+        def _verify() -> Optional[str]:
+            detail = _poll_until_running(ctx.get("connector_name"))
+            sink_name = ctx.get("sink_name")
+            if sink_name is not None:
+                sink_detail = _poll_until_running(sink_name)
+                if not detail:
+                    detail = sink_detail
+            return detail or None
 
         if not run("verify", _verify):
             return fail()

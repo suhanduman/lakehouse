@@ -565,20 +565,28 @@ def _kafka_consumer_override(spec: SourceSpec) -> dict:
     }
 
 
-def _render_kafka_ingest(spec: SourceSpec) -> dict:
-    """stream+kafka (event/append-only) -> a DEDICATED Iceberg sink KafkaConnector
-    that reads an existing topic (in-cluster or external) directly and lands an
-    append-only change-log in its own Bronze table. Separate from the shared
-    CDC/JDBC sinks; no message duplication. Bronze is pre-created as a metadata
-    skeleton by the orchestrator; evolve-schema adds business columns."""
-    name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
+def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
+    """Shared dedicated-Iceberg-sink config: JSON (schemaless) converters +
+    Nessie/S3 rawdata catalog + fan-out route/auto-create/evolve + control-group
+    stability + medallion SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) +
+    DLQ. Used by _render_kafka_ingest (stream/kafka) and render_camel_sink (Camel
+    lanes). value.converter deserializes JSON to a Map BEFORE the SMTs, so
+    InsertField$Value works on the Map (unlike a Camel source's byte[] value).
+
+    `name` is this sink's own KafkaConnector name (e.g. "kafka-ingest-k1-orders"
+    or "http-h1-prices-sink") and is used to derive a PER-CONNECTOR
+    `iceberg.control.topic` ("control-<name>"). Without this, every dedicated
+    sink defaults to the connector's shared "control-iceberg" topic; two
+    concurrent dedicated sinks would then cross-read each other's control
+    events (commit-request/commit-response) and can silently commit 0 rows.
+    The chart's `control` ACL prefix already covers `control-*`, so no ACL
+    change is needed for this."""
     config: dict = {
-        "topics": spec.table,
+        "topics": topics,
         "key.converter": "org.apache.kafka.connect.json.JsonConverter",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
         "key.converter.schemas.enable": "false",
         "value.converter.schemas.enable": "false",
-        # --- Nessie REST catalog + S3 (all deployment values via colon-form) ---
         "iceberg.catalog.type": "rest",
         "iceberg.catalog.uri": NESSIE_URI,
         "iceberg.catalog.warehouse": "rawdata",
@@ -587,11 +595,11 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
         "iceberg.catalog.s3.endpoint": _cred("s3", "endpoint"),
         "iceberg.catalog.s3.access-key-id": _cred("s3", "access-key-id"),
         "iceberg.catalog.s3.secret-access-key": _cred("s3", "secret-access-key"),
-        # --- fan-out routing + auto-create/evolve (no upfront business schema) ---
         "iceberg.tables.dynamic-enabled": "true",
         "iceberg.tables.route-field": "_target_table",
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
+        "iceberg.control.topic": _k8s_topic_name(f"control-{name}"),
         "iceberg.control.commit.interval-ms": "60000",
         # Control-group stability. This dedicated sink is Console-rendered, so
         # (unlike the chart's shared sinks) it does NOT inherit
@@ -609,7 +617,6 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
         "iceberg.kafka.heartbeat.interval.ms": "15000",
         "iceberg.kafka.request.timeout.ms": "130000",
         "iceberg.kafka.max.poll.interval.ms": "300000",
-        # --- SMTs: route + synthesize medallion metadata (event: __op=u/__deleted=false) ---
         "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
         "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.setop.static.field": "__op",
@@ -617,24 +624,27 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
         "transforms.setdel.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.setdel.static.field": "__deleted",
         "transforms.setdel.static.value": "false",
-        # __ts_ms from the Kafka record timestamp (there is no source event-time),
-        # then normalize to a Connect Timestamp for the day(__ts_ms) Bronze partition.
         "transforms.tsms.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.tsms.timestamp.field": "__ts_ms",
         "transforms.tsconv.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
         "transforms.tsconv.field": "__ts_ms",
         "transforms.tsconv.target.type": "Timestamp",
-        # deterministic dedup tie-break metadata (parity with the Plan A sinks)
         "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.kafkameta.offset.field": "__kafka_offset",
         "transforms.kafkameta.partition.field": "__kafka_partition",
-        # --- errors / DLQ ---
         "errors.tolerance": "all",
-        "errors.deadletterqueue.topic.name": f"{name}.dlq",
+        "errors.deadletterqueue.topic.name": dlq_name,
         "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
         "errors.deadletterqueue.context.headers.enable": "true",
     }
-    config.update(_route_transform(spec.target_ns, spec.target_table))
+    config.update(_route_transform(target_ns, target_table))
+    return config
+
+
+def _render_kafka_ingest(spec: SourceSpec) -> dict:
+    """stream+kafka (event) -> DEDICATED Iceberg sink reading an existing topic."""
+    name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
+    config = _iceberg_sink_config(name, spec.table, spec.target_ns, spec.target_table, f"{name}.dlq")
     config.update(_kafka_consumer_override(spec))
     return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
 
@@ -643,82 +653,45 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
 # Camel Kafka SOURCE connectors — stream+http/mqtt/rabbitmq (Plan B3)
 # --------------------------------------------------------------------------
 # Apache Camel Kamelet-based Kafka *source* connectors (baked into the prebuilt
-# Connect image, Task 3). Each polls/subscribes its protocol and PRODUCES JSON
-# to its own topic (http.*/mqtt.*/amqp.*), applying the same medallion-metadata
-# SMT chain the dedicated sink uses so the shared JSON Iceberg sink (chart
-# 13-connectors.yaml, regex widened in Task 4) lands it in Bronze via
-# `_target_table`. Event disposition (append-only): __op=u, __deleted=false,
-# __ts_ms synthesized from the record. Kamelet config keys verified against
-# camel.apache.org/camel-kamelets/latest (http-source / mqtt-source /
+# Connect image, Task 3). Each polls/subscribes its protocol and PRODUCES THE
+# RAW JSON BODY (byte[], ByteArrayConverter, NO SMTs) to its own topic
+# (http.*/mqtt.*/amqp.*). The medallion-metadata SMT chain does NOT run here —
+# a Camel source's value is a byte[], and InsertField$Value silently drops
+# every record against a byte[] (live-confirmed, see
+# 2026-07-30-b3-camel-sink-side-transform). The transform instead runs on a
+# DEDICATED Iceberg sink (render_camel_sink, below): JsonConverter deserializes
+# the byte[] to a Map BEFORE the SMTs apply. Kamelet config keys verified
+# against camel.apache.org/camel-kamelets/latest (http-source / mqtt-source /
 # spring-rabbitmq-source).
 #
 # KNOWN LIVE-VERIFY RISKS (Task 6, not unit-testable here):
-#   (1) Camel KC source records may be String-valued; InsertField$Value SMTs
-#       need a schemaless Map. If the SMTs don't apply at runtime, a Camel
-#       body-unmarshal / converter tweak will be needed.
-#   (2) `topics` as the destination-topic key for a Camel *source* connector,
+#   (1) `topics` as the destination-topic key for a Camel *source* connector,
 #       and spring-rabbitmq-source `exchangeName` (defaulted to the queue name
 #       for pure queue-consume with autoDeclare=false) both need live confirm.
 
-def _camel_medallion_config(spec: SourceSpec, name: str) -> dict:
-    """JSON (schemaless) converters + medallion-metadata SMT chain + DLQ shared
-    by all three Camel source connectors. Mirrors the SMT/DLQ block of
-    `_render_kafka_ingest` (minus kafkameta — see the note below) so the event
-    lanes synthesize identical Bronze metadata (__op=u, __deleted=false,
-    __ts_ms); __kafka_offset/__kafka_partition are stamped by the shared sink."""
-    config = {
-        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": "false",
-        "value.converter.schemas.enable": "false",
-        "transforms": "route,setop,setdel,tsms,tsconv",
-        "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
-        "transforms.setop.static.field": "__op",
-        "transforms.setop.static.value": "u",
-        "transforms.setdel.type": "org.apache.kafka.connect.transforms.InsertField$Value",
-        "transforms.setdel.static.field": "__deleted",
-        "transforms.setdel.static.value": "false",
-        "transforms.tsms.type": "org.apache.kafka.connect.transforms.InsertField$Value",
-        "transforms.tsms.timestamp.field": "__ts_ms",
-        # NB: no source-side `kafkameta` SMT. These are Kafka *source* connectors
-        # (records have null Kafka offset/partition), and the shared JSON Iceberg
-        # sink (chart 13-connectors.yaml) applies `transforms: kafkameta` itself,
-        # stamping __kafka_offset/__kafka_partition of the Bronze-input topic — the
-        # values silver-merge uses. (Caveat: Camel sources set no PK-based Kafka
-        # message key, so same-PK records may spread across partitions on the
-        # http.*/mqtt.*/amqp.* topic; __ts_ms stays the primary silver-merge order.)
-        "errors.tolerance": "all",
-        "errors.deadletterqueue.topic.name": f"{name}.dlq",
-        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
-        "errors.deadletterqueue.context.headers.enable": "true",
-    }
-    config.update(_tsconv())
-    config.update(_route_transform(spec.target_ns, spec.target_table))
-    return config
+_BYTE_CONVERTERS = {
+    "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+}
 
 
 def _render_camel_http(spec: SourceSpec) -> dict:
-    """stream+http -> Camel `http-source` Kamelet KC source. Polls spec.http_url
-    every spec.poll_ms ms (Kamelet default 10000 when unset) and produces JSON
-    to http.<source>.<table>."""
+    """stream+http -> Camel http-source producing the RAW JSON body (byte[]) to
+    http.<source>.<table>. NO SMTs here — the medallion transform runs on the
+    dedicated sink (render_camel_sink), where JsonConverter has parsed the body
+    to a Map. See spec 2026-07-30-b3-camel-sink-side-transform."""
     name = _k8s_name("http", spec.source, spec.target_table)
-    config = {
-        "topics": topic_name(spec),
-        "camel.kamelet.http-source.url": spec.http_url,
-    }
+    config = {"topics": topic_name(spec), "camel.kamelet.http-source.url": spec.http_url, **_BYTE_CONVERTERS}
     if spec.poll_ms is not None:
         config["camel.kamelet.http-source.period"] = str(spec.poll_ms)
-    config.update(_camel_medallion_config(spec, name))
-    return _connector(
-        name,
-        "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector",
-        config,
-    )
+    return _connector(name, "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector", config)
 
 
 def _render_camel_mqtt(spec: SourceSpec) -> dict:
     """stream+mqtt -> Camel `mqtt-source` Kamelet KC source. Subscribes
-    spec.mqtt_topic on spec.mqtt_broker and produces JSON to mqtt.<source>.<table>.
+    spec.mqtt_topic on spec.mqtt_broker and produces the RAW JSON body (byte[])
+    to mqtt.<source>.<table>. NO SMTs here — see _render_camel_http's docstring;
+    the medallion transform runs on the dedicated sink (render_camel_sink).
     Broker creds via DirectoryConfigProvider colon-form (mounted secret <source>).
 
     v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
@@ -732,7 +705,7 @@ def _render_camel_mqtt(spec: SourceSpec) -> dict:
         "camel.kamelet.mqtt-source.username": _cred(spec.source, "user"),
         "camel.kamelet.mqtt-source.password": _cred(spec.source, "pass"),
     }
-    config.update(_camel_medallion_config(spec, name))
+    config.update(_BYTE_CONVERTERS)
     return _connector(
         name,
         "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
@@ -743,8 +716,10 @@ def _render_camel_mqtt(spec: SourceSpec) -> dict:
 def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
     """stream+rabbitmq -> Camel `spring-rabbitmq-source` Kamelet KC source.
     Consumes spec.rabbitmq_queue on the broker parsed from spec.rabbitmq_uri and
-    produces JSON to amqp.<source>.<table>. The Kamelet requires exchangeName;
-    for a pure queue-consumer we pass the queue name and leave autoDeclare at its
+    produces the RAW JSON body (byte[]) to amqp.<source>.<table>. NO SMTs here —
+    see _render_camel_http's docstring; the medallion transform runs on the
+    dedicated sink (render_camel_sink). The Kamelet requires exchangeName; for a
+    pure queue-consumer we pass the queue name and leave autoDeclare at its
     default (false) — queue/exchange must pre-exist (live-verify, Task 6).
 
     v1: broker username/password are emitted unconditionally (DirectoryConfigProvider);
@@ -761,12 +736,23 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
         "camel.kamelet.spring-rabbitmq-source.username": _cred(spec.source, "user"),
         "camel.kamelet.spring-rabbitmq-source.password": _cred(spec.source, "pass"),
     }
-    config.update(_camel_medallion_config(spec, name))
+    config.update(_BYTE_CONVERTERS)
     return _connector(
         name,
         "org.apache.camel.kafkaconnector.springrabbitmqsource.CamelSpringrabbitmqsourceSourceConnector",
         config,
     )
+
+
+def render_camel_sink(spec: SourceSpec) -> dict:
+    """Dedicated Iceberg sink for a Camel lane: reads the source's topic, JSON-
+    deserializes to a Map, applies the medallion SMTs, routes to <ns>_raw.<tbl>.
+    DLQ under the source's topic prefix so the connect KafkaUser ACL covers it."""
+    topic = topic_name(spec)
+    src_name = render_connector(spec)["metadata"]["name"]
+    name = _k8s_name(src_name, "sink")
+    config = _iceberg_sink_config(name, topic, spec.target_ns, spec.target_table, f"{topic}.dlq")
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
 
 
 _RENDERERS = {
@@ -794,6 +780,25 @@ def render_connector(spec: SourceSpec) -> dict:
             f"render_connector: no KafkaConnector rendering for {descriptor.id} "
             f"(lane={descriptor.lane}); the spark-batch lane uses a Spark CronJob"
         )
+    return fn(spec)
+
+
+_SINK_RENDERERS = {
+    "camel-http": render_camel_sink,
+    "camel-mqtt": render_camel_sink,
+    "camel-rabbitmq": render_camel_sink,
+}
+
+
+def has_dedicated_sink(spec: SourceSpec) -> bool:
+    return source_types.get(spec.kind, spec.type).render_key in _SINK_RENDERERS
+
+
+def render_sink(spec: SourceSpec) -> dict:
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _SINK_RENDERERS.get(descriptor.render_key)
+    if fn is None:
+        raise NotImplementedError(f"no dedicated sink for {descriptor.id}")
     return fn(spec)
 
 

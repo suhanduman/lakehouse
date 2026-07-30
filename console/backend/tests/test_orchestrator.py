@@ -57,9 +57,18 @@ class FakeK8s:
     of connector `state` values get_status returns on successive polls
     (None => status not yet populated / pending); the last entry repeats if
     polled more times than the sequence length.
+
+    `status_states_by_name` (optional) gives a PER-NAME state sequence,
+    keyed by connector name — needed for Finding-2-style tests where the
+    source and the dedicated sink must report DIFFERENT states (e.g. source
+    RUNNING, sink FAILED). A name present in this dict polls its own
+    independent sequence/index; any other name falls back to the shared
+    `status_states` sequence (indexed by total `status_calls` length, as
+    before).
     """
 
-    def __init__(self, fail_on: Optional[str] = None, status_states=None):
+    def __init__(self, fail_on: Optional[str] = None, status_states=None,
+                 status_states_by_name: Optional[Dict[str, List[Any]]] = None):
         self.fail_on = fail_on
         self.calls: List[tuple] = []
         self.created_secrets: List[Any] = []
@@ -71,6 +80,10 @@ class FakeK8s:
         self.applied_spark_jobs: List[Dict[str, Any]] = []
         self.status_calls: List[str] = []
         self.status_states = list(status_states) if status_states is not None else ["RUNNING"]
+        self.status_states_by_name = (
+            {k: list(v) for k, v in status_states_by_name.items()} if status_states_by_name else {}
+        )
+        self._status_idx_by_name: Dict[str, int] = {}
 
     @staticmethod
     def _wrap(state):
@@ -115,6 +128,12 @@ class FakeK8s:
     def get_status(self, name):
         if self.fail_on == "verify":
             raise RuntimeError("verify boom")
+        if name in self.status_states_by_name:
+            states = self.status_states_by_name[name]
+            idx = min(self._status_idx_by_name.get(name, 0), len(states) - 1)
+            self._status_idx_by_name[name] = idx + 1
+            self.status_calls.append(name)
+            return self._wrap(states[idx])
         idx = min(len(self.status_calls), len(self.status_states) - 1)
         self.status_calls.append(name)
         return self._wrap(self.status_states[idx])
@@ -167,8 +186,9 @@ class FakeIcebergOrch:
         return [layer for (_ns, _table, _identifier, layer) in self.created]
 
 
-def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5) -> tuple:
-    k8s = FakeK8s(fail_on=fail_on, status_states=status_states)
+def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5,
+          status_states_by_name=None) -> tuple:
+    k8s = FakeK8s(fail_on=fail_on, status_states=status_states, status_states_by_name=status_states_by_name)
     s3 = FakeS3(fail_on=fail_on)
     trino = FakeTrino(fail_on=fail_on)
     # sleep is a no-op so the bounded-poll verify runs at zero delay in tests.
@@ -180,13 +200,15 @@ def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: in
     return orch, k8s, s3, trino
 
 
-def _orch_fakes(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5) -> tuple:
+def _orch_fakes(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5,
+                status_states_by_name=None) -> tuple:
     """Same as `_orch` but returns (orch, fakes-dict) — the shape the
     lane/disposition tests below want (`fakes["iceberg"]`, `fakes["k8s"]`, ...).
     No pytest fixture exists in this file (no conftest.py), so this is a plain
     helper, not an `orchestrator_fakes` fixture (adapting the brief's snippet,
     per the task instructions)."""
-    orch, k8s, s3, trino = _orch(fail_on=fail_on, status_states=status_states, verify_attempts=verify_attempts)
+    orch, k8s, s3, trino = _orch(fail_on=fail_on, status_states=status_states, verify_attempts=verify_attempts,
+                                  status_states_by_name=status_states_by_name)
     return orch, {"k8s": k8s, "s3": s3, "trino": trino, "iceberg": orch.iceberg}
 
 
@@ -780,7 +802,8 @@ def test_mqtt_event_creates_topic_and_bronze_no_secret_no_silver():
     names = [s.name for s in res.steps]
     assert "secret" not in names   # no creds supplied -> no secret step
     # Camel source DOES create its own topic (topic_key set) -- unlike stream/kafka.
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze"]   # event -> Bronze only, no Silver
 
 
@@ -804,6 +827,64 @@ def test_edit_spark_source_rerenders_and_applies():
     assert "--bucket" in applied["spec"]["template"]["arguments"]
 
 
+def test_camel_http_applies_source_and_dedicated_sink():
+    orch, fakes = _orch_fakes()
+    spec = _http_spec()
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    assert "connector" in names and "sink" in names
+    applied = [b["metadata"]["name"] for b in fakes["k8s"].applied_connectors]
+    assert "http-h1-prices" in applied and "http-h1-prices-sink" in applied
+
+
+def test_camel_sink_failed_state_fails_add_source_not_ok():
+    # Finding 2: for a Camel lane the dedicated SINK does the Bronze write,
+    # not the source. If verify only polled the source, a source that reaches
+    # RUNNING while its sink is stuck/FAILED would report ok=True with no data
+    # ever landing. Here the source is RUNNING (default fallback sequence) but
+    # the sink reports FAILED -- add_source must fail, not ok=True, and the
+    # sink (+ source + topic) must be rolled back.
+    sink_name = "http-h1-prices-sink"
+    orch, fakes = _orch_fakes(status_states_by_name={sink_name: ["FAILED"]})
+
+    res = orch.add_source(_http_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is False
+    verify_step = res.steps[-1]
+    assert verify_step.name == "verify" and verify_step.ok is False
+    assert sink_name in verify_step.detail and "FAILED" in verify_step.detail
+    # rollback: sink + source connector + topic all deleted (no creds -> no secret step).
+    assert sink_name in fakes["k8s"].deleted_connectors
+    assert "http-h1-prices" in fakes["k8s"].deleted_connectors
+    assert fakes["k8s"].deleted_topics
+
+
+def test_camel_lane_without_sink_stuck_behaves_as_before():
+    # Sanity check for the "keep existing behavior for lanes without a sink"
+    # requirement: a non-Camel lane (no dedicated sink -> ctx has no
+    # "sink_name") with the source itself FAILED still fails exactly as
+    # before this fix -- verify polls only the source.
+    orch, k8s, s3, trino = _orch(status_states=["FAILED"])
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is False
+    assert res.steps[-1].name == "verify" and res.steps[-1].ok is False
+    assert "FAILED" in res.steps[-1].detail
+
+
+def test_kafka_ingest_has_no_separate_sink_step():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert "sink" not in [s.name for s in res.steps]
+
+
 def test_http_entity_creates_topic_bronze_and_silver():
     orch, fakes = _orch_fakes()
     spec = _http_spec(
@@ -816,5 +897,6 @@ def test_http_entity_creates_topic_bronze_and_silver():
 
     assert res.ok is True
     names = [s.name for s in res.steps]
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "verify"]
+    # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
+    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
