@@ -123,21 +123,34 @@ jobs:
           # Build args default to the exact versions pinned in
           # chart/values.yaml's `versions:` block already (see that
           # Dockerfile's own ARG defaults) -- no override needed here.
+          # `context` is the Docker build context per image. The images/*
+          # Dockerfiles COPY paths relative to the repo root, so they build
+          # with context `.`. The console Dockerfiles COPY paths relative to
+          # their OWN dir (e.g. `COPY requirements.txt .`, `COPY app ./app`,
+          # `COPY . .`), so each needs its own dir as context — otherwise the
+          # COPYs resolve against the repo root and fail "not found".
+          # `file:` stays a repo-root-relative path (buildx --file resolves
+          # from the workspace, not the context).
           - name: connect
             dockerfile: images/connect/Dockerfile
             image: connect-lakehouse
+            context: .
           - name: iceberg-tools
             dockerfile: images/iceberg-tools/Dockerfile
             image: iceberg-tools
+            context: .
           - name: spark-py
             dockerfile: images/spark-py/Dockerfile
             image: spark-py
+            context: .
           - name: console-backend
             dockerfile: console/backend/Dockerfile
             image: console-backend
+            context: console/backend
           - name: console-frontend
             dockerfile: console/frontend/Dockerfile
             image: console-frontend
+            context: console/frontend
     steps:
       - uses: actions/checkout@v5
 
@@ -154,7 +167,7 @@ jobs:
       - name: Build (push only on a real, non-dry-run release)
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: ${{ needs.version.outputs.publish == 'true' }}
           tags: |
