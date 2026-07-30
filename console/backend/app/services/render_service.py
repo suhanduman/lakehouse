@@ -822,8 +822,24 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str)
     ScheduledSparkApplication shape (05-spark-operator.yaml)."""
     name = _k8s_name("s3-register", spec.source, spec.target_table)
     target = f"rawlake.{spec.target_ns}.{spec.target_table}"
-    envfrom = [{"secretRef": {"name": s3_secret_name}}]
-    mounts = [{"name": "spark-conf", "mountPath": "/opt/spark/conf"}]
+    aws_keys = [("AWS_ACCESS_KEY_ID", "access-key-id"),
+                ("AWS_SECRET_ACCESS_KEY", "secret-access-key"),
+                ("AWS_ENDPOINT_URL_S3", "endpoint"),
+                ("AWS_REGION", "region")]
+    env = [{"name": n, "valueFrom": {"secretKeyRef": {"name": s3_secret_name, "key": k}}}
+           for n, k in aws_keys] + [{"name": "HOME", "value": "/tmp"}]
+    spark_conf = {
+        "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        "spark.sql.catalog.rawlake": "org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.rawlake.catalog-impl": "org.apache.iceberg.rest.RESTCatalog",
+        "spark.sql.catalog.rawlake.uri": NESSIE_URI,
+        "spark.sql.catalog.rawlake.warehouse": "rawdata",
+        "spark.sql.catalog.rawlake.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+        "spark.hadoop.fs.s3a.path.style.access": "true",
+        "spark.hadoop.fs.s3a.aws.credentials.provider":
+            "com.amazonaws.auth.EnvironmentVariableCredentialsProvider",
+        "spark.jars.ivy": "/tmp/.ivy2",
+    }
     return {
         "apiVersion": "sparkoperator.k8s.io/v1beta2",
         "kind": "ScheduledSparkApplication",
@@ -851,11 +867,11 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str)
                 "arguments": ["--bucket", spec.s3_bucket, "--prefix", spec.s3_prefix,
                               "--format", spec.file_format, "--target", target],
                 "restartPolicy": {"type": "Never"},
-                "driver": {"cores": 1, "memory": "1g", "serviceAccount": "spark-driver",
-                           "envFrom": envfrom, "volumeMounts": mounts},
-                "executor": {"cores": 1, "instances": 1, "memory": "1g",
-                             "envFrom": envfrom, "volumeMounts": mounts},
-                "volumes": [{"name": "spark-conf", "configMap": {"name": "spark-defaults"}}],
+                "sparkConf": spark_conf,
+                "driver": {"cores": 1, "coreLimit": "1200m", "memory": "1g",
+                           "serviceAccount": "spark-driver", "env": env},
+                "executor": {"cores": 1, "coreLimit": "1200m", "instances": 1,
+                             "memory": "1g", "env": env},
             },
         },
     }

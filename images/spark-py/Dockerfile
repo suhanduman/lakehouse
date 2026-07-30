@@ -13,19 +13,25 @@
 # `SELECT * FROM avro.\`...\`` full-refresh CTAS path (parquet/json are
 # built into Spark, Avro is not).
 #
+# AWS SDK v2 is baked via `org.apache.iceberg:iceberg-aws-bundle`
+# (version-matched to iceberg-spark-runtime), NOT a standalone
+# `software.amazon.awssdk:bundle` coordinate. A standalone AWS SDK bundle
+# resolves its own (newer) SDK v2 version, which skews against the SDK v2
+# version iceberg-aws was compiled against and breaks S3FileIO writes at
+# runtime with `NoSuchMethodError: ...IoUtils.closeQuietly(...)`.
+# iceberg-aws-bundle ships the exact SDK v2 classes iceberg-aws expects.
+#
 # All versions MUST match chart .Values.versions.* (single source of truth).
 # Build (from repo root):
 #   docker build -f images/spark-py/Dockerfile \
 #     --build-arg SPARK_VERSION=3.5.1 \
-#     --build-arg ICEBERG_SPARK_RUNTIME=1.5.2 \
-#     --build-arg AWS_SDK_BUNDLE=<versions.awsSdkBundle> \
+#     --build-arg ICEBERG_SPARK_RUNTIME=1.9.0 \
 #     --build-arg HADOOP_AWS=<versions.hadoopAws> \
 #     -t <registry>/spark-py:1.0 .
 ARG SPARK_VERSION=3.5.1
 FROM apache/spark:${SPARK_VERSION}-scala2.12-java17-python3-ubuntu
 ARG SPARK_VERSION
-ARG ICEBERG_SPARK_RUNTIME=1.5.2
-ARG AWS_SDK_BUNDLE=2.25.11
+ARG ICEBERG_SPARK_RUNTIME=1.9.0
 ARG HADOOP_AWS=3.3.4
 USER root
 
@@ -38,8 +44,7 @@ USER root
 # never again pass silently.
 RUN set -eux; \
     PKGS="org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:${ICEBERG_SPARK_RUNTIME},\
-software.amazon.awssdk:bundle:${AWS_SDK_BUNDLE},\
-software.amazon.awssdk:url-connection-client:${AWS_SDK_BUNDLE},\
+org.apache.iceberg:iceberg-aws-bundle:${ICEBERG_SPARK_RUNTIME},\
 org.apache.spark:spark-sql-kafka-0-10_2.12:${SPARK_VERSION},\
 org.apache.spark:spark-avro_2.12:${SPARK_VERSION},\
 org.apache.hadoop:hadoop-aws:${HADOOP_AWS}"; \
@@ -49,6 +54,8 @@ org.apache.hadoop:hadoop-aws:${HADOOP_AWS}"; \
     find /tmp/.ivy -name '*.jar' -exec cp -n {} "$SPARK_HOME/jars/" \; ; \
     test -n "$(find "$SPARK_HOME/jars" -name 'iceberg-spark-runtime*')" \
       || { echo "ERROR: dependency bake resolved no jars" >&2; exit 1; }; \
+    test -n "$(find "$SPARK_HOME/jars" -name 'iceberg-aws-bundle*')" \
+      || { echo "ERROR: iceberg-aws-bundle not baked" >&2; exit 1; }; \
     rm -rf /tmp/.ivy /tmp/bake.py
 
 # Job code baked (local:// path the chart references). Kept in the image (not a

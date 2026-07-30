@@ -231,7 +231,7 @@ Dockerfile yazıp elle build/push yok, `pip install` yok.
   `pushSecret: connect-build-push-secret`.
 - `build.plugins`: `debezium-sqlserver` + `debezium-mongodb` (2.7.3.Final),
   `aiven-jdbc` (6.10.0 + mssql-jdbc 12.8.1 + postgresql 42.7.4 jar'ları),
-  `iceberg-sink` (iceberg-kafka-connect-runtime 1.6.1), `apicurio-avro-converter`
+  `iceberg-sink` (iceberg-kafka-connect-runtime 1.9.0), `apicurio-avro-converter`
   (2.6.5.Final).
 - `externalConfiguration.volumes`: `mssql`, `mongo`, `s3` (secret adları
   `mssql`/`mongo`/`s3-credentials`) → connector'lar bunları

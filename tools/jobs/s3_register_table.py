@@ -24,6 +24,17 @@ def build_ctas_sql(target: str, fmt: str, bucket: str, prefix: str) -> str:
             f"SELECT * FROM {fmt}.`s3a://{bucket}/{prefix}`")
 
 
+def s3a_conf_from_env(env):
+    """hadoop `fs.s3a.*` entries for the READ path, from the injected S3 env.
+    The s3a client (hadoop-aws, AWS SDK v1) does NOT read `AWS_ENDPOINT_URL_S3`
+    itself (that's SDK v2 / Iceberg S3FileIO), so the endpoint must be set on
+    the hadoop config explicitly. Empty when no endpoint is present."""
+    endpoint = env.get("AWS_ENDPOINT_URL_S3")
+    if not endpoint:
+        return {}
+    return {"fs.s3a.endpoint": endpoint, "fs.s3a.path.style.access": "true"}
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Register S3 files as an Iceberg table (full-refresh).")
     for a in ("bucket", "prefix", "format", "target"):
@@ -36,6 +47,10 @@ def main() -> int:
     args = parse_args()
     spark = SparkSession.builder.appName(f"s3-register-{args.target}").getOrCreate()
     try:
+        import os
+        hadoop_conf = spark._jsc.hadoopConfiguration()
+        for k, v in s3a_conf_from_env(os.environ).items():
+            hadoop_conf.set(k, v)
         spark.sql(build_namespace_sql(args.target))
         spark.sql(build_ctas_sql(args.target, args.format, args.bucket, args.prefix))
         n = spark.sql(f"SELECT count(*) c FROM {args.target}").collect()[0]["c"]

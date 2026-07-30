@@ -284,3 +284,30 @@ Usage:
 {{- define "lakehouse.s3BucketFromUri" -}}
 {{- . | trimPrefix "s3://" | splitList "/" | first -}}
 {{- end -}}
+
+{{- /* Base Spark config for all first-party spark jobs (was spark-defaults.conf,
+       retired: spark-operator v2.x owns /opt/spark/conf). Emit under sparkConf. */ -}}
+{{- define "lakehouse.spark.baseConf" -}}
+spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+spark.jars.ivy: "/tmp/.ivy2"
+spark.hadoop.fs.s3a.path.style.access: "true"
+spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
+spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
+spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+spark.sql.catalog.lakehouse.uri: "http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/"
+spark.sql.catalog.lakehouse.warehouse: "{{ .Values.nessie.catalog.warehouse.location }}"
+spark.sql.catalog.lakehouse.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+spark.sql.catalog.rawlake: "org.apache.iceberg.spark.SparkCatalog"
+spark.sql.catalog.rawlake.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
+spark.sql.catalog.rawlake.uri: "http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/"
+spark.sql.catalog.rawlake.warehouse: "rawdata"
+spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+{{- end -}}
+{{- /* AWS creds env: map the S3 secret's dash-keys to AWS SDK env names +HOME. */ -}}
+{{- define "lakehouse.spark.awsEnv" -}}
+- {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+- {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+- {name: AWS_ENDPOINT_URL_S3,   valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+- {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
+- {name: HOME, value: /tmp}
+{{- end -}}

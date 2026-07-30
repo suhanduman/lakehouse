@@ -538,8 +538,8 @@ versions:
   # Spark minor release (parity hardening, same convention as
   # `cnpgPostgresImage` above).
   sparkVersion: "3.5.1"
-  icebergSparkRuntime: "1.5.2"      # org.apache.iceberg:iceberg-spark-runtime-3.5_2.12
-  awsSdkBundle: "2.25.11"           # software.amazon.awssdk:bundle + :url-connection-client
+  icebergSparkRuntime: "1.9.0"      # org.apache.iceberg:iceberg-spark-runtime-3.5_2.12
+                                    # AND :iceberg-aws-bundle (version-matched S3FileIO AWS SDK v2)
   hadoopAws: "3.3.4"                # org.apache.hadoop:hadoop-aws
   # chart/templates/12-kafka-connect.yaml: custom Connect image tag + the
   # `spec.build.plugins` version pins (single source per plugin, so an
@@ -549,7 +549,8 @@ versions:
   aivenJdbc: "6.10.0"               # Aiven JDBC source connector
   mssqlJdbc: "12.8.1.jre11"         # com.microsoft.sqlserver:mssql-jdbc (bundled into the aiven-jdbc plugin dir)
   postgresqlJdbc: "42.7.4"          # org.postgresql:postgresql (bundled into the aiven-jdbc plugin dir)
-  icebergKafkaConnect: "1.6.1"      # org.apache.iceberg:iceberg-kafka-connect-runtime (sink plugin)
+  icebergKafkaConnect: "1.9.0"      # org.apache.iceberg:iceberg-kafka-connect-runtime (sink plugin;
+                                    # aligned to icebergSparkRuntime above — single Iceberg version everywhere)
   apicurioConverter: "2.6.5"        # io.apicurio apicurio-registry-distro-connect-converter (".Final" suffix appended in template)
   # Apache Camel Kafka Connector source-connector pin (http-source /
   # mqtt-source / spring-rabbitmq-source), baked into the connect image

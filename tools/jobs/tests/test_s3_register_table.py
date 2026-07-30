@@ -1,5 +1,17 @@
 import pytest
 from tools.jobs.s3_register_table import build_ctas_sql, build_namespace_sql, VALID_FORMATS
+from tools.jobs.s3_register_table import s3a_conf_from_env
+
+
+def test_s3a_conf_from_env_sets_endpoint_and_path_style():
+    assert s3a_conf_from_env({"AWS_ENDPOINT_URL_S3": "http://minio:9000"}) == {
+        "fs.s3a.endpoint": "http://minio:9000",
+        "fs.s3a.path.style.access": "true",
+    }
+
+
+def test_s3a_conf_from_env_empty_when_no_endpoint():
+    assert s3a_conf_from_env({}) == {}
 
 
 def test_build_ctas_sql_parquet():
