@@ -25,13 +25,13 @@
 # Build (from repo root):
 #   docker build -f images/spark-py/Dockerfile \
 #     --build-arg SPARK_VERSION=3.5.1 \
-#     --build-arg ICEBERG_SPARK_RUNTIME=1.5.2 \
+#     --build-arg ICEBERG_SPARK_RUNTIME=1.11.0 \
 #     --build-arg HADOOP_AWS=<versions.hadoopAws> \
 #     -t <registry>/spark-py:1.0 .
 ARG SPARK_VERSION=3.5.1
 FROM apache/spark:${SPARK_VERSION}-scala2.12-java17-python3-ubuntu
 ARG SPARK_VERSION
-ARG ICEBERG_SPARK_RUNTIME=1.5.2
+ARG ICEBERG_SPARK_RUNTIME=1.11.0
 ARG HADOOP_AWS=3.3.4
 USER root
 

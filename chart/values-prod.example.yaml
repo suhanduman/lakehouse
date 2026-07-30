@@ -161,14 +161,14 @@ versions:
   trinoImage: trinodb/trino:439
   sparkImageTag: "1.0"
   sparkVersion: "3.5.1"
-  icebergSparkRuntime: "1.5.2"
+  icebergSparkRuntime: "1.11.0"
   hadoopAws: "3.3.4"
   connectImageTag: "1.0"
   debezium: "2.7.3"
   aivenJdbc: "6.10.0"
   mssqlJdbc: "12.8.1.jre11"
   postgresqlJdbc: "42.7.4"
-  icebergKafkaConnect: "1.6.1"
+  icebergKafkaConnect: "1.11.0"
   apicurioConverter: "2.6.5"
   zeppelinImage: registry.apps.ocp.example.com/lakehouse/zeppelin:1.0
   keycloakImage: ""
