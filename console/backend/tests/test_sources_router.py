@@ -19,10 +19,12 @@ from app.deps import (
     get_trino,
     get_roles,
 )
+from app.config import settings
 from app.main import app
 from app.orchestrator import AddSourceResult, StepResult
 from app.services import render_service
 from app.services.authz import Role
+from app.services.git_writer import CommitResult
 
 VALID_SPEC = {
     "source": "mssql1",
@@ -138,10 +140,11 @@ class FakeTrino:
 
 
 class FakeOrchestrator:
-    def __init__(self, ok: bool = True):
+    def __init__(self, ok: bool = True, git_writer: Any = None):
         self.ok = ok
         self.calls: List[tuple] = []
         self.edit_spark_calls: List[Any] = []
+        self.git_writer = git_writer
 
     def add_source(self, spec, creds):
         self.calls.append((spec, creds))
@@ -153,6 +156,19 @@ class FakeOrchestrator:
     def edit_spark_source(self, spec):
         self.edit_spark_calls.append(spec)
         return {"ok": True}
+
+
+class _FakeGitWriter:
+    """Stand-in for app.services.git_writer.GitWriter -- records the `source`
+    argument remove_source was actually called with (gitops delete routing,
+    see test_delete_gitops_* below)."""
+
+    def __init__(self):
+        self.removed: List[str] = []
+
+    def remove_source(self, source):
+        self.removed.append(source)
+        return CommitResult(committed=True, ref="cafef00d")
 
 
 class ExplodingProvider:
@@ -643,6 +659,99 @@ def test_delete_missing_source_is_404_for_admin():
     assert r.status_code == 404
     assert k8s.deleted_connectors == []
     assert trino.dropped == [] and s3.emptied == []
+
+
+# --------------------------------------------------------------------------
+# gitops delete_source (Task 4 fix): remove_source must be called with the
+# BARE spec.source recovered from the CR's `lakehouse.solus.dev/source`
+# round-trip annotation -- NEVER the composite CR name -- and must fail loud
+# (409), not silently no-op, if that annotation is missing.
+# --------------------------------------------------------------------------
+
+def test_delete_gitops_mode_commits_removal_of_bare_source(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    cr = {
+        "metadata": {
+            "name": "dbz-pgdemo-customers",
+            "annotations": {"lakehouse.solus.dev/source": "pgdemo"},
+        },
+        "spec": {"class": "io.debezium.connector.postgresql.PostgresConnector", "config": {}},
+    }
+    k8s, s3, trino = FakeK8s(sources=[cr]), FakeS3(), FakeTrino()
+    git_writer = _FakeGitWriter()
+    orch = FakeOrchestrator(git_writer=git_writer)
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino, orchestrator=orch)
+
+    r = client.delete("/api/sources/dbz-pgdemo-customers?mode=pipeline_only")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"ok": True, "name": "dbz-pgdemo-customers", "mode": "pipeline_only", "ref": "cafef00d"}
+    # the BARE source id ("pgdemo"), never the composite CR name, must be
+    # what GitWriter.remove_source deletes from the pipelines repo.
+    assert git_writer.removed == ["pgdemo"]
+    # gitops mode never calls the direct connector/topic teardown.
+    assert k8s.deleted_connectors == []
+    assert k8s.deleted_topics == []
+    assert trino.dropped == [] and s3.emptied == []
+
+
+def test_delete_gitops_mode_missing_annotation_fails_loud(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    cr = {  # no `lakehouse.solus.dev/source` annotation -- e.g. hand-applied or legacy CR
+        "metadata": {"name": "dbz-legacy-orders"},
+        "spec": {"class": "io.debezium.connector.postgresql.PostgresConnector", "config": {}},
+    }
+    k8s, s3, trino = FakeK8s(sources=[cr]), FakeS3(), FakeTrino()
+    git_writer = _FakeGitWriter()
+    orch = FakeOrchestrator(git_writer=git_writer)
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino, orchestrator=orch)
+
+    r = client.delete("/api/sources/dbz-legacy-orders?mode=pipeline_only")
+
+    assert r.status_code == 409
+    assert "annotation" in r.json()["detail"]
+    # fail-loud, not a silent no-op: remove_source must never have been called.
+    assert git_writer.removed == []
+
+
+def test_delete_gitops_mode_with_data_still_drops_table_and_bucket(monkeypatch):
+    # with_data (drop table/bucket) is a data-plane action, separate from the
+    # GitOps-managed connector/topic teardown -- it must still run in gitops
+    # mode, exactly as it does in direct mode.
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    cr = {
+        "metadata": {
+            "name": "dbz-pgdemo-customers",
+            "annotations": {"lakehouse.solus.dev/source": "pgdemo"},
+        },
+        "spec": {
+            "class": "io.debezium.connector.postgresql.PostgresConnector",
+            "config": {
+                "topic.prefix": "cdc.pgdemo",
+                "table.include.list": "public.customers",
+                "transforms.route.static.value": "depo_raw.customers",
+            },
+        },
+    }
+    k8s, s3, trino = FakeK8s(sources=[cr]), FakeS3(), FakeTrino()
+    git_writer = _FakeGitWriter()
+    orch = FakeOrchestrator(git_writer=git_writer)
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino, orchestrator=orch)
+
+    r = client.delete("/api/sources/dbz-pgdemo-customers?mode=with_data")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ref"] == "cafef00d"
+    assert body["dropped_table"] == "lakehouse.depo.customers"
+    assert body["emptied_bucket"] == render_service.bucket_name("depo")
+    assert body["deleted_topic"] == "cdc.pgdemo.public.customers"
+    assert git_writer.removed == ["pgdemo"]
+    assert trino.dropped == ["lakehouse.depo.customers"]
+    assert s3.emptied == [render_service.bucket_name("depo")]
+    assert k8s.deleted_connectors == []   # no direct connector delete in gitops mode
+    assert k8s.deleted_topics == []       # no direct topic delete in gitops mode
 
 
 # --------------------------------------------------------------------------

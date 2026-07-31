@@ -365,19 +365,39 @@ def delete_source(
     (`orchestrator.git_writer.remove_source`) that removes the source's
     manifests from the pipelines repo -- ArgoCD prunes the live CRs on sync,
     Console itself never calls `k8s.delete_connector`/`delete_topic`/
-    `delete_spark_job` in this mode. `with_data` (dropping the Iceberg table /
-    emptying the bucket) is a data-plane action, not a GitOps-managed one, so
-    it stays a separate, explicit destructive call regardless of deploy_mode
-    -- it still runs here exactly as in direct mode, against the CR's
-    round-tripped ns/table (the CR itself is expected to already be present
-    in the cluster via ArgoCD's earlier sync from git).
+    `delete_spark_job` in this mode. `GitWriter.remove_source` keys off the
+    BARE logical `spec.source` (the git directory name, e.g. "pgdemo") --
+    NEVER the CR's `metadata.name` (a composite, e.g. "dbz-pgdemo-customers",
+    via `render_service._k8s_name(prefix, source, table)`), so `spec.source`
+    is recovered from the CR's own `{_SPARK_ANN}source` round-trip annotation
+    (stamped on every rendered connector/sink/spark CR by render_service --
+    see `render_service._connector`/`render_spark_job`). Missing annotation
+    (e.g. a CR pre-dating this annotation, or applied by hand) -> fail loud
+    (409), never a silent no-op that looks like a successful delete while
+    leaving the source's manifests untouched in git.
+    `with_data` (dropping the Iceberg table / emptying the bucket) is a
+    data-plane action, not a GitOps-managed one, so it stays a separate,
+    explicit destructive call regardless of deploy_mode -- it still runs here
+    exactly as in direct mode, against the CR's round-tripped ns/table (the CR
+    itself is expected to already be present in the cluster via ArgoCD's
+    earlier sync from git).
     """
     if settings.deploy_mode == "gitops":
-        commit = orchestrator.git_writer.remove_source(name)
+        cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
+        source = ((cr.get("metadata") or {}).get("annotations") or {}).get(f"{_SPARK_ANN}source")
+        if not source:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"cannot resolve logical source id for {name!r} -- CR is missing the "
+                    f"'{_SPARK_ANN}source' annotation; refusing gitops delete (would silently "
+                    "remove nothing from the pipelines repo)"
+                ),
+            )
+        commit = orchestrator.git_writer.remove_source(source)
         result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
         if mode != "with_data":
             return result
-        cr = _find_source(k8s, name)
         if _kind_of(cr) == "ScheduledSparkApplication":
             ns, table = _spark_target(cr)
             fqn = f"rawlake.{ns}.{table}"

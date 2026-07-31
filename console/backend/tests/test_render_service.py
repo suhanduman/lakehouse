@@ -687,6 +687,28 @@ def test_camel_sinks_have_dlq_and_route():
 
 
 # --------------------------------------------------------------------------
+# `lakehouse.solus.dev/source` round-trip annotation (gitops Task 4 fix):
+# every rendered KafkaConnector -- both the source connector AND a dedicated
+# Camel sink -- carries the logical spec.source, because the CR's own
+# metadata.name is a composite (_k8s_name(prefix, source, table)) and never
+# equal to the bare source id. Without this, gitops delete routing
+# (routers.sources.delete_source) has no way to recover spec.source from an
+# arbitrary connector/sink CR to key GitWriter.remove_source correctly.
+# --------------------------------------------------------------------------
+
+def test_render_connector_carries_source_annotation():
+    for spec in (_cdc_mssql(), _cdc_pg(), _cdc_mongo(), _scheduled_mssql(), _mysql(), _http(), _mqtt(), _rabbitmq()):
+        body = r.render_connector(spec)
+        assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == spec.source
+
+
+def test_render_camel_sink_carries_source_annotation():
+    for spec in (_http(), _mqtt(), _rabbitmq()):
+        body = r.render_camel_sink(spec)
+        assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == spec.source
+
+
+# --------------------------------------------------------------------------
 # RFC1123-safe CR names (_k8s_name / _k8s_topic_name) — Task 1
 # --------------------------------------------------------------------------
 
