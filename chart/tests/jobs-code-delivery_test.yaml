@@ -10,6 +10,7 @@ suite: s3a job-code delivery — values + baseConf endpoint + bucket-init
 templates:
   - 05-spark-operator.yaml
   - 18-bucket-init.yaml
+  - 19-jobs-seed.yaml
 tests:
   - it: "storage.s3.endpoint set -> merge_cdc sparkConf carries spark.hadoop.fs.s3a.endpoint"
     template: templates/05-spark-operator.yaml
@@ -33,3 +34,25 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "mc mb --ignore-existing s3/spark-jobs"
+
+  - it: "seedJobs=false renders no jobs-seed Job"
+    template: templates/19-jobs-seed.yaml
+    set: {storage.seedJobs: false}
+    asserts:
+      - hasDocuments: {count: 0}
+
+  - it: "default renders the jobs-seed Job: spark-py initContainer copies code, mc container uploads to the jobs bucket, dual hooks"
+    template: templates/19-jobs-seed.yaml
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: "metadata.annotations[\"helm.sh/hook\"]", value: "post-install,post-upgrade"}
+      - equal: {path: "metadata.annotations[\"argocd.argoproj.io/hook\"]", value: "PostSync"}
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].image
+          pattern: "spark-py:"
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "quay.io/minio/mc:RELEASE.2024-01-13T08-44-48Z"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc cp /seed/.*s3/spark-jobs/jobs/"
