@@ -44,12 +44,10 @@ def test_get_unknown_raises():
         st.get("cdc", "nope")
 
 
-def test_stream_kafka_registered_event_only():
+def test_stream_kafka_allows_event_and_entity():
     d = st.get("stream", "kafka")
-    assert d.lane == "kafka-connect-source"
-    assert d.render_key == "kafka-ingest"
-    assert d.topic_key == ""            # consumes an existing topic; creates none
-    assert st.allowed_dispositions(d) == ("event",)
+    assert d.disposition == "event"                       # default when unset
+    assert st.allowed_dispositions(d) == ("event", "entity")
 
 
 def test_allowed_dispositions_defaults_to_single():

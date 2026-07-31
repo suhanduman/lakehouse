@@ -46,6 +46,12 @@ class SourceSpec(BaseModel):
     poll_ms: Optional[int] = None
     cron: Optional[str] = None
     disposition: Optional[Literal["entity", "event"]] = None
+    # existing-Kafka entity/upsert: name of an upstream BOOLEAN field whose
+    # value is the per-record delete flag. When set (entity only), the sink
+    # renames it to __deleted so the Bronze->Silver MERGE can DELETE. Must be
+    # present on every record and NOT listed in `columns` (it is consumed as
+    # the __deleted metadata column). Unset => upsert-only (no deletes).
+    delete_field: Optional[str] = None
     kafka_bootstrap: Optional[str] = None   # existing-Kafka: external brokers (None => in-cluster)
 
     # batch/s3: platform's own S3 file-set registered as an Iceberg table via a

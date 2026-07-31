@@ -364,7 +364,7 @@ def test_get_source_types_lists_registry(client):
     assert {"cdc-pg", "cdc-mysql", "stream-kafka"} <= ids
     kafka = next(t for t in body["types"] if t["id"] == "stream-kafka")
     assert kafka["lane"] == "kafka-connect-source"
-    assert kafka["dispositions"] == ["event"]
+    assert kafka["dispositions"] == ["event", "entity"]
     assert kafka["needs_bootstrap"] is True
 
 
