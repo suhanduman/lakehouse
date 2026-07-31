@@ -1,0 +1,99 @@
+# chart/tests/console_test.yaml — helm-unittest suite for
+# 2026-07-30-gitops-core-slice-a-write-path Task 5: `console.deployMode` +
+# `console.gitops.*` wiring into the backend ConfigMap (env names the
+# backend — Task 1 — reads: DEPLOY_MODE/GITOPS_REPO_URL/GITOPS_BRANCH/
+# GITOPS_PATH/GITOPS_CREDENTIAL_SECRET) and into the backend Deployment's
+# credential mount (the backend — Task 4 — reads the git SSH key from a
+# file at /var/run/gitops/ssh-privatekey, +optional known_hosts — hence a
+# volume/volumeMount, not env vars, for the credential itself).
+#
+# documentSelector notes (chart/templates/console/console.yaml renders many
+# documents from one file):
+#   - `{path: kind, value: ConfigMap}` is unique — only one ConfigMap here.
+#   - `{path: kind, value: Deployment}` is NOT unique (backend + frontend
+#     Deployments both render) and `{path: metadata.name, value:
+#     console-backend}` is ALSO not unique (the backend Service shares that
+#     exact name — see the file's own header comment on why). Selecting on
+#     `spec.template.spec.containers[0].name == console-backend` sidesteps
+#     both collisions: only the backend Deployment has that path/value pair
+#     (the frontend Deployment's container is named console-frontend; the
+#     Service has no spec.template at all, so the path just doesn't match —
+#     not an error, per helm-unittest's yamlpath semantics).
+suite: console deployMode + gitops config/credential wiring
+templates:
+  - templates/console/console.yaml
+tests:
+  - it: "default (deployMode=direct, unset): ConfigMap carries DEPLOY_MODE=direct + the gitops.* defaults, and the backend Deployment has NO gitops-credential volume/mount (control case)"
+    asserts:
+      - equal:
+          path: data.DEPLOY_MODE
+          value: "direct"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: ""
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.GITOPS_BRANCH
+          value: "main"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.GITOPS_PATH
+          value: "pipelines"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.GITOPS_CREDENTIAL_SECRET
+          value: "gitops-credential"
+        documentSelector: {path: kind, value: ConfigMap}
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: gitops-credential
+        documentSelector: {path: "spec.template.spec.containers[0].name", value: console-backend}
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: gitops-credential
+        documentSelector: {path: "spec.template.spec.containers[0].name", value: console-backend}
+
+  - it: "deployMode=gitops + repoUrl set: ConfigMap reflects the override, backend Deployment mounts the gitops-credential Secret at /var/run/gitops (ssh-privatekey + optional known_hosts)"
+    set:
+      console.deployMode: gitops
+      console.gitops.repoUrl: ssh://x
+    asserts:
+      - equal:
+          path: data.DEPLOY_MODE
+          value: "gitops"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: "ssh://x"
+        documentSelector: {path: kind, value: ConfigMap}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: gitops-credential
+            secret:
+              secretName: gitops-credential
+              defaultMode: 256
+              items:
+                - key: ssh-privatekey
+                  path: ssh-privatekey
+                - key: known_hosts
+                  path: known_hosts
+                  optional: true
+        documentSelector: {path: "spec.template.spec.containers[0].name", value: console-backend}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: gitops-credential
+            mountPath: /var/run/gitops
+            readOnly: true
+        documentSelector: {path: "spec.template.spec.containers[0].name", value: console-backend}
+
+  - it: "deployMode=gitops with empty repoUrl fails the render loudly (required() guard, mirrors oidc.secretName's fail-loud pattern)"
+    set:
+      console.deployMode: gitops
+    asserts:
+      - failedTemplate:
+          errorMessage: "console.gitops.repoUrl is required when deployMode=gitops"

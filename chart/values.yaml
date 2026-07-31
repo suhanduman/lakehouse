@@ -1263,6 +1263,37 @@ console:
     # issuer-URL source of truth (must match `keycloak.realm.name`
     # = `lakehouse`).
     audience: lakehouse-console
+  # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5).
+  # `deployMode` selects the backend's write path for generated
+  # connector/job artifacts (console/backend/app/config.py `deploy_mode`,
+  # env `DEPLOY_MODE`):
+  #   direct (DEFAULT): backend applies CRs straight to the k8s API (today's
+  #     behavior, unchanged) — no repo, no credential needed.
+  #   gitops: backend instead commits rendered manifests to a git repo
+  #     (`gitops.repoUrl`/`branch`/`path`) for an external reconciler
+  #     (Argo CD/Flux) to apply. Requires `gitops.repoUrl` to be set — the
+  #     Deployment template `required()`-guards this at render time (mirrors
+  #     `oidc.secretName`'s fail-loud pattern in 06-trino-ha.yaml/
+  #     04-nessie-ha.yaml) so a misconfigured `gitops` install fails loudly
+  #     at `helm install/upgrade`, not silently at backend runtime.
+  deployMode: direct
+  gitops:
+    # ssh://git@host/org/pipelines.git (or an in-cluster Gitea/Gitness
+    # instance). Empty by default (direct mode needs no repo); REQUIRED when
+    # `deployMode: gitops` (see comment above).
+    repoUrl: ""
+    branch: main
+    path: pipelines
+    # k8s Secret name providing the git credential — mounted read-only at
+    # /var/run/gitops on console-backend (keys `ssh-privatekey` +
+    # optional `known_hosts`), matching the deploy-key path the backend
+    # reads (console/backend/app/services/gitops_service.py, Task 4). Same
+    # "name reference only" convention as `storage.s3.secretName`/
+    # `oidc.secretName` — the Secret's own material is provisioned
+    # out-of-band per `.Values.secrets.mode`, never defined in this chart.
+    # Only actually consumed (volume + mount rendered) when
+    # `deployMode: gitops`.
+    credentialSecret: gitops-credential
   networkPolicy:
     # S3 endpoint CIDR/IP block (egress allow-list) — same plain
     # `{{TOKEN}}` placeholder convention as `postgres.nessie.backup.endpointURL`
