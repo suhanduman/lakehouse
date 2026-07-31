@@ -34,17 +34,32 @@ class GitWriter:
         self.credential = credential
         self._lock = threading.Lock()   # serialize pushes (single-flight)
         self._askpass_path: Optional[str] = None
+        self._token_path: Optional[str] = None
 
     def _make_askpass_script(self, token: str) -> str:
         """Write a temp GIT_ASKPASS helper that hands `token` to git out-of-band
-        (never on the command line, never in the remote URL, never logged)."""
+        (never on the command line, never in the remote URL, never logged).
+
+        The token is NEVER interpolated into shell source -- doing so would let
+        a token containing `"`, backtick, `$()`, or `\\` break out and execute
+        arbitrary shell. Instead the raw token bytes go into their own 0600 temp
+        file, and the (non-attacker-controlled, mkstemp-generated) file PATH is
+        the only thing interpolated into the script; the script just `cat`s it.
+        """
+        tfd, tpath = tempfile.mkstemp(prefix="gitops-token-")
+        with os.fdopen(tfd, "w") as fh:
+            fh.write(token)
+        os.chmod(tpath, 0o600)
+        self._token_path = tpath
+
         fd, path = tempfile.mkstemp(prefix="gitops-askpass-")
         with os.fdopen(fd, "w") as fh:
             fh.write("#!/bin/sh\n")
-            fh.write("# GIT_ASKPASS helper -- supplies the HTTPS token as the password.\n")
+            fh.write("# GIT_ASKPASS helper -- prints the HTTPS token read verbatim from a\n")
+            fh.write("# separate file; the token itself never appears in this script's source.\n")
             fh.write('case "$1" in\n')
             fh.write('  *[Uu]sername*) printf %s "x-access-token" ;;\n')
-            fh.write(f'  *) printf %s "{token}" ;;\n')
+            fh.write(f'  *) cat "{tpath}" ;;\n')
             fh.write("esac\n")
         os.chmod(path, 0o700)
         return path
@@ -92,12 +107,14 @@ class GitWriter:
                 return res
             finally:
                 shutil.rmtree(work, ignore_errors=True)
-                if self._askpass_path:
-                    try:
-                        os.remove(self._askpass_path)
-                    except OSError:
-                        pass
-                    self._askpass_path = None
+                for attr in ("_askpass_path", "_token_path"):
+                    p = getattr(self, attr)
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                        setattr(self, attr, None)
 
     def write_source(self, source: str, fileset: Dict[str, Dict[str, Any]]) -> CommitResult:
         def mutate(work: str) -> List[str]:

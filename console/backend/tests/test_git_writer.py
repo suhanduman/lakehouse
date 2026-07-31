@@ -45,6 +45,12 @@ def test_remove_source_deletes_dir():
         assert not os.path.exists(os.path.join(co, "pipelines", "mysrc"))
 
 
+def _cleanup_credential_temps(w):
+    for p in (w._askpass_path, w._token_path):
+        if p and os.path.exists(p):
+            os.remove(p)
+
+
 def test_https_token_wires_askpass_without_leaking_token_in_env():
     token = "secret-tok"
     w = GitWriter(repo_url="https://example.invalid/repo.git", branch="main", path="pipelines",
@@ -62,5 +68,35 @@ def test_https_token_wires_askpass_without_leaking_token_in_env():
                               check=True, capture_output=True, text=True).stdout
         assert out == token
     finally:
-        if w._askpass_path and os.path.exists(w._askpass_path):
-            os.remove(w._askpass_path)
+        _cleanup_credential_temps(w)
+
+
+def test_https_token_askpass_is_injection_proof_for_malicious_tokens():
+    # A token containing shell metacharacters must NOT be interpolated into
+    # the askpass script's source (that was the bug: printf %s "{token}"
+    # let a token break out of its quotes and execute arbitrary shell). The
+    # fix writes the raw token to its own file and has the script `cat` it,
+    # so these tokens must come back byte-for-byte with zero code execution.
+    with tempfile.TemporaryDirectory() as tmp:
+        marker_dquote = os.path.join(tmp, "PWNED_DQUOTE")
+        marker_cmdsub = os.path.join(tmp, "PWNED_CMDSUB")
+        malicious_tokens = [
+            f'abc"; touch {marker_dquote}; echo "',      # double-quote breakout
+            f'abc`touch {marker_cmdsub}`',                # backtick command substitution
+        ]
+        for token in malicious_tokens:
+            w = GitWriter(repo_url="https://example.invalid/repo.git", branch="main", path="pipelines",
+                          credential=GitCredential(https_token=token))
+            try:
+                env = w._env()
+                askpass = env["GIT_ASKPASS"]
+                out = subprocess.run([askpass, "Password for 'https://x@example.invalid':"],
+                                      check=True, capture_output=True, text=True).stdout
+                assert out == token   # returned verbatim -- proves no shell interpretation
+                assert token not in w.repo_url
+                assert all(v != token for v in env.values())
+            finally:
+                _cleanup_credential_temps(w)
+        # the injected commands must NOT have run
+        assert not os.path.exists(marker_dquote)
+        assert not os.path.exists(marker_cmdsub)
