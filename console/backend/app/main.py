@@ -9,7 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 HTTP_422_UNPROCESSABLE = 422
 
-from app.routers import buckets, schemas, sources, tables
+from app.routers import buckets, gitops, schemas, sources, tables
 from app.routers import status as status_router
 
 app = FastAPI(title="Lakehouse Console")
@@ -18,6 +18,7 @@ app.include_router(tables.router)
 app.include_router(buckets.router)
 app.include_router(schemas.router)
 app.include_router(status_router.router)
+app.include_router(gitops.router)
 
 # Prometheus /metrics (monitoring D1). ServiceMonitor `console-backend` scrapes
 # this Service. Adds an HTTP request counter + latency histogram plus default
