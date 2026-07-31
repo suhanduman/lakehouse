@@ -68,3 +68,26 @@ def test_gitops_edit_spark_source_commits_instead_of_applying(monkeypatch, cdc_e
     assert res.ok
     assert w.calls[0][0] == "write"
     assert any("deadbeef" in s.detail for s in res.steps)
+
+
+def test_gitops_edit_spark_source_commit_failure_returns_ok_false(monkeypatch, cdc_entity_spec):
+    # Symmetry with add_source's gitops branch: a failed commit must be
+    # caught and returned as AddSourceResult(ok=False), not propagate as an
+    # unhandled exception (which would otherwise surface as a 500).
+    monkeypatch.setattr(
+        orch_mod, "render_pipeline_fileset",
+        lambda spec, **k: {f"{spec.source}/00-x-a.yaml": {"kind": "X", "metadata": {"name": "a"}}},
+    )
+
+    class _BoomWriter:
+        def write_source(self, source, fileset):
+            raise RuntimeError("push rejected: non-fast-forward")
+
+    orch = AddSourceOrchestrator(
+        k8s=object(), s3=object(), trino=object(), render=object(),
+        iceberg=None, deploy_mode="gitops", git_writer=_BoomWriter(),
+        spark_image="img:1", s3_secret_name="s3-credentials",
+    )
+    res = orch.edit_spark_source(cdc_entity_spec)
+    assert res.ok is False
+    assert any("push rejected" in s.detail for s in res.steps)

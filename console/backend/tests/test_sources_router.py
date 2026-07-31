@@ -496,6 +496,91 @@ def test_pause_forbidden_for_student(client_as_student):
 
 
 # --------------------------------------------------------------------------
+# gitops mode: connector-edit / pause / resume must fail loud (409), never
+# silently do a direct k8s write that ArgoCD selfHeal would just revert.
+# The spark edit path is exempt -- it already gitops-routes via
+# orchestrator.edit_spark_source (see test_orchestrator_gitops.py).
+# --------------------------------------------------------------------------
+
+def test_edit_connector_gitops_mode_is_409(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    k8s = FakeK8s()
+    client = _client_as({Role.ANALYST}, k8s=k8s)
+
+    r = client.patch("/api/sources/dbz-mssql1-students", json={"config": {"a": "b"}})
+
+    assert r.status_code == 409
+    assert "gitops mode" in r.json()["detail"]
+    assert k8s.patched == []  # never reaches the direct k8s write
+
+
+def test_edit_connector_direct_mode_unchanged(fake_k8s):
+    # settings.deploy_mode is "direct" by default -- confirm this guard
+    # doesn't regress the pre-existing direct-mode patch behavior.
+    client = _client_as({Role.ANALYST}, k8s=fake_k8s)
+    r = client.patch(
+        "/api/sources/dbz-mssql1-students", json={"config": {"poll.interval.ms": "1000"}}
+    )
+    assert r.status_code == 200
+    assert fake_k8s.patched == [("dbz-mssql1-students", {"poll.interval.ms": "1000"})]
+
+
+def test_pause_gitops_mode_is_409(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    k8s = FakeK8s()
+    client = _client_as({Role.ANALYST}, k8s=k8s)
+
+    r = client.post("/api/sources/dbz-mssql1-students/pause")
+
+    assert r.status_code == 409
+    assert "gitops mode" in r.json()["detail"]
+    assert k8s.paused_calls == []
+    assert k8s.spark_suspended_calls == []
+
+
+def test_resume_gitops_mode_is_409(monkeypatch):
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    k8s = FakeK8s()
+    client = _client_as({Role.ANALYST}, k8s=k8s)
+
+    r = client.post("/api/sources/dbz-mssql1-students/resume")
+
+    assert r.status_code == 409
+    assert "gitops mode" in r.json()["detail"]
+    assert k8s.paused_calls == []
+    assert k8s.spark_suspended_calls == []
+
+
+def test_pause_resume_direct_mode_unchanged(fake_k8s):
+    # settings.deploy_mode is "direct" by default -- confirm this guard
+    # doesn't regress the pre-existing direct-mode pause/resume behavior.
+    client = _client_as({Role.ANALYST}, k8s=fake_k8s)
+
+    r1 = client.post("/api/sources/dbz-mssql1-students/pause")
+    assert r1.status_code == 200
+    r2 = client.post("/api/sources/dbz-mssql1-students/resume")
+    assert r2.status_code == 200
+
+    assert fake_k8s.paused_calls == [
+        ("dbz-mssql1-students", True),
+        ("dbz-mssql1-students", False),
+    ]
+
+
+def test_pause_gitops_mode_also_409_for_spark_cr(monkeypatch):
+    # pause/resume have no gitops routing for EITHER CR kind -- the guard
+    # must reject a spark source too, not just KafkaConnector ones.
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    k8s = FakeK8s(sources=[SPARK_CR])
+    client = _client_as({Role.ANALYST}, k8s=k8s)
+
+    r = client.post("/api/sources/s3-register-s1-orders/pause")
+
+    assert r.status_code == 409
+    assert k8s.spark_suspended_calls == []
+
+
+# --------------------------------------------------------------------------
 # Kind-aware pause/edit/delete -- ScheduledSparkApplication (batch/s3) source
 # gets parity with KafkaConnector sources, dispatched on `cr["kind"]`.
 # --------------------------------------------------------------------------

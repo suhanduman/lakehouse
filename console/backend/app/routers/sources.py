@@ -300,12 +300,27 @@ def edit_source(
     k8s: K8sService = Depends(get_k8s),
     orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
+    """Connector-edit note (gitops): the SPARK branch below already routes
+    through `orchestrator.edit_spark_source`, which itself commits via
+    GitWriter when `settings.deploy_mode == "gitops"` (Task 4). The
+    non-spark (KafkaConnector) branch has no such routing yet -- a direct
+    `k8s.patch_connector` in gitops mode would be silently reverted by
+    ArgoCD selfHeal on its next sync (a misleading no-op), so it fails loud
+    (409) instead until connector-edit gitops routing exists (follow-up)."""
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         if payload.spec is None:
             raise HTTPException(status_code=400, detail="spark source edit requires `spec`")
         orchestrator.edit_spark_source(payload.spec)
     else:
+        if settings.deploy_mode == "gitops":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "connector edit not supported in gitops mode -- edit the source in the "
+                    "pipeline repo (git); the cluster is reconciled from git"
+                ),
+            )
         if payload.config is None:
             raise HTTPException(status_code=400, detail="connector edit requires `config`")
         k8s.patch_connector(name, payload.config)
@@ -317,6 +332,19 @@ def pause_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
+    """Neither CR kind has gitops routing for pause -- a direct
+    `k8s.set_paused`/`set_spark_suspended` write in gitops mode would be
+    silently reverted by ArgoCD selfHeal on its next sync (a misleading
+    no-op), so this fails loud (409) in gitops mode instead (follow-up:
+    gitops-route pause/resume, e.g. a `suspend`/`state` field commit)."""
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "pause not supported in gitops mode -- edit the source in the pipeline "
+                "repo (git); the cluster is reconciled from git"
+            ),
+        )
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, True)
@@ -330,6 +358,15 @@ def resume_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
+    """See pause_source's docstring -- same gitops fail-loud guard."""
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "resume not supported in gitops mode -- edit the source in the pipeline "
+                "repo (git); the cluster is reconciled from git"
+            ),
+        )
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, False)

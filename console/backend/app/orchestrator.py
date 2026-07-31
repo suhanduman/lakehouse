@@ -205,9 +205,18 @@ class AddSourceOrchestrator:
 
         gitops mode: commits the re-rendered fileset via GitWriter instead
         (returns an AddSourceResult; direct mode keeps returning the raw
-        apply_spark_job status dict, unchanged)."""
+        apply_spark_job status dict, unchanged). Symmetric with add_source's
+        gitops branch: a failed commit is caught and returned as
+        AddSourceResult(ok=False) rather than propagating (which would
+        otherwise surface as an unhandled 500)."""
         if self.deploy_mode == "gitops":
-            return self._gitops_write(spec)
+            try:
+                return self._gitops_write(spec)
+            except Exception as exc:  # noqa: BLE001 - convert failure into a StepResult
+                return AddSourceResult(
+                    steps=[StepResult(name="gitops-commit", ok=False, detail=str(exc))],
+                    ok=False,
+                )
         body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
         return self.k8s.apply_spark_job(body)
 
