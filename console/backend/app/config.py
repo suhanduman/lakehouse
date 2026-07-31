@@ -29,5 +29,13 @@ class Settings(BaseSettings):
     # S3_SECRET_NAME).
     spark_image: str = "image-registry.openshift-image-registry.svc:5000/lakehouse/spark-py:1.0"
     s3_secret_name: str = "s3-credentials"
+    # GitOps write-path (deploy_mode=gitops): Console commits rendered pipeline
+    # manifests to a git repo ArgoCD watches, instead of applying imperatively.
+    # deploy_mode default "direct" preserves the current B-v1 behavior.
+    deploy_mode: str = "direct"                 # "direct" | "gitops"
+    gitops_repo_url: str = ""                   # ssh://... or https://... pipeline repo
+    gitops_branch: str = "main"
+    gitops_path: str = "pipelines"              # subdir the pipelines Application watches
+    gitops_credential_secret: str = "gitops-credential"  # k8s Secret; SSH key or https token
 
 settings = Settings()
