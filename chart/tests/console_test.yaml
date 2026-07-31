@@ -45,6 +45,19 @@ tests:
           path: data.GITOPS_CREDENTIAL_SECRET
           value: "gitops-credential"
         documentSelector: {path: kind, value: ConfigMap}
+      # s3a job-code delivery (2026-07-31-s3a-job-code-delivery Task 4) —
+      # ConfigMap carries JOBS_BUCKET/JOBS_PREFIX (default
+      # .Values.storage.jobsBucket/jobsPrefix = "spark-jobs"/"jobs", same
+      # values 05-spark-operator.yaml/14-nginx-ingest.yaml's
+      # mainApplicationFile s3a:// URLs already use).
+      - equal:
+          path: data.JOBS_BUCKET
+          value: "spark-jobs"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: data.JOBS_PREFIX
+          value: "jobs"
+        documentSelector: {path: kind, value: ConfigMap}
       - notContains:
           path: spec.template.spec.volumes
           content:
