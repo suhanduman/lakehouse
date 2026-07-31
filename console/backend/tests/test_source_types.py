@@ -46,6 +46,9 @@ def test_get_unknown_raises():
 
 def test_stream_kafka_allows_event_and_entity():
     d = st.get("stream", "kafka")
+    assert d.lane == "kafka-connect-source"
+    assert d.render_key == "kafka-ingest"
+    assert d.topic_key == ""            # consumes an existing topic; creates none
     assert d.disposition == "event"                       # default when unset
     assert st.allowed_dispositions(d) == ("event", "entity")
 
