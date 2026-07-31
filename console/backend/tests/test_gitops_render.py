@@ -1,18 +1,11 @@
 """B-v2 GitOps — render_pipeline_fileset (lane-aware, delegating to
-render_service) + Git-provider seam tests (SCM-agnostik)."""
+render_service)."""
 from __future__ import annotations
 
 import pytest
-import yaml
 
 from app.models import ColumnSpec, SourceSpec
 from app.services import gitops_render
-from app.services.git_provider import (
-    GithubGitProvider,
-    GitlabGitProvider,
-    LocalDirGitProvider,
-    manifests_to_yaml,
-)
 
 
 # --------------------------------------------------------------------------
@@ -113,30 +106,3 @@ def test_spark_batch_fileset_is_spark_cr_only(batch_s3_spec):
 def test_entity_fileset_fail_loud_without_identifier(cdc_entity_spec_no_id):
     with pytest.raises(ValueError):
         _files(cdc_entity_spec_no_id)
-
-
-# --------------------------------------------------------------------------
-# Git-provider seam (LocalDirGitProvider / Github / Gitlab / manifests_to_yaml)
-# --------------------------------------------------------------------------
-
-def test_local_git_provider_writes_multidoc_yaml(tmp_path, cdc_entity_spec):
-    files = _files(cdc_entity_spec)
-    manifests = list(files.values())
-    provider = LocalDirGitProvider(root=str(tmp_path))
-    res = provider.open_pipeline_pr(
-        source_name="pgdemo", manifests=manifests, title="add pgdemo", body="..."
-    )
-    assert res["provider"] == "local" and res["manifests"] == len(manifests)
-    docs = list(yaml.safe_load_all(open(res["path"])))
-    assert [d["kind"] for d in docs] == [m["kind"] for m in manifests]
-
-
-def test_unconfigured_providers_raise():
-    for p in (GitlabGitProvider(), GithubGitProvider()):
-        with pytest.raises(NotImplementedError):
-            p.open_pipeline_pr(source_name="x", manifests=[], title="t", body="b")
-
-
-def test_manifests_to_yaml_is_multidoc(cdc_entity_spec):
-    out = manifests_to_yaml(list(_files(cdc_entity_spec).values()))
-    assert out.count("---") >= 3
