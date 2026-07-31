@@ -900,3 +900,28 @@ def test_http_entity_creates_topic_bronze_and_silver():
     # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
     assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
+
+
+def test_stream_kafka_entity_precreates_bronze_and_silver():
+    # Task 3 (entity/upsert-from-Kafka): a stream+kafka source with
+    # disposition="entity" must pre-create BOTH Bronze and Silver, exactly
+    # like CDC/JDBC and the Camel-lane entity test above. The orchestrator's
+    # "table" step branches purely on `spec.effective_disposition()` (no
+    # hardcoded kind=="stream"/type=="kafka" special-case) -- this locks in
+    # that the generic entity branch already covers kafka-ingest, no
+    # orchestrator change needed.
+    orch, fakes = _orch_fakes()
+    spec = _kafka_spec(
+        disposition="entity",
+        columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="name", type="varchar")],
+        identifier=["id"],
+    )
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    names = [s.name for s in res.steps]
+    # kafka-ingest still has no topic step (consumes an existing topic) and
+    # no dedicated sink (it IS the sink) -- disposition doesn't change that.
+    assert names == ["bucket", "namespace", "table", "connector", "verify"]
+    assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
