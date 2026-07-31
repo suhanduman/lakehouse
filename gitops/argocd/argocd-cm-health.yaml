@@ -1,0 +1,34 @@
+# ArgoCD custom health for the platform CRDs a Console pipeline produces.
+# ArgoCD has no built-in health for these CRDs -> they show "Unknown" unless
+# a health.lua is registered here. Merged into argocd-cm by bootstrap Layer-1
+# (kubectl apply). PROD note: OpenShift GitOps uses argocd-cm in
+# `openshift-gitops`; vanilla ArgoCD (fullnameOverride=argocd) uses argocd-cm
+# in `argocd` -- bootstrap targets the right namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+data:
+  resource.customizations.health.kafka.strimzi.io_KafkaConnector: |
+    hs = {}
+    if obj.status ~= nil and obj.status.connectorStatus ~= nil
+       and obj.status.connectorStatus.connector ~= nil then
+      local state = obj.status.connectorStatus.connector.state
+      if state == "RUNNING" then hs.status = "Healthy"; hs.message = "connector RUNNING"; return hs end
+      if state == "FAILED" then hs.status = "Degraded"; hs.message = "connector FAILED"; return hs end
+    end
+    hs.status = "Progressing"; hs.message = "waiting for connector RUNNING"; return hs
+  resource.customizations.health.kafka.strimzi.io_KafkaTopic: |
+    hs = {}
+    if obj.status ~= nil and obj.status.conditions ~= nil then
+      for _, c in ipairs(obj.status.conditions) do
+        if c.type == "Ready" and c.status == "True" then hs.status = "Healthy"; hs.message = "topic Ready"; return hs end
+      end
+    end
+    hs.status = "Progressing"; hs.message = "waiting for topic Ready"; return hs
+  resource.customizations.health.sparkoperator.k8s.io_ScheduledSparkApplication: |
+    hs = {}
+    if obj.status ~= nil and obj.status.scheduleState == "Scheduled" then
+      hs.status = "Healthy"; hs.message = "schedule active"; return hs
+    end
+    hs.status = "Progressing"; hs.message = "schedule not yet active"; return hs

@@ -228,6 +228,7 @@ ENDPOINTS: List[Dict[str, Any]] = [
     },
     {"method": "GET", "template": "/api/schemas", "path": "/api/schemas"},
     {"method": "GET", "template": "/api/status", "path": "/api/status"},
+    {"method": "GET", "template": "/gitops/status", "path": "/gitops/status"},
 ]
 
 

@@ -435,3 +435,32 @@ def test_get_status_missing_status_returns_empty_dict():
     fake.get_response = {"metadata": {"name": "dbz-x"}}
     svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
     assert svc.get_status("dbz-x") == {}
+
+
+# --------------------------------------------------------------------------
+# get_application_status — ArgoCD Application CR .status (best-effort; None
+# on 404 so gitops-status never becomes a hard dependency on ArgoCD being
+# installed).
+# --------------------------------------------------------------------------
+
+class _FakeCustom:
+    def __init__(self, obj=None, raise_status=None):
+        self._obj = obj
+        self._raise = raise_status
+
+    def get_namespaced_custom_object(self, **kw):
+        if self._raise:
+            raise ApiException(status=self._raise)
+        return self._obj
+
+
+def test_get_application_status_returns_status():
+    svc = K8sService.__new__(K8sService)
+    svc.custom_api = _FakeCustom({"status": {"sync": {"status": "Synced"}}})
+    assert svc.get_application_status("lakehouse-pipelines", "argocd") == {"sync": {"status": "Synced"}}
+
+
+def test_get_application_status_404_returns_none():
+    svc = K8sService.__new__(K8sService)
+    svc.custom_api = _FakeCustom(raise_status=404)
+    assert svc.get_application_status("lakehouse-pipelines", "argocd") is None

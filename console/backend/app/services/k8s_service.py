@@ -229,3 +229,23 @@ class K8sService:
             group=SPARK_GROUP, version=SPARK_API_VERSION, namespace=self.namespace,
             plural=SPARK_PLURAL, name=name, body={"spec": {"suspend": suspended}},
         )
+
+    # ----------------------------------------------------------------
+    # get_application_status — ArgoCD Application CR .status (sync/health/
+    # resources) via the k8s API. None when ArgoCD/the Application isn't
+    # present (404) -- gitops-status is best-effort, never a hard dependency.
+    # ----------------------------------------------------------------
+
+    def get_application_status(self, name, namespace):
+        """ArgoCD Application CR .status (sync/health/resources) via the k8s API.
+        None when ArgoCD/the Application isn't present (404) -- gitops-status is
+        best-effort, never a hard dependency."""
+        try:
+            obj = self.custom_api.get_namespaced_custom_object(
+                group="argoproj.io", version="v1alpha1", namespace=namespace,
+                plural="applications", name=name)
+        except ApiException as exc:
+            if exc.status == HTTP_NOT_FOUND:
+                return None
+            raise
+        return (obj or {}).get("status")

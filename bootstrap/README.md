@@ -139,7 +139,7 @@ bir cluster olmadan tamamen güvenle çalıştırılabilir olmasını garanti ed
 - `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` — yalnızca
   `--s3-secret-from-env` ile okunur; CLI argümanı olarak ASLA verilmez.
 
-## Bir sonraki adım — Layer 1 (Task 8, bu script'in kapsamı DIŞINDA)
+## Bir sonraki adım — Layer 1 (bu script'in kapsamı DIŞINDA, bkz. bootstrap/app-of-apps.sh)
 
 Bootstrap tamamlandığında (ArgoCD ayakta — OpenShift'te OLM'den gelen
 `openshift-gitops` instance'ı, vanilla'da `argocd` namespace'indeki Helm
@@ -151,13 +151,26 @@ bir S3 endpoint'ine karşı `mc mb --ignore-existing` çalıştırır) OTOMATİK
 tetikler; ayrı bir manuel "bucket oluştur" adımı gerekmez.
 
 1. **ArgoCD app-of-apps (önerilen — GitOps, bkz. gitops/README.md)**:
-   önce `gitops/apps/app-of-apps.yaml` içindeki `<PLATFORM_REPO_URL>` /
-   `<PIPELINE_REPO_URL>` placeholder'larını kendi platform/pipeline repo
-   URL'lerinizle değiştirin (bkz. o dosyanın başındaki yorum), sonra:
+   `bootstrap/app-of-apps.sh` çalıştırın:
 
    ```bash
-   kubectl apply -f gitops/apps/app-of-apps.yaml
+   bootstrap/app-of-apps.sh --platform-repo <PLATFORM_REPO_URL> \
+                             --pipeline-repo <PIPELINE_REPO_URL> \
+                             [--argocd-namespace argocd|openshift-gitops] \
+                             [--dry-run]
    ```
+
+   Bu script `gitops/apps/app-of-apps.yaml`'daki `<PLATFORM_REPO_URL>` /
+   `<PIPELINE_REPO_URL>` placeholder'larını VE `namespace:
+   openshift-gitops` alanını (`--argocd-namespace` — vanilla'da `argocd`,
+   varsayılan; OpenShift'te `openshift-gitops` verin) RENDERED bir
+   KOPYAYA substitute eder — committed dosya asla mutate edilmez — sonra
+   argocd-cm health-check patch'ini (`gitops/argocd/argocd-cm-health.yaml`)
+   ve substitute edilmiş kök Application'ı (`lakehouse-root`) sırasıyla
+   apply eder, son olarak health customization'ının pick up edilmesi için
+   `argocd-repo-server`'ı restart eder. `--dry-run`, hiçbir şeyi
+   uygulamadan (canlı bir cluster'a ihtiyaç duymadan) her iki placeholder
+   da doldurulmuş TAM planı stdout'a yazdırır.
 
    ArgoCD, `lakehouse-platform` Application'ını (`argocd.argoproj.io/
    sync-wave: "0"`, chart'ı Helm-source olarak kurar — bucket-init Job'u
