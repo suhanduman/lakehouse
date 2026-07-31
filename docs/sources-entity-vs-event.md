@@ -2,8 +2,9 @@
 
 Every ingest source registered with the lakehouse console has a
 **disposition** — `entity` or `event` — that decides what Bronze→Silver does
-with each record. This doc explains the difference, when to pick each for an
-existing Kafka topic, the exact semantics of `stream/kafka` **entity**
+with each record. It is set via the source spec's `disposition` field
+(e.g. `disposition: entity`). This doc explains the difference, when to
+pick each for an existing Kafka topic, the exact semantics of `stream/kafka` **entity**
 sources (including the optional delete opt-in), the ordering guarantee you
 need to make upserts deterministic, and the `columns`/`identifier`
 declaration these sources require. It is a semantics reference for
@@ -63,8 +64,9 @@ behavior for any entity source that doesn't carry an explicit delete
 signal.
 
 If your use case needs deletes to propagate, either supply `delete_field`
-(below) or use a CDC source (Debezium) instead, which carries delete events
-natively in its envelope (`__op == "d"`).
+(below) or use a CDC source (Debezium) instead — a separate ingest lane
+from the existing-Kafka entity path this doc describes — which carries
+delete events natively in its envelope (`__op == "d"`).
 
 ### Optional: `delete_field` (boolean delete opt-in)
 
@@ -89,9 +91,13 @@ three-valued boolean logic work:
   sure your producer stamps the flag on every message, including inserts
   and plain updates (`false` for those).
 - **The field must NOT be listed in `columns`.** It is *consumed* by the
-  sink's rename transform — it becomes the `__deleted` metadata column, not
-  a Silver data column. Declaring it in `columns` as well is redundant at
-  best and a schema conflict at worst.
+  sink's `ReplaceField` rename transform, which renames it away to the
+  `__deleted` metadata column — the original field name no longer exists in
+  the record afterward. Deletes still work via `__deleted` either way, but
+  declaring the field in `columns` too doesn't cause a schema conflict —
+  it just leaves a redundant Silver column that is always `NULL` (nothing
+  ever populates it, since the source field was consumed before it could
+  reach Silver).
 
 ### Future (v2): value-equality deletes
 
