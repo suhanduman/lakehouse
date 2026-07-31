@@ -8,6 +8,15 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: argocd-cm
+  # REQUIRED: ArgoCD's configmap informer filters on this label — without it,
+  # applying this fragment creates/overwrites argocd-cm UNLABELLED and the
+  # application-controller CrashLoopBackOffs ("error loading cache settings:
+  # configmap \"argocd-cm\" not found") even though the CM exists. The upstream
+  # install ships argocd-cm with this label; we MUST re-declare it so a
+  # standalone `kubectl apply` of this fragment (bootstrap Layer-1) keeps it.
+  # (Live-verify finding, GitOps Slice B-II 2026-07-31.)
+  labels:
+    app.kubernetes.io/part-of: argocd
 data:
   resource.customizations.health.kafka.strimzi.io_KafkaConnector: |
     hs = {}

@@ -104,3 +104,6 @@ jobs:
 
       - name: Bootstrap (Layer-0) script test suite
         run: bash bootstrap/tests/bootstrap_test.sh
+
+      - name: app-of-apps (Layer-1) script test suite
+        run: bash bootstrap/tests/app_of_apps_test.sh

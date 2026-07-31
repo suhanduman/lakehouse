@@ -224,6 +224,23 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 6. The committed argocd-cm health fragment declares the
+#    `app.kubernetes.io/part-of: argocd` label. That ConfigMap is named
+#    `argocd-cm`, so applying it (here via `kubectl apply`) creates or
+#    overwrites argocd-cm; WITHOUT the label, ArgoCD's configmap informer —
+#    which filters on `app.kubernetes.io/part-of=argocd` — never sees it,
+#    and the application-controller CrashLoopBackOffs with
+#    `error loading cache settings: configmap "argocd-cm" not found` even
+#    though the CM exists. (Live-verify finding, GitOps Slice B-II 2026-07-31.)
+# --------------------------------------------------------------------------
+HEALTH_YAML="$ROOT/gitops/argocd/argocd-cm-health.yaml"
+if grep -qE '^[[:space:]]+app\.kubernetes\.io/part-of:[[:space:]]*argocd[[:space:]]*$' "$HEALTH_YAML"; then
+  pass "argocd-cm health fragment declares the app.kubernetes.io/part-of=argocd label"
+else
+  fail "argocd-cm health fragment is MISSING the app.kubernetes.io/part-of=argocd label (ArgoCD's configmap informer won't see argocd-cm)"
+fi
+
+# --------------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "app_of_apps_test.sh: FAIL" >&2
   exit 1
