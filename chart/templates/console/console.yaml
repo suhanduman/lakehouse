@@ -39,6 +39,20 @@
 #     (non-secret) config, `.Values.console.oidc.audience`.
 #
 {{- if .Values.components.console }}
+{{- /*
+GitOps repo URL fallback (2026-07-30-gitops-core-slice-a-write-path Task 6):
+explicit `console.gitops.repoUrl` always wins when set. Only when it's
+EMPTY *and* the in-cluster Gitea fallback is on (`components.gitea`,
+chart/templates/16-gitea.yaml) do we default to that Gitea instance's SSH
+remote — same "gitea-ssh" Service name/namespace/port 16-gitea.yaml
+renders, so this string and that file's Service must be kept in sync.
+When `components.gitea` is off (default) this resolves to "", identical to
+today's behavior (Task 5) — the `required()` guard below still fails loud.
+*/}}
+{{- $gitopsRepoUrl := .Values.console.gitops.repoUrl }}
+{{- if and (not $gitopsRepoUrl) .Values.components.gitea }}
+{{- $gitopsRepoUrl = printf "ssh://git@gitea-ssh.%s.svc:22/gitea/%s.git" (include "lakehouse.namespace" .) .Values.gitea.repo }}
+{{- end }}
 ---
 # -------- ServiceAccount --------
 apiVersion: v1
@@ -106,6 +120,19 @@ data:
   # falls back to config.py's neutral defaults (a non-existent image/secret).
   SPARK_IMAGE: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
   S3_SECRET_NAME: {{ .Values.storage.s3.secretName | quote }}
+  # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5) —
+  # plain (non-secret) config, same convention as OIDC_AUDIENCE/S3_SECRET_NAME
+  # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME
+  # reference here (its material is mounted as a file below, not read as an
+  # env var — see the Deployment's gitops volume/volumeMount).
+  # GITOPS_REPO_URL uses the computed `$gitopsRepoUrl` (Task 6, see top of
+  # file) — falls back to the in-cluster Gitea only when the explicit value
+  # is empty AND `components.gitea` is on; otherwise identical to Task 5.
+  DEPLOY_MODE: {{ .Values.console.deployMode | quote }}
+  GITOPS_REPO_URL: {{ $gitopsRepoUrl | quote }}
+  GITOPS_BRANCH: {{ .Values.console.gitops.branch | quote }}
+  GITOPS_PATH: {{ .Values.console.gitops.path | quote }}
+  GITOPS_CREDENTIAL_SECRET: {{ .Values.console.gitops.credentialSecret | quote }}
 
 ---
 # -------- Backend Deployment --------
@@ -157,6 +184,39 @@ spec:
           limits:
             cpu: {{ .Values.console.backend.resources.limits.cpu | quote }}
             memory: {{ .Values.console.backend.resources.limits.memory | quote }}
+        {{- if eq .Values.console.deployMode "gitops" }}
+        # GitOps write-path (Task 5): git SSH credential mounted as files, NOT
+        # env vars — the backend (Task 4) reads the private key from
+        # /var/run/gitops/ssh-privatekey (+ optional known_hosts alongside
+        # it), same "credential mounted as file" pattern used for every other
+        # git/SSH-style secret in this ecosystem. `deployMode: gitops` also
+        # REQUIRES `console.gitops.repoUrl` (guarded below) — fail loud at
+        # `helm install/upgrade`, mirroring the `oidc.secretName` `required()`
+        # guard in 06-trino-ha.yaml/04-nessie-ha.yaml, rather than the
+        # backend silently no-op'ing at runtime with an empty repo URL.
+        volumeMounts:
+        - name: gitops-credential
+          mountPath: /var/run/gitops
+          readOnly: true
+        {{- end }}
+      {{- if eq .Values.console.deployMode "gitops" }}
+      {{- /* Guard on the COMPUTED repo URL ($gitopsRepoUrl, top of file), not
+             the raw value — a Gitea-fallback install (components.gitea=true,
+             gitops.repoUrl left empty) is a valid gitops config, not a
+             misconfiguration. */}}
+      {{- $_ := required "console.gitops.repoUrl is required when deployMode=gitops" $gitopsRepoUrl }}
+      volumes:
+      - name: gitops-credential
+        secret:
+          secretName: {{ .Values.console.gitops.credentialSecret | quote }}
+          defaultMode: 0400
+          items:
+          - key: ssh-privatekey
+            path: ssh-privatekey
+          - key: known_hosts
+            path: known_hosts
+            optional: true
+      {{- end }}
 
 ---
 # -------- Backend Service — nginx `/api` proxy hedefiyle BİREBİR eşleşmeli

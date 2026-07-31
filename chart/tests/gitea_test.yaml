@@ -1,0 +1,123 @@
+# chart/tests/gitea_test.yaml — helm-unittest suite for
+# 2026-07-30-gitops-core-slice-a-write-path Task 6: the optional in-cluster
+# Gitea write-path fallback (`components.gitea`, DEFAULT FALSE —
+# chart/templates/16-gitea.yaml) and its wiring into the Console backend's
+# `GITOPS_REPO_URL` default (chart/templates/console/console.yaml, extends
+# Task 5's `console.deployMode`/`console.gitops.*`).
+suite: In-cluster Gitea fallback (components.gitea) + Console GITOPS_REPO_URL default
+templates:
+  - 16-gitea.yaml
+  - templates/console/console.yaml
+tests:
+  - it: default render (components.gitea=false) creates NO Gitea Deployment/PVC/Service documents at all
+    template: 16-gitea.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: components.gitea=true renders the Deployment (configured image, both ports), the PVC (configured size, no storageClassName by default) and both Services (gitea-ssh :22, gitea-http :3000)
+    template: 16-gitea.yaml
+    set:
+      components.gitea: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "gitea/gitea:1.22"
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: ssh, containerPort: 22}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: http, containerPort: 3000}
+        documentSelector: {path: kind, value: Deployment}
+      - equal:
+          path: spec.resources.requests.storage
+          value: "5Gi"
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - notExists:
+          path: spec.storageClassName
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - equal:
+          path: spec.ports[0].port
+          value: 22
+        documentSelector: {path: metadata.name, value: gitea-ssh}
+      - equal:
+          path: spec.ports[0].port
+          value: 3000
+        documentSelector: {path: metadata.name, value: gitea-http}
+
+  - it: components.gitea=true with a custom image/storageSize/storageClassName renders those exact values
+    template: 16-gitea.yaml
+    set:
+      components.gitea: true
+      gitea.image: "gitea/gitea:1.23"
+      gitea.storageSize: 10Gi
+      gitea.storageClassName: fast-file-rwx
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "gitea/gitea:1.23"
+        documentSelector: {path: kind, value: Deployment}
+      - equal:
+          path: spec.resources.requests.storage
+          value: "10Gi"
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - equal:
+          path: spec.storageClassName
+          value: fast-file-rwx
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+
+  - it: "default (components.gitea=false, deployMode=direct): Console ConfigMap's GITOPS_REPO_URL stays empty (no regression on Task 5's behavior)"
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    asserts:
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: ""
+
+  - it: "deployMode=gitops + empty repoUrl + components.gitea=true: Console ConfigMap's GITOPS_REPO_URL defaults to the in-cluster Gitea's SSH remote (no required() failure)"
+    template: templates/console/console.yaml
+    set:
+      console.deployMode: gitops
+      components.gitea: true
+    documentSelector: {path: kind, value: ConfigMap}
+    asserts:
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: "ssh://git@gitea-ssh.NAMESPACE.svc:22/gitea/pipelines.git"
+
+  - it: "deployMode=gitops + empty repoUrl + components.gitea=true + a custom gitea.repo: the Gitea fallback URL reflects the custom repo path"
+    template: templates/console/console.yaml
+    set:
+      console.deployMode: gitops
+      components.gitea: true
+      gitea.repo: my-org/my-pipelines
+    documentSelector: {path: kind, value: ConfigMap}
+    asserts:
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: "ssh://git@gitea-ssh.NAMESPACE.svc:22/gitea/my-org/my-pipelines.git"
+
+  - it: "explicit console.gitops.repoUrl still wins over the Gitea fallback even when components.gitea=true"
+    template: templates/console/console.yaml
+    set:
+      console.deployMode: gitops
+      console.gitops.repoUrl: ssh://git@external-host/org/pipelines.git
+      components.gitea: true
+    documentSelector: {path: kind, value: ConfigMap}
+    asserts:
+      - equal:
+          path: data.GITOPS_REPO_URL
+          value: "ssh://git@external-host/org/pipelines.git"
+
+  - it: "deployMode=gitops with empty repoUrl and components.gitea=false (default) still fails the render loudly (Task 5's required() guard is unchanged for the no-fallback case)"
+    template: templates/console/console.yaml
+    set:
+      console.deployMode: gitops
+    asserts:
+      - failedTemplate:
+          errorMessage: "console.gitops.repoUrl is required when deployMode=gitops"

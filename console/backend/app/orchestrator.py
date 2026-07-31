@@ -97,6 +97,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app import source_types
 from app.models import SourceCredentials, SourceSpec
+from app.services.gitops_render import render_pipeline_fileset
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX
 
 VERIFY_PENDING_DETAIL = "PENDING — reconciliation ongoing"
@@ -154,6 +155,8 @@ class AddSourceOrchestrator:
         sleep: Callable[[float], None] = time.sleep,
         spark_image: str = "",
         s3_secret_name: str = "s3-credentials",
+        deploy_mode: str = "direct",
+        git_writer: Any = None,
     ) -> None:
         self.k8s = k8s
         self.s3 = s3
@@ -168,14 +171,64 @@ class AddSourceOrchestrator:
         # spark-batch lane (Plan B2): render_spark_job/apply_spark_job inputs.
         self.spark_image = spark_image
         self.s3_secret_name = s3_secret_name
+        # GitOps write-path (Task 4): when deploy_mode == "gitops", add_source/
+        # edit_spark_source commit rendered manifests via git_writer instead of
+        # applying to the cluster. deploy_mode default "direct" + git_writer
+        # default None preserve the pre-existing (B-v1) behavior byte-for-byte.
+        self.deploy_mode = deploy_mode
+        self.git_writer = git_writer
 
-    def edit_spark_source(self, spec: SourceSpec) -> dict:
+    def _gitops_write(self, spec: SourceSpec) -> AddSourceResult:
+        """gitops mode: render the full pipeline fileset (Task 2) and commit it
+        via the injected GitWriter (Task 3) instead of applying anything to
+        the cluster. Shared by add_source and edit_spark_source."""
+        from app.config import settings
+
+        fileset = render_pipeline_fileset(
+            spec, spark_image=self.spark_image, s3_secret_name=self.s3_secret_name,
+            namespace=settings.namespace,
+        )
+        res = self.git_writer.write_source(spec.source, fileset)
+        return AddSourceResult(
+            steps=[
+                StepResult(
+                    name="gitops-commit", ok=res.committed,
+                    detail=f"{res.ref} ({len(res.files)} files)",
+                )
+            ],
+            ok=res.committed,
+        )
+
+    def edit_spark_source(self, spec: SourceSpec):
         """Re-render the ScheduledSparkApplication from an updated spec and
-        apply it (create-or-patch; the CR name is stable across an edit)."""
+        apply it (create-or-patch; the CR name is stable across an edit).
+
+        gitops mode: commits the re-rendered fileset via GitWriter instead
+        (returns an AddSourceResult; direct mode keeps returning the raw
+        apply_spark_job status dict, unchanged). Symmetric with add_source's
+        gitops branch: a failed commit is caught and returned as
+        AddSourceResult(ok=False) rather than propagating (which would
+        otherwise surface as an unhandled 500)."""
+        if self.deploy_mode == "gitops":
+            try:
+                return self._gitops_write(spec)
+            except Exception as exc:  # noqa: BLE001 - convert failure into a StepResult
+                return AddSourceResult(
+                    steps=[StepResult(name="gitops-commit", ok=False, detail=str(exc))],
+                    ok=False,
+                )
         body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
         return self.k8s.apply_spark_job(body)
 
     def add_source(self, spec: SourceSpec, creds: SourceCredentials) -> AddSourceResult:
+        if self.deploy_mode == "gitops":
+            try:
+                return self._gitops_write(spec)
+            except Exception as exc:  # noqa: BLE001 - convert failure into a StepResult
+                return AddSourceResult(
+                    steps=[StepResult(name="gitops-commit", ok=False, detail=str(exc))],
+                    ok=False,
+                )
         descriptor = source_types.get(spec.kind, spec.type)
         if descriptor.lane == "spark-batch":
             if not descriptor.render_key:

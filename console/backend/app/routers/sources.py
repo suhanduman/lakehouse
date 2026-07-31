@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app import source_types
+from app.config import settings
 from app.deps import (
     get_k8s,
     get_orchestrator,
@@ -299,12 +300,27 @@ def edit_source(
     k8s: K8sService = Depends(get_k8s),
     orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
+    """Connector-edit note (gitops): the SPARK branch below already routes
+    through `orchestrator.edit_spark_source`, which itself commits via
+    GitWriter when `settings.deploy_mode == "gitops"` (Task 4). The
+    non-spark (KafkaConnector) branch has no such routing yet -- a direct
+    `k8s.patch_connector` in gitops mode would be silently reverted by
+    ArgoCD selfHeal on its next sync (a misleading no-op), so it fails loud
+    (409) instead until connector-edit gitops routing exists (follow-up)."""
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         if payload.spec is None:
             raise HTTPException(status_code=400, detail="spark source edit requires `spec`")
         orchestrator.edit_spark_source(payload.spec)
     else:
+        if settings.deploy_mode == "gitops":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "connector edit not supported in gitops mode -- edit the source in the "
+                    "pipeline repo (git); the cluster is reconciled from git"
+                ),
+            )
         if payload.config is None:
             raise HTTPException(status_code=400, detail="connector edit requires `config`")
         k8s.patch_connector(name, payload.config)
@@ -316,6 +332,19 @@ def pause_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
+    """Neither CR kind has gitops routing for pause -- a direct
+    `k8s.set_paused`/`set_spark_suspended` write in gitops mode would be
+    silently reverted by ArgoCD selfHeal on its next sync (a misleading
+    no-op), so this fails loud (409) in gitops mode instead (follow-up:
+    gitops-route pause/resume, e.g. a `suspend`/`state` field commit)."""
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "pause not supported in gitops mode -- edit the source in the pipeline "
+                "repo (git); the cluster is reconciled from git"
+            ),
+        )
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, True)
@@ -329,6 +358,15 @@ def resume_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
+    """See pause_source's docstring -- same gitops fail-loud guard."""
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "resume not supported in gitops mode -- edit the source in the pipeline "
+                "repo (git); the cluster is reconciled from git"
+            ),
+        )
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, False)
@@ -349,6 +387,7 @@ def delete_source(
     k8s: K8sService = Depends(get_k8s),
     s3: S3Service = Depends(get_s3),
     trino: TrinoService = Depends(get_trino),
+    orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
     """`pipeline_only` tears down only the KafkaConnector CR (data already
     landed in the lakehouse is untouched). `with_data` (admin-only, gated by
@@ -357,7 +396,62 @@ def delete_source(
     the destructive, data-loss path. `<ns>`/`<table>` are recovered from the
     connector's own `transforms.route.static.value` config, and the bucket
     from `render_service.bucket_name(ns)`.
+
+    gitops mode (`settings.deploy_mode == "gitops"`): the direct
+    connector/topic (or spark-job) teardown above is replaced by a git commit
+    (`orchestrator.git_writer.remove_source`) that removes the source's
+    manifests from the pipelines repo -- ArgoCD prunes the live CRs on sync,
+    Console itself never calls `k8s.delete_connector`/`delete_topic`/
+    `delete_spark_job` in this mode. `GitWriter.remove_source` keys off the
+    BARE logical `spec.source` (the git directory name, e.g. "pgdemo") --
+    NEVER the CR's `metadata.name` (a composite, e.g. "dbz-pgdemo-customers",
+    via `render_service._k8s_name(prefix, source, table)`), so `spec.source`
+    is recovered from the CR's own `{_SPARK_ANN}source` round-trip annotation
+    (stamped on every rendered connector/sink/spark CR by render_service --
+    see `render_service._connector`/`render_spark_job`). Missing annotation
+    (e.g. a CR pre-dating this annotation, or applied by hand) -> fail loud
+    (409), never a silent no-op that looks like a successful delete while
+    leaving the source's manifests untouched in git.
+    `with_data` (dropping the Iceberg table / emptying the bucket) is a
+    data-plane action, not a GitOps-managed one, so it stays a separate,
+    explicit destructive call regardless of deploy_mode -- it still runs here
+    exactly as in direct mode, against the CR's round-tripped ns/table (the CR
+    itself is expected to already be present in the cluster via ArgoCD's
+    earlier sync from git).
     """
+    if settings.deploy_mode == "gitops":
+        cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
+        source = ((cr.get("metadata") or {}).get("annotations") or {}).get(f"{_SPARK_ANN}source")
+        if not source:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"cannot resolve logical source id for {name!r} -- CR is missing the "
+                    f"'{_SPARK_ANN}source' annotation; refusing gitops delete (would silently "
+                    "remove nothing from the pipelines repo)"
+                ),
+            )
+        commit = orchestrator.git_writer.remove_source(source)
+        result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
+        if mode != "with_data":
+            return result
+        if _kind_of(cr) == "ScheduledSparkApplication":
+            ns, table = _spark_target(cr)
+            fqn = f"rawlake.{ns}.{table}"
+            bucket = render_service.bucket_name(ns)
+            trino.drop_table(fqn)
+            s3.empty_bucket(bucket)
+            result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=None)
+            return result
+        ns, table = _target_ns_table(cr)
+        fqn = f"lakehouse.{ns}.{table}"
+        bucket = render_service.bucket_name(ns)
+        topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
+        trino.drop_table(fqn)
+        s3.empty_bucket(bucket)
+        result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=topic)
+        return result
+
     cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.delete_spark_job(name)

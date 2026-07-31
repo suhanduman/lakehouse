@@ -1,19 +1,17 @@
 """B-v2 GitOps — Console'un pipeline repo'suna PR olarak açtığı manifest SETini
 ÜRETİR (doğrudan-apply/orchestrator B-v1 YERİNE deklaratif dosyalar).
 
-Her kaynak = 6 manifest (medallion CDC: Console BOTH Bronze ve Silver'ı
-pre-create eder), ArgoCD PreSync sırası:
-  1) Bronze descriptor ConfigMap  (PreSync wave 0) — `<ns>_raw`, `layer:
-     bronze`, identifier YOK, sabit CDC metadata kolonları eklenir
-  2) Bronze pre-create Job        (PreSync wave 1) — Bronze changelog
-     tablosunu (partitioned, no identifier, rawdata warehouse) yaratır
-  3) Silver descriptor ConfigMap  (PreSync wave 0) — `<ns>`, `layer: silver`,
-     şema + identifier (PK)
-  4) Silver pre-create Job        (PreSync wave 1) — current-state tabloyu
-     identifier field ile yaratır (images/iceberg-tools); fail-loud →
-     uyuşmazsa connector sync olmaz
-  5) KafkaTopic                   (render_service.render_kafka_topic)
-  6) KafkaConnector                (render_service.render_connector)
+`render_pipeline_fileset` lane-aware bir manifest SETi üretir — render_key/
+lane/disposition mantığını render_service'e DELEGE eder (burada tekrar
+implement edilmez), GitOps zarfını (PreSync pre-create, namespace stamp,
+dosya layout'u) ekler:
+  - spark-batch (örn. batch/s3)     → tek ScheduledSparkApplication (kendi
+    rawlake tablosunu full-refresh CTAS ile kendi yazar; topic/connector/
+    precreate YOK)
+  - cdc / scheduled / stream        → Bronze PreSync pre-create (ConfigMap +
+    Job) + entity disposition ise ayrıca Silver PreSync pre-create + (varsa)
+    KafkaTopic + KafkaConnector + (Camel gibi) dedicated sink varsa onun da
+    KafkaConnector'ı
 
 Sink auto-create identifier koymaz → upsert append-only'e düşer; tablo(lar)
 bu yüzden connector'dan önce (PreSync) yaratılmalı — hem Bronze hem
@@ -38,7 +36,6 @@ ICEBERG_TOOLS_IMAGE = (
 )
 NESSIE_URI = "http://nessie:19120/iceberg/"
 S3_SECRET = "s3-credentials"
-DEFAULT_NAMESPACE = "lakehouse"
 
 
 def _cm_name(ice_namespace: str, target_table: str) -> str:
@@ -169,35 +166,54 @@ def _with_namespace(manifest: Dict[str, Any], namespace: str) -> Dict[str, Any]:
     return manifest
 
 
-def render_gitops_pipeline(
-    spec: SourceSpec,
-    columns: List[ColumnSpec],
-    identifier: List[str] | None = None,
-    namespace: str = DEFAULT_NAMESPACE,
-) -> List[Dict[str, Any]]:
-    """Bir kaynağın tam pipeline manifest SETi (dosya olarak yazılacak / PR'a
-    girecek). identifier verilmezse resolve_identifier fallback'i denenir; şema
-    (columns) veya identifier yoksa fail-loud (append-only bug'ı engellenir)."""
-    ident = list(identifier) if identifier else resolve_identifier(spec)
-    if not ident:
-        raise ValueError(
-            f"{spec.kind}+{spec.type}: identifier (PK) gerekli — spec.identifier verin "
-            "(sink auto-create identifier koymaz → upsert append-only)"
-        )
-    if not columns:
-        raise ValueError("columns (tablo şeması) gerekli — Console discovery ile doldurun")
+def render_pipeline_fileset(
+    spec: SourceSpec, *, spark_image: str, s3_secret_name: str, namespace: str
+) -> Dict[str, Dict[str, Any]]:
+    """Full GitOps manifest set for a source as {relative_path: manifest}.
+    DELEGATES to render_service (never re-implements lane/topic/disposition
+    logic) so it stays current; adds the GitOps envelope (PreSync pre-create,
+    namespace stamp, file layout). File layout: <source>/<NN>-<kind>-<name>.yaml."""
+    from app import source_types
+
+    files: Dict[str, Dict[str, Any]] = {}
+    src = spec.source
+
+    def _add(idx: int, kind: str, manifest: Dict[str, Any]) -> None:
+        m = _with_namespace(manifest, namespace)
+        name = m["metadata"]["name"]
+        files[f"{src}/{idx:02d}-{kind}-{name}.yaml"] = m
+
+    descriptor = source_types.get(spec.kind, spec.type)
+
+    # spark-batch: the ScheduledSparkApplication owns writing its own rawlake
+    # table (full-refresh CTAS) -- no topic/connector/precreate.
+    if descriptor.lane == "spark-batch":
+        _add(0, "scheduledsparkapplication",
+             render_service.render_spark_job(spec, spark_image, s3_secret_name))
+        return files
+
+    # cdc / scheduled / stream: PreSync pre-create + topic + connector [+ sink].
     bronze_ns = f"{spec.target_ns}{render_service.BRONZE_NAMESPACE_SUFFIX}"
-    return [
-        # Bronze — changelog, no identifier, metadata cols (before Silver/connector).
-        render_descriptor_configmap(
-            spec, columns, [], namespace, ice_namespace=bronze_ns, layer="bronze"
-        ),
-        render_precreate_job(spec, namespace, ice_namespace=bronze_ns, layer="bronze"),
-        # Silver — current-state, identifier (PK) (before connector).
-        render_descriptor_configmap(
-            spec, columns, ident, namespace, ice_namespace=spec.target_ns, layer="silver"
-        ),
-        render_precreate_job(spec, namespace, ice_namespace=spec.target_ns, layer="silver"),
-        _with_namespace(render_service.render_kafka_topic(render_service.topic_name(spec)), namespace),
-        _with_namespace(render_service.render_connector(spec), namespace),
-    ]
+    _add(0, "configmap", render_descriptor_configmap(
+        spec, spec.columns or [], [], namespace, ice_namespace=bronze_ns, layer="bronze"))
+    _add(1, "job", render_precreate_job(
+        spec, namespace, ice_namespace=bronze_ns, layer="bronze"))
+    if spec.effective_disposition() == "entity":
+        identifier = resolve_identifier(spec)
+        if not identifier:
+            raise ValueError(
+                f"{spec.kind}+{spec.type}: identifier (PK) gerekli — sink auto-create "
+                "identifier koymaz → upsert append-only'e düşer"
+            )
+        if not spec.columns:
+            raise ValueError("spec.columns gerekli (Silver şeması)")
+        _add(2, "configmap", render_descriptor_configmap(
+            spec, spec.columns, identifier, namespace, layer="silver"))
+        _add(3, "job", render_precreate_job(spec, namespace, layer="silver"))
+    if descriptor.topic_key:
+        _add(4, "kafkatopic",
+             render_service.render_kafka_topic(render_service.topic_name(spec)))
+    _add(5, "kafkaconnector", render_service.render_connector(spec))
+    if render_service.has_dedicated_sink(spec):
+        _add(6, "kafkaconnector", render_service.render_sink(spec))
+    return files

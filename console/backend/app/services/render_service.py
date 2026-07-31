@@ -48,6 +48,14 @@ SCHEMA_AUTO_REGISTER = "false"
 # RF=3 fails on a <3-broker cluster ("Could not initialize dead letter
 # queue").
 DLQ_REPLICATION_FACTOR = "3"
+# Annotation namespace stamped on every rendered CR (KafkaConnector,
+# dedicated sink, ScheduledSparkApplication) so Console/GitOps callers can
+# round-trip the logical `spec.source` that produced a given CR from the CR
+# object alone -- the CR's own `metadata.name` is a composite
+# (`_k8s_name(prefix, spec.source, table)`), never the bare source id, so
+# there is no other reliable way to recover it (see gitops delete routing in
+# routers.sources.delete_source, which fails loud without this annotation).
+SPARK_ANNOTATION_PREFIX = "lakehouse.solus.dev/"
 
 
 # --------------------------------------------------------------------------
@@ -138,7 +146,7 @@ def _tsconv() -> dict:
     }
 
 
-def _connector(name: str, klass: str, config: dict) -> dict:
+def _connector(name: str, klass: str, config: dict, source: str) -> dict:
     # NB: no `metadata.namespace` here on purpose — the API layer
     # (`app.services.k8s_service.K8sService._apply`) always applies this body
     # via `create/patch_namespaced_custom_object(namespace=self.namespace, ...)`,
@@ -147,12 +155,19 @@ def _connector(name: str, klass: str, config: dict) -> dict:
     # would cause an API-side namespace mismatch (the body's namespace vs.
     # the URL path's namespace) on any install whose namespace isn't the
     # dev/POC default.
+    #
+    # `source` -- the logical spec.source that produced this CR -- IS stamped
+    # as an annotation (unlike namespace): `name` is a composite
+    # (`_k8s_name(prefix, source, table)`), never the bare source id, so
+    # without this annotation there is no way to recover `spec.source` from
+    # the CR alone (needed by e.g. gitops delete routing).
     return {
         "apiVersion": "kafka.strimzi.io/v1beta2",
         "kind": "KafkaConnector",
         "metadata": {
             "name": name,
             "labels": {"strimzi.io/cluster": "connect"},
+            "annotations": {f"{SPARK_ANNOTATION_PREFIX}source": source},
         },
         "spec": {
             "class": klass,
@@ -363,7 +378,7 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
 
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
-    return _connector(name, klass, config)
+    return _connector(name, klass, config, spec.source)
 
 
 def _mysql_server_id(source: str) -> str:
@@ -419,7 +434,7 @@ def _render_cdc_mysql(spec: SourceSpec) -> dict:
 
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
-    return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config)
+    return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config, spec.source)
 
 
 def _render_cdc_mongo(spec: SourceSpec) -> dict:
@@ -460,7 +475,7 @@ def _render_cdc_mongo(spec: SourceSpec) -> dict:
     })
 
     name = _k8s_name("dbz", spec.source, spec.table)
-    return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config)
+    return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config, spec.source)
 
 
 def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
@@ -535,7 +550,7 @@ def _render_scheduled_jdbc(spec: SourceSpec) -> dict:
     })
 
     name = _k8s_name("jdbc", spec.source, table_name)
-    return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config)
+    return _connector(name, "io.aiven.connect.jdbc.JdbcSourceConnector", config, spec.source)
 
 
 def _kafka_consumer_override(spec: SourceSpec) -> dict:
@@ -646,7 +661,7 @@ def _render_kafka_ingest(spec: SourceSpec) -> dict:
     name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
     config = _iceberg_sink_config(name, spec.table, spec.target_ns, spec.target_table, f"{name}.dlq")
     config.update(_kafka_consumer_override(spec))
-    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config, spec.source)
 
 
 # --------------------------------------------------------------------------
@@ -684,7 +699,9 @@ def _render_camel_http(spec: SourceSpec) -> dict:
     config = {"topics": topic_name(spec), "camel.kamelet.http-source.url": spec.http_url, **_BYTE_CONVERTERS}
     if spec.poll_ms is not None:
         config["camel.kamelet.http-source.period"] = str(spec.poll_ms)
-    return _connector(name, "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector", config)
+    return _connector(
+        name, "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector", config, spec.source
+    )
 
 
 def _render_camel_mqtt(spec: SourceSpec) -> dict:
@@ -710,6 +727,7 @@ def _render_camel_mqtt(spec: SourceSpec) -> dict:
         name,
         "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector",
         config,
+        spec.source,
     )
 
 
@@ -741,6 +759,7 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
         name,
         "org.apache.camel.kafkaconnector.springrabbitmqsource.CamelSpringrabbitmqsourceSourceConnector",
         config,
+        spec.source,
     )
 
 
@@ -752,7 +771,7 @@ def render_camel_sink(spec: SourceSpec) -> dict:
     src_name = render_connector(spec)["metadata"]["name"]
     name = _k8s_name(src_name, "sink")
     config = _iceberg_sink_config(name, topic, spec.target_ns, spec.target_table, f"{topic}.dlq")
-    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config)
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config, spec.source)
 
 
 _RENDERERS = {
@@ -807,11 +826,10 @@ def render_sink(spec: SourceSpec) -> dict:
 # --------------------------------------------------------------------------
 
 SPARK_VERSION = "3.5.1"   # matches chart versions.sparkVersion (spark-py image)
-# Annotation namespace stamped on rendered Spark CRs so the Console's
-# edit/list views can round-trip the SourceSpec fields that produced a given
-# ScheduledSparkApplication (the CR spec itself has no room for e.g. the
-# logical `source`/`target_ns` that produced it).
-SPARK_ANNOTATION_PREFIX = "lakehouse.solus.dev/"
+# SPARK_ANNOTATION_PREFIX (used below for the round-trip annotations on
+# rendered Spark CRs) is defined once, near the top of this module, and
+# shared with `_connector` (KafkaConnector/sink CRs) -- see that constant's
+# docstring.
 
 
 def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:

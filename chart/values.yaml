@@ -103,6 +103,20 @@ components:
   # ONLY for a throwaway dev/PoC/e2e cluster with no real S3 endpoint
   # available. NEVER set this to `true` in a real/prod values-<env>.yaml.
   minio: false
+  # DEFAULT false — in-cluster Gitea write-path fallback
+  # (2026-07-30-gitops-core-slice-a-write-path Task 6,
+  # chart/templates/16-gitea.yaml): a single-replica, single-PVC Gitea
+  # instance for environments with no external git host reachable from the
+  # cluster. Only meaningful alongside `console.deployMode: gitops` — when
+  # `console.gitops.repoUrl` is left empty AND this is `true`, the Console
+  # backend's GITOPS_REPO_URL defaults to this Gitea's SSH remote (see
+  # chart/templates/console/console.yaml). Real installs bring their OWN git
+  # host (GitHub/GitLab/Gitea/Gitness) and set `console.gitops.repoUrl`
+  # explicitly instead — same "DEV/PoC/no-external-dependency fallback,
+  # never for production" posture as `components.minio` above. Bootstrap is
+  # responsible for seeding the `gitops-credential` Secret and creating the
+  # target repo inside this Gitea (out of this chart's scope).
+  gitea: false
   postgres: true
   kafka: true
   nessie: true
@@ -293,6 +307,25 @@ minio:
     # convention as `zeppelin.storageClassName` / `kafka.nodePools.*.storage.
     # class` — chart/tests/storage-neutrality_test.yaml).
     storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# In-cluster Gitea write-path fallback (Task 6, gated `components.gitea`,
+# DEFAULT false — see that key's own doc comment above). Only rendered by
+# chart/templates/16-gitea.yaml when the gate is on.
+gitea:
+  image: gitea/gitea:1.22
+  storageSize: 5Gi
+  # Empty (default) = cluster's default StorageClass (same omit-when-empty
+  # convention as `minio.storage.storageClassName` / `zeppelin.
+  # storageClassName` — chart/tests/storage-neutrality_test.yaml).
+  storageClassName: ""
+  repo: pipelines            # org/repo path the Console commits to
   resources:
     requests:
       cpu: 100m
@@ -1263,6 +1296,37 @@ console:
     # issuer-URL source of truth (must match `keycloak.realm.name`
     # = `lakehouse`).
     audience: lakehouse-console
+  # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5).
+  # `deployMode` selects the backend's write path for generated
+  # connector/job artifacts (console/backend/app/config.py `deploy_mode`,
+  # env `DEPLOY_MODE`):
+  #   direct (DEFAULT): backend applies CRs straight to the k8s API (today's
+  #     behavior, unchanged) — no repo, no credential needed.
+  #   gitops: backend instead commits rendered manifests to a git repo
+  #     (`gitops.repoUrl`/`branch`/`path`) for an external reconciler
+  #     (Argo CD/Flux) to apply. Requires `gitops.repoUrl` to be set — the
+  #     Deployment template `required()`-guards this at render time (mirrors
+  #     `oidc.secretName`'s fail-loud pattern in 06-trino-ha.yaml/
+  #     04-nessie-ha.yaml) so a misconfigured `gitops` install fails loudly
+  #     at `helm install/upgrade`, not silently at backend runtime.
+  deployMode: direct
+  gitops:
+    # ssh://git@host/org/pipelines.git (or an in-cluster Gitea/Gitness
+    # instance). Empty by default (direct mode needs no repo); REQUIRED when
+    # `deployMode: gitops` (see comment above).
+    repoUrl: ""
+    branch: main
+    path: pipelines
+    # k8s Secret name providing the git credential — mounted read-only at
+    # /var/run/gitops on console-backend (keys `ssh-privatekey` +
+    # optional `known_hosts`), matching the deploy-key path the backend
+    # reads (console/backend/app/services/gitops_service.py, Task 4). Same
+    # "name reference only" convention as `storage.s3.secretName`/
+    # `oidc.secretName` — the Secret's own material is provisioned
+    # out-of-band per `.Values.secrets.mode`, never defined in this chart.
+    # Only actually consumed (volume + mount rendered) when
+    # `deployMode: gitops`.
+    credentialSecret: gitops-credential
   networkPolicy:
     # S3 endpoint CIDR/IP block (egress allow-list) — same plain
     # `{{TOKEN}}` placeholder convention as `postgres.nessie.backup.endpointURL`
