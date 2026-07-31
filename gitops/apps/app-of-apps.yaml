@@ -10,8 +10,9 @@
 #   • lakehouse-pipelines → DIRECTORY-source: Console'un ürettiği saf-YAML CDC
 #     akış manifestleri (pipeline repo'su). PreSync hook sıralaması burada.
 #
-# App-of-Apps'e ölçeklemek istenirse: bu iki Application'ı yöneten bir kök
-# `Application` (source=gitops/apps) eklenebilir — bkz. gitops/README.md.
+# App-of-Apps: bu iki Application'ı yöneten bir kök `Application` (lakehouse-root,
+# source=gitops/apps) aşağıda tanımlanmıştır. Root, sync-wave anotasyonlarına göre
+# platform → pipelines sırasını uygular — bkz. gitops/README.md.
 #
 # ÖN KOŞUL: cluster-scoped OLM operatörleri (operators/, 06-openshift-gitops
 # dahil) ve secret'lar ArgoCD'den ÖNCE kurulur (chart namespaced release,
@@ -31,6 +32,27 @@
 # `project: default` yerine ayrı bir AppProject (RBAC) kullanılması
 # önerilir — POC-DOĞRULA.
 # ============================================================================
+---
+# Root Application: lakehouse-root — manages gitops/apps directory.
+# Enforces sync-wave ordering: platform (0) before pipelines (1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lakehouse-root
+  namespace: openshift-gitops   # vanilla: bootstrap substitutes `argocd` (see Task 3)
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+spec:
+  project: default
+  source:
+    repoURL: "<PLATFORM_REPO_URL>"   # bootstrap fills; holds gitops/apps
+    targetRevision: main
+    path: gitops/apps
+    directory: {recurse: false, include: "app-of-apps.yaml"}
+  destination: {server: https://kubernetes.default.svc, namespace: openshift-gitops}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=false]
+---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -88,7 +110,7 @@ spec:
   source:
     repoURL: "<PIPELINE_REPO_URL>"   # bkz. yukarıdaki placeholder notu — elle değiştirin
     targetRevision: main
-    path: "."                        # her kaynak = bir manifest seti (recurse)
+    path: pipelines                  # her kaynak = bir manifest seti; pipelines/ alt dizini
     directory: {recurse: true}
   destination:
     server: https://kubernetes.default.svc
