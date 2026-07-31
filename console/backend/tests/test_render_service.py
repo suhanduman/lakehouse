@@ -527,6 +527,43 @@ def test_kafka_ingest_has_control_group_overrides():
     assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"
 
 
+def test_kafka_ingest_event_keeps_static_deleted_false():
+    c = r.render_connector(_kafka())["spec"]["config"]  # default event, no delete_field
+    assert c["transforms.setdel.type"] == "org.apache.kafka.connect.transforms.InsertField$Value"
+    assert c["transforms.setdel.static.field"] == "__deleted"
+    assert c["transforms.setdel.static.value"] == "false"
+    assert "transforms.setdel.renames" not in c
+
+
+def test_kafka_ingest_entity_with_delete_field_renames_to_deleted():
+    from app.models import ColumnSpec
+    c = r.render_connector(_kafka(
+        disposition="entity",
+        columns=[ColumnSpec(name="id", type="bigint")],
+        identifier=["id"],
+        delete_field="_deleted",
+    ))["spec"]["config"]
+    assert c["transforms.setdel.type"] == "org.apache.kafka.connect.transforms.ReplaceField$Value"
+    assert c["transforms.setdel.renames"] == "_deleted:__deleted"
+    # the static-set keys are gone (ReplaceField ignores them, but keep it clean)
+    assert "transforms.setdel.static.field" not in c
+    assert "transforms.setdel.static.value" not in c
+    # the rest of the chain is unchanged
+    assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+    assert c["transforms.setop.static.value"] == "u"
+
+
+def test_kafka_ingest_entity_without_delete_field_stays_upsert_only():
+    from app.models import ColumnSpec
+    c = r.render_connector(_kafka(
+        disposition="entity",
+        columns=[ColumnSpec(name="id", type="bigint")],
+        identifier=["id"],
+    ))["spec"]["config"]
+    assert c["transforms.setdel.static.value"] == "false"   # no delete_field => static false
+    assert "transforms.setdel.renames" not in c
+
+
 # --------------------------------------------------------------------------
 # render_spark_job / _render_s3_register (Plan B2 Task 2: spark-batch lane,
 # separate ScheduledSparkApplication dispatch from the KafkaConnector one)

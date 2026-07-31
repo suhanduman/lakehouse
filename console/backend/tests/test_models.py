@@ -129,8 +129,12 @@ def test_stream_kafka_external_bootstrap():
 
 
 def test_disposition_entity_rejected_for_event_only_type():
+    # stream-kafka now allows entity (upsert-from-Kafka); stream-mqtt remains
+    # event-only, so it is the type that still exercises this rejection path.
     with pytest.raises(ValidationError, match="disposition"):
-        SourceSpec(**_kafka(disposition="entity"))   # stream-kafka allows only event in B1
+        SourceSpec(source="m1", kind="stream", type="mqtt", db="-", table="-",
+                   target_ns="iot", target_table="sensors",
+                   mqtt_broker="b", mqtt_topic="t", disposition="entity")
 
 
 def test_cdc_pg_still_entity():
@@ -143,6 +147,19 @@ def test_stream_non_kafka_type_is_unregistered():
     # valid Literal combo, but it isn't registered -> registry KeyError path.
     with pytest.raises(ValidationError, match="unknown source"):
         SourceSpec(**_kafka(type="mssql"))
+
+
+def test_stream_kafka_entity_with_columns_identifier_and_delete_field():
+    from app.models import ColumnSpec
+    s = SourceSpec(**_kafka(
+        disposition="entity",
+        columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="name", type="varchar")],
+        identifier=["id"],
+        delete_field="_deleted",
+    ))
+    assert s.effective_disposition() == "entity"
+    assert s.delete_field == "_deleted"
+    assert s.identifier == ["id"]
 
 
 def _s3(**over):

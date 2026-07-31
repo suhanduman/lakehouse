@@ -95,9 +95,10 @@ register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "ent
                     ("cron",), "", ""))
 # existing-Kafka: consume a topic (in-cluster or external) into its own Bronze
 # via a DEDICATED Iceberg sink (see render_service._render_kafka_ingest). event
-# disposition only in B1 (append-only; entity/upsert-from-Kafka is a later plan).
+# (append-only) is the default; entity (upsert-from-Kafka) is now allowed too,
+# via SourceSpec.identifier + optional SourceSpec.delete_field.
 register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "event",
-                    (), "kafka-ingest", "", dispositions=("event",)))
+                    (), "kafka-ingest", "", dispositions=("event", "entity")))
 # S3 file-set -> Iceberg table (Spark-batch lane). Files already live in the
 # platform's own object store; a Console-driven Spark job full-refresh CTAS's
 # them into a queryable rawlake table. Not CDC/medallion — disposition is inert.

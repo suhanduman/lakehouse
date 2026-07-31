@@ -90,6 +90,11 @@ interface FormState {
   password: string;
   disposition: Disposition;
   kafka_bootstrap: string;
+  // stream/kafka + entity only (upsert-from-Kafka, Plan B1 Task 4): raw text
+  // for the entity's columns/PK/soft-delete marker, parsed in buildSpec.
+  columnsText: string;
+  identifierText: string;
+  delete_field: string;
   // Values for any required field the registry lists that FIELD_META
   // doesn't know a dedicated input for -- keeps a brand-new source type
   // fully usable (not just visible) without a frontend edit.
@@ -123,6 +128,9 @@ const INITIAL_STATE: FormState = {
   password: "",
   disposition: "",
   kafka_bootstrap: "",
+  columnsText: "",
+  identifierText: "",
+  delete_field: "",
   extraFields: {},
 };
 
@@ -241,6 +249,29 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   if (form.kafka_bootstrap) {
     spec.kafka_bootstrap = form.kafka_bootstrap;
   }
+  if (form.disposition === "entity" && form.type === "kafka") {
+    const cols = form.columnsText
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const [name, type] = pair.split(":").map((x) => x.trim());
+        return { name, type };
+      });
+    if (cols.length) {
+      spec.columns = cols;
+    }
+    const ids = form.identifierText
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length) {
+      spec.identifier = ids;
+    }
+    if (form.delete_field.trim()) {
+      spec.delete_field = form.delete_field.trim();
+    }
+  }
   return spec;
 }
 
@@ -307,6 +338,10 @@ export default function AddSourceWizard() {
   const unknownRequiredFields = requiredFields.filter((f) => !KNOWN_SPEC_FIELDS.has(f));
   const showDisposition = (selectedDescriptor?.dispositions.length ?? 0) > 1;
   const showKafkaBootstrap = selectedDescriptor?.needs_bootstrap ?? false;
+  // Upsert-from-Kafka (Plan B1 Task 4): only stream/kafka + an explicit
+  // "entity" disposition choice collects columns/identifier/delete_field --
+  // the unset default (effective disposition "event") keeps them hidden.
+  const showEntityFields = selectedDescriptor?.type === "kafka" && form.disposition === "entity";
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -329,11 +364,22 @@ export default function AddSourceWizard() {
       type: firstType as Type,
       disposition: "",
       kafka_bootstrap: "",
+      columnsText: "",
+      identifierText: "",
+      delete_field: "",
     }));
   }
 
   function handleTypeChange(newType: string) {
-    setForm((prev) => ({ ...prev, type: newType as Type, disposition: "", kafka_bootstrap: "" }));
+    setForm((prev) => ({
+      ...prev,
+      type: newType as Type,
+      disposition: "",
+      kafka_bootstrap: "",
+      columnsText: "",
+      identifierText: "",
+      delete_field: "",
+    }));
   }
 
   function goNext() {
@@ -442,6 +488,39 @@ export default function AddSourceWizard() {
                 onChange={(e) => set("kafka_bootstrap", e.target.value)}
               />
             </div>
+          )}
+          {showEntityFields && (
+            <>
+              <div>
+                <label htmlFor="columns">Columns</label>
+                <input
+                  id="columns"
+                  value={form.columnsText}
+                  onChange={(e) => set("columnsText", e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="identifier">Identifier</label>
+                <input
+                  id="identifier"
+                  value={form.identifierText}
+                  onChange={(e) => set("identifierText", e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="delete_field">Delete field</label>
+                <input
+                  id="delete_field"
+                  value={form.delete_field}
+                  onChange={(e) => set("delete_field", e.target.value)}
+                />
+              </div>
+              <p>
+                Key your topic by the entity PK for deterministic last-writer-wins. A delete
+                field must be a boolean present on every record and must not be listed in
+                columns.
+              </p>
+            </>
           )}
           <button type="button" onClick={goNext}>
             Next

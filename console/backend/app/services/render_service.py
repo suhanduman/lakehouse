@@ -657,10 +657,24 @@ def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: s
 
 
 def _render_kafka_ingest(spec: SourceSpec) -> dict:
-    """stream+kafka (event) -> DEDICATED Iceberg sink reading an existing topic."""
+    """stream+kafka -> DEDICATED Iceberg sink reading an existing topic.
+
+    event (default): __deleted is a static "false" -- append-only, no upsert.
+    entity + delete_field: rename the upstream BOOLEAN delete flag to __deleted
+    so merge_cdc's `WHEN MATCHED AND __deleted THEN DELETE` fires. The flag must
+    be a boolean present on EVERY record (else __deleted is NULL and merge_sql's
+    NOT-MATCHED insert is skipped by three-valued logic). Value-equality deletes
+    (op=="d") are v2 (need a custom SMT). Localized here on purpose: the shared
+    _iceberg_sink_config and the Camel sinks are untouched.
+    """
     name = _k8s_name("kafka-ingest", spec.source, spec.target_table)
     config = _iceberg_sink_config(name, spec.table, spec.target_ns, spec.target_table, f"{name}.dlq")
     config.update(_kafka_consumer_override(spec))
+    if spec.effective_disposition() == "entity" and spec.delete_field:
+        config.pop("transforms.setdel.static.field", None)
+        config.pop("transforms.setdel.static.value", None)
+        config["transforms.setdel.type"] = "org.apache.kafka.connect.transforms.ReplaceField$Value"
+        config["transforms.setdel.renames"] = f"{spec.delete_field}:__deleted"
     return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config, spec.source)
 
 

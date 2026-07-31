@@ -45,7 +45,7 @@ const DEFAULT_SOURCE_TYPES: SourceTypeDescriptor[] = [
   },
   {
     id: "stream-kafka", kind: "stream", type: "kafka", lane: "kafka-connect-source",
-    disposition: "event", dispositions: ["event"],
+    disposition: "event", dispositions: ["event", "entity"],
     required_fields: [], needs_bootstrap: true,
   },
   {
@@ -355,5 +355,88 @@ describe("AddSourceWizard", () => {
     expect(screen.getByRole("option", { name: /^entity$/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     expect(await screen.findByLabelText(/http url/i)).toBeInTheDocument();
+  });
+
+  it("shows columns/identifier/delete_field for stream/kafka + entity", async () => {
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^kafka$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "kafka" } });
+
+    fireEvent.change(await screen.findByLabelText(/disposition/i), {
+      target: { value: "entity" },
+    });
+
+    expect(screen.getByLabelText(/columns/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/identifier/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/delete field/i)).toBeInTheDocument();
+  });
+
+  it("hides columns/identifier/delete_field for stream/kafka + event (default)", async () => {
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^kafka$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "kafka" } });
+
+    // Default disposition (unselected) resolves to "event" -- entity-only
+    // fields must stay hidden.
+    await screen.findByLabelText(/disposition/i);
+    expect(screen.queryByLabelText(/columns/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/identifier/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/delete field/i)).not.toBeInTheDocument();
+  });
+
+  it("wires filled columns/identifier/delete_field into the built spec for stream/kafka + entity", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^kafka$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "kafka" } });
+    fireEvent.change(await screen.findByLabelText(/disposition/i), {
+      target: { value: "entity" },
+    });
+
+    fireEvent.change(screen.getByLabelText(/columns/i), {
+      target: { value: "id:bigint,name:varchar" },
+    });
+    fireEvent.change(screen.getByLabelText(/identifier/i), {
+      target: { value: "id" },
+    });
+    fireEvent.change(screen.getByLabelText(/delete field/i), {
+      target: { value: "_deleted" },
+    });
+
+    // Step 1 -> 2: source name.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.change(screen.getByLabelText(/source name/i), {
+      target: { value: "kafka1" },
+    });
+    // Step 2 -> 3 -> 4: no required fields for stream/kafka; fill the target.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.change(screen.getByLabelText(/target namespace/i), {
+      target: { value: "ns1" },
+    });
+    fireEvent.change(screen.getByLabelText(/target table/i), {
+      target: { value: "tbl1" },
+    });
+    // Step 4 -> 5: fetch preview, which calls buildSpec under the hood.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.columns).toEqual([
+      { name: "id", type: "bigint" },
+      { name: "name", type: "varchar" },
+    ]);
+    expect(spec.identifier).toEqual(["id"]);
+    expect(spec.delete_field).toBe("_deleted");
   });
 });

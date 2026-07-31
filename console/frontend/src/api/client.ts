@@ -66,6 +66,9 @@ export interface SourceSpec {
   rabbitmq_queue?: string;
   disposition?: "entity" | "event";
   kafka_bootstrap?: string;
+  columns?: { name: string; type: string }[];
+  identifier?: string[];
+  delete_field?: string;
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
