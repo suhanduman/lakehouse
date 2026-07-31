@@ -15,13 +15,13 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: components.gitea=true renders the Deployment (configured image, both ports), the PVC (configured size, no storageClassName by default) and both Services (gitea-ssh :22, gitea-http :3000)
+  - it: components.gitea=true renders the Deployment (configured image, both ports), the PVC (configured size, no storageClassName by default), both Services (gitea-ssh :22, gitea-http :3000) and the ArgoCD-ingress NetworkPolicy
     template: 16-gitea.yaml
     set:
       components.gitea: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 5
       - equal:
           path: spec.template.spec.containers[0].image
           value: "gitea/gitea:1.22"
@@ -49,6 +49,37 @@ tests:
           path: spec.ports[0].port
           value: 3000
         documentSelector: {path: metadata.name, value: gitea-http}
+      # The ArgoCD-ingress NetworkPolicy (live-verify finding, Slice B-II):
+      # selects the gitea pods and allows ingress from the ArgoCD namespace
+      # (default `argocd`) on the SSH port, so the release namespace's
+      # default-deny-ingress doesn't block ArgoCD's repo-server clone.
+      - equal:
+          path: spec.podSelector.matchLabels.app
+          value: gitea
+        documentSelector: {path: kind, value: NetworkPolicy}
+      - equal:
+          path: spec.policyTypes[0]
+          value: Ingress
+        documentSelector: {path: kind, value: NetworkPolicy}
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: argocd
+        documentSelector: {path: kind, value: NetworkPolicy}
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 22
+        documentSelector: {path: kind, value: NetworkPolicy}
+
+  - it: "components.gitea=true with a custom console.argocdNamespace: the ArgoCD-ingress NetworkPolicy selects that namespace (OpenShift's openshift-gitops)"
+    template: 16-gitea.yaml
+    set:
+      components.gitea: true
+      console.argocdNamespace: openshift-gitops
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-gitops
+        documentSelector: {path: kind, value: NetworkPolicy}
 
   - it: components.gitea=true with a custom image/storageSize/storageClassName renders those exact values
     template: 16-gitea.yaml
