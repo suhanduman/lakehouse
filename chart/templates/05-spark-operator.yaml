@@ -6,10 +6,13 @@
 # bir SparkApplication CR olarak submit edilir; driver + N executor açılır,
 # iş bitince kapanır.
 #
-# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py) `spark-py` imajına
-# gömülüdür ve `local://` yolu ile referanslanır — imaj build ayrı bir
-# pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
-# referans verir, job dosyalarını TAŞIMAZ.
+# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py, merge_cdc.py +
+# merge_lib.py) artık `spark-py` imajına gömülü DEĞİL; `mainApplicationFile`
+# (ve merge_cdc için `deps.pyFiles`) `s3a://<storage.jobsBucket>/
+# <storage.jobsPrefix>/<f>.py` ile referanslanır — jobs-seed Job'ı
+# (19-jobs-seed.yaml) imajdaki kodu bu bucket'a yükler (spec s3a
+# job-code-delivery). Image build ayrı bir pipeline'dır (spec §0.3); bu
+# chart yalnızca `image`/version values ile referans verir.
 #
 # Service wiring (spec §3.1/§8): the inline `sparkConf` below (via the
 # `lakehouse.spark.baseConf` helper, chart/templates/_helpers.tpl) resolves
@@ -70,7 +73,7 @@ spec:
     type: Python
     mode: cluster
     image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
-    mainApplicationFile: "local:///opt/spark/jobs/iceberg_maintenance.py"
+    mainApplicationFile: {{ printf "s3a://%s/%s/iceberg_maintenance.py" .Values.storage.jobsBucket .Values.storage.jobsPrefix | quote }}
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
     sparkConf:
 {{ include "lakehouse.spark.baseConf" . | indent 6 }}
@@ -109,7 +112,10 @@ spec:
     type: Python
     mode: cluster
     image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
-    mainApplicationFile: "local:///opt/spark/jobs/merge_cdc.py"
+    mainApplicationFile: {{ printf "s3a://%s/%s/merge_cdc.py" .Values.storage.jobsBucket .Values.storage.jobsPrefix | quote }}
+    deps:
+      pyFiles:
+        - {{ printf "s3a://%s/%s/merge_lib.py" .Values.storage.jobsBucket .Values.storage.jobsPrefix | quote }}
     arguments: ["--max-parallel", {{ .Values.sparkOperator.silverMerge.mergeParallelism | quote }}]
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
     sparkConf:

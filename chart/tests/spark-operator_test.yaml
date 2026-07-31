@@ -15,7 +15,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.mainApplicationFile
-          value: "local:///opt/spark/jobs/merge_cdc.py"
+          value: "s3a://spark-jobs/jobs/merge_cdc.py"
       - equal:
           path: spec.template.dynamicAllocation.enabled
           value: true

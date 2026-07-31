@@ -9,6 +9,7 @@
 suite: s3a job-code delivery — values + baseConf endpoint + bucket-init
 templates:
   - 05-spark-operator.yaml
+  - 14-nginx-ingest.yaml
   - 18-bucket-init.yaml
   - 19-jobs-seed.yaml
 tests:
@@ -56,3 +57,22 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "mc cp /seed/.*s3/spark-jobs/jobs/"
+
+  - it: "merge_cdc reads its main file + merge_lib from s3a"
+    template: templates/05-spark-operator.yaml
+    documentSelector: {path: metadata.name, value: silver-merge}
+    asserts:
+      - equal: {path: spec.template.mainApplicationFile, value: "s3a://spark-jobs/jobs/merge_cdc.py"}
+      - contains: {path: spec.template.deps.pyFiles, content: "s3a://spark-jobs/jobs/merge_lib.py"}
+
+  - it: "iceberg_maintenance reads its main file from s3a"
+    template: templates/05-spark-operator.yaml
+    documentSelector: {path: metadata.name, value: iceberg-maintenance}
+    asserts:
+      - equal: {path: spec.template.mainApplicationFile, value: "s3a://spark-jobs/jobs/iceberg_maintenance.py"}
+
+  - it: "nginx_streaming reads its main file from s3a"
+    template: templates/14-nginx-ingest.yaml
+    documentSelector: {path: metadata.name, value: nginx-streaming}
+    asserts:
+      - equal: {path: spec.mainApplicationFile, value: "s3a://spark-jobs/jobs/nginx_streaming.py"}
