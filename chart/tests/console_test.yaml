@@ -97,3 +97,77 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "console.gitops.repoUrl is required when deployMode=gitops"
+
+  # 2026-07-30-gitops-core-slice-b1-argocd-wiring Task 6: the ArgoCD-read
+  # Role/RoleBinding (namespace `.Values.console.argocdNamespace`) + the
+  # ConfigMap's ARGOCD_NAMESPACE key. Both the new Role and RoleBinding
+  # share `metadata.name: lakehouse-console-argocd-read`, and `kind: Role`
+  # alone collides with the file's OTHER (release-namespace) Role
+  # `lakehouse-console-role` above — so the positive test below disambiguates
+  # via documentSelector on a field unique to each: `rules[0].apiGroups[0]`
+  # (argoproj.io, vs the other Role's kafka.strimzi.io) for the Role,
+  # `roleRef.name` (lakehouse-console-argocd-read, vs the other RoleBinding's
+  # lakehouse-console-role) for the RoleBinding. For THIS absence test,
+  # `containsDocument` + `not: true` is used instead of `hasDocuments` +
+  # `documentSelector`: helm-unittest's documentSelector hard-errors
+  # ("document not found") when zero documents match by default (a prior
+  # gotcha), whereas `containsDocument` tolerates a genuine zero-match render.
+  - it: "default (deployMode=direct): NO lakehouse-console-argocd-read Role/RoleBinding renders (control case)"
+    asserts:
+      - containsDocument:
+          kind: Role
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: lakehouse-console-argocd-read
+          namespace: argocd
+        not: true
+      - containsDocument:
+          kind: RoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: lakehouse-console-argocd-read
+          namespace: argocd
+        not: true
+
+  - it: "deployMode=gitops: the ArgoCD-read Role+RoleBinding render in .Values.console.argocdNamespace (kind: Role, NEVER ClusterRole), bound to the lakehouse-console ServiceAccount, and the ConfigMap carries ARGOCD_NAMESPACE"
+    set:
+      console.deployMode: gitops
+      console.gitops.repoUrl: ssh://x
+    asserts:
+      - equal:
+          path: data.ARGOCD_NAMESPACE
+          value: "argocd"
+        documentSelector: {path: kind, value: ConfigMap}
+      - equal:
+          path: kind
+          value: Role
+        documentSelector: {path: "rules[0].apiGroups[0]", value: "argoproj.io"}
+      - equal:
+          path: metadata.namespace
+          value: argocd
+        documentSelector: {path: "rules[0].apiGroups[0]", value: "argoproj.io"}
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["argoproj.io"]
+            resources: ["applications"]
+            verbs: ["get", "list", "watch"]
+        documentSelector: {path: "rules[0].apiGroups[0]", value: "argoproj.io"}
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
+      - equal:
+          path: metadata.namespace
+          value: argocd
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
+      - equal:
+          path: subjects[0].name
+          value: lakehouse-console
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
+      - equal:
+          path: roleRef
+          value: {kind: Role, name: lakehouse-console-argocd-read, apiGroup: rbac.authorization.k8s.io}
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}

@@ -133,6 +133,13 @@ data:
   GITOPS_BRANCH: {{ .Values.console.gitops.branch | quote }}
   GITOPS_PATH: {{ .Values.console.gitops.path | quote }}
   GITOPS_CREDENTIAL_SECRET: {{ .Values.console.gitops.credentialSecret | quote }}
+  # ArgoCD-status read-path (2026-07-30-gitops-core-slice-b1-argocd-wiring
+  # Task 6) — plain (non-secret) config, same convention as GITOPS_* above.
+  # Feeds `settings.argocd_namespace` (Task 4), consumed by the `/gitops/
+  # status` reader (Task 5) to locate the Application CR. Set unconditionally
+  # (not gated on deployMode) since the backend/reader itself only acts on
+  # it when relevant; the RBAC granting access to it below IS gated.
+  ARGOCD_NAMESPACE: {{ .Values.console.argocdNamespace | quote }}
 
 ---
 # -------- Backend Deployment --------
@@ -415,4 +422,36 @@ spec:
   - to:
     - ipBlock: {cidr: {{ .Values.console.networkPolicy.s3Cidr | quote }}}
     ports: [{protocol: TCP, port: 443}]
+
+{{- if eq .Values.console.deployMode "gitops" }}
+---
+# -------- ArgoCD-read RBAC (2026-07-30-gitops-core-slice-b1-argocd-wiring
+# Task 6) — NAMESPACE-SCOPED `Role` (NEVER `ClusterRole`), rendered ONLY in
+# gitops mode. Lives in `.Values.console.argocdNamespace` (ArgoCD's OWN
+# namespace, generally different from the release namespace this chart's
+# other Role/RoleBinding pair above lives in), granting the SAME
+# `lakehouse-console` ServiceAccount (release namespace, bound cross-
+# namespace via the RoleBinding's `subjects[].namespace`) read-only access
+# to the `Application` CR the `/gitops/status` endpoint (Task 5) polls. --------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lakehouse-console-argocd-read
+  namespace: {{ .Values.console.argocdNamespace | quote }}
+rules:
+- apiGroups: ["argoproj.io"]
+  resources: ["applications"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lakehouse-console-argocd-read
+  namespace: {{ .Values.console.argocdNamespace | quote }}
+subjects:
+- kind: ServiceAccount
+  name: lakehouse-console
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef: {kind: Role, name: lakehouse-console-argocd-read, apiGroup: rbac.authorization.k8s.io}
+{{- end }}
 {{- end }}

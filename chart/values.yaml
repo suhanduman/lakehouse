@@ -1327,6 +1327,16 @@ console:
     # Only actually consumed (volume + mount rendered) when
     # `deployMode: gitops`.
     credentialSecret: gitops-credential
+  # ArgoCD's own namespace (2026-07-30-gitops-core-slice-b1-argocd-wiring
+  # Task 6). Consumed two ways: (1) plain config, `ARGOCD_NAMESPACE` in the
+  # backend ConfigMap, feeding `settings.argocd_namespace`
+  # (console/backend/app/config.py, Task 4) — the `/gitops/status` reader
+  # (Task 5) looks up the Application CR here regardless of `deployMode`;
+  # (2) the namespace the namespace-scoped `lakehouse-console-argocd-read`
+  # Role/RoleBinding below is rendered into, gated `deployMode: gitops`
+  # only. openshift-gitops is the OpenShift OperatorHub ArgoCD's default
+  # namespace; "argocd" is the vanilla/community-manifest default.
+  argocdNamespace: argocd   # openshift-gitops on OpenShift
   networkPolicy:
     # S3 endpoint CIDR/IP block (egress allow-list) — same plain
     # `{{TOKEN}}` placeholder convention as `postgres.nessie.backup.endpointURL`
