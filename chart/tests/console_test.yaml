@@ -168,6 +168,10 @@ tests:
           value: lakehouse-console
         documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
       - equal:
+          path: subjects[0].namespace
+          value: NAMESPACE
+        documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}
+      - equal:
           path: roleRef
           value: {kind: Role, name: lakehouse-console-argocd-read, apiGroup: rbac.authorization.k8s.io}
         documentSelector: {path: roleRef.name, value: lakehouse-console-argocd-read}

@@ -240,13 +240,12 @@ class K8sService:
         """ArgoCD Application CR .status (sync/health/resources) via the k8s API.
         None when ArgoCD/the Application isn't present (404) -- gitops-status is
         best-effort, never a hard dependency."""
-        from kubernetes.client.exceptions import ApiException
         try:
             obj = self.custom_api.get_namespaced_custom_object(
                 group="argoproj.io", version="v1alpha1", namespace=namespace,
                 plural="applications", name=name)
         except ApiException as exc:
-            if exc.status == 404:
+            if exc.status == HTTP_NOT_FOUND:
                 return None
             raise
         return (obj or {}).get("status")
