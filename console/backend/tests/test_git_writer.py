@@ -1,5 +1,5 @@
 import subprocess, tempfile, os, yaml
-from app.services.git_writer import GitWriter
+from app.services.git_writer import GitWriter, GitCredential
 
 
 def _git(cwd, *a):
@@ -43,3 +43,24 @@ def test_remove_source_deletes_dir():
         assert res.committed
         co = _clone(bare, tmp)
         assert not os.path.exists(os.path.join(co, "pipelines", "mysrc"))
+
+
+def test_https_token_wires_askpass_without_leaking_token_in_env():
+    token = "secret-tok"
+    w = GitWriter(repo_url="https://example.invalid/repo.git", branch="main", path="pipelines",
+                  credential=GitCredential(https_token=token))
+    try:
+        env = w._env()
+        askpass = env.get("GIT_ASKPASS")
+        assert askpass and os.path.isfile(askpass) and os.access(askpass, os.X_OK)
+        # token delivered out-of-band via the askpass script only -- never on the
+        # repo URL, never as a literal value anywhere else in the built env.
+        assert token not in w.repo_url
+        assert all(v != token for v in env.values())
+        # sanity: the script actually answers a password prompt with the token.
+        out = subprocess.run([askpass, "Password for 'https://x@example.invalid':"],
+                              check=True, capture_output=True, text=True).stdout
+        assert out == token
+    finally:
+        if w._askpass_path and os.path.exists(w._askpass_path):
+            os.remove(w._askpass_path)

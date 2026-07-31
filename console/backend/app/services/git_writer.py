@@ -33,6 +33,21 @@ class GitWriter:
         self.path = path.strip("/")
         self.credential = credential
         self._lock = threading.Lock()   # serialize pushes (single-flight)
+        self._askpass_path: Optional[str] = None
+
+    def _make_askpass_script(self, token: str) -> str:
+        """Write a temp GIT_ASKPASS helper that hands `token` to git out-of-band
+        (never on the command line, never in the remote URL, never logged)."""
+        fd, path = tempfile.mkstemp(prefix="gitops-askpass-")
+        with os.fdopen(fd, "w") as fh:
+            fh.write("#!/bin/sh\n")
+            fh.write("# GIT_ASKPASS helper -- supplies the HTTPS token as the password.\n")
+            fh.write('case "$1" in\n')
+            fh.write('  *[Uu]sername*) printf %s "x-access-token" ;;\n')
+            fh.write(f'  *) printf %s "{token}" ;;\n')
+            fh.write("esac\n")
+        os.chmod(path, 0o700)
+        return path
 
     def _env(self) -> Dict[str, str]:
         env = dict(os.environ)
@@ -41,6 +56,10 @@ class GitWriter:
             opts = f"-i {self.credential.ssh_key_path} -o IdentitiesOnly=yes"
             opts += f" -o UserKnownHostsFile={kh}" if kh else " -o StrictHostKeyChecking=accept-new"
             env["GIT_SSH_COMMAND"] = f"ssh {opts}"
+        elif self.credential and self.credential.https_token:
+            if not self._askpass_path or not os.path.exists(self._askpass_path):
+                self._askpass_path = self._make_askpass_script(self.credential.https_token)
+            env["GIT_ASKPASS"] = self._askpass_path
         env.setdefault("GIT_TERMINAL_PROMPT", "0")
         return env
 
@@ -73,6 +92,12 @@ class GitWriter:
                 return res
             finally:
                 shutil.rmtree(work, ignore_errors=True)
+                if self._askpass_path:
+                    try:
+                        os.remove(self._askpass_path)
+                    except OSError:
+                        pass
+                    self._askpass_path = None
 
     def write_source(self, source: str, fileset: Dict[str, Dict[str, Any]]) -> CommitResult:
         def mutate(work: str) -> List[str]:
