@@ -44,6 +44,9 @@ spec:
         args: ["set -eu; cp /opt/spark/jobs/*.py /seed/"]
         volumeMounts:
         - {name: seed, mountPath: /seed}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}
       containers:
       - name: upload-jobs
         image: {{ .Values.versions.mcImage | quote }}

@@ -12,6 +12,13 @@ templates:
   - 14-nginx-ingest.yaml
   - 18-bucket-init.yaml
   - 19-jobs-seed.yaml
+# NON-default release namespace ("lakehouse-test"), same convention as
+# chart/tests/helpers_test.yaml — so the `lakehouse.s3.s3aEndpoint` helper's
+# auto-derived MinIO endpoint test below (which embeds the namespace in the
+# expected URL) actually proves namespace-portability instead of only
+# matching the tool's own implicit default namespace by coincidence.
+release:
+  namespace: lakehouse-test
 tests:
   - it: "storage.s3.endpoint set -> merge_cdc sparkConf carries spark.hadoop.fs.s3a.endpoint"
     template: templates/05-spark-operator.yaml
@@ -28,6 +35,15 @@ tests:
     asserts:
       - notExists:
           path: spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]
+
+  - it: "components.minio=true + storage.s3.endpoint empty -> auto-derived in-cluster MinIO s3a endpoint (bundled-MinIO installs must not regress)"
+    template: templates/05-spark-operator.yaml
+    set: {components.minio: true}
+    documentSelector: {path: metadata.name, value: silver-merge}
+    asserts:
+      - equal:
+          path: spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]
+          value: "http://minio.lakehouse-test.svc:9000"
 
   - it: "bucket-init creates the dedicated jobs bucket by default"
     template: templates/18-bucket-init.yaml

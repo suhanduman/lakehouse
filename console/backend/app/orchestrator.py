@@ -271,10 +271,10 @@ class AddSourceOrchestrator:
             sb_steps: List[StepResult] = []
             try:
                 body = self.render.render_spark_job(
-            spec, self.spark_image, self.s3_secret_name,
-            jobs_bucket=self.jobs_bucket, jobs_prefix=self.jobs_prefix,
-            s3_endpoint=self.s3_endpoint,
-        )
+                    spec, self.spark_image, self.s3_secret_name,
+                    jobs_bucket=self.jobs_bucket, jobs_prefix=self.jobs_prefix,
+                    s3_endpoint=self.s3_endpoint,
+                )
                 self.k8s.apply_spark_job(body)
                 sb_steps.append(StepResult(name="spark-job", ok=True, detail=body["metadata"]["name"]))
                 return AddSourceResult(steps=sb_steps, ok=True)

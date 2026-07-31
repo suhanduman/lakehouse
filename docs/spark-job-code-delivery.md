@@ -102,7 +102,9 @@ platform without any chart change or image rebuild:
        # Reuse the platform's Iceberg catalog + S3 config so the job reads/
        # writes the same lakehouse/rawlake tables the other jobs use — copy
        # this block from an existing rendered SparkApplication (e.g.
-       # iceberg-maintenance) rather than hand-rolling it.
+       # iceberg-maintenance) rather than hand-rolling it. Retrieve it with:
+       #   kubectl get scheduledsparkapplication iceberg-maintenance \
+       #     -n <lakehouse namespace> -o yaml
        spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
        spark.hadoop.fs.s3a.path.style.access: "true"
        spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"

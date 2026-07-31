@@ -135,7 +135,14 @@ data:
   # silently shadowed.
   JOBS_BUCKET: {{ .Values.storage.jobsBucket | quote }}
   JOBS_PREFIX: {{ .Values.storage.jobsPrefix | quote }}
-  SPARK_S3A_ENDPOINT: {{ .Values.storage.s3.endpoint | quote }}
+  # Same `lakehouse.s3.s3aEndpoint` helper the chart's own SparkApplications
+  # use (_helpers.tpl, via `lakehouse.spark.baseConf`) - NOT a direct read of
+  # `.Values.storage.s3.endpoint`: on a bundled-MinIO install that value is
+  # left empty and the helper auto-derives the in-cluster MinIO endpoint, so
+  # the Console-rendered job's s3a bootstrap fetch doesn't regress to
+  # hadoop-aws's default (AWS) endpoint the same way the chart's own jobs
+  # would have without it.
+  SPARK_S3A_ENDPOINT: {{ include "lakehouse.s3.s3aEndpoint" . | quote }}
   # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5) —
   # plain (non-secret) config, same convention as OIDC_AUDIENCE/S3_SECRET_NAME
   # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME

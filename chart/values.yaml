@@ -304,11 +304,13 @@ storage:
   # elsewhere in this file (`nessie.catalog.warehouse.location` → "depo",
   # `nessie.catalog.rawdata.location` → "ham-veri",
   # `nginx.streaming.checkpointBucket` → "nginx-web",
-  # `postgres.nessie.backup.destinationPath`'s bucket → "backups" — see the
-  # `lakehouse.s3BucketFromUri` helper, _helpers.tpl), so this list and
-  # those `s3://...` values can never silently drift apart. Set this
-  # explicitly only to add buckets beyond those four, or to fully replace
-  # the computed list for a non-default warehouse layout.
+  # `postgres.nessie.backup.destinationPath`'s bucket → "backups", plus
+  # `storage.jobsBucket` → "spark-jobs" (s3a job-code delivery, see that
+  # value's own comment above) — see the `lakehouse.s3BucketFromUri` helper,
+  # _helpers.tpl), so this list and those `s3://...` values can never
+  # silently drift apart. Set this explicitly only to add buckets beyond
+  # those five, or to fully replace the computed list for a non-default
+  # warehouse layout.
   buckets: []
 
 # Dev-grade in-cluster MinIO (Product Foundation Task 8, chart/templates/
@@ -958,8 +960,12 @@ trino:
 # above) are values-driven; the Iceberg/S3/shuffle-tracking config in
 # `spark-defaults.conf` and the RBAC rules are preserved verbatim in the
 # template (load-bearing, not values). Jobs (prod-manifests/jobs/*.py) are
-# baked into the `spark-py` image and referenced by `local://` path — they
-# are NOT chart templates, only referenced by name/image here.
+# baked into the `spark-py` image AND seeded from there into the dedicated
+# `storage.jobsBucket` S3 bucket by the jobs-seed Job (chart/templates/
+# 19-jobs-seed.yaml) on install/upgrade; SparkApplications read the code at
+# runtime via `mainApplicationFile: s3a://<jobsBucket>/<jobsPrefix>/X.py`
+# (s3a job-code delivery model), not the retired `local://` path — they are
+# NOT chart templates, only referenced by name/image here.
 sparkOperator:
   maintenance:
     schedule: "0 * * * *"          # hourly; expire/orphan-cleanup cadence lives in the job script itself
@@ -1088,11 +1094,14 @@ connectors:
 
 # nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
 # values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is
-# baked into the `spark-py` image (same `local://` convention as
-# `sparkOperator.maintenance` — see chart/templates/05-spark-operator.yaml) —
-# its Kafka SASL_SSL/SCRAM wiring, S3 checkpoint location, and IP-hash logic
-# are NOT chart-templated and stay verbatim (load-bearing, see
-# chart/templates/14-nginx-ingest.yaml header comment).
+# baked into the `spark-py` image AND seeded into the `storage.jobsBucket`
+# S3 bucket by the jobs-seed Job, then read at runtime via
+# `mainApplicationFile: s3a://...` (same s3a job-code delivery model as
+# `sparkOperator.maintenance` — see chart/templates/05-spark-operator.yaml
+# and chart/templates/19-jobs-seed.yaml) — its Kafka SASL_SSL/SCRAM wiring,
+# S3 checkpoint location, and IP-hash logic are NOT chart-templated and stay
+# verbatim (load-bearing, see chart/templates/14-nginx-ingest.yaml header
+# comment).
 nginx:
   streaming:
     driver:
