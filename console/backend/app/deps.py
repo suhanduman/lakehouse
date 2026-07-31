@@ -25,6 +25,7 @@ for production and are each overridable in tests.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Dict, Optional, Set, Tuple
 
@@ -239,21 +240,43 @@ def get_iceberg() -> IcebergService:
     return IcebergService(catalog_factory=_catalog)
 
 
+def get_git_writer():
+    """GitWriter from settings.gitops_* + the mounted credential Secret. None
+    when deploy_mode != gitops. Credential files are mounted by the chart at
+    /var/run/gitops (ssh-privatekey [+ known_hosts])."""
+    if settings.deploy_mode != "gitops":
+        return None
+    from app.services.git_writer import GitCredential, GitWriter
+
+    if not settings.gitops_repo_url:
+        raise RuntimeError("deploy_mode=gitops but GITOPS_REPO_URL is empty (fail-loud)")
+    key, kh = "/var/run/gitops/ssh-privatekey", "/var/run/gitops/known_hosts"
+    cred = GitCredential(
+        ssh_key_path=key if os.path.exists(key) else None,
+        known_hosts_path=kh if os.path.exists(kh) else None,
+    )
+    return GitWriter(settings.gitops_repo_url, settings.gitops_branch, settings.gitops_path, cred)
+
+
 def get_orchestrator(
     k8s: K8sService = Depends(get_k8s),
     s3: S3Service = Depends(get_s3),
     trino: TrinoService = Depends(get_trino),
     iceberg: IcebergService = Depends(get_iceberg),
+    git_writer=Depends(get_git_writer),
 ) -> AddSourceOrchestrator:
     """Real `AddSourceOrchestrator`, wired to the real K8s/S3/Trino/Iceberg
     providers above plus the `render_service` module. `iceberg` drives the CDC
     table pre-create step (identifier field). `spark_image`/`s3_secret_name`
     (from `settings`) drive the spark-batch lane's single spark-job step
-    (Plan B2). Overridable in tests via
+    (Plan B2). `deploy_mode`/`git_writer` (Task 4) route add_source/
+    edit_spark_source through GitWriter instead of the cluster when
+    `settings.deploy_mode == "gitops"`. Overridable in tests via
     `app.dependency_overrides[get_orchestrator]`."""
     return AddSourceOrchestrator(
         k8s, s3, trino, render_service, iceberg=iceberg,
         spark_image=settings.spark_image, s3_secret_name=settings.s3_secret_name,
+        deploy_mode=settings.deploy_mode, git_writer=git_writer,
     )
 
 

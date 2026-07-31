@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app import source_types
+from app.config import settings
 from app.deps import (
     get_k8s,
     get_orchestrator,
@@ -349,6 +350,7 @@ def delete_source(
     k8s: K8sService = Depends(get_k8s),
     s3: S3Service = Depends(get_s3),
     trino: TrinoService = Depends(get_trino),
+    orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
     """`pipeline_only` tears down only the KafkaConnector CR (data already
     landed in the lakehouse is untouched). `with_data` (admin-only, gated by
@@ -357,7 +359,42 @@ def delete_source(
     the destructive, data-loss path. `<ns>`/`<table>` are recovered from the
     connector's own `transforms.route.static.value` config, and the bucket
     from `render_service.bucket_name(ns)`.
+
+    gitops mode (`settings.deploy_mode == "gitops"`): the direct
+    connector/topic (or spark-job) teardown above is replaced by a git commit
+    (`orchestrator.git_writer.remove_source`) that removes the source's
+    manifests from the pipelines repo -- ArgoCD prunes the live CRs on sync,
+    Console itself never calls `k8s.delete_connector`/`delete_topic`/
+    `delete_spark_job` in this mode. `with_data` (dropping the Iceberg table /
+    emptying the bucket) is a data-plane action, not a GitOps-managed one, so
+    it stays a separate, explicit destructive call regardless of deploy_mode
+    -- it still runs here exactly as in direct mode, against the CR's
+    round-tripped ns/table (the CR itself is expected to already be present
+    in the cluster via ArgoCD's earlier sync from git).
     """
+    if settings.deploy_mode == "gitops":
+        commit = orchestrator.git_writer.remove_source(name)
+        result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
+        if mode != "with_data":
+            return result
+        cr = _find_source(k8s, name)
+        if _kind_of(cr) == "ScheduledSparkApplication":
+            ns, table = _spark_target(cr)
+            fqn = f"rawlake.{ns}.{table}"
+            bucket = render_service.bucket_name(ns)
+            trino.drop_table(fqn)
+            s3.empty_bucket(bucket)
+            result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=None)
+            return result
+        ns, table = _target_ns_table(cr)
+        fqn = f"lakehouse.{ns}.{table}"
+        bucket = render_service.bucket_name(ns)
+        topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
+        trino.drop_table(fqn)
+        s3.empty_bucket(bucket)
+        result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=topic)
+        return result
+
     cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.delete_spark_job(name)
