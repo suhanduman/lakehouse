@@ -157,9 +157,6 @@ class AddSourceOrchestrator:
         s3_secret_name: str = "s3-credentials",
         deploy_mode: str = "direct",
         git_writer: Any = None,
-        jobs_bucket: str = "spark-jobs",
-        jobs_prefix: str = "jobs",
-        s3_endpoint: str = "",
     ) -> None:
         self.k8s = k8s
         self.s3 = s3
@@ -174,12 +171,6 @@ class AddSourceOrchestrator:
         # spark-batch lane (Plan B2): render_spark_job/apply_spark_job inputs.
         self.spark_image = spark_image
         self.s3_secret_name = s3_secret_name
-        # s3a job-code delivery (2026-07-31-s3a-job-code-delivery Task 4):
-        # render_spark_job's mainApplicationFile bucket/prefix + optional
-        # Hadoop fs.s3a endpoint -- same spark-batch lane as above.
-        self.jobs_bucket = jobs_bucket
-        self.jobs_prefix = jobs_prefix
-        self.s3_endpoint = s3_endpoint
         # GitOps write-path (Task 4): when deploy_mode == "gitops", add_source/
         # edit_spark_source commit rendered manifests via git_writer instead of
         # applying to the cluster. deploy_mode default "direct" + git_writer
@@ -196,8 +187,6 @@ class AddSourceOrchestrator:
         fileset = render_pipeline_fileset(
             spec, spark_image=self.spark_image, s3_secret_name=self.s3_secret_name,
             namespace=settings.namespace,
-            jobs_bucket=self.jobs_bucket, jobs_prefix=self.jobs_prefix,
-            s3_endpoint=self.s3_endpoint,
         )
         res = self.git_writer.write_source(spec.source, fileset)
         return AddSourceResult(
@@ -228,11 +217,7 @@ class AddSourceOrchestrator:
                     steps=[StepResult(name="gitops-commit", ok=False, detail=str(exc))],
                     ok=False,
                 )
-        body = self.render.render_spark_job(
-            spec, self.spark_image, self.s3_secret_name,
-            jobs_bucket=self.jobs_bucket, jobs_prefix=self.jobs_prefix,
-            s3_endpoint=self.s3_endpoint,
-        )
+        body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
         return self.k8s.apply_spark_job(body)
 
     def add_source(self, spec: SourceSpec, creds: SourceCredentials) -> AddSourceResult:
@@ -270,11 +255,7 @@ class AddSourceOrchestrator:
             # its output table.
             sb_steps: List[StepResult] = []
             try:
-                body = self.render.render_spark_job(
-                    spec, self.spark_image, self.s3_secret_name,
-                    jobs_bucket=self.jobs_bucket, jobs_prefix=self.jobs_prefix,
-                    s3_endpoint=self.s3_endpoint,
-                )
+                body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)
                 self.k8s.apply_spark_job(body)
                 sb_steps.append(StepResult(name="spark-job", ok=True, detail=body["metadata"]["name"]))
                 return AddSourceResult(steps=sb_steps, ok=True)

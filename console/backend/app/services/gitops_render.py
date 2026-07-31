@@ -167,18 +167,12 @@ def _with_namespace(manifest: Dict[str, Any], namespace: str) -> Dict[str, Any]:
 
 
 def render_pipeline_fileset(
-    spec: SourceSpec, *, spark_image: str, s3_secret_name: str, namespace: str,
-    jobs_bucket: str = "spark-jobs", jobs_prefix: str = "jobs", s3_endpoint: str = "",
+    spec: SourceSpec, *, spark_image: str, s3_secret_name: str, namespace: str
 ) -> Dict[str, Dict[str, Any]]:
     """Full GitOps manifest set for a source as {relative_path: manifest}.
     DELEGATES to render_service (never re-implements lane/topic/disposition
     logic) so it stays current; adds the GitOps envelope (PreSync pre-create,
-    namespace stamp, file layout). File layout: <source>/<NN>-<kind>-<name>.yaml.
-
-    `jobs_bucket`/`jobs_prefix`/`s3_endpoint` (2026-07-31-s3a-job-code-
-    delivery Task 4) pass straight through to render_service.render_spark_job
-    for the spark-batch lane below -- same s3a mainApplicationFile + optional
-    fs.s3a endpoint as the direct-apply path (orchestrator.py)."""
+    namespace stamp, file layout). File layout: <source>/<NN>-<kind>-<name>.yaml."""
     from app import source_types
 
     files: Dict[str, Dict[str, Any]] = {}
@@ -195,10 +189,7 @@ def render_pipeline_fileset(
     # table (full-refresh CTAS) -- no topic/connector/precreate.
     if descriptor.lane == "spark-batch":
         _add(0, "scheduledsparkapplication",
-             render_service.render_spark_job(
-                 spec, spark_image, s3_secret_name,
-                 jobs_bucket=jobs_bucket, jobs_prefix=jobs_prefix, s3_endpoint=s3_endpoint,
-             ))
+             render_service.render_spark_job(spec, spark_image, s3_secret_name))
         return files
 
     # cdc / scheduled / stream: PreSync pre-create + topic + connector [+ sink].

@@ -29,25 +29,6 @@ class Settings(BaseSettings):
     # S3_SECRET_NAME).
     spark_image: str = "image-registry.openshift-image-registry.svc:5000/lakehouse/spark-py:1.0"
     s3_secret_name: str = "s3-credentials"
-    # s3a job-code delivery (2026-07-31-s3a-job-code-delivery Task 4): the
-    # rendered ScheduledSparkApplication's `mainApplicationFile` points at
-    # s3a://<jobs_bucket>/<jobs_prefix>/s3_register_table.py (mirrors the
-    # chart's own jobs-seed bucket/prefix, chart/values.yaml
-    # storage.jobsBucket/jobsPrefix -- see JOBS_BUCKET/JOBS_PREFIX below).
-    jobs_bucket: str = "spark-jobs"
-    jobs_prefix: str = "jobs"
-    # Hadoop **fs.s3a** endpoint for that spark-submit bootstrap fetch --
-    # mirrors chart/templates/_helpers.tpl's `lakehouse.spark.baseConf`
-    # (`.Values.storage.s3.endpoint`), NOT the same thing as `s3_endpoint`
-    # above: that field is sourced from the S3 CREDENTIALS SECRET's
-    # `endpoint` key (see this Deployment's env: block in console.yaml) and
-    # drives the console's own boto3 S3Service / AWS_ENDPOINT_URL_S3 data
-    # path. A same-named field here would collide -- k8s `env:` entries
-    # override `envFrom` ConfigMap values for the same var name, so an
-    # `S3_ENDPOINT` ConfigMap key would silently lose to the Secret-sourced
-    # one. Kept deliberately separate (SPARK_S3A_ENDPOINT below).
-    spark_s3a_endpoint: str = ""
-
     # GitOps write-path (deploy_mode=gitops): Console commits rendered pipeline
     # manifests to a git repo ArgoCD watches, instead of applying imperatively.
     # deploy_mode default "direct" preserves the current B-v1 behavior.

@@ -120,29 +120,6 @@ data:
   # falls back to config.py's neutral defaults (a non-existent image/secret).
   SPARK_IMAGE: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
   S3_SECRET_NAME: {{ .Values.storage.s3.secretName | quote }}
-  # s3a job-code delivery (2026-07-31-s3a-job-code-delivery Task 4) — SAME
-  # bucket/prefix/endpoint values as the chart's OWN SparkApplications
-  # (05-spark-operator.yaml/14-nginx-ingest.yaml, via `.Values.storage.
-  # jobsBucket`/`jobsPrefix`/`s3.endpoint`) and the jobs-seed Job
-  # (19-jobs-seed.yaml) that populates that bucket — the Console-rendered
-  # batch/s3 ScheduledSparkApplication reads its code from the exact same
-  # s3a:// location. Feeds `settings.jobs_bucket`/`jobs_prefix`/
-  # `spark_s3a_endpoint` (config.py); NOT named `S3_ENDPOINT` — that env var
-  # is already set below (explicit `env:` block, from the S3 credentials
-  # Secret's `endpoint` key) for the console's own boto3/AWS_ENDPOINT_URL_S3
-  # data path, and k8s `env:` entries always win over `envFrom` ConfigMap
-  # values for the same var name — an `S3_ENDPOINT` key here would be
-  # silently shadowed.
-  JOBS_BUCKET: {{ .Values.storage.jobsBucket | quote }}
-  JOBS_PREFIX: {{ .Values.storage.jobsPrefix | quote }}
-  # Same `lakehouse.s3.s3aEndpoint` helper the chart's own SparkApplications
-  # use (_helpers.tpl, via `lakehouse.spark.baseConf`) - NOT a direct read of
-  # `.Values.storage.s3.endpoint`: on a bundled-MinIO install that value is
-  # left empty and the helper auto-derives the in-cluster MinIO endpoint, so
-  # the Console-rendered job's s3a bootstrap fetch doesn't regress to
-  # hadoop-aws's default (AWS) endpoint the same way the chart's own jobs
-  # would have without it.
-  SPARK_S3A_ENDPOINT: {{ include "lakehouse.s3.s3aEndpoint" . | quote }}
   # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5) —
   # plain (non-secret) config, same convention as OIDC_AUDIENCE/S3_SECRET_NAME
   # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME

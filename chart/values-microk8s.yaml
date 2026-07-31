@@ -121,18 +121,6 @@ secrets:
 # TOGETHER (see values.yaml's comment for why) — never override just one of
 # the three.
 
-# `storage.s3.endpoint` -> `spark.hadoop.fs.s3a.endpoint` (see
-# `lakehouse.s3.s3aEndpoint` helper, _helpers.tpl): `components.minio` is
-# NOT set in this overlay (MinIO here is an external prereq the operator
-# provisions out-of-band, per this file's header comment — not the chart's
-# own `components.minio`-gated 17-minio.yaml), so the helper cannot
-# auto-derive an in-cluster endpoint and this must be set explicitly. SAME
-# endpoint as the `s3-credentials` Secret created in the header comment
-# above and `postgres.*.backup.endpointURL` below.
-storage:
-  s3:
-    endpoint: "http://minio.lakehouse-test.svc:9000"
-
 # ---- CNPG Postgres clusters: repoint storageClass + backup endpoint, and
 # shrink to 1 instance / small volumes for a single-node microk8s smoke test.
 postgres:

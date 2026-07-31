@@ -10,12 +10,6 @@
 # parameterized (chart/templates/03-kafka-strimzi.yaml + chart/values.yaml
 # `kafka.replication.*`), so THIS overlay can now also drop broker/controller
 # replicas to 1 — the memory-minimal shape the ingest e2e test needs.
-# storage.s3.endpoint: values-microk8s.yaml already sets this to the same
-# in-cluster MinIO (`http://minio.lakehouse-test.svc:9000`) used below by
-# `connectors.icebergSink.s3Endpoint` — no override needed here, kept only
-# as a pointer since `sparkOperator`/`console` are still off in both tiers
-# (see values-microk8s.yaml's own components block) so Spark/Console never
-# read `storage.s3.endpoint` yet in this overlay ("ileride açılır").
 components:
   kafkaConnect: true            # F: Connect gerekli
   connectors:

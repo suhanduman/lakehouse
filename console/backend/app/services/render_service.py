@@ -846,26 +846,12 @@ SPARK_VERSION = "3.5.1"   # matches chart versions.sparkVersion (spark-py image)
 # docstring.
 
 
-def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str,
-                         jobs_bucket: str = "spark-jobs", jobs_prefix: str = "jobs",
-                         s3_endpoint: str = "") -> dict:
+def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
     """batch+s3 -> a ScheduledSparkApplication that, on spec.cron, full-refresh
     CTAS's the files under s3a://<bucket>/<prefix> into rawlake.<ns>.<table>
     (Iceberg). Register once; each tick re-derives the table (CREATE OR
     REPLACE) so newly-arrived files stay query-visible. Mirrors the chart's
-    ScheduledSparkApplication shape (05-spark-operator.yaml).
-
-    `mainApplicationFile` is `s3a://<jobs_bucket>/<jobs_prefix>/s3_register_table.py`
-    (2026-07-31-s3a-job-code-delivery Task 4) -- the chart's jobs-seed Job
-    (chart/templates/19-jobs-seed.yaml) copies the image-baked job code to
-    that bucket/prefix on install/upgrade, and every OTHER chart-rendered
-    SparkApplication (05-spark-operator.yaml, 14-nginx-ingest.yaml) already
-    reads its code from the same s3a:// location -- this Console-rendered CR
-    now matches. `s3_endpoint`, when set, becomes
-    `spark.hadoop.fs.s3a.endpoint` -- required for spark-submit to fetch
-    that file from a non-AWS S3 (e.g. MinIO) BEFORE the job's own runtime
-    self-config (env-var-driven, see the AWS_* env below) ever runs; mirrors
-    chart/templates/_helpers.tpl's `lakehouse.spark.baseConf` conditional."""
+    ScheduledSparkApplication shape (05-spark-operator.yaml)."""
     name = _k8s_name("s3-register", spec.source, spec.target_table)
     target = f"rawlake.{spec.target_ns}.{spec.target_table}"
     aws_keys = [("AWS_ACCESS_KEY_ID", "access-key-id"),
@@ -886,8 +872,6 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str,
             "com.amazonaws.auth.EnvironmentVariableCredentialsProvider",
         "spark.jars.ivy": "/tmp/.ivy2",
     }
-    if s3_endpoint:
-        spark_conf["spark.hadoop.fs.s3a.endpoint"] = s3_endpoint
     return {
         "apiVersion": "sparkoperator.k8s.io/v1beta2",
         "kind": "ScheduledSparkApplication",
@@ -911,7 +895,7 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str,
                 "mode": "cluster",
                 "image": spark_image,
                 "sparkVersion": SPARK_VERSION,
-                "mainApplicationFile": f"s3a://{jobs_bucket}/{jobs_prefix}/s3_register_table.py",
+                "mainApplicationFile": "local:///opt/spark/jobs/s3_register_table.py",
                 "arguments": ["--bucket", spec.s3_bucket, "--prefix", spec.s3_prefix,
                               "--format", spec.file_format, "--target", target],
                 "restartPolicy": {"type": "Never"},
@@ -928,20 +912,14 @@ def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str,
 _SPARK_RENDERERS = {"s3-register": _render_s3_register}
 
 
-def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str,
-                      jobs_bucket: str = "spark-jobs", jobs_prefix: str = "jobs",
-                      s3_endpoint: str = "") -> dict:
+def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
     """Dispatch on the source-type registry -> ScheduledSparkApplication dict
     (spark-batch lane). A spark-batch source with no spark renderer wired yet
-    (e.g. scheduled-mongo, render_key="") raises NotImplementedError.
-
-    `jobs_bucket`/`jobs_prefix`/`s3_endpoint` (2026-07-31-s3a-job-code-
-    delivery Task 4) thread straight through to the per-render_key builder
-    (currently only `_render_s3_register`) -- see that function's docstring."""
+    (e.g. scheduled-mongo, render_key="") raises NotImplementedError."""
     descriptor = source_types.get(spec.kind, spec.type)
     fn = _SPARK_RENDERERS.get(descriptor.render_key)
     if fn is None:
         raise NotImplementedError(
             f"render_spark_job: no Spark-batch renderer for {descriptor.id} (lane={descriptor.lane})"
         )
-    return fn(spec, spark_image, s3_secret_name, jobs_bucket, jobs_prefix, s3_endpoint)
+    return fn(spec, spark_image, s3_secret_name)

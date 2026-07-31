@@ -269,21 +269,14 @@ def get_orchestrator(
     providers above plus the `render_service` module. `iceberg` drives the CDC
     table pre-create step (identifier field). `spark_image`/`s3_secret_name`
     (from `settings`) drive the spark-batch lane's single spark-job step
-    (Plan B2). `jobs_bucket`/`jobs_prefix`/`s3_endpoint`
-    (2026-07-31-s3a-job-code-delivery Task 4, from `settings.jobs_bucket`/
-    `settings.jobs_prefix`/`settings.spark_s3a_endpoint`) drive that same
-    step's `mainApplicationFile: s3a://...` + optional
-    `spark.hadoop.fs.s3a.endpoint`. `deploy_mode`/`git_writer` (Task 4 of
-    gitops-core-slice-a) route add_source/edit_spark_source through
-    GitWriter instead of the cluster when `settings.deploy_mode ==
-    "gitops"`. Overridable in tests via
+    (Plan B2). `deploy_mode`/`git_writer` (Task 4) route add_source/
+    edit_spark_source through GitWriter instead of the cluster when
+    `settings.deploy_mode == "gitops"`. Overridable in tests via
     `app.dependency_overrides[get_orchestrator]`."""
     return AddSourceOrchestrator(
         k8s, s3, trino, render_service, iceberg=iceberg,
         spark_image=settings.spark_image, s3_secret_name=settings.s3_secret_name,
         deploy_mode=settings.deploy_mode, git_writer=git_writer,
-        jobs_bucket=settings.jobs_bucket, jobs_prefix=settings.jobs_prefix,
-        s3_endpoint=settings.spark_s3a_endpoint,
     )
 
 

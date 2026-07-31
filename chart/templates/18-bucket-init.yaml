@@ -12,12 +12,11 @@
 # from the actual `s3://` locations already embedded elsewhere in this
 # values file — `nessie.catalog.warehouse.location` (silver/Iceberg,
 # "depo"), `nessie.catalog.rawdata.location` (bronze, "ham-veri"),
-# `nginx.streaming.checkpointBucket` (Spark checkpoint, "nginx-web"),
+# `nginx.streaming.checkpointBucket` (Spark checkpoint, "nginx-web"), and
 # `postgres.nessie.backup.destinationPath`'s bucket (CNPG barman,
-# "backups"), and `storage.jobsBucket` (Spark JOB CODE, s3a code-delivery
-# model, "spark-jobs") — see the `lakehouse.s3BucketFromUri` helper
-# (_helpers.tpl). ONE extraction so this list and those `s3://...` values
-# can never silently drift apart.
+# "backups") — see the `lakehouse.s3BucketFromUri` helper (_helpers.tpl).
+# ONE extraction so this list and those `s3://...` values can never
+# silently drift apart.
 #
 # Runs on BOTH install paths so first ingest always has somewhere to
 # land: plain `helm install/upgrade` (`helm.sh/hook`
@@ -34,7 +33,6 @@
       (include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.rawdata.location)
       .Values.nginx.streaming.checkpointBucket
       (include "lakehouse.s3BucketFromUri" .Values.postgres.nessie.backup.destinationPath)
-      .Values.storage.jobsBucket
     | uniq }}
 {{- end }}
 apiVersion: batch/v1
