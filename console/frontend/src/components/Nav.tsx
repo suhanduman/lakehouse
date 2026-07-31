@@ -36,6 +36,7 @@ export default function Nav() {
       <NavLink to="/tables">Tables &amp; buckets</NavLink>
       <NavLink to="/schemas">Schemas</NavLink>
       <NavLink to="/status">Status</NavLink>
+      <NavLink to="/gitops">GitOps</NavLink>
 
       <span aria-hidden="true"> | </span>
 

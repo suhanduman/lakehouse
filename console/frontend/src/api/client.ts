@@ -145,6 +145,25 @@ export interface StatusResponse {
   error?: string;
 }
 
+export interface GitopsResource {
+  kind: string;
+  name: string;
+  status: string | null;
+  health: string | null;
+}
+export interface GitopsSource {
+  source: string;
+  sync: string;
+  health: string;
+  resources: GitopsResource[];
+}
+export interface GitopsStatusResponse {
+  mode: "direct" | "gitops";
+  application: { sync: string | null; health: string | null } | null;
+  sources: GitopsSource[];
+  outOfSync: GitopsResource[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -284,4 +303,10 @@ export async function listSchemas(): Promise<Record<string, unknown>[]> {
 /** GET /api/status -> unified connector health view. */
 export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/status");
+}
+
+/** GET /api/gitops/status -> per-source ArgoCD sync/health (gitops mode);
+ * {mode:"direct"} when the Console is in direct-apply mode. */
+export async function getGitopsStatus(): Promise<GitopsStatusResponse> {
+  return request<GitopsStatusResponse>("/gitops/status");
 }
