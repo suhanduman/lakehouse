@@ -285,12 +285,38 @@ Usage:
 {{- . | trimPrefix "s3://" | splitList "/" | first -}}
 {{- end -}}
 
+{{- /* lakehouse.s3.s3aEndpoint - resolve the fs.s3a.endpoint value Spark
+       (and the Console-rendered batch/s3 job) should use:
+         1. `storage.s3.endpoint` if set explicitly - always wins.
+         2. else, when the bundled MinIO is enabled (`components.minio`),
+            auto-derive its in-cluster endpoint
+            (http://<lakehouse.svc.minio>.<namespace>.svc:9000) - so a
+            MinIO-bundling install (values.storage.s3.endpoint left empty)
+            doesn't regress: without this, `mainApplicationFile: s3a://...`
+            would resolve against hadoop-aws's default (AWS) endpoint
+            instead of the in-cluster MinIO and every Spark job would fail
+            before its code even runs.
+         3. else empty (external S3 with no endpoint override needed -
+            hadoop-aws's own AWS-endpoint default is correct there).
+       Usage: {{ include "lakehouse.s3.s3aEndpoint" . }} */ -}}
+{{- define "lakehouse.s3.s3aEndpoint" -}}
+{{- if .Values.storage.s3.endpoint -}}
+{{- .Values.storage.s3.endpoint -}}
+{{- else if .Values.components.minio -}}
+{{- printf "http://%s.%s.svc:9000" (include "lakehouse.svc.minio" .) (include "lakehouse.namespace" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- /* Base Spark config for all first-party spark jobs (was spark-defaults.conf,
        retired: spark-operator v2.x owns /opt/spark/conf). Emit under sparkConf. */ -}}
 {{- define "lakehouse.spark.baseConf" -}}
 spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
 spark.jars.ivy: "/tmp/.ivy2"
 spark.hadoop.fs.s3a.path.style.access: "true"
+{{- $ep := include "lakehouse.s3.s3aEndpoint" . }}
+{{- with $ep }}
+spark.hadoop.fs.s3a.endpoint: {{ . | quote }}
+{{- end }}
 spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
 spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
 spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"

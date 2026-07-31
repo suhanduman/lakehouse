@@ -583,7 +583,11 @@ def test_render_spark_job_s3_register():
     assert body["metadata"]["name"] == "s3-register-ds1-trips"
     assert body["spec"]["schedule"] == "0 * * * *"
     tmpl = body["spec"]["template"]
-    assert tmpl["mainApplicationFile"] == "local:///opt/spark/jobs/s3_register_table.py"
+    # s3a job-code delivery (Task 4): default jobs_bucket/jobs_prefix
+    # ("spark-jobs"/"jobs", same as config.py Settings + chart/values.yaml
+    # storage.jobsBucket/jobsPrefix) apply even when the caller (as here)
+    # doesn't pass them explicitly.
+    assert tmpl["mainApplicationFile"] == "s3a://spark-jobs/jobs/s3_register_table.py"
     assert tmpl["image"] == "reg/spark-py:9"
     assert tmpl["arguments"] == ["--bucket", "ham-veri", "--prefix", "raw/",
                                  "--format", "parquet", "--target", "rawlake.nyc.trips"]
@@ -611,6 +615,29 @@ def test_render_spark_job_rejects_non_spark_renderer():
                       table="enr", target_ns="depo", target_table="enr", cron="0 * * * *")
     with pytest.raises(NotImplementedError):
         r.render_spark_job(spec, spark_image="x", s3_secret_name="y")
+
+
+def test_s3_register_reads_main_file_from_s3a_and_sets_endpoint():
+    from app.models import SourceSpec
+    spec = SourceSpec(source="s1", kind="batch", type="s3", db="x", table="t",
+                      target_ns="rl", target_table="t", s3_bucket="raw", s3_prefix="p",
+                      file_format="parquet", cron="*/10 * * * *")
+    body = r.render_spark_job(spec, spark_image="img", s3_secret_name="s3-credentials",
+                              jobs_bucket="spark-jobs", jobs_prefix="jobs",
+                              s3_endpoint="http://minio:9000")
+    tmpl = body["spec"]["template"]
+    assert tmpl["mainApplicationFile"] == "s3a://spark-jobs/jobs/s3_register_table.py"
+    assert tmpl["sparkConf"]["spark.hadoop.fs.s3a.endpoint"] == "http://minio:9000"
+
+
+def test_s3_register_omits_endpoint_when_unset():
+    from app.models import SourceSpec
+    spec = SourceSpec(source="s1", kind="batch", type="s3", db="x", table="t",
+                      target_ns="rl", target_table="t", s3_bucket="raw", s3_prefix="p",
+                      file_format="parquet", cron="*/10 * * * *")
+    body = r.render_spark_job(spec, spark_image="img", s3_secret_name="s3-credentials",
+                              jobs_bucket="spark-jobs", jobs_prefix="jobs", s3_endpoint="")
+    assert "spark.hadoop.fs.s3a.endpoint" not in body["spec"]["template"]["sparkConf"]
 
 
 # --------------------------------------------------------------------------

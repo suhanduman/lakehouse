@@ -12,9 +12,11 @@
 # `.Values.components.nginxIngest`.
 #
 # Service wiring (spec §3.1/§8):
-#   - Kafka bootstrap: prod-manifests/jobs/nginx_streaming.py (baked into the
-#     spark-py image, referenced via `local://` — NOT a chart template, see
-#     05-spark-operator.yaml's header comment for the same convention) hardcodes
+#   - Kafka bootstrap: prod-manifests/jobs/nginx_streaming.py (uploaded to
+#     `s3a://<storage.jobsBucket>/<storage.jobsPrefix>/nginx_streaming.py` by
+#     jobs-seed, referenced via `mainApplicationFile` below — NOT a chart
+#     template, see 05-spark-operator.yaml's header comment for the same s3a
+#     job-code-delivery convention) hardcodes
 #     `kafka.bootstrap.servers=kafka-kafka-bootstrap:9093`. That literal is the
 #     SAME value `lakehouse.svc.kafkaBootstrap` resolves to (verified against
 #     _helpers.tpl's canonical-name header) on the `tls` (9093, SASL_SSL+SCRAM)
@@ -44,7 +46,7 @@ spec:
   mode: cluster
   image: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
   imagePullPolicy: IfNotPresent
-  mainApplicationFile: "local:///opt/spark/jobs/nginx_streaming.py"
+  mainApplicationFile: {{ printf "s3a://%s/%s/nginx_streaming.py" .Values.storage.jobsBucket .Values.storage.jobsPrefix | quote }}
   sparkVersion: {{ .Values.versions.sparkVersion | quote }}
   sparkConf:
 {{ include "lakehouse.spark.baseConf" . | indent 4 }}

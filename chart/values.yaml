@@ -270,6 +270,25 @@ storage:
   s3:
     # Name only — no access-key/secret-key/endpoint material in this chart.
     secretName: s3-credentials
+    # Plaintext S3 endpoint for the Hadoop **fs.s3a** filesystem, used ONLY to
+    # fetch `mainApplicationFile: s3a://…` (and pyFiles) at spark-submit
+    # bootstrap — BEFORE any job code runs, so the runtime self-config in
+    # s3_register_table.py is too late. hadoop-aws (SDK v1) does not read
+    # AWS_ENDPOINT_URL_S3, so the endpoint must be on the Hadoop config. Leave
+    # EMPTY for real AWS S3 (default endpoint); set to the MinIO/custom-S3 URL
+    # otherwise. The data path (Iceberg S3FileIO) still uses the secret's
+    # `endpoint` key via AWS_ENDPOINT_URL_S3 — this value is only for fs.s3a.
+    endpoint: ""
+  # Dedicated bucket + prefix for Spark JOB CODE (s3a code-delivery model).
+  # SparkApplications read `mainApplicationFile: s3a://<jobsBucket>/<jobsPrefix>/X.py`
+  # at runtime; the jobs-seed Job (19-jobs-seed.yaml) copies the image-baked
+  # code here on install/upgrade. Kept SEPARATE from the data buckets so job
+  # code and data never mix. Points at the platform MinIO or a customer S3.
+  jobsBucket: spark-jobs
+  jobsPrefix: jobs
+  # Run the jobs-seed Job (default on). Off only when job code is seeded
+  # out-of-band (e.g. an air-gapped pre-seeded bucket).
+  seedJobs: true
   # Vendor-generic S3 bucket-init Job (Task 8, chart/templates/
   # 18-bucket-init.yaml) — gated by `createBuckets`, NOT by
   # `components.minio`: it runs `mc mb --ignore-existing` against WHATEVER
@@ -285,11 +304,13 @@ storage:
   # elsewhere in this file (`nessie.catalog.warehouse.location` → "depo",
   # `nessie.catalog.rawdata.location` → "ham-veri",
   # `nginx.streaming.checkpointBucket` → "nginx-web",
-  # `postgres.nessie.backup.destinationPath`'s bucket → "backups" — see the
-  # `lakehouse.s3BucketFromUri` helper, _helpers.tpl), so this list and
-  # those `s3://...` values can never silently drift apart. Set this
-  # explicitly only to add buckets beyond those four, or to fully replace
-  # the computed list for a non-default warehouse layout.
+  # `postgres.nessie.backup.destinationPath`'s bucket → "backups", plus
+  # `storage.jobsBucket` → "spark-jobs" (s3a job-code delivery, see that
+  # value's own comment above) — see the `lakehouse.s3BucketFromUri` helper,
+  # _helpers.tpl), so this list and those `s3://...` values can never
+  # silently drift apart. Set this explicitly only to add buckets beyond
+  # those five, or to fully replace the computed list for a non-default
+  # warehouse layout.
   buckets: []
 
 # Dev-grade in-cluster MinIO (Product Foundation Task 8, chart/templates/
@@ -939,8 +960,12 @@ trino:
 # above) are values-driven; the Iceberg/S3/shuffle-tracking config in
 # `spark-defaults.conf` and the RBAC rules are preserved verbatim in the
 # template (load-bearing, not values). Jobs (prod-manifests/jobs/*.py) are
-# baked into the `spark-py` image and referenced by `local://` path — they
-# are NOT chart templates, only referenced by name/image here.
+# baked into the `spark-py` image AND seeded from there into the dedicated
+# `storage.jobsBucket` S3 bucket by the jobs-seed Job (chart/templates/
+# 19-jobs-seed.yaml) on install/upgrade; SparkApplications read the code at
+# runtime via `mainApplicationFile: s3a://<jobsBucket>/<jobsPrefix>/X.py`
+# (s3a job-code delivery model), not the retired `local://` path — they are
+# NOT chart templates, only referenced by name/image here.
 sparkOperator:
   maintenance:
     schedule: "0 * * * *"          # hourly; expire/orphan-cleanup cadence lives in the job script itself
@@ -1069,11 +1094,14 @@ connectors:
 
 # nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
 # values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is
-# baked into the `spark-py` image (same `local://` convention as
-# `sparkOperator.maintenance` — see chart/templates/05-spark-operator.yaml) —
-# its Kafka SASL_SSL/SCRAM wiring, S3 checkpoint location, and IP-hash logic
-# are NOT chart-templated and stay verbatim (load-bearing, see
-# chart/templates/14-nginx-ingest.yaml header comment).
+# baked into the `spark-py` image AND seeded into the `storage.jobsBucket`
+# S3 bucket by the jobs-seed Job, then read at runtime via
+# `mainApplicationFile: s3a://...` (same s3a job-code delivery model as
+# `sparkOperator.maintenance` — see chart/templates/05-spark-operator.yaml
+# and chart/templates/19-jobs-seed.yaml) — its Kafka SASL_SSL/SCRAM wiring,
+# S3 checkpoint location, and IP-hash logic are NOT chart-templated and stay
+# verbatim (load-bearing, see chart/templates/14-nginx-ingest.yaml header
+# comment).
 nginx:
   streaming:
     driver:
