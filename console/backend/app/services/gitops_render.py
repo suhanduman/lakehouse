@@ -1,19 +1,17 @@
 """B-v2 GitOps — Console'un pipeline repo'suna PR olarak açtığı manifest SETini
 ÜRETİR (doğrudan-apply/orchestrator B-v1 YERİNE deklaratif dosyalar).
 
-Her kaynak = 6 manifest (medallion CDC: Console BOTH Bronze ve Silver'ı
-pre-create eder), ArgoCD PreSync sırası:
-  1) Bronze descriptor ConfigMap  (PreSync wave 0) — `<ns>_raw`, `layer:
-     bronze`, identifier YOK, sabit CDC metadata kolonları eklenir
-  2) Bronze pre-create Job        (PreSync wave 1) — Bronze changelog
-     tablosunu (partitioned, no identifier, rawdata warehouse) yaratır
-  3) Silver descriptor ConfigMap  (PreSync wave 0) — `<ns>`, `layer: silver`,
-     şema + identifier (PK)
-  4) Silver pre-create Job        (PreSync wave 1) — current-state tabloyu
-     identifier field ile yaratır (images/iceberg-tools); fail-loud →
-     uyuşmazsa connector sync olmaz
-  5) KafkaTopic                   (render_service.render_kafka_topic)
-  6) KafkaConnector                (render_service.render_connector)
+`render_pipeline_fileset` lane-aware bir manifest SETi üretir — render_key/
+lane/disposition mantığını render_service'e DELEGE eder (burada tekrar
+implement edilmez), GitOps zarfını (PreSync pre-create, namespace stamp,
+dosya layout'u) ekler:
+  - spark-batch (örn. batch/s3)     → tek ScheduledSparkApplication (kendi
+    rawlake tablosunu full-refresh CTAS ile kendi yazar; topic/connector/
+    precreate YOK)
+  - cdc / scheduled / stream        → Bronze PreSync pre-create (ConfigMap +
+    Job) + entity disposition ise ayrıca Silver PreSync pre-create + (varsa)
+    KafkaTopic + KafkaConnector + (Camel gibi) dedicated sink varsa onun da
+    KafkaConnector'ı
 
 Sink auto-create identifier koymaz → upsert append-only'e düşer; tablo(lar)
 bu yüzden connector'dan önce (PreSync) yaratılmalı — hem Bronze hem
@@ -38,7 +36,6 @@ ICEBERG_TOOLS_IMAGE = (
 )
 NESSIE_URI = "http://nessie:19120/iceberg/"
 S3_SECRET = "s3-credentials"
-DEFAULT_NAMESPACE = "lakehouse"
 
 
 def _cm_name(ice_namespace: str, target_table: str) -> str:
