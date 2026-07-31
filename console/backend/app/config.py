@@ -37,5 +37,7 @@ class Settings(BaseSettings):
     gitops_branch: str = "main"
     gitops_path: str = "pipelines"              # subdir the pipelines Application watches
     gitops_credential_secret: str = "gitops-credential"  # k8s Secret; SSH key or https token
+    argocd_namespace: str = "argocd"          # openshift-gitops on OpenShift
+    gitops_app_name: str = "lakehouse-pipelines"
 
 settings = Settings()
