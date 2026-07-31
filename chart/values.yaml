@@ -103,6 +103,20 @@ components:
   # ONLY for a throwaway dev/PoC/e2e cluster with no real S3 endpoint
   # available. NEVER set this to `true` in a real/prod values-<env>.yaml.
   minio: false
+  # DEFAULT false — in-cluster Gitea write-path fallback
+  # (2026-07-30-gitops-core-slice-a-write-path Task 6,
+  # chart/templates/16-gitea.yaml): a single-replica, single-PVC Gitea
+  # instance for environments with no external git host reachable from the
+  # cluster. Only meaningful alongside `console.deployMode: gitops` — when
+  # `console.gitops.repoUrl` is left empty AND this is `true`, the Console
+  # backend's GITOPS_REPO_URL defaults to this Gitea's SSH remote (see
+  # chart/templates/console/console.yaml). Real installs bring their OWN git
+  # host (GitHub/GitLab/Gitea/Gitness) and set `console.gitops.repoUrl`
+  # explicitly instead — same "DEV/PoC/no-external-dependency fallback,
+  # never for production" posture as `components.minio` above. Bootstrap is
+  # responsible for seeding the `gitops-credential` Secret and creating the
+  # target repo inside this Gitea (out of this chart's scope).
+  gitea: false
   postgres: true
   kafka: true
   nessie: true
@@ -293,6 +307,25 @@ minio:
     # convention as `zeppelin.storageClassName` / `kafka.nodePools.*.storage.
     # class` — chart/tests/storage-neutrality_test.yaml).
     storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# In-cluster Gitea write-path fallback (Task 6, gated `components.gitea`,
+# DEFAULT false — see that key's own doc comment above). Only rendered by
+# chart/templates/16-gitea.yaml when the gate is on.
+gitea:
+  image: gitea/gitea:1.22
+  storageSize: 5Gi
+  # Empty (default) = cluster's default StorageClass (same omit-when-empty
+  # convention as `minio.storage.storageClassName` / `zeppelin.
+  # storageClassName` — chart/tests/storage-neutrality_test.yaml).
+  storageClassName: ""
+  repo: pipelines            # org/repo path the Console commits to
   resources:
     requests:
       cpu: 100m

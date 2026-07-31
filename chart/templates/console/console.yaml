@@ -39,6 +39,20 @@
 #     (non-secret) config, `.Values.console.oidc.audience`.
 #
 {{- if .Values.components.console }}
+{{- /*
+GitOps repo URL fallback (2026-07-30-gitops-core-slice-a-write-path Task 6):
+explicit `console.gitops.repoUrl` always wins when set. Only when it's
+EMPTY *and* the in-cluster Gitea fallback is on (`components.gitea`,
+chart/templates/16-gitea.yaml) do we default to that Gitea instance's SSH
+remote — same "gitea-ssh" Service name/namespace/port 16-gitea.yaml
+renders, so this string and that file's Service must be kept in sync.
+When `components.gitea` is off (default) this resolves to "", identical to
+today's behavior (Task 5) — the `required()` guard below still fails loud.
+*/}}
+{{- $gitopsRepoUrl := .Values.console.gitops.repoUrl }}
+{{- if and (not $gitopsRepoUrl) .Values.components.gitea }}
+{{- $gitopsRepoUrl = printf "ssh://git@gitea-ssh.%s.svc:22/gitea/%s.git" (include "lakehouse.namespace" .) .Values.gitea.repo }}
+{{- end }}
 ---
 # -------- ServiceAccount --------
 apiVersion: v1
@@ -111,8 +125,11 @@ data:
   # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME
   # reference here (its material is mounted as a file below, not read as an
   # env var — see the Deployment's gitops volume/volumeMount).
+  # GITOPS_REPO_URL uses the computed `$gitopsRepoUrl` (Task 6, see top of
+  # file) — falls back to the in-cluster Gitea only when the explicit value
+  # is empty AND `components.gitea` is on; otherwise identical to Task 5.
   DEPLOY_MODE: {{ .Values.console.deployMode | quote }}
-  GITOPS_REPO_URL: {{ .Values.console.gitops.repoUrl | quote }}
+  GITOPS_REPO_URL: {{ $gitopsRepoUrl | quote }}
   GITOPS_BRANCH: {{ .Values.console.gitops.branch | quote }}
   GITOPS_PATH: {{ .Values.console.gitops.path | quote }}
   GITOPS_CREDENTIAL_SECRET: {{ .Values.console.gitops.credentialSecret | quote }}
@@ -183,7 +200,11 @@ spec:
           readOnly: true
         {{- end }}
       {{- if eq .Values.console.deployMode "gitops" }}
-      {{- $_ := required "console.gitops.repoUrl is required when deployMode=gitops" .Values.console.gitops.repoUrl }}
+      {{- /* Guard on the COMPUTED repo URL ($gitopsRepoUrl, top of file), not
+             the raw value — a Gitea-fallback install (components.gitea=true,
+             gitops.repoUrl left empty) is a valid gitops config, not a
+             misconfiguration. */}}
+      {{- $_ := required "console.gitops.repoUrl is required when deployMode=gitops" $gitopsRepoUrl }}
       volumes:
       - name: gitops-credential
         secret:

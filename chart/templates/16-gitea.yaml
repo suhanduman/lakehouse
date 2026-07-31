@@ -1,0 +1,133 @@
+# Gitea — OPTIONAL in-cluster git server, the no-external-git fallback for
+# the GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 6).
+# Gated by `.Values.components.gitea` (DEFAULT FALSE).
+#
+# *** THIS IS NOT FOR PRODUCTION. *** A real `console.deployMode: gitops`
+# install brings its OWN external git host (GitHub/GitLab/a dedicated
+# Gitea/Gitness instance, ...) and points `console.gitops.repoUrl` at it
+# explicitly — see chart/templates/console/console.yaml. This component
+# exists ONLY so an environment with no external git host reachable from
+# the cluster (throwaway dev/PoC/e2e, or a genuinely air-gapped install)
+# still has somewhere for the Console's rendered pipeline manifests to
+# land. Single replica, ONE PVC, no HA — same posture as
+# chart/templates/17-minio.yaml's dev-only object store.
+#
+# Minimal by design: no Ingress/Route (an external reconciler — ArgoCD,
+# Slice B — is wired to this Gitea's SSH remote directly, in-cluster; there
+# is no need for anything here to be reachable from outside the cluster).
+#
+# Bootstrap is responsible for (OUT OF THIS TASK'S SCOPE):
+#   - seeding the `gitops-credential` Secret (console.gitops.credentialSecret)
+#     with an SSH keypair Gitea's admin/repo setup already trusts, and
+#   - creating the `.Values.gitea.repo` repository under the `gitea` org/user
+#     inside this instance.
+# Without that bootstrap wiring, this Deployment renders and runs, but the
+# Console's first commit attempt will fail (no repo / no accepted key) —
+# exactly as it would against a misconfigured EXTERNAL git host.
+#
+# Service naming — MUST stay in sync with chart/templates/console/
+# console.yaml's GITOPS_REPO_URL fallback string
+# (`ssh://git@gitea-ssh.<ns>.svc:22/gitea/<repo>.git`):
+#   - `gitea-ssh`  (port 22)   — the git remote the Console commits/pushes to.
+#   - `gitea-http` (port 3000) — Gitea's web UI/API (not wired to anything
+#     else in this chart yet; kept for admin/debugging access only).
+{{- if .Values.components.gitea }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    app: gitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gitea}
+  template:
+    metadata:
+      labels: {app: gitea}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: gitea
+        image: {{ .Values.gitea.image | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports:
+        - {name: ssh,  containerPort: 22}
+        - {name: http, containerPort: 3000}
+        readinessProbe:
+          tcpSocket: {port: 3000}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket: {port: 3000}
+          initialDelaySeconds: 20
+          periodSeconds: 20
+        resources:
+          requests:
+            cpu: {{ .Values.gitea.resources.requests.cpu | quote }}
+            memory: {{ .Values.gitea.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.gitea.resources.limits.cpu | quote }}
+            memory: {{ .Values.gitea.resources.limits.memory | quote }}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: gitea-data}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-data
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: {{ .Values.gitea.storageSize | quote }}}
+  # storageClassName empty (default, `gitea.storageClassName`) = the
+  # cluster's default StorageClass — same omit-when-empty convention as
+  # `minio.storage.storageClassName` / `zeppelin.storageClassName`
+  # (storage-neutrality, Product Foundation task 6.5; see
+  # chart/tests/storage-neutrality_test.yaml).
+{{- with .Values.gitea.storageClassName }}
+  storageClassName: {{ . }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-ssh
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    app: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+  - {name: ssh, port: 22, targetPort: 22}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-http
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+    app: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+  - {name: http, port: 3000, targetPort: 3000}
+{{- end }}
