@@ -33,6 +33,7 @@
       (include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.rawdata.location)
       .Values.nginx.streaming.checkpointBucket
       (include "lakehouse.s3BucketFromUri" .Values.postgres.nessie.backup.destinationPath)
+      .Values.storage.jobsBucket
     | uniq }}
 {{- end }}
 apiVersion: batch/v1

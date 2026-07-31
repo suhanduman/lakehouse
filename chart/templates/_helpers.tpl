@@ -291,6 +291,9 @@ Usage:
 spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
 spark.jars.ivy: "/tmp/.ivy2"
 spark.hadoop.fs.s3a.path.style.access: "true"
+{{- with .Values.storage.s3.endpoint }}
+spark.hadoop.fs.s3a.endpoint: {{ . | quote }}
+{{- end }}
 spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.EnvironmentVariableCredentialsProvider"
 spark.sql.catalog.lakehouse: "org.apache.iceberg.spark.SparkCatalog"
 spark.sql.catalog.lakehouse.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
