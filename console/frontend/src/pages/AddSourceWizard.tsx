@@ -783,7 +783,10 @@ export default function AddSourceWizard() {
                 Kafka topic: <strong>{preview.kafka_topic?.metadata?.name ?? "(none)"}</strong>
               </p>
               <p>
-                Bucket: <strong>{preview.bucket}</strong>
+                Bronze bucket: <strong>{preview.bronze_bucket}</strong>
+              </p>
+              <p>
+                Silver bucket: <strong>{preview.silver_bucket}</strong>
               </p>
               <pre>{preview.namespace_ddl}</pre>
             </div>

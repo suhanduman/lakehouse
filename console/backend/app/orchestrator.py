@@ -304,19 +304,24 @@ class AddSourceOrchestrator:
             if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):
                 return fail()
 
-        # 2. bucket -- no undo pushed, see module docstring "Rollback scope"
-        bucket = self.render.bucket_name(spec.target_ns)
+        # 2. buckets -- per-pipeline (Sub-project B). Bronze always; Silver only
+        # for entity disposition (event/append-only has no Silver). No undo
+        # pushed, see module docstring "Rollback scope".
+        bronze_bucket = self.render.bronze_bucket_name(spec.target_ns, spec.target_table)
+        silver_bucket = self.render.silver_bucket_name(spec.target_ns, spec.target_table)
 
-        def _create_bucket() -> Optional[str]:
-            self.s3.create_bucket(bucket)
+        def _create_buckets() -> Optional[str]:
+            self.s3.create_bucket(bronze_bucket)
+            if disposition == "entity":
+                self.s3.create_bucket(silver_bucket)
             return None
 
-        if not run("bucket", _create_bucket):
+        if not run("bucket", _create_buckets):
             return fail()
 
         # 3. namespace -- no undo pushed, see module docstring "Rollback scope"
         def _run_ns_ddl() -> Optional[str]:
-            self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns, bucket))
+            self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns))
             return None
 
         if not run("namespace", _run_ns_ddl):
@@ -342,8 +347,10 @@ class AddSourceOrchestrator:
                     "IcebergService enjekte edilmedi — tablo identifier field ile "
                     "pre-create edilemez (upsert append-only'e düşer)"
                 )
-            # location=None: namespace + konumu yukarıdaki Trino adımı kurdu;
-            # iceberg yalnızca tabloyu (identifier field ile) yaratır.
+            # location=<per-pipeline bucket>/warehouse: her tablo kendi
+            # Bronze/Silver bucket'ına (yukarıdaki adım 2) yazar -- namespace
+            # DDL'i (Trino adımı) sadece namespace'i kurar, tablo location'ı
+            # burada, create_table çağrısında verilir (Task 2 arayüzü).
             cols = [c.model_dump() for c in spec.columns] if spec.columns else []
             if disposition == "entity":
                 # Validate BEFORE any Iceberg write: a misconfigured entity
@@ -369,11 +376,11 @@ class AddSourceOrchestrator:
                     )
                 bronze_fq = self.iceberg.create_table(
                     f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
-                    location=None, layer="bronze",
+                    location=f"s3://{bronze_bucket}/warehouse", layer="bronze",
                 )
                 silver_fq = self.iceberg.create_table(
                     spec.target_ns, spec.target_table, cols, identifier,
-                    location=None, layer="silver",
+                    location=f"s3://{silver_bucket}/warehouse", layer="silver",
                 )
                 return f"{bronze_fq} + {silver_fq} (identifier={identifier})"
             # event/append-only: Bronze skeleton only (columns may be empty —
@@ -382,7 +389,7 @@ class AddSourceOrchestrator:
             # silver-merge skips this source entirely.
             bronze_fq = self.iceberg.create_table(
                 f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
-                location=None, layer="bronze",
+                location=f"s3://{bronze_bucket}/warehouse", layer="bronze",
             )
             return f"{bronze_fq} (event/append-only, no Silver)"
 

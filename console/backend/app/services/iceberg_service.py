@@ -168,8 +168,9 @@ class IcebergService:
         layer="silver" (default): mevcut davranış — identifier field (PK)
         ZORUNLU (boşsa fail-loud ValueError), default warehouse, unpartitioned.
         Tablo VARSA identifier'ı doğrular; uyuşmazsa IdentifierMismatch fırlatır
-        (fail-loud). `location` verilirse namespace bu S3 konumuyla yaratılır
-        (kaynak-başına bucket modeli — Model X).
+        (fail-loud). `location` verilirse TABLO bu S3 konumuyla yaratılır
+        (pipeline-başına bucket modeli — Sub-project B); namespace mantıksal
+        (logical) kalır, konum taşımaz.
 
         layer="bronze": medallion CDC changelog tablosu — identifier YOK
         (append-only log; MERGE hedefi Silver'dır), sabit CDC metadata
@@ -184,7 +185,9 @@ class IcebergService:
             raise ValueError("identifier (PK) boş olamaz — upsert/delete için zorunlu")
 
         partition_spec = None
-        ns_properties: Dict[str, Any] = {"location": location} if location else {}
+        # Namespace is logical (Sub-project B): per-table location goes on the
+        # TABLE, not the namespace, so each pipeline lands in its own bucket.
+        ns_properties: Dict[str, Any] = {}
         warehouse = None
         if layer == "bronze":
             identifier = []  # changelog — no identifier, ever (fail-loud rule is silver-only)
@@ -225,8 +228,10 @@ class IcebergService:
                 "write.update.mode": "copy-on-write",
                 "write.delete.mode": "copy-on-write",
             })
+        create_kwargs: Dict[str, Any] = {"schema": schema, "properties": properties}
+        if location:
+            create_kwargs["location"] = location
         if partition_spec is not None:
-            cat.create_table(fq, schema=schema, partition_spec=partition_spec, properties=properties)
-        else:
-            cat.create_table(fq, schema=schema, properties=properties)
+            create_kwargs["partition_spec"] = partition_spec
+        cat.create_table(fq, **create_kwargs)
         return fq
