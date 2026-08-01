@@ -70,8 +70,15 @@ metadata:
   namespace: {{ include "lakehouse.namespace" . }}
 rules:
 - apiGroups: [kafka.strimzi.io]
-  resources: [kafkaconnectors, kafkatopics, kafkausers]
+  resources: [kafkaconnectors, kafkatopics]
   verbs: [get, list, create, patch, delete]
+# kafkausers: only get+patch — the orchestrator READ-MODIFY-WRITEs the `connect`
+# KafkaUser's per-source ACLs (ensure/remove_user_acl); it never creates/lists/
+# deletes KafkaUsers. Scoped to least-privilege (sartname 3.7.1.3) rather than
+# reusing the broader connector/topic verb set above.
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkausers]
+  verbs: [get, patch]
 - apiGroups: [kafka.strimzi.io]
   resources: [kafkaconnectors/status, kafkatopics/status]
   verbs: [get]

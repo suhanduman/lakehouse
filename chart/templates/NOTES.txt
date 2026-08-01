@@ -28,6 +28,15 @@ Chart {{ .Chart.Name }}-{{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }}
 
 See exactly what this revision rendered with:
   helm get manifest {{ .Release.Name }} -n {{ include "lakehouse.namespace" . }}
+{{- if not .Values.kafkaConnect.seedConnectAcls }}
+
+⚠️  WARNING: kafkaConnect.seedConnectAcls is FALSE.
+    The `connect` KafkaUser is declared without ACLs (runtime-owned), so with
+    the seed Job disabled it starts with ZERO base ACLs — every Kafka Connect
+    connector (CDC/JDBC/existing-Kafka/Camel) will fail authorization until you
+    seed connect's base ACLs (.Values.kafkaConnect.connectBaseAcls) out-of-band.
+    Only disable this if you provision the connect ACLs by other means.
+{{- end }}
 
 {{- if .Values.components.routesTls }}
 
