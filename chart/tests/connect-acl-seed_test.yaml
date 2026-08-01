@@ -62,12 +62,17 @@ suite: console Role kafka.strimzi.io rule includes kafkausers (orchestrator ACL 
 templates:
   - templates/console/console.yaml
 tests:
-  - it: "console Role kafka.strimzi.io rule lists kafkausers alongside kafkaconnectors/kafkatopics"
+  - it: "console Role grants kafkausers get+patch in its own least-privilege rule (not the broader connector/topic verbs)"
     documentSelector: {path: metadata.name, value: lakehouse-console-role}
     asserts:
+      # kafkausers is scoped to a dedicated rule with only get+patch
       - contains:
-          path: rules[0].resources
+          path: rules[1].resources
           content: kafkausers
       - equal:
-          path: rules[0].apiGroups[0]
-          value: kafka.strimzi.io
+          path: rules[1].verbs
+          value: [get, patch]
+      # and is NOT in the broader kafkaconnectors/kafkatopics rule
+      - notContains:
+          path: rules[0].resources
+          content: kafkausers
