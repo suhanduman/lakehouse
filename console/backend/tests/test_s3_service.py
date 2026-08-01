@@ -25,6 +25,10 @@ class FakeS3:
         self.buckets = ["src-existing"]
         self.objects = {}  # bucket -> list of keys
         self.list_objects_calls = []
+        # Single shared ordered log so tests can assert relative sequence
+        # between object-deletion and bucket-deletion calls (not just that
+        # both happened) — proves delete_bucket empties-before-removing.
+        self.log = []
 
     def create_bucket(self, Bucket):
         if self.already_owned:
@@ -46,6 +50,7 @@ class FakeS3:
 
     def delete_objects(self, Bucket, Delete):
         self.deleted_objects_calls.append((Bucket, Delete))
+        self.log.append(("empty", Bucket))
         return {"Deleted": Delete["Objects"]}
 
     def delete_bucket(self, Bucket):
@@ -55,6 +60,7 @@ class FakeS3:
                 "DeleteBucket",
             )
         self.deleted_buckets.append(Bucket)
+        self.log.append(("delbucket", Bucket))
         if Bucket in self.buckets:
             self.buckets.remove(Bucket)
 
@@ -142,6 +148,10 @@ def test_delete_bucket_empties_then_removes():
     assert len(fake.deleted_objects_calls) == 1
     assert fake.deleted_objects_calls[0][0] == "src-x"
     assert fake.deleted_buckets == ["src-x"]
+    # Ordering assertion: proves empty happened *before* remove, not just
+    # that both happened (a reversed delete_bucket()/empty_bucket() call
+    # order would still pass every assertion above this one).
+    assert fake.log == [("empty", "src-x"), ("delbucket", "src-x")]
 
 
 def test_delete_bucket_missing_is_noop():
