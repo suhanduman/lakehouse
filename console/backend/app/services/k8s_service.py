@@ -28,8 +28,18 @@ SPARK_GROUP = "sparkoperator.k8s.io"
 SPARK_API_VERSION = "v1beta2"
 SPARK_PLURAL = "scheduledsparkapplications"
 
+USER_PLURAL = "kafkausers"
+
 HTTP_CONFLICT = 409
 HTTP_NOT_FOUND = 404
+
+
+def _acl_key(acl: Dict[str, Any]) -> tuple:
+    """Identity of a Strimzi ACL entry for dedup/removal purposes: compares by
+    resource (type+name+patternType) only, so differing `operations` on the
+    same resource don't create duplicate entries."""
+    r = acl.get("resource", {})
+    return (r.get("type"), r.get("name"), r.get("patternType"))
 
 
 class K8sService:
@@ -249,3 +259,57 @@ class K8sService:
                 return None
             raise
         return (obj or {}).get("status")
+
+    # ----------------------------------------------------------------
+    # ensure_user_acl / remove_user_acl — read-modify-write a KafkaUser CR's
+    # spec.authorization.acls. Used by the add-source/remove-source
+    # orchestrator to grant/revoke a scoped topic READ on the `connect` user
+    # per stream/kafka source. Both are idempotent (no-op if already in the
+    # desired state) and retry once on a 409 (concurrent modification of the
+    # KafkaUser) before giving up.
+    # ----------------------------------------------------------------
+
+    def ensure_user_acl(self, user: str, acl: Dict[str, Any]) -> None:
+        """Idempotently add an ACL entry to a KafkaUser's spec.authorization.acls
+        (read-modify-write, retry once on 409). No-op if an entry with the same
+        (type,name,patternType) is already present."""
+        for attempt in range(2):
+            obj = self.custom_api.get_namespaced_custom_object(
+                group=GROUP, version=VERSION, namespace=self.namespace,
+                plural=USER_PLURAL, name=user)
+            acls = obj.get("spec", {}).get("authorization", {}).get("acls", []) or []
+            if any(_acl_key(a) == _acl_key(acl) for a in acls):
+                return
+            new_acls = acls + [acl]
+            try:
+                self.custom_api.patch_namespaced_custom_object(
+                    group=GROUP, version=VERSION, namespace=self.namespace,
+                    plural=USER_PLURAL, name=user,
+                    body={"spec": {"authorization": {"acls": new_acls}}})
+                return
+            except ApiException as exc:
+                if exc.status == HTTP_CONFLICT and attempt == 0:
+                    continue
+                raise
+
+    def remove_user_acl(self, user: str, acl: Dict[str, Any]) -> None:
+        """Idempotently remove the ACL entry matching (type,name,patternType)
+        from a KafkaUser (read-modify-write, retry once on 409). No-op if absent."""
+        for attempt in range(2):
+            obj = self.custom_api.get_namespaced_custom_object(
+                group=GROUP, version=VERSION, namespace=self.namespace,
+                plural=USER_PLURAL, name=user)
+            acls = obj.get("spec", {}).get("authorization", {}).get("acls", []) or []
+            new_acls = [a for a in acls if _acl_key(a) != _acl_key(acl)]
+            if len(new_acls) == len(acls):
+                return
+            try:
+                self.custom_api.patch_namespaced_custom_object(
+                    group=GROUP, version=VERSION, namespace=self.namespace,
+                    plural=USER_PLURAL, name=user,
+                    body={"spec": {"authorization": {"acls": new_acls}}})
+                return
+            except ApiException as exc:
+                if exc.status == HTTP_CONFLICT and attempt == 0:
+                    continue
+                raise

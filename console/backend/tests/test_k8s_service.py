@@ -464,3 +464,61 @@ def test_get_application_status_404_returns_none():
     svc = K8sService.__new__(K8sService)
     svc.custom_api = _FakeCustom(raise_status=404)
     assert svc.get_application_status("lakehouse-pipelines", "argocd") is None
+
+
+# --------------------------------------------------------------------------
+# ensure_user_acl / remove_user_acl — read-modify-write on a KafkaUser CR's
+# spec.authorization.acls (connect-user ACL grant/revoke). Reuses FakeCustom
+# above (already supports a configurable get_response + records
+# patched/last_patch) rather than a separate fake.
+# --------------------------------------------------------------------------
+
+ACL = {"resource": {"type": "topic", "name": "orders", "patternType": "literal"},
+       "operations": ["Read", "Describe"]}
+
+
+def test_ensure_user_acl_adds_when_absent():
+    fake = FakeCustom()
+    fake.get_response = {"spec": {"authorization": {"acls": [
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]}
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.ensure_user_acl("connect", ACL)
+
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL in patched
+    assert len(patched) == 2   # base preserved + new one
+
+
+def test_ensure_user_acl_idempotent_when_present():
+    fake = FakeCustom()
+    fake.get_response = {"spec": {"authorization": {"acls": [ACL]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.ensure_user_acl("connect", ACL)
+
+    assert len(fake.patched) == 0   # already present -> no patch
+
+
+def test_remove_user_acl_removes_when_present():
+    fake = FakeCustom()
+    fake.get_response = {"spec": {"authorization": {"acls": [
+        ACL,
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]},
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.remove_user_acl("connect", ACL)
+
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL not in patched
+    assert len(patched) == 1
+
+
+def test_remove_user_acl_idempotent_when_absent():
+    fake = FakeCustom()
+    fake.get_response = {"spec": {"authorization": {"acls": []}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.remove_user_acl("connect", ACL)
+
+    assert len(fake.patched) == 0
