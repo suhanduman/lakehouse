@@ -1,0 +1,33 @@
+# chart/tests/connect-acl-seed_test.yaml — helm-unittest suite for
+# chart/templates/20-connect-acl-seed.yaml: the dual-hook (helm
+# post-install,post-upgrade + ArgoCD PostSync) Job that merge-ADDS
+# `.Values.kafkaConnect.connectBaseAcls` onto the `connect` KafkaUser via
+# kubectl+jq (see chart/values.yaml `kafkaConnect.seedConnectAcls` doc
+# comment for why the connect ACLs are runtime-owned).
+suite: connect-acl-seed Job (runtime-owned connect ACLs)
+templates:
+  - templates/20-connect-acl-seed.yaml
+tests:
+  - it: "seedConnectAcls=false renders nothing"
+    set: {kafkaConnect.seedConnectAcls: false}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: "default renders SA + Role + RoleBinding + dual-hook Job that merge-adds base ACLs incl kafka-ingest-"
+    asserts:
+      - hasDocuments: {count: 4}
+      - equal:
+          path: "metadata.annotations[\"helm.sh/hook\"]"
+          value: "post-install,post-upgrade"
+        documentSelector: {path: kind, value: Job}
+      - equal:
+          path: "metadata.annotations[\"argocd.argoproj.io/hook\"]"
+          value: "PostSync"
+        documentSelector: {path: kind, value: Job}
+      - contains:
+          path: rules[0].resources
+          content: kafkausers
+        documentSelector: {path: kind, value: Role}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "kafka-ingest-"
+        documentSelector: {path: kind, value: Job}

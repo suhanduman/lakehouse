@@ -622,6 +622,12 @@ versions:
   # S3-compatible store (not just the dev MinIO above). POC-VERIFY before
   # bumping.
   mcImage: "quay.io/minio/mc:RELEASE.2024-01-13T08-44-48Z"
+  # chart/templates/20-connect-acl-seed.yaml: vendor-generic kubectl+jq image
+  # used ONLY to `kubectl get`/`kubectl patch` the `connect` KafkaUser CR
+  # (merge-add its static base ACLs — see `kafkaConnect.connectBaseAcls`
+  # below). Overridable for air-gapped/OpenShift environments that mirror
+  # their own kubectl image instead of pulling from docker.io.
+  kubectlImage: "alpine/k8s:1.29.2"
 
 # CNPG (CloudNativePG) HA Postgres clusters: pg-nessie and pg-apicurio
 # (pg-apicurio gated separately from the Apicurio app itself — see
@@ -1010,6 +1016,27 @@ kafkaConnect:
     limits:
       cpu: "2"
       memory: 4Gi
+  # Seed the `connect` KafkaUser's static base ACLs at install/upgrade. The
+  # connect ACLs are RUNTIME-OWNED (03-kafka-strimzi.yaml declares the user
+  # without `acls` so helm/ArgoCD never clobber the per-source ACLs the Console
+  # adds). This Job merge-ADDS the base set (never removes), so it is safe to
+  # re-run on upgrade and preserves Console-added per-source ACLs.
+  seedConnectAcls: true
+  connectBaseAcls:
+    - {resource: {type: group, name: connect, patternType: prefix}, operations: [Read]}
+    - {resource: {type: group, name: cg-control-, patternType: prefix}, operations: [Read, Describe]}
+    - {resource: {type: topic, name: connect-cluster-, patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: topic, name: kafka-ingest-, patternType: prefix}, operations: [Read, Write, Create, Describe]}
+    - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
+    - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
 
 # Kafka Connectors. Gating: see `components.connectors` above. `{{MSSQL_HOST}}` / `{{MONGO_HOST}}`
 # / `{{S3_ENDPOINT}}` are the SAME plain-placeholder-token
