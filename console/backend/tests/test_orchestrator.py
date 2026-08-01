@@ -184,7 +184,9 @@ class FakeIcebergOrch:
     """IcebergService double for the orchestrator "table" pre-create step.
     `fail_on='table'` makes create_table raise (rollback testi). The "table"
     step calls create_table TWICE (bronze then silver) — `created` records
-    BOTH calls, in order, as (namespace, table, identifier, layer)."""
+    BOTH calls, in order, as (namespace, table, identifier, layer, location)
+    (Task 4 added `location` as the 5th element to prove the per-pipeline
+    Bronze/Silver bucket location is passed through)."""
 
     def __init__(self, fail_on: Optional[str] = None):
         self.fail_on = fail_on
@@ -193,15 +195,21 @@ class FakeIcebergOrch:
     def create_table(self, namespace, table, columns, identifier, location=None, layer="silver"):
         if self.fail_on == "table":
             raise RuntimeError("table boom")
-        self.created.append((namespace, table, tuple(identifier), layer))
+        self.created.append((namespace, table, tuple(identifier), layer, location))
         return f"{namespace}.{table}"
 
     @property
     def created_layers(self) -> List[str]:
         """Convenience view over `created` for lane/disposition tests that only
         care which layers were pre-created, not the full (ns, table, identifier,
-        layer) tuple — `layer` was already captured above, this just projects it."""
-        return [layer for (_ns, _table, _identifier, layer) in self.created]
+        layer, location) tuple — `layer` was already captured above, this just
+        projects it."""
+        return [layer for (_ns, _table, _identifier, layer, _location) in self.created]
+
+    def by_layer(self, layer: str) -> tuple:
+        """Last create_table call recorded for `layer` — convenience for tests
+        asserting the per-table `location` passed to a specific layer."""
+        return [c for c in self.created if c[3] == layer][-1]
 
 
 def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5,
@@ -255,7 +263,12 @@ def test_add_source_happy_path_calls_services_with_expected_data():
     orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
     assert k8s.created_secrets == [("mssql1", {"user": "sa", "pass": "s3cret"})]
-    assert s3.created_buckets == [render_service.bucket_name("mssql_ogrenci")]
+    # entity disposition -> per-pipeline Bronze AND Silver buckets (Task 4),
+    # not the old single `src-<ns>` bucket.
+    assert s3.created_buckets == [
+        render_service.bronze_bucket_name("mssql_ogrenci", "students"),
+        render_service.silver_bucket_name("mssql_ogrenci", "students"),
+    ]
     assert trino.ddls == [render_service.render_namespace_ddl("mssql_ogrenci")]
     expected_topic = render_service.topic_name(CDC_MSSQL_SPEC)
     assert [t["metadata"]["name"] for t in k8s.applied_topics] == [expected_topic]
@@ -310,8 +323,12 @@ def test_rollback_on_connector_failure_deletes_topic_and_secret():
 
     # bucket/namespace are deliberately NOT rolled back (see orchestrator
     # module docstring "Rollback scope") -- they're cheap+idempotent to
-    # leave behind and may already hold state worth keeping.
-    assert s3.created_buckets == [render_service.bucket_name("mssql_ogrenci")]
+    # leave behind and may already hold state worth keeping. Entity
+    # disposition -> both per-pipeline buckets (Task 4).
+    assert s3.created_buckets == [
+        render_service.bronze_bucket_name("mssql_ogrenci", "students"),
+        render_service.silver_bucket_name("mssql_ogrenci", "students"),
+    ]
     assert len(trino.ddls) == 1
 
 
@@ -619,10 +636,13 @@ def test_table_step_precreates_with_identifier_before_connector():
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
     assert res.ok is True
     # BOTH layers pre-created — Bronze (<ns>_raw, no identifier) first, then
-    # Silver (<ns>, identifier).
+    # Silver (<ns>, identifier) — each with its own per-pipeline bucket
+    # location (Task 4).
+    bb = render_service.bronze_bucket_name("mssql_ogrenci", "students")
+    sb = render_service.silver_bucket_name("mssql_ogrenci", "students")
     assert orch.iceberg.created == [
-        ("mssql_ogrenci_raw", "students", (), "bronze"),
-        ("mssql_ogrenci", "students", ("id",), "silver"),
+        ("mssql_ogrenci_raw", "students", (), "bronze", f"s3://{bb}/warehouse"),
+        ("mssql_ogrenci", "students", ("id",), "silver", f"s3://{sb}/warehouse"),
     ]
     # "table" adımı connector'dan (ve topic'ten) ÖNCE
     names = [s.name for s in res.steps]
@@ -638,9 +658,11 @@ def test_table_identifier_fallback_scheduled_incrementing_col():
     orch, *_ = _orch()
     res = orch.add_source(spec, CREDS)
     assert res.ok is True
+    bb = render_service.bronze_bucket_name("pg_ns", "t")
+    sb = render_service.silver_bucket_name("pg_ns", "t")
     assert orch.iceberg.created == [
-        ("pg_ns_raw", "t", (), "bronze"),
-        ("pg_ns", "t", ("pk",), "silver"),
+        ("pg_ns_raw", "t", (), "bronze", f"s3://{bb}/warehouse"),
+        ("pg_ns", "t", ("pk",), "silver", f"s3://{sb}/warehouse"),
     ]
 
 
@@ -653,9 +675,11 @@ def test_table_identifier_fallback_mongo_id():
     orch, *_ = _orch()
     res = orch.add_source(spec, CREDS)
     assert res.ok is True
+    bb = render_service.bronze_bucket_name("m_ns", "c")
+    sb = render_service.silver_bucket_name("m_ns", "c")
     assert orch.iceberg.created == [
-        ("m_ns_raw", "c", (), "bronze"),
-        ("m_ns", "c", ("_id",), "silver"),
+        ("m_ns_raw", "c", (), "bronze", f"s3://{bb}/warehouse"),
+        ("m_ns", "c", ("_id",), "silver", f"s3://{sb}/warehouse"),
     ]
 
 
@@ -1002,3 +1026,39 @@ def test_stream_kafka_entity_precreates_bronze_and_silver():
     # no dedicated sink (it IS the sink) -- disposition doesn't change that.
     assert names == ["bucket", "namespace", "table", "acl", "connector", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
+
+
+# --------------------------------------------------------------------------
+# Task 4 (Sub-project B, per-pipeline buckets): the "bucket" step now creates
+# TWO per-pipeline buckets (bronze_bucket_name/silver_bucket_name) instead of
+# one shared `src-<ns>` bucket, and the "table" step passes each layer's
+# bucket as its Iceberg `location=`.
+# --------------------------------------------------------------------------
+
+def test_add_entity_creates_bronze_and_silver_buckets_with_locations():
+    orch, fakes = _orch_fakes()
+
+    orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    ns, tbl = CDC_MSSQL_SPEC.target_ns, CDC_MSSQL_SPEC.target_table
+    bb = render_service.bronze_bucket_name(ns, tbl)
+    sb = render_service.silver_bucket_name(ns, tbl)
+    assert bb in fakes["s3"].created_buckets and sb in fakes["s3"].created_buckets
+    # per-table locations passed to create_table (Task 2 `location=` arg).
+    assert fakes["iceberg"].by_layer("bronze")[4] == f"s3://{bb}/warehouse"
+    assert fakes["iceberg"].by_layer("silver")[4] == f"s3://{sb}/warehouse"
+
+
+def test_add_event_creates_only_bronze_bucket():
+    orch, fakes = _orch_fakes()
+    spec = _kafka_spec()   # stream/kafka defaults to event/append-only disposition
+
+    orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    ns, tbl = spec.target_ns, spec.target_table
+    bb = render_service.bronze_bucket_name(ns, tbl)
+    sb = render_service.silver_bucket_name(ns, tbl)
+    assert bb in fakes["s3"].created_buckets
+    assert sb not in fakes["s3"].created_buckets       # no Silver bucket for event
+    assert not fakes["iceberg"].created_layers.count("silver")   # no Silver table
+    assert fakes["iceberg"].by_layer("bronze")[4] == f"s3://{bb}/warehouse"
