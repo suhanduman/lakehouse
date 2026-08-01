@@ -162,6 +162,43 @@ def _kind_of(cr: Dict[str, Any]) -> str:
     return cr.get("kind") or "KafkaConnector"
 
 
+def _connect_topic_acl(topic: str) -> Dict[str, Any]:
+    """The scoped literal READ/DESCRIBE ACL AddSourceOrchestrator.add_source
+    grants `connect` for a stream/kafka (kafka-ingest) source's customer
+    topic (Task 2) -- shape must match the orchestrator's `topic_acl` exactly
+    so `remove_user_acl`'s (type,name,patternType) key match finds it."""
+    return {"resource": {"type": "topic", "name": topic, "patternType": "literal"},
+            "operations": ["Read", "Describe"]}
+
+
+def _kafka_ingest_topic(cr: Dict[str, Any]) -> Optional[str]:
+    """Best-effort recovery of the customer topic a stream/kafka source's
+    dedicated sink reads from, straight off its own KafkaConnector CR --
+    needed so `delete_source` can revoke the `connect` ACL Task 2's add_source
+    granted (this router has no SourceSpec on delete, only the CR, so the
+    lane identity must be recovered structurally, the same way
+    `_target_ns_table`/`_topic_from_config` above recover other per-source
+    facts from a CR alone rather than from a spec).
+
+    `render_service._render_kafka_ingest` is the ONLY renderer that names its
+    connector via `_k8s_name("kafka-ingest", spec.source, spec.target_table)`
+    (i.e. `metadata.name` always starts with "kafka-ingest-") and sets
+    `spec.config["topics"] = spec.table` (see `_iceberg_sink_config`'s
+    `topics` param) -- both a stream/kafka source's OWN CR (kafka-ingest IS
+    the sink, no separate dedicated-sink CR) and its Camel-sink counterparts
+    (named `<source-connector-name>-sink`) also use IcebergSinkConnector + a
+    `topics` key, so the name-prefix check (not the class) is what scopes
+    this to kafka-ingest specifically.
+
+    Returns None (skip, best-effort -- matching this module's existing
+    best-effort teardown tone, e.g. `_topic_from_config`) when the CR isn't a
+    kafka-ingest connector or its config is missing the `topics` key."""
+    name = (cr.get("metadata") or {}).get("name") or ""
+    if not name.startswith("kafka-ingest-"):
+        return None
+    return (cr.get("spec") or {}).get("config", {}).get("topics") or None
+
+
 def _spark_target(cr: Dict[str, Any]) -> Tuple[str, str]:
     """(target_ns, target_table) for a spark source, from its round-trip
     annotations, falling back to parsing `--target rawlake.<ns>.<tbl>` from the
@@ -418,6 +455,17 @@ def delete_source(
     exactly as in direct mode, against the CR's round-tripped ns/table (the CR
     itself is expected to already be present in the cluster via ArgoCD's
     earlier sync from git).
+
+    Existing-Kafka ACL revocation (Task 2): a stream/kafka source's
+    add_source grants `connect` a scoped literal topic READ/DESCRIBE (see
+    `AddSourceOrchestrator.add_source`'s "acl" step). That grant is a direct
+    K8s API mutation on the `connect` KafkaUser, not a chart-templated/GitOps
+    -managed resource, so -- like `with_data`'s drop_table/empty_bucket --
+    it is revoked here directly regardless of `deploy_mode`/`mode`, via
+    `_kafka_ingest_topic` recovering the source's topic straight off its own
+    CR (best-effort: a CR that isn't a kafka-ingest connector, or is missing
+    the expected topic config, is silently skipped -- never fails the
+    delete).
     """
     if settings.deploy_mode == "gitops":
         cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
@@ -431,6 +479,9 @@ def delete_source(
                     "remove nothing from the pipelines repo)"
                 ),
             )
+        kafka_ingest_topic = _kafka_ingest_topic(cr)
+        if kafka_ingest_topic:
+            k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
         commit = orchestrator.git_writer.remove_source(source)
         result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
         if mode != "with_data":
@@ -464,6 +515,10 @@ def delete_source(
         s3.empty_bucket(bucket)
         return {"ok": True, "name": name, "mode": mode, "dropped_table": fqn,
                 "emptied_bucket": bucket, "deleted_topic": None}   # spark-batch: no topic
+
+    kafka_ingest_topic = _kafka_ingest_topic(cr)
+    if kafka_ingest_topic:
+        k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
 
     k8s.delete_connector(name)
     if mode != "with_data":

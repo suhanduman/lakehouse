@@ -100,6 +100,7 @@ class FakeK8s:
         self.deleted_topics: List[str] = []
         self.spark_suspended_calls: List[tuple] = []
         self.deleted_spark_jobs: List[str] = []
+        self.removed_acls: List[tuple] = []
 
     def list_sources(self):
         return self._sources
@@ -115,6 +116,9 @@ class FakeK8s:
 
     def delete_topic(self, name):
         self.deleted_topics.append(name)
+
+    def remove_user_acl(self, user, acl):
+        self.removed_acls.append((user, acl))
 
     def set_spark_suspended(self, name, suspended):
         self.spark_suspended_calls.append((name, suspended))
@@ -744,6 +748,82 @@ def test_delete_missing_source_is_404_for_admin():
     assert r.status_code == 404
     assert k8s.deleted_connectors == []
     assert trino.dropped == [] and s3.emptied == []
+
+
+# --------------------------------------------------------------------------
+# Existing-Kafka ACL revocation (Task 2): deleting a stream/kafka source must
+# revoke the scoped `connect` topic ACL its add_source granted. The customer
+# topic is recovered from the CR's own `spec.config["topics"]` (a kafka-
+# ingest CR's name always starts with "kafka-ingest-" -- see
+# `app.routers.sources._kafka_ingest_topic`); a CDC connector's CR shape has
+# no `topics` key at all, so it must never call remove_user_acl.
+# --------------------------------------------------------------------------
+
+KAFKA_INGEST_CR = {
+    "metadata": {"name": "kafka-ingest-k1-orders"},
+    "spec": {
+        "class": "org.apache.iceberg.connect.IcebergSinkConnector",
+        "config": {
+            "topics": "orders-topic",
+            "transforms.route.static.value": "events_raw.orders",
+        },
+    },
+    "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
+}
+
+
+def test_delete_stream_kafka_revokes_connect_topic_acl():
+    k8s, s3, trino = FakeK8s(sources=[KAFKA_INGEST_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/kafka-ingest-k1-orders?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.removed_acls == [
+        ("connect", {"resource": {"type": "topic", "name": "orders-topic", "patternType": "literal"},
+                     "operations": ["Read", "Describe"]})
+    ]
+    assert k8s.deleted_connectors == ["kafka-ingest-k1-orders"]
+
+
+def test_delete_cdc_source_does_not_revoke_any_acl():
+    k8s, s3, trino = FakeK8s(), FakeS3(), FakeTrino()  # default sources=[CONNECTOR_CR] (cdc-mssql)
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.removed_acls == []
+
+
+def test_delete_gitops_mode_stream_kafka_revokes_connect_topic_acl(monkeypatch):
+    # ACL revocation is a direct K8s API mutation (Task 1's `remove_user_acl`),
+    # not GitOps-managed, so it must run even in gitops mode -- same rationale
+    # as with_data's drop_table/empty_bucket (see delete_source's docstring).
+    monkeypatch.setattr(settings, "deploy_mode", "gitops")
+    cr = {
+        "metadata": {
+            "name": "kafka-ingest-k1-orders",
+            "annotations": {"lakehouse.solus.dev/source": "k1"},
+        },
+        "spec": {
+            "class": "org.apache.iceberg.connect.IcebergSinkConnector",
+            "config": {"topics": "orders-topic"},
+        },
+    }
+    k8s, s3, trino = FakeK8s(sources=[cr]), FakeS3(), FakeTrino()
+    git_writer = _FakeGitWriter()
+    orch = FakeOrchestrator(git_writer=git_writer)
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino, orchestrator=orch)
+
+    r = client.delete("/api/sources/kafka-ingest-k1-orders?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.removed_acls == [
+        ("connect", {"resource": {"type": "topic", "name": "orders-topic", "patternType": "literal"},
+                     "operations": ["Read", "Describe"]})
+    ]
+    assert git_writer.removed == ["k1"]
 
 
 # --------------------------------------------------------------------------

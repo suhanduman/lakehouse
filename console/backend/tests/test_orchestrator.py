@@ -42,6 +42,12 @@ CDC_MSSQL_SPEC = SourceSpec(
 )
 CREDS = SourceCredentials(user="sa", password="s3cret")
 
+# Task 2 (existing-Kafka runtime-owned connect ACLs): the scoped literal
+# topic READ/DESCRIBE the orchestrator grants `connect` for a stream/kafka
+# source consuming `table="orders-topic"` (see _kafka_spec below).
+CONNECT_TOPIC_ACL = {"resource": {"type": "topic", "name": "orders-topic", "patternType": "literal"},
+                     "operations": ["Read", "Describe"]}
+
 
 # --------------------------------------------------------------------------
 # Fakes (call-order-recording doubles for k8s_service/s3_service/trino_service)
@@ -78,6 +84,8 @@ class FakeK8s:
         self.applied_connectors: List[Dict[str, Any]] = []
         self.deleted_connectors: List[str] = []
         self.applied_spark_jobs: List[Dict[str, Any]] = []
+        self.ensured_acls: List[tuple] = []
+        self.removed_acls: List[tuple] = []
         self.status_calls: List[str] = []
         self.status_states = list(status_states) if status_states is not None else ["RUNNING"]
         self.status_states_by_name = (
@@ -124,6 +132,16 @@ class FakeK8s:
             raise RuntimeError("spark-job boom")
         self.calls.append(("apply_spark_job", body["metadata"]["name"]))
         self.applied_spark_jobs.append(body)
+
+    def ensure_user_acl(self, user, acl):
+        if self.fail_on == "acl":
+            raise RuntimeError("acl boom")
+        self.calls.append(("ensure_user_acl", user))
+        self.ensured_acls.append((user, acl))
+
+    def remove_user_acl(self, user, acl):
+        self.calls.append(("remove_user_acl", user))
+        self.removed_acls.append((user, acl))
 
     def get_status(self, name):
         if self.fail_on == "verify":
@@ -680,7 +698,10 @@ def test_kafka_event_skips_secret_topic_and_silver():
     names = [s.name for s in res.steps]
     assert "secret" not in names   # in-cluster: no creds -> no secret step
     assert "topic" not in names    # existing topic: descriptor.topic_key == "" -> none created
-    assert names == ["bucket", "namespace", "table", "connector", "verify"]
+    # Task 2: "acl" grants `connect` a scoped literal READ on the customer
+    # topic (kafka-ingest lane only) -- runs before "connector".
+    assert names == ["bucket", "namespace", "table", "acl", "connector", "verify"]
+    assert ("connect", CONNECT_TOPIC_ACL) in fakes["k8s"].ensured_acls
     # Bronze only (event disposition) -- no Silver create_table call at all.
     assert fakes["iceberg"].created_layers == ["bronze"]
 
@@ -698,6 +719,31 @@ def test_kafka_external_creds_creates_secret():
     # still no topic (kafka-ingest consumes an existing topic) and still Bronze-only.
     assert "topic" not in [s.name for s in res.steps]
     assert fakes["iceberg"].created_layers == ["bronze"]
+
+
+# --------------------------------------------------------------------------
+# Task 2 (existing-Kafka runtime-owned connect ACLs): the "acl" step grants
+# `connect` a scoped literal topic READ/DESCRIBE for stream/kafka sources
+# ONLY (descriptor.render_key == "kafka-ingest") -- CDC/JDBC/Camel topics
+# live under our own prefixes and need no per-source grant.
+# --------------------------------------------------------------------------
+
+def test_stream_kafka_add_grants_connect_topic_acl():
+    orch, k8s, s3, trino = _orch()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok
+    assert ("connect", CONNECT_TOPIC_ACL) in k8s.ensured_acls
+    assert "acl" in [s.name for s in res.steps]
+
+
+def test_cdc_source_does_not_grant_connect_topic_acl():
+    orch, k8s, s3, trino = _orch()
+
+    orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert k8s.ensured_acls == []
 
 
 def test_spark_batch_rejected_via_registry_not_hardcoded_detail():
@@ -923,5 +969,5 @@ def test_stream_kafka_entity_precreates_bronze_and_silver():
     names = [s.name for s in res.steps]
     # kafka-ingest still has no topic step (consumes an existing topic) and
     # no dedicated sink (it IS the sink) -- disposition doesn't change that.
-    assert names == ["bucket", "namespace", "table", "connector", "verify"]
+    assert names == ["bucket", "namespace", "table", "acl", "connector", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
