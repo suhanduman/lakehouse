@@ -256,11 +256,7 @@ def test_add_source_happy_path_calls_services_with_expected_data():
 
     assert k8s.created_secrets == [("mssql1", {"user": "sa", "pass": "s3cret"})]
     assert s3.created_buckets == [render_service.bucket_name("mssql_ogrenci")]
-    assert trino.ddls == [
-        render_service.render_namespace_ddl(
-            "mssql_ogrenci", render_service.bucket_name("mssql_ogrenci")
-        )
-    ]
+    assert trino.ddls == [render_service.render_namespace_ddl("mssql_ogrenci")]
     expected_topic = render_service.topic_name(CDC_MSSQL_SPEC)
     assert [t["metadata"]["name"] for t in k8s.applied_topics] == [expected_topic]
     # source connector AND its dedicated sink are both applied, source first.

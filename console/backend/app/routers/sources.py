@@ -265,7 +265,7 @@ def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
     bucket = render_service.bucket_name(spec.target_ns)
     preview: Dict[str, Any] = {
         "bucket": bucket,
-        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns, bucket),
+        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns),
         "connector": None,
         "kafka_topic": None,
     }

@@ -316,7 +316,7 @@ class AddSourceOrchestrator:
 
         # 3. namespace -- no undo pushed, see module docstring "Rollback scope"
         def _run_ns_ddl() -> Optional[str]:
-            self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns, bucket))
+            self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns))
             return None
 
         if not run("namespace", _run_ns_ddl):
