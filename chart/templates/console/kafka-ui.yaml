@@ -9,8 +9,8 @@
 #
 # Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
 # (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
-# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
-# console/).
+# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — Console'un
+# add-source wizard'ının uyguladığı KafkaConnector CR'leri).
 #
 # Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
 # Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`

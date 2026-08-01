@@ -12,10 +12,10 @@
 # same templated `apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}`
 # expression is used verbatim on every other Strimzi CR in this chart
 # (KafkaNodePool/KafkaTopic/KafkaUser in 03-kafka-strimzi.yaml, KafkaConnect
-# in 12-kafka-connect.yaml, KafkaConnector in 13-connectors.yaml, KafkaUser
-# `spark-nginx` in 14-nginx-ingest.yaml, KafkaUser `kafka-ui` in
-# console/kafka-ui.yaml — grep-verified, chart/tests/integrity.sh's live
-# `helm template` renders exercise all of them together).
+# in 12-kafka-connect.yaml, KafkaUser `spark-nginx` in 14-nginx-ingest.yaml,
+# KafkaUser `kafka-ui` in console/kafka-ui.yaml — grep-verified,
+# chart/tests/integrity.sh's live `helm template` renders exercise all of
+# them together).
 suite: Strimzi apiVersion is parametrized via versions.strimziApi
 templates:
   - 03-kafka-strimzi.yaml
