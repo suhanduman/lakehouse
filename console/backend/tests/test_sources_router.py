@@ -753,10 +753,15 @@ def test_delete_missing_source_is_404_for_admin():
 # --------------------------------------------------------------------------
 # Existing-Kafka ACL revocation (Task 2): deleting a stream/kafka source must
 # revoke the scoped `connect` topic ACL its add_source granted. The customer
-# topic is recovered from the CR's own `spec.config["topics"]` (a kafka-
-# ingest CR's name always starts with "kafka-ingest-" -- see
-# `app.routers.sources._kafka_ingest_topic`); a CDC connector's CR shape has
-# no `topics` key at all, so it must never call remove_user_acl.
+# topic is recovered from the CR's own `spec.config["topics"]` GATED on
+# `metadata.name` starting with "kafka-ingest-" (see
+# `app.routers.sources._kafka_ingest_topic`) -- that name-prefix check is the
+# thing that actually does the discrimination; a CDC connector's CR shape has
+# no `topics` key at all (belt-and-suspenders, doesn't exercise the gate), but
+# a Camel dedicated sink's CR DOES have a `topics` key (same
+# IcebergSinkConnector class + `_iceberg_sink_config` helper as kafka-ingest)
+# and is named `<source>-sink`, not `kafka-ingest-*` -- CAMEL_SINK_CR below
+# exercises exactly that discrimination.
 # --------------------------------------------------------------------------
 
 KAFKA_INGEST_CR = {
@@ -766,6 +771,24 @@ KAFKA_INGEST_CR = {
         "config": {
             "topics": "orders-topic",
             "transforms.route.static.value": "events_raw.orders",
+        },
+    },
+    "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
+}
+
+# A Camel lane's DEDICATED SINK CR (render_service.render_camel_sink's output
+# shape): same class + a real `topics` key as KAFKA_INGEST_CR above, but named
+# `<source-connector-name>-sink` (never `kafka-ingest-*`). Proves
+# `_kafka_ingest_topic`'s name-prefix gate -- not the coincidental absence of
+# a `topics` key -- is what excludes non-kafka-ingest sources from ACL
+# revocation (see test_delete_camel_sink_does_not_revoke_acl_despite_topics_key).
+CAMEL_SINK_CR = {
+    "metadata": {"name": "http-h1-prices-sink"},
+    "spec": {
+        "class": "org.apache.iceberg.connect.IcebergSinkConnector",
+        "config": {
+            "topics": "http.h1.prices",
+            "transforms.route.static.value": "ext_raw.prices",
         },
     },
     "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
@@ -794,6 +817,23 @@ def test_delete_cdc_source_does_not_revoke_any_acl():
 
     assert r.status_code == 200
     assert k8s.removed_acls == []
+
+
+def test_delete_camel_sink_does_not_revoke_acl_despite_topics_key():
+    # Regression guard: CAMEL_SINK_CR has the SAME class + a real `topics`
+    # config key as KAFKA_INGEST_CR (both go through
+    # render_service._iceberg_sink_config) -- only its CR name differs
+    # ("http-h1-prices-sink", not "kafka-ingest-*"). If `_kafka_ingest_topic`'s
+    # name-prefix gate were ever loosened/removed, this would start wrongly
+    # calling remove_user_acl for a Camel dedicated sink's own topic.
+    k8s, s3, trino = FakeK8s(sources=[CAMEL_SINK_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/http-h1-prices-sink?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.removed_acls == []
+    assert k8s.deleted_connectors == ["http-h1-prices-sink"]
 
 
 def test_delete_gitops_mode_stream_kafka_revokes_connect_topic_acl(monkeypatch):
