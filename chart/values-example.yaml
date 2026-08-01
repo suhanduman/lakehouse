@@ -79,12 +79,6 @@ components:
   # real install; bring your own S3-compatible endpoint instead
   # (storage.s3.secretName above).
   minio: false
-  # Demo per-source CDC connectors (dbz-mssql, jdbc-mssql, dbz-mongo).
-  # Real per-source connectors are generated at runtime by the Console's
-  # add-source wizard, not by this chart — leave this off outside a demo.
-  connectors:
-    examples:
-      enabled: false
 
 # Routes/Ingress TLS issuer + IngressClass — used depending on `platform`
 # above (Route on openshift, Ingress on vanilla).

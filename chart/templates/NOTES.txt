@@ -115,7 +115,7 @@ See exactly what this revision rendered with:
     BEFORE install:
       - {{ .Values.storage.s3.secretName }}  (keys: access-key-id, secret-access-key, endpoint, region)
       - {{ .Values.oidc.secretName }}  (keys: issuer-url, trino-client-id, trino-client-secret, ...)
-      - mssql / mongo / debezium-src   (Kafka Connect external-config, only if connectors enabled)
+      - mssql / mongo / debezium-src   (Kafka Connect external-config, only if Kafka Connect enabled)
 {{- if .Values.components.trino }}
       - trino-internal-secret          (key: shared-secret; only if `.Values.trino.internalSharedSecret` left empty)
 {{- end }}
@@ -166,7 +166,7 @@ See exactly what this revision rendered with:
    1. namespace / quota / limits / NetworkPolicy / StorageClass  (foundation)
    2. CNPG Postgres clusters + Kafka backbone + Apicurio          (stateful)
    3. Nessie + Trino + Kafka Connect + Spark + Keycloak app       (depends on 2)
-   4. example connectors + Console + Kafka UI + Routes            (outermost)
+   4. Console + Kafka UI + Routes                                 (outermost)
  Hard data-dependencies (Nessie needs pg-nessie ready; Connect needs Kafka +
  Apicurio ready) settle automatically via operator reconcile + container
  restarts — transient CrashLoopBackOff during the first minutes is EXPECTED,

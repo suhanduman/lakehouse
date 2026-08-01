@@ -79,10 +79,12 @@ data:
           kafka-connect:
             - name: connect
               address: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
-      # NOT: connector'ların TEK doğruluk kaynağı Git'teki KafkaConnector
-      # CR'leridir (bkz. 12-kafka-connect.yaml `strimzi.io/use-connector-resources`,
-      # 13-connectors.yaml). Aşağıdaki RBAC bilerek connector'a yalnızca "view"
-      # veriyor — Kafka UI'de connector oluşturma işlevsiz kalır.
+      # NOT: connector'ların TEK doğruluk kaynağı, Console'un add-source
+      # wizard'ının (console/backend/app/orchestrator.py) küme'ye uyguladığı
+      # KafkaConnector CR'leridir (bkz. 12-kafka-connect.yaml
+      # `strimzi.io/use-connector-resources`). Aşağıdaki RBAC bilerek
+      # connector'a yalnızca "view" veriyor — Kafka UI'de connector oluşturma
+      # işlevsiz kalır.
     auth:
       type: OAUTH2
       oauth2:
