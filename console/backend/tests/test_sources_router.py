@@ -130,13 +130,9 @@ class FakeK8s:
 class FakeS3:
     def __init__(self):
         self.emptied: List[str] = []
-        self.deleted_buckets: List[str] = []
 
     def empty_bucket(self, name):
         self.emptied.append(name)
-
-    def delete_bucket(self, name):
-        self.deleted_buckets.append(name)
 
 
 class FakeTrino:
@@ -325,8 +321,7 @@ def test_preview_source_renders_crs_without_touching_any_provider():
         == "mssql_ogrenci_raw.students"
     )
     assert body["kafka_topic"]["metadata"]["name"] == "cdc.mssql1.dbo.students"
-    assert body["bronze_bucket"] == render_service.bronze_bucket_name("mssql_ogrenci", "students")
-    assert body["silver_bucket"] == render_service.silver_bucket_name("mssql_ogrenci", "students")
+    assert body["bucket"] == "src-mssql-ogrenci"
     assert "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci" in body["namespace_ddl"]
 
 
@@ -357,8 +352,7 @@ def test_preview_source_scheduled_mongo_has_no_connector_but_still_200():
     body = r.json()
     assert body["connector"] is None
     assert body["kafka_topic"] is None
-    assert body["bronze_bucket"] == render_service.bronze_bucket_name("lms_kayit", "enrollments")
-    assert body["silver_bucket"] == render_service.silver_bucket_name("lms_kayit", "enrollments")
+    assert body["bucket"] == "src-lms-kayit"
 
 
 # --------------------------------------------------------------------------
@@ -649,10 +643,6 @@ def test_delete_with_data_forbidden_for_analyst(client_as_analyst):
 
 
 def test_delete_with_data_ok_for_admin_does_full_teardown():
-    # Per-pipeline teardown (Sub-project B): with_data drops BOTH the Bronze
-    # (rawlake.<ns>_raw.<table>) AND Silver (lakehouse.<ns>.<table>) tables and
-    # deletes BOTH per-pipeline buckets -- not the old Silver-only drop_table +
-    # shared per-namespace empty_bucket.
     k8s, s3, trino = FakeK8s(), FakeS3(), FakeTrino()
     client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
     r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
@@ -660,66 +650,15 @@ def test_delete_with_data_ok_for_admin_does_full_teardown():
     body = r.json()
     assert body["ok"] is True
     assert body["mode"] == "with_data"
-    bronze_fqn = "rawlake.mssql_ogrenci_raw.students"
-    silver_fqn = "lakehouse.mssql_ogrenci.students"
-    bronze_bucket = render_service.bronze_bucket_name("mssql_ogrenci", "students")
-    silver_bucket = render_service.silver_bucket_name("mssql_ogrenci", "students")
     # response is DISTINCT from pipeline_only -- surfaces what was destroyed.
-    assert body["dropped_tables"] == [bronze_fqn, silver_fqn]
-    assert body["deleted_buckets"] == [bronze_bucket, silver_bucket]
+    assert body["dropped_table"] == "lakehouse.mssql_ogrenci.students"
+    assert body["emptied_bucket"] == "src-mssql-ogrenci"
     assert body["deleted_topic"] == "cdc.mssql1.dbo.students"
     # and the destructive calls actually happened, against the parsed targets.
     assert k8s.deleted_connectors == ["dbz-mssql1-students"]
     assert k8s.deleted_topics == ["cdc.mssql1.dbo.students"]
-    assert trino.dropped == [bronze_fqn, silver_fqn]
-    assert s3.deleted_buckets == [bronze_bucket, silver_bucket]
-    # the old shared per-namespace empty_bucket must NOT be called on this path.
-    assert s3.emptied == []
-
-
-def test_delete_entity_drops_both_tables_and_both_buckets():
-    # with_data delete of a CDC/entity KafkaConnector source (CONNECTOR_CR:
-    # mssql_ogrenci/students) drops BOTH layers and deletes BOTH per-pipeline
-    # buckets -- the direct-mode branch's dict-literal return shape.
-    k8s, s3, trino = FakeK8s(), FakeS3(), FakeTrino()
-    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
-
-    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
-
-    assert r.status_code == 200
-    body = r.json()
-    ns, table = "mssql_ogrenci", "students"
-    assert (f"rawlake.{ns}_raw.{table}") in trino.dropped
-    assert (f"lakehouse.{ns}.{table}") in trino.dropped
-    assert render_service.bronze_bucket_name(ns, table) in s3.deleted_buckets
-    assert render_service.silver_bucket_name(ns, table) in s3.deleted_buckets
-    # the old per-ns empty_bucket must NOT be called on the CDC/kafka/camel path
-    assert s3.emptied == []
-    assert body["dropped_tables"] == [f"rawlake.{ns}_raw.{table}", f"lakehouse.{ns}.{table}"]
-    assert body["deleted_buckets"] == [
-        render_service.bronze_bucket_name(ns, table),
-        render_service.silver_bucket_name(ns, table),
-    ]
-
-
-def test_delete_drops_bronze_and_tolerates_absent_silver():
-    # event/append-only source (KAFKA_INGEST_CR: events/orders): no Silver
-    # table/bucket actually exists for an event source, but delete
-    # unconditionally attempts both drops + both delete_bucket calls -- all
-    # idempotent/IF-EXISTS no-ops -- and must not raise.
-    k8s, s3, trino = FakeK8s(sources=[KAFKA_INGEST_CR]), FakeS3(), FakeTrino()
-    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
-
-    r = client.delete("/api/sources/kafka-ingest-k1-orders?mode=with_data")
-
-    assert r.status_code == 200
-    ns, table = "events", "orders"
-    assert (f"rawlake.{ns}_raw.{table}") in trino.dropped
-    assert render_service.bronze_bucket_name(ns, table) in s3.deleted_buckets
-    # Silver drop_table / delete_bucket are still CALLED (idempotent no-ops
-    # for an event source that never had a Silver table) and must not raise.
-    assert (f"lakehouse.{ns}.{table}") in trino.dropped
-    assert render_service.silver_bucket_name(ns, table) in s3.deleted_buckets
+    assert trino.dropped == ["lakehouse.mssql_ogrenci.students"]
+    assert s3.emptied == ["src-mssql-ogrenci"]
 
 
 def test_delete_default_mode_is_pipeline_only():
@@ -1009,18 +948,13 @@ def test_delete_gitops_mode_with_data_still_drops_table_and_bucket(monkeypatch):
 
     assert r.status_code == 200
     body = r.json()
-    bronze_fqn = "rawlake.depo_raw.customers"
-    silver_fqn = "lakehouse.depo.customers"
-    bronze_bucket = render_service.bronze_bucket_name("depo", "customers")
-    silver_bucket = render_service.silver_bucket_name("depo", "customers")
     assert body["ref"] == "cafef00d"
-    assert body["dropped_tables"] == [bronze_fqn, silver_fqn]
-    assert body["deleted_buckets"] == [bronze_bucket, silver_bucket]
+    assert body["dropped_table"] == "lakehouse.depo.customers"
+    assert body["emptied_bucket"] == render_service.bucket_name("depo")
     assert body["deleted_topic"] == "cdc.pgdemo.public.customers"
     assert git_writer.removed == ["pgdemo"]
-    assert trino.dropped == [bronze_fqn, silver_fqn]
-    assert s3.deleted_buckets == [bronze_bucket, silver_bucket]
-    assert s3.emptied == []               # old shared empty_bucket must NOT be called
+    assert trino.dropped == ["lakehouse.depo.customers"]
+    assert s3.emptied == [render_service.bucket_name("depo")]
     assert k8s.deleted_connectors == []   # no direct connector delete in gitops mode
     assert k8s.deleted_topics == []       # no direct topic delete in gitops mode
 

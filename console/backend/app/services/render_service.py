@@ -16,7 +16,6 @@ Template parity (sub-project A, read for this task):
 from __future__ import annotations
 
 import re
-import zlib
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -63,31 +62,6 @@ SPARK_ANNOTATION_PREFIX = "lakehouse.solus.dev/"
 def bucket_name(target_ns: str) -> str:
     """`src-<ns>`, RFC1123-safe (e.g. mssql_ogrenci -> src-mssql-ogrenci)."""
     return _k8s_name("src", target_ns)
-
-
-def _pipeline_bucket(prefix: str, target_ns: str, target_table: str) -> str:
-    """`<prefix>-<ns>-<table>`, S3-bucket-safe (lowercase/hyphen/<=63). If the
-    clean join would exceed 63 (risking a truncation collision between two
-    distinct pipelines), append a short deterministic crc32 suffix of the full
-    untruncated join so distinct (ns,table) never map to the same bucket."""
-    full = _k8s_name(prefix, target_ns, target_table)          # already <=63, sanitized
-    joined_raw = f"{prefix}-{target_ns}-{target_table}"
-    sanitized_uncapped = re.sub(r"[^a-z0-9-]+", "-", joined_raw.lower())
-    sanitized_uncapped = re.sub(r"-{2,}", "-", sanitized_uncapped).strip("-")
-    if len(sanitized_uncapped) > 63:                            # truncation happened
-        suffix = format(zlib.crc32(joined_raw.encode()) & 0xFFFFFFFF, "08x")
-        full = f"{full[:63 - 9].rstrip('-')}-{suffix}"
-    return full
-
-
-def bronze_bucket_name(target_ns: str, target_table: str) -> str:
-    """`bronze-<ns>-<table>` — per-pipeline Bronze bucket (Sub-project B)."""
-    return _pipeline_bucket("bronze", target_ns, target_table)
-
-
-def silver_bucket_name(target_ns: str, target_table: str) -> str:
-    """`silver-<ns>-<table>` — per-pipeline Silver bucket (entity only)."""
-    return _pipeline_bucket("silver", target_ns, target_table)
 
 
 def _cred(source: str, key: str) -> str:
@@ -297,8 +271,11 @@ def render_kafka_topic(topic_name: str) -> dict:
 # render_namespace_ddl
 # --------------------------------------------------------------------------
 
-def render_namespace_ddl(target_ns: str) -> str:
-    return f"CREATE NAMESPACE IF NOT EXISTS lakehouse.{target_ns}"
+def render_namespace_ddl(target_ns: str, bucket: str) -> str:
+    return (
+        f"CREATE NAMESPACE IF NOT EXISTS lakehouse.{target_ns} "
+        f"WITH (location='s3://{bucket}/warehouse')"
+    )
 
 
 # --------------------------------------------------------------------------

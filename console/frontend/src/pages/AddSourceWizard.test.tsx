@@ -70,8 +70,7 @@ beforeEach(() => {
 });
 
 const PREVIEW_RESPONSE = {
-  bronze_bucket: "bronze-mssql-ogrenci-students",
-  silver_bucket: "silver-mssql-ogrenci-students",
+  bucket: "src-mssql-ogrenci",
   namespace_ddl:
     "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci WITH (location='s3://src-mssql-ogrenci/warehouse')",
   connector: {
@@ -168,8 +167,7 @@ describe("AddSourceWizard", () => {
       screen.getByText("io.debezium.connector.sqlserver.SqlServerConnector"),
     ).toBeInTheDocument();
     expect(screen.getByText("cdc.mssql1.dbo.students")).toBeInTheDocument();
-    expect(screen.getByText("bronze-mssql-ogrenci-students")).toBeInTheDocument();
-    expect(screen.getByText("silver-mssql-ogrenci-students")).toBeInTheDocument();
+    expect(screen.getByText("src-mssql-ogrenci")).toBeInTheDocument();
     expect(
       screen.getByText(/CREATE NAMESPACE IF NOT EXISTS lakehouse\.mssql_ogrenci/),
     ).toBeInTheDocument();

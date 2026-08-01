@@ -35,7 +35,6 @@ class FakeCatalog:
         self.partition_specs = []  # [(fq, partition_spec)] — bronze day(__ts_ms)
         self.namespaces = []       # [(ns, properties)]
         self.table_properties = {}  # {fq: properties} — Iceberg CREATE-time table properties
-        self.table_locations = {}  # {fq: location} — per-table S3 location (Sub-project B)
 
     def create_namespace(self, namespace, properties=None):
         self.namespaces.append((namespace, properties))
@@ -46,11 +45,10 @@ class FakeCatalog:
     def load_table(self, fq):
         return FakeTable(self.existing[fq.split(".")[-1]])
 
-    def create_table(self, fq, schema=None, partition_spec=None, properties=None, location=None):
+    def create_table(self, fq, schema=None, partition_spec=None, properties=None):
         self.created.append((fq, schema))
         self.partition_specs.append((fq, partition_spec))
         self.table_properties[fq] = properties or {}
-        self.table_locations[fq] = location
         self.existing[fq.split(".")[-1]] = list(schema.identifier_field_names())
         return FakeTable(schema.identifier_field_names())
 
@@ -94,10 +92,7 @@ def test_create_table_sets_identifier_and_maps_types():
         location="s3://src-depo/warehouse",
     )
     assert fq == "depo.customers"
-    # Namespace is logical (Sub-project B) — location goes on the TABLE, not
-    # the namespace.
-    assert cat.namespaces == [("depo", {})]
-    assert cat.table_locations["depo.customers"] == "s3://src-depo/warehouse"
+    assert cat.namespaces == [("depo", {"location": "s3://src-depo/warehouse"})]
     assert len(cat.created) == 1
     _, schema = cat.created[0]
     # identifier field set edildi
@@ -228,25 +223,6 @@ def test_silver_table_created_with_cow_and_target_file_size():
     assert props["write.update.mode"] == "copy-on-write"
     assert props["write.delete.mode"] == "copy-on-write"
     assert props["write.target-file-size-bytes"] == "134217728"
-
-
-def test_create_table_sets_table_location_not_namespace():
-    # Sub-project B (per-pipeline buckets): an explicit `location` must land
-    # on the TABLE create call, and the namespace must stay locationless —
-    # the opposite of the old Model X behavior (namespace-level location).
-    cat = FakeCatalog()
-    fq = _svc(cat).create_table(
-        "depo", "customers",
-        [{"name": "id", "type": "int"}, {"name": "name", "type": "varchar"}],
-        identifier=["id"],
-        location="s3://silver-depo-customers/warehouse",
-        layer="silver",
-    )
-    assert fq == "depo.customers"
-    # namespace created WITHOUT a location property
-    assert cat.namespaces == [("depo", {})]
-    # table created WITH the explicit location
-    assert cat.table_locations["depo.customers"] == "s3://silver-depo-customers/warehouse"
 
 
 def test_bronze_table_created_with_target_file_size():

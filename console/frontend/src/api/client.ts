@@ -112,21 +112,10 @@ export interface CreateSourceResult {
   ok: boolean;
 }
 
-/** Shape of `DELETE /api/sources/{name}` -- `with_data` teardown detail
- * varies by lane (see console/backend/app/routers/sources.py delete_source):
- * the KafkaConnector (CDC/kafka/camel) path returns the per-pipeline PLURAL
- * fields `dropped_tables`/`deleted_buckets` (Bronze+Silver, both lists); the
- * ScheduledSparkApplication (spark-batch) path still returns the SINGULAR
- * `dropped_table`/`emptied_bucket` (one rawlake table/bucket, no Silver
- * layer). `pipeline_only` mode returns none of the teardown-detail fields.
- * `ref` is gitops-mode's git commit ref (absent in direct mode). */
 export interface DeleteSourceResult {
   ok: boolean;
   name: string;
   mode: DeleteMode;
-  ref?: string;
-  dropped_tables?: string[];
-  deleted_buckets?: string[];
   dropped_table?: string;
   emptied_bucket?: string;
   deleted_topic?: string | null;

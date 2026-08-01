@@ -60,29 +60,10 @@ def test_bucket_name_multiple_underscores():
     assert r.bucket_name("mongo_lms_prod") == "src-mongo-lms-prod"
 
 
-def test_pipeline_bucket_names():
-    assert r.bronze_bucket_name("mssql_ogrenci", "students") == "bronze-mssql-ogrenci-students"
-    assert r.silver_bucket_name("mssql_ogrenci", "students") == "silver-mssql-ogrenci-students"
-    # S3-safe: lowercase, hyphen-only, <=63
-    for name in (r.bronze_bucket_name("A_B", "C.D"), r.silver_bucket_name("A_B", "C.D")):
-        assert name == name.lower() and "_" not in name and len(name) <= 63
-
-
-def test_pipeline_bucket_name_long_no_collision():
-    # Long shared prefix + short differing tails: the differing chars land
-    # PAST the 54-char slice _pipeline_bucket keeps before appending the
-    # crc32 suffix, so a truncate-only implementation (no crc32 branch)
-    # WOULD collide here -- only the crc32 suffix can distinguish these two.
-    a = r.bronze_bucket_name("n" * 60, "aaa")
-    b = r.bronze_bucket_name("n" * 60, "bbb")
-    assert len(a) <= 63 and len(b) <= 63
-    assert a != b   # only the crc32 suffix can distinguish these past truncation
-
-
-def test_render_namespace_ddl_is_locationless():
-    ddl = r.render_namespace_ddl("mssql_ogrenci")
-    assert ddl == "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci"
-    assert "location" not in ddl.lower()
+def test_namespace_ddl():
+    ddl = r.render_namespace_ddl("mssql_ogrenci", "src-mssql-ogrenci")
+    assert "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci" in ddl
+    assert "s3://src-mssql-ogrenci/warehouse" in ddl
 
 
 # --------------------------------------------------------------------------
