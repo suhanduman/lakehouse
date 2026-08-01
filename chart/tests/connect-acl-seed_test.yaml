@@ -1,0 +1,73 @@
+# chart/tests/connect-acl-seed_test.yaml — helm-unittest suite for
+# chart/templates/20-connect-acl-seed.yaml: the dual-hook (helm
+# post-install,post-upgrade + ArgoCD PostSync) Job that merge-ADDS
+# `.Values.kafkaConnect.connectBaseAcls` onto the `connect` KafkaUser via
+# kubectl+jq (see chart/values.yaml `kafkaConnect.seedConnectAcls` doc
+# comment for why the connect ACLs are runtime-owned).
+suite: connect-acl-seed Job (runtime-owned connect ACLs)
+templates:
+  - templates/20-connect-acl-seed.yaml
+tests:
+  - it: "seedConnectAcls=false renders nothing"
+    set: {kafkaConnect.seedConnectAcls: false}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: "default renders SA + Role + RoleBinding + dual-hook Job that merge-adds base ACLs incl kafka-ingest-"
+    asserts:
+      - hasDocuments: {count: 4}
+      - equal:
+          path: "metadata.annotations[\"helm.sh/hook\"]"
+          value: "post-install,post-upgrade"
+        documentSelector: {path: kind, value: Job}
+      - equal:
+          path: "metadata.annotations[\"argocd.argoproj.io/hook\"]"
+          value: "PostSync"
+        documentSelector: {path: kind, value: Job}
+      - contains:
+          path: rules[0].resources
+          content: kafkausers
+        documentSelector: {path: kind, value: Role}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "kafka-ingest-"
+        documentSelector: {path: kind, value: Job}
+
+---
+# Separate suite document (own `templates:` scope — verified helm-unittest
+# behavior, see chart/tests/monitoring_test.yaml's comment on why a
+# suite-level `templates:` list is a per-suite allowlist): proves the
+# `connect` KafkaUser (chart/templates/03-kafka-strimzi.yaml) no longer
+# templates its own `acls` — Task 4 makes the seed Job above the SOLE
+# chart-owned source of the connect user's base ACLs, so helm/ArgoCD never
+# clobber the per-source literal ACLs the Console/orchestrator adds/removes
+# for existing-Kafka (stream/kafka) sources at runtime.
+suite: connect KafkaUser ACLs are runtime-owned (no chart-templated acls)
+templates:
+  - templates/03-kafka-strimzi.yaml
+tests:
+  - it: "connect KafkaUser is authorization:simple with NO acls (runtime-owned)"
+    documentSelector: {path: metadata.name, value: connect}
+    asserts:
+      - equal: {path: spec.authorization.type, value: simple}
+      - notExists: {path: spec.authorization.acls}
+
+---
+# Separate suite document (own `templates:` scope, same reasoning as
+# above): proves the console Role (chart/templates/console/console.yaml)
+# grants `kafkausers` get/patch alongside the existing
+# kafkaconnectors/kafkatopics rule — the orchestrator's ACL step
+# (console/backend k8s_service ensure/remove_user_acl) reads+patches the
+# `connect` KafkaUser CR directly and needs this RBAC.
+suite: console Role kafka.strimzi.io rule includes kafkausers (orchestrator ACL step RBAC)
+templates:
+  - templates/console/console.yaml
+tests:
+  - it: "console Role kafka.strimzi.io rule lists kafkausers alongside kafkaconnectors/kafkatopics"
+    documentSelector: {path: metadata.name, value: lakehouse-console-role}
+    asserts:
+      - contains:
+          path: rules[0].resources
+          content: kafkausers
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: kafka.strimzi.io

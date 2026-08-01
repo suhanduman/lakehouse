@@ -70,7 +70,7 @@ metadata:
   namespace: {{ include "lakehouse.namespace" . }}
 rules:
 - apiGroups: [kafka.strimzi.io]
-  resources: [kafkaconnectors, kafkatopics]
+  resources: [kafkaconnectors, kafkatopics, kafkausers]
   verbs: [get, list, create, patch, delete]
 - apiGroups: [kafka.strimzi.io]
   resources: [kafkaconnectors/status, kafkatopics/status]

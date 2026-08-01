@@ -39,13 +39,21 @@ class FakeCustom:
         connectors: list | None = None,
         sparks: list | None = None,
         spark_crd_absent: bool = False,
+        conflict_on_patch_once: bool = False,
     ):
         self.conflict_on_create = conflict_on_create
         self.connectors = connectors
         self.sparks = sparks
         self.spark_crd_absent = spark_crd_absent
+        # When True, the *first* patch_namespaced_custom_object call raises a
+        # 409 (simulating a concurrent modification losing the optimistic-
+        # concurrency race); every call after that succeeds normally. Used to
+        # exercise ensure_user_acl/remove_user_acl's retry-once-on-409 path.
+        self.conflict_on_patch_once = conflict_on_patch_once
+        self._patch_conflict_used = False
         self.created = []
         self.patched = []
+        self.patch_attempts = 0
         self.deleted = []
         self.list_calls = []
         self.get_calls = []
@@ -62,6 +70,10 @@ class FakeCustom:
         return kw["body"]
 
     def patch_namespaced_custom_object(self, **kw):
+        self.patch_attempts += 1
+        if self.conflict_on_patch_once and not self._patch_conflict_used:
+            self._patch_conflict_used = True
+            raise ApiException(status=409, reason="Conflict")
         self.patched.append(kw)
         self.last_patch = kw
         return kw["body"]
@@ -464,3 +476,107 @@ def test_get_application_status_404_returns_none():
     svc = K8sService.__new__(K8sService)
     svc.custom_api = _FakeCustom(raise_status=404)
     assert svc.get_application_status("lakehouse-pipelines", "argocd") is None
+
+
+# --------------------------------------------------------------------------
+# ensure_user_acl / remove_user_acl — read-modify-write on a KafkaUser CR's
+# spec.authorization.acls (connect-user ACL grant/revoke). Reuses FakeCustom
+# above (already supports a configurable get_response + records
+# patched/last_patch) rather than a separate fake.
+# --------------------------------------------------------------------------
+
+ACL = {"resource": {"type": "topic", "name": "orders", "patternType": "literal"},
+       "operations": ["Read", "Describe"]}
+
+
+def test_ensure_user_acl_adds_when_absent():
+    fake = FakeCustom()
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": [
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]}
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.ensure_user_acl("connect", ACL)
+
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL in patched
+    assert len(patched) == 2   # base preserved + new one
+    # optimistic-concurrency precondition carried on the patch
+    assert fake.last_patch["body"]["metadata"]["resourceVersion"] == "10"
+
+
+def test_ensure_user_acl_idempotent_when_present():
+    fake = FakeCustom()
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": [ACL]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.ensure_user_acl("connect", ACL)
+
+    assert len(fake.patched) == 0   # already present -> no patch
+
+
+def test_ensure_user_acl_retries_once_on_patch_conflict():
+    """A real concurrent modification (e.g. a second add_source call racing
+    on the same connect KafkaUser) surfaces as a 409 on patch because the
+    body carries the read's resourceVersion as a precondition. The method
+    must re-read the fresh object (2nd get) and re-patch (2nd patch attempt,
+    which succeeds) rather than losing the update."""
+    fake = FakeCustom(conflict_on_patch_once=True)
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": [
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]}
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.ensure_user_acl("connect", ACL)
+
+    assert len(fake.get_calls) == 2       # re-read after the 409
+    assert fake.patch_attempts == 2       # first attempt 409'd, second succeeded
+    assert len(fake.patched) == 1         # only the successful patch is recorded
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL in patched
+    assert len(patched) == 2
+
+
+def test_remove_user_acl_removes_when_present():
+    fake = FakeCustom()
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": [
+        ACL,
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]},
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.remove_user_acl("connect", ACL)
+
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL not in patched
+    assert len(patched) == 1
+    assert fake.last_patch["body"]["metadata"]["resourceVersion"] == "10"
+
+
+def test_remove_user_acl_idempotent_when_absent():
+    fake = FakeCustom()
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": []}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.remove_user_acl("connect", ACL)
+
+    assert len(fake.patched) == 0
+
+
+def test_remove_user_acl_retries_once_on_patch_conflict():
+    """Symmetric to test_ensure_user_acl_retries_once_on_patch_conflict: a
+    409 on the first patch attempt (stale resourceVersion) must trigger a
+    re-read + re-patch rather than a lost update."""
+    fake = FakeCustom(conflict_on_patch_once=True)
+    fake.get_response = {"metadata": {"resourceVersion": "10"}, "spec": {"authorization": {"acls": [
+        ACL,
+        {"resource": {"type": "topic", "name": "cdc.", "patternType": "prefix"},
+         "operations": ["Read"]},
+    ]}}}
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.remove_user_acl("connect", ACL)
+
+    assert len(fake.get_calls) == 2       # re-read after the 409
+    assert fake.patch_attempts == 2       # first attempt 409'd, second succeeded
+    assert len(fake.patched) == 1         # only the successful patch is recorded
+    patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
+    assert ACL not in patched
+    assert len(patched) == 1

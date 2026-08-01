@@ -405,6 +405,24 @@ class AddSourceOrchestrator:
             ):
                 return fail()
 
+        # ACL — existing-Kafka (stream/kafka) consumes a customer-named topic
+        # that matches none of `connect`'s prefix ACLs. Grant `connect` a
+        # scoped literal READ (least-privilege, sartname 3.7.1.3), runtime-owned
+        # so helm upgrade never clobbers it. Only for the kafka-ingest renderer;
+        # other lanes' topics are under our own prefixes (already covered).
+        if descriptor.render_key == "kafka-ingest":
+            topic_acl = {"resource": {"type": "topic", "name": spec.table,
+                                      "patternType": "literal"},
+                         "operations": ["Read", "Describe"]}
+
+            def _grant_acl() -> Optional[str]:
+                self.k8s.ensure_user_acl("connect", topic_acl)
+                return None
+
+            if not run("acl", _grant_acl,
+                       lambda: self.k8s.remove_user_acl("connect", topic_acl)):
+                return fail()
+
         # 5. connector
         def _apply_connector() -> Optional[str]:
             ctx["connector_body"] = self.render.render_connector(spec)
