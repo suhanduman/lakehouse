@@ -272,7 +272,15 @@ class K8sService:
     def ensure_user_acl(self, user: str, acl: Dict[str, Any]) -> None:
         """Idempotently add an ACL entry to a KafkaUser's spec.authorization.acls
         (read-modify-write, retry once on 409). No-op if an entry with the same
-        (type,name,patternType) is already present."""
+        (type,name,patternType) is already present.
+
+        The patch body carries the read's `metadata.resourceVersion` as an
+        optimistic-concurrency precondition: the apiserver rejects a stale
+        write with 409 (rather than silently last-writer-wins), so a real
+        concurrent modification surfaces the 409 this retry loop handles
+        instead of two callers both reading-then-clobbering each other's
+        appended ACL entry.
+        """
         for attempt in range(2):
             obj = self.custom_api.get_namespaced_custom_object(
                 group=GROUP, version=VERSION, namespace=self.namespace,
@@ -281,11 +289,13 @@ class K8sService:
             if any(_acl_key(a) == _acl_key(acl) for a in acls):
                 return
             new_acls = acls + [acl]
+            rv = obj.get("metadata", {}).get("resourceVersion")
             try:
                 self.custom_api.patch_namespaced_custom_object(
                     group=GROUP, version=VERSION, namespace=self.namespace,
                     plural=USER_PLURAL, name=user,
-                    body={"spec": {"authorization": {"acls": new_acls}}})
+                    body={"metadata": {"resourceVersion": rv},
+                          "spec": {"authorization": {"acls": new_acls}}})
                 return
             except ApiException as exc:
                 if exc.status == HTTP_CONFLICT and attempt == 0:
@@ -294,7 +304,10 @@ class K8sService:
 
     def remove_user_acl(self, user: str, acl: Dict[str, Any]) -> None:
         """Idempotently remove the ACL entry matching (type,name,patternType)
-        from a KafkaUser (read-modify-write, retry once on 409). No-op if absent."""
+        from a KafkaUser (read-modify-write, retry once on 409). No-op if
+        absent. Same resourceVersion optimistic-concurrency precondition as
+        ensure_user_acl (see its docstring) so a genuine concurrent
+        modification surfaces a 409 instead of a lost update."""
         for attempt in range(2):
             obj = self.custom_api.get_namespaced_custom_object(
                 group=GROUP, version=VERSION, namespace=self.namespace,
@@ -303,11 +316,13 @@ class K8sService:
             new_acls = [a for a in acls if _acl_key(a) != _acl_key(acl)]
             if len(new_acls) == len(acls):
                 return
+            rv = obj.get("metadata", {}).get("resourceVersion")
             try:
                 self.custom_api.patch_namespaced_custom_object(
                     group=GROUP, version=VERSION, namespace=self.namespace,
                     plural=USER_PLURAL, name=user,
-                    body={"spec": {"authorization": {"acls": new_acls}}})
+                    body={"metadata": {"resourceVersion": rv},
+                          "spec": {"authorization": {"acls": new_acls}}})
                 return
             except ApiException as exc:
                 if exc.status == HTTP_CONFLICT and attempt == 0:
