@@ -527,6 +527,29 @@ def test_kafka_ingest_has_control_group_overrides():
     assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"
 
 
+def test_iceberg_sink_config_shared_infra_unchanged():
+    # Guards the Task 1 refactor: the raw-body sink config must stay identical.
+    c = r.render_connector(_kafka())["spec"]["config"]  # kafka-ingest: render_connector IS the sink
+    # catalog/S3
+    assert c["iceberg.catalog.type"] == "rest"
+    assert c["iceberg.catalog.uri"] == r.NESSIE_URI
+    assert c["iceberg.catalog.warehouse"] == "rawdata"
+    assert c["iceberg.catalog.io-impl"] == "org.apache.iceberg.aws.s3.S3FileIO"
+    assert c["iceberg.catalog.s3.path-style-access"] == "true"
+    # routing
+    assert c["iceberg.tables.dynamic-enabled"] == "true"
+    assert c["iceberg.tables.route-field"] == "_target_table"
+    assert c["iceberg.tables.auto-create-enabled"] == "true"
+    assert c["iceberg.tables.evolve-schema-enabled"] == "true"
+    # control tuning (per-connector control topic)
+    assert c["iceberg.control.topic"].startswith("control-")
+    assert c["iceberg.control.commit.interval-ms"] == "60000"
+    assert c["iceberg.control.commit.timeout-ms"] == "120000"
+    assert c["iceberg.kafka.session.timeout.ms"] == "120000"
+    # raw-body medallion chain still present
+    assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+
+
 def test_kafka_ingest_event_keeps_static_deleted_false():
     c = r.render_connector(_kafka())["spec"]["config"]  # default event, no delete_field
     assert c["transforms.setdel.type"] == "org.apache.kafka.connect.transforms.InsertField$Value"

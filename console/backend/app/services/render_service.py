@@ -580,28 +580,11 @@ def _kafka_consumer_override(spec: SourceSpec) -> dict:
     }
 
 
-def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
-    """Shared dedicated-Iceberg-sink config: JSON (schemaless) converters +
-    Nessie/S3 rawdata catalog + fan-out route/auto-create/evolve + control-group
-    stability + medallion SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) +
-    DLQ. Used by _render_kafka_ingest (stream/kafka) and render_camel_sink (Camel
-    lanes). value.converter deserializes JSON to a Map BEFORE the SMTs, so
-    InsertField$Value works on the Map (unlike a Camel source's byte[] value).
-
-    `name` is this sink's own KafkaConnector name (e.g. "kafka-ingest-k1-orders"
-    or "http-h1-prices-sink") and is used to derive a PER-CONNECTOR
-    `iceberg.control.topic` ("control-<name>"). Without this, every dedicated
-    sink defaults to the connector's shared "control-iceberg" topic; two
-    concurrent dedicated sinks would then cross-read each other's control
-    events (commit-request/commit-response) and can silently commit 0 rows.
-    The chart's `control` ACL prefix already covers `control-*`, so no ACL
-    change is needed for this."""
-    config: dict = {
-        "topics": topics,
-        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": "false",
-        "value.converter.schemas.enable": "false",
+def _iceberg_catalog_io() -> dict:
+    """Nessie REST catalog + S3 (rawdata Bronze warehouse) + dynamic-routing
+    knobs shared by every Console-rendered Iceberg sink. Routing reads the
+    source-stamped `_target_table` field."""
+    return {
         "iceberg.catalog.type": "rest",
         "iceberg.catalog.uri": NESSIE_URI,
         "iceberg.catalog.warehouse": "rawdata",
@@ -614,24 +597,43 @@ def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: s
         "iceberg.tables.route-field": "_target_table",
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
+    }
+
+
+def _iceberg_control_tuning(name: str) -> dict:
+    """Per-connector control topic (`control-<name>`) + commit windows +
+    Kafka client tuning. A per-connector control topic keeps two concurrent
+    dedicated sinks from cross-reading each other's commit-request/response
+    control events (which silently commits 0 rows). The long session/commit
+    windows keep the `cg-control-*` consumer from flapping on a resource-
+    constrained/single-worker Connect. The chart's `control` ACL prefix covers
+    `control-*`, so no ACL change is needed."""
+    return {
         "iceberg.control.topic": _k8s_topic_name(f"control-{name}"),
         "iceberg.control.commit.interval-ms": "60000",
-        # Control-group stability. This dedicated sink is Console-rendered, so
-        # (unlike the chart's shared sinks) it does NOT inherit
-        # `connectors.icebergSink.kafkaClientOverrides`. Without a long control
-        # consumer session/commit window, the sink's `cg-control-*` consumer
-        # flaps (JoinGroup UNKNOWN_MEMBER_ID) on a resource-constrained/single-
-        # worker Connect and every commit reports "committed to 0 table(s)" —
-        # rows never land in Bronze. These are Console-specific defaults tuned
-        # for a constrained/single-worker Connect (NOT synced to the chart's
-        # shared-sink `kafkaClientOverrides`, which differ per overlay) and are
-        # overridable via the Console edit-before-apply step. Verified necessary
-        # on constrained microk8s (Plan B1 Task 7).
         "iceberg.control.commit.timeout-ms": "120000",
         "iceberg.kafka.session.timeout.ms": "120000",
         "iceberg.kafka.heartbeat.interval.ms": "15000",
         "iceberg.kafka.request.timeout.ms": "130000",
         "iceberg.kafka.max.poll.interval.ms": "300000",
+    }
+
+
+def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
+    """Shared dedicated-Iceberg-sink config for RAW-BODY lanes (kafka-ingest,
+    Camel): JSON converters + shared catalog/S3/routing (`_iceberg_catalog_io`)
+    + per-connector control tuning (`_iceberg_control_tuning`) + the medallion
+    SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) + DLQ. value.converter
+    deserializes JSON to a Map BEFORE the SMTs, so InsertField$Value works on the
+    Map (unlike a Camel source's byte[] value)."""
+    config: dict = {
+        "topics": topics,
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter.schemas.enable": "false",
+        **_iceberg_catalog_io(),
+        **_iceberg_control_tuning(name),
         "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
         "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.setop.static.field": "__op",
