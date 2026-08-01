@@ -9,8 +9,8 @@
 #
 # Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
 # (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
-# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
-# console/).
+# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — Console'un
+# add-source wizard'ının uyguladığı KafkaConnector CR'leri).
 #
 # Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
 # Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`
@@ -79,10 +79,12 @@ data:
           kafka-connect:
             - name: connect
               address: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
-      # NOT: connector'ların TEK doğruluk kaynağı Git'teki KafkaConnector
-      # CR'leridir (bkz. 12-kafka-connect.yaml `strimzi.io/use-connector-resources`,
-      # 13-connectors.yaml). Aşağıdaki RBAC bilerek connector'a yalnızca "view"
-      # veriyor — Kafka UI'de connector oluşturma işlevsiz kalır.
+      # NOT: connector'ların TEK doğruluk kaynağı, Console'un add-source
+      # wizard'ının (console/backend/app/orchestrator.py) küme'ye uyguladığı
+      # KafkaConnector CR'leridir (bkz. 12-kafka-connect.yaml
+      # `strimzi.io/use-connector-resources`). Aşağıdaki RBAC bilerek
+      # connector'a yalnızca "view" veriyor — Kafka UI'de connector oluşturma
+      # işlevsiz kalır.
     auth:
       type: OAUTH2
       oauth2:

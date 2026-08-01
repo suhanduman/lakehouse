@@ -136,18 +136,6 @@ components:
   # keycloakDb: true
   apicurio: true
   kafkaConnect: true
-  # Two independent switches (see chart/templates/13-connectors.yaml header):
-  # `enabled` gates the whole file, including the core `iceberg-sink-cdc`
-  # fan-out sink (always-on ingest infrastructure — not an example, nothing
-  # else generates a replacement for it); `examples.enabled` additionally
-  # gates the three demo per-source connectors (dbz-mssql-students,
-  # jdbc-mssql-scheduled, dbz-mongo-lms) — off by default because real
-  # per-source CRs are generated at runtime by scaffold-source.sh or the
-  # Console's add-source wizard, not by this chart.
-  connectors:
-    enabled: true
-    examples:
-      enabled: false
   nginxIngest: true
   console: true
   kafkaUi: true
@@ -532,9 +520,9 @@ versions:
   # `versions.strimziApi` parameterizes `apiVersion: kafka.strimzi.io/<...>`
   # across EVERY Strimzi CR this chart renders: `Kafka`/`KafkaNodePool`/
   # `KafkaTopic`/`KafkaUser` (03-kafka-strimzi.yaml), `KafkaUser` `spark-nginx`
-  # (14-nginx-ingest.yaml), `KafkaConnect` (12-kafka-connect.yaml),
-  # `KafkaConnector` (13-connectors.yaml), and `KafkaUser` `kafka-ui`
-  # (console/kafka-ui.yaml) — one switch, no template edits needed to flip
+  # (14-nginx-ingest.yaml), `KafkaConnect` (12-kafka-connect.yaml), and
+  # `KafkaUser` `kafka-ui` (console/kafka-ui.yaml) — one switch, no template
+  # edits needed to flip
   # between `v1`/`v1beta2`. `chart/templates/_prereq-check.tpl`'s
   # `.Capabilities.APIVersions.Has` check reads this same value.
   strimziApi: v1
@@ -1037,62 +1025,6 @@ kafkaConnect:
     - {resource: {type: topic, name: kafka-ingest-, patternType: prefix}, operations: [Read, Write, Create, Describe]}
     - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
-
-# Kafka Connectors. Gating: see `components.connectors` above. `{{MSSQL_HOST}}` / `{{MONGO_HOST}}`
-# / `{{S3_ENDPOINT}}` are the SAME plain-placeholder-token
-# convention as `postgres.nessie.backup.endpointURL` (values-file string
-# data — NOT Helm template syntax, never parsed by Helm's template engine;
-# this is required here specifically because a literal `{{MSSQL_HOST}}`
-# inside chart/templates/13-connectors.yaml itself would be mis-parsed as
-# an (invalid) Helm template action).
-connectors:
-  # Apicurio schema auto-register for every Avro (`*.converter.apicurio.
-  # registry.auto-register`) source connector this chart renders
-  # (chart/templates/13-connectors.yaml's example connectors). PROD DEFAULT
-  # IS `false` (this key): uncontrolled schema auto-registration is an
-  # anti-pattern in prod — an unreviewed producer-side schema change would
-  # silently register a new/incompatible schema version and can break
-  # downstream consumers. Prod schemas are instead deployed via CI/CD with
-  # backward-compat checks run against Apicurio BEFORE rollout, so an
-  # unknown/unregistered schema at connector-start time should fail fast
-  # (auto-register=false) rather than silently register itself. dev/test
-  # environments (e.g. values-microk8s-ingest.yaml) override this to `true`
-  # for fast iteration without a separate schema-publish step.
-  schemaAutoRegister: false
-  examples:
-    mssqlHost: "{{MSSQL_HOST}}"
-    mongoHost: "{{MONGO_HOST}}"
-    # Single source for both dbz-mssql-students (`database.names`) and
-    # jdbc-mssql-scheduled (`connection.url` databaseName=) — parity
-    # hardening, same convention as `versions.cnpgPostgresImage`.
-    mssqlDatabase: OgrenciDB
-  icebergSink:
-    s3Endpoint: "{{S3_ENDPOINT}}"
-    # Iceberg sink commit koordinasyonu (13-connectors.yaml). Prod varsayılanları
-    # Iceberg default'larıyla aynı; kaynak-kısıtlı overlay'ler (values-microk8s-
-    # ingest.yaml) commitTimeoutMs'i büyütür: tek-worker Connect'te
-    # control-consumer flap'i 30s commit penceresini kaçırıp "0 table(s) committed"
-    # üretebiliyor.
-    commitIntervalMs: "60000"
-    commitTimeoutMs: "30000"
-    # Bronze changelog warehouse (Nessie multi-warehouse). CDC lands append-only
-    # in rawdata; the silver-merge Spark job MERGEs into the `warehouse` (Silver).
-    warehouse: rawdata
-    # Bronze namespace suffix — Bronze ContentKey (<ns>_raw.<t>) MUST differ from
-    # Silver (<ns>.<t>); Nessie has one content-tree per branch. See spec §2.
-    bronzeNamespaceSuffix: _raw
-    # Sink task count. Default 1: on a constrained single-worker Connect, >1 task
-    # stalls the sink's commit coordinator (6-of-12-partition wait). Prod may raise.
-    tasksMax: 1
-    # iceberg.kafka.* passes through to ALL of the sink's internal Kafka clients
-    # (data consumer, producer, admin, AND the 2-phase-commit control consumer).
-    # Empty by default — prod Kafka client defaults are fine. On a constrained
-    # single-broker cluster the control consumer (cg-control-*) can hit
-    # "socket connection setup timeout" against the default 10s
-    # socket.connection.setup.timeout.ms and fail to join its group (=> commits
-    # stall at "committed to 0 table(s)"). The microk8s-ingest overlay raises the
-    # client socket/session/request timeouts here.
-    kafkaClientOverrides: {}
 
 # nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
 # values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is

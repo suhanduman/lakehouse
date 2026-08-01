@@ -61,10 +61,6 @@ components:
   keycloak: true
   apicurio: true
   kafkaConnect: true
-  connectors:
-    enabled: true
-    examples:
-      enabled: false
   nginxIngest: true
   console: true
   kafkaUi: true
@@ -391,17 +387,6 @@ kafkaConnect:
     limits:
       cpu: "2"
       memory: 4Gi
-
-# Kafka Connectors — see chart/templates/13-connectors.yaml.
-connectors:
-  examples:
-    mssqlHost: "mssql1.example.com"
-    mongoHost: "mongo1.example.com"
-    mssqlDatabase: OgrenciDB
-  icebergSink:
-    s3Endpoint: "https://s3.example.com"
-    warehouse: rawdata
-    tasksMax: 2
 
 # nginx-access ingest — see chart/templates/14-nginx-ingest.yaml.
 nginx:

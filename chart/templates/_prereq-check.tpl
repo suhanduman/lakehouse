@@ -47,7 +47,7 @@ The six CRD/APIVersion strings checked below are the exact `apiVersion`
 values this chart's OWN templates already emit for the corresponding CRs
 (grep-verified against chart/templates/*.yaml, not guessed):
   - kafka.strimzi.io/<.Values.versions.strimziApi>  (parametrized, default
-    `v1` — 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
+    `v1` — 03-kafka-strimzi.yaml, 12-kafka-connect.yaml,
     14-nginx-ingest.yaml, console/kafka-ui.yaml all emit
     `apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}`; this
     check reads the SAME value so it never drifts from what the chart

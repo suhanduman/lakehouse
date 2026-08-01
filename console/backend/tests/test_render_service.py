@@ -120,9 +120,7 @@ def test_cdc_mssql_connector():
 def test_cdc_mssql_schema_auto_register_prod_safe_default():
     # Prod must NOT auto-register schemas (uncontrolled schema evolution) --
     # render_service has no chart-values access, so SCHEMA_AUTO_REGISTER is
-    # the documented prod-safe ("false") contract constant (see
-    # chart/values.yaml `connectors.schemaAutoRegister` for the equivalent
-    # chart-side default).
+    # the documented prod-safe ("false") contract constant.
     cfg = r.render_connector(_cdc_mssql())["spec"]["config"]
     assert cfg["key.converter.apicurio.registry.auto-register"] == "false"
     assert cfg["value.converter.apicurio.registry.auto-register"] == "false"
@@ -527,6 +525,29 @@ def test_kafka_ingest_has_control_group_overrides():
     assert c["iceberg.kafka.max.poll.interval.ms"] == "300000"
 
 
+def test_iceberg_sink_config_shared_infra_unchanged():
+    # Guards the Task 1 refactor: the raw-body sink config must stay identical.
+    c = r.render_connector(_kafka())["spec"]["config"]  # kafka-ingest: render_connector IS the sink
+    # catalog/S3
+    assert c["iceberg.catalog.type"] == "rest"
+    assert c["iceberg.catalog.uri"] == r.NESSIE_URI
+    assert c["iceberg.catalog.warehouse"] == "rawdata"
+    assert c["iceberg.catalog.io-impl"] == "org.apache.iceberg.aws.s3.S3FileIO"
+    assert c["iceberg.catalog.s3.path-style-access"] == "true"
+    # routing
+    assert c["iceberg.tables.dynamic-enabled"] == "true"
+    assert c["iceberg.tables.route-field"] == "_target_table"
+    assert c["iceberg.tables.auto-create-enabled"] == "true"
+    assert c["iceberg.tables.evolve-schema-enabled"] == "true"
+    # control tuning (per-connector control topic)
+    assert c["iceberg.control.topic"].startswith("control-")
+    assert c["iceberg.control.commit.interval-ms"] == "60000"
+    assert c["iceberg.control.commit.timeout-ms"] == "120000"
+    assert c["iceberg.kafka.session.timeout.ms"] == "120000"
+    # raw-body medallion chain still present
+    assert c["transforms"] == "route,setop,setdel,tsms,tsconv,kafkameta"
+
+
 def test_kafka_ingest_event_keeps_static_deleted_false():
     c = r.render_connector(_kafka())["spec"]["config"]  # default event, no delete_field
     assert c["transforms.setdel.type"] == "org.apache.kafka.connect.transforms.InsertField$Value"
@@ -743,6 +764,60 @@ def test_render_camel_sink_carries_source_annotation():
     for spec in (_http(), _mqtt(), _rabbitmq()):
         body = r.render_camel_sink(spec)
         assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == spec.source
+
+
+# --------------------------------------------------------------------------
+# CDC/JDBC/mongo dedicated Iceberg sinks (per-source sink for every lane)
+# --------------------------------------------------------------------------
+
+def test_cdc_dedicated_sink_avro_lanes():
+    for spec in (_cdc_mssql(), _cdc_pg(), _scheduled_mssql(), _mysql()):
+        assert r.has_dedicated_sink(spec) is True
+        body = r.render_sink(spec)
+        assert body["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
+        c = body["spec"]["config"]
+        # Avro (Apicurio) decode, URL only — no auto-register on the sink side
+        assert c["value.converter"] == "io.apicurio.registry.utils.converter.AvroConverter"
+        assert c["value.converter.apicurio.registry.url"] == r.APICURIO_URL
+        assert "value.converter.apicurio.registry.auto-register" not in c
+        # leaner SMT chain: kafkameta ONLY (source already stamped the rest)
+        assert c["transforms"] == "kafkameta"
+        assert c["transforms.kafkameta.offset.field"] == "__kafka_offset"
+        assert c["transforms.kafkameta.partition.field"] == "__kafka_partition"
+        for absent in ("transforms.route.type", "transforms.setop.type",
+                       "transforms.setdel.type", "transforms.tsms.type",
+                       "transforms.tsconv.type"):
+            assert absent not in c
+        # dynamic routing via source-stamped _target_table
+        assert c["iceberg.tables.dynamic-enabled"] == "true"
+        assert c["iceberg.tables.route-field"] == "_target_table"
+        # single topic + per-connector control topic + DLQ under source prefix
+        assert c["topics"] == r.topic_name(spec)
+        assert c["iceberg.control.topic"].startswith("control-")
+        assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+        assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
+        # parity with the retired shared iceberg-sink-cdc/mongo chart connectors
+        assert c["errors.log.enable"] == "true"
+        # sink name derives from the source connector name + "-sink"
+        assert body["metadata"]["name"].endswith("-sink")
+
+
+def test_cdc_dedicated_sink_mongo_is_json():
+    spec = _cdc_mongo()
+    assert r.has_dedicated_sink(spec) is True
+    c = r.render_sink(spec)["spec"]["config"]
+    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
+    assert c["value.converter.schemas.enable"] == "false"
+    assert c["transforms"] == "kafkameta"
+    assert c["topics"] == r.topic_name(spec)
+    assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+    assert c["errors.log.enable"] == "true"
+
+
+def test_cdc_dedicated_sink_carries_source_annotation():
+    # gitops delete routing recovers spec.source from the sink CR's annotation
+    body = r.render_sink(_cdc_mssql())
+    assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == "mssql1"
 
 
 # --------------------------------------------------------------------------

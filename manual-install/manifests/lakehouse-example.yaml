@@ -764,6 +764,26 @@ data:
   # falls back to config.py's neutral defaults (a non-existent image/secret).
   SPARK_IMAGE: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/spark-py:1.0"
   S3_SECRET_NAME: "s3-credentials"
+  # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5) —
+  # plain (non-secret) config, same convention as OIDC_AUDIENCE/S3_SECRET_NAME
+  # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME
+  # reference here (its material is mounted as a file below, not read as an
+  # env var — see the Deployment's gitops volume/volumeMount).
+  # GITOPS_REPO_URL uses the computed `$gitopsRepoUrl` (Task 6, see top of
+  # file) — falls back to the in-cluster Gitea only when the explicit value
+  # is empty AND `components.gitea` is on; otherwise identical to Task 5.
+  DEPLOY_MODE: "direct"
+  GITOPS_REPO_URL: ""
+  GITOPS_BRANCH: "main"
+  GITOPS_PATH: "pipelines"
+  GITOPS_CREDENTIAL_SECRET: "gitops-credential"
+  # ArgoCD-status read-path (2026-07-30-gitops-core-slice-b1-argocd-wiring
+  # Task 6) — plain (non-secret) config, same convention as GITOPS_* above.
+  # Feeds `settings.argocd_namespace` (Task 4), consumed by the `/gitops/
+  # status` reader (Task 5) to locate the Application CR. Set unconditionally
+  # (not gated on deployMode) since the backend/reader itself only acts on
+  # it when relevant; the RBAC granting access to it below IS gated.
+  ARGOCD_NAMESPACE: "argocd"
 ---
 # Source: lakehouse/templates/console/kafka-ui.yaml
 # -------- Kafka UI config (Spring Boot YAML — kafbat-ui dokümantasyonu env
@@ -793,10 +813,12 @@ data:
           kafka-connect:
             - name: connect
               address: "http://connect-connect-api:8083"
-      # NOT: connector'ların TEK doğruluk kaynağı Git'teki KafkaConnector
-      # CR'leridir (bkz. 12-kafka-connect.yaml `strimzi.io/use-connector-resources`,
-      # 13-connectors.yaml). Aşağıdaki RBAC bilerek connector'a yalnızca "view"
-      # veriyor — Kafka UI'de connector oluşturma işlevsiz kalır.
+      # NOT: connector'ların TEK doğruluk kaynağı, Console'un add-source
+      # wizard'ının (console/backend/app/orchestrator.py) küme'ye uyguladığı
+      # KafkaConnector CR'leridir (bkz. 12-kafka-connect.yaml
+      # `strimzi.io/use-connector-resources`). Aşağıdaki RBAC bilerek
+      # connector'a yalnızca "view" veriyor — Kafka UI'de connector oluşturma
+      # işlevsiz kalır.
     auth:
       type: OAUTH2
       oauth2:
@@ -1153,6 +1175,13 @@ rules:
 - apiGroups: [kafka.strimzi.io]
   resources: [kafkaconnectors, kafkatopics]
   verbs: [get, list, create, patch, delete]
+# kafkausers: only get+patch — the orchestrator READ-MODIFY-WRITEs the `connect`
+# KafkaUser's per-source ACLs (ensure/remove_user_acl); it never creates/lists/
+# deletes KafkaUsers. Scoped to least-privilege (sartname 3.7.1.3) rather than
+# reusing the broader connector/topic verb set above.
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkausers]
+  verbs: [get, patch]
 - apiGroups: [kafka.strimzi.io]
   resources: [kafkaconnectors/status, kafkatopics/status]
   verbs: [get]
@@ -2210,6 +2239,41 @@ spec:
 # not otherwise referenced by any other template independent of the
 # dev-convenience toggle.
 ---
+# Source: lakehouse/templates/16-gitea.yaml
+# Gitea — OPTIONAL in-cluster git server, the no-external-git fallback for
+# the GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 6).
+# Gated by `.Values.components.gitea` (DEFAULT FALSE).
+#
+# *** THIS IS NOT FOR PRODUCTION. *** A real `console.deployMode: gitops`
+# install brings its OWN external git host (GitHub/GitLab/a dedicated
+# Gitea/Gitness instance, ...) and points `console.gitops.repoUrl` at it
+# explicitly — see chart/templates/console/console.yaml. This component
+# exists ONLY so an environment with no external git host reachable from
+# the cluster (throwaway dev/PoC/e2e, or a genuinely air-gapped install)
+# still has somewhere for the Console's rendered pipeline manifests to
+# land. Single replica, ONE PVC, no HA — same posture as
+# chart/templates/17-minio.yaml's dev-only object store.
+#
+# Minimal by design: no Ingress/Route (an external reconciler — ArgoCD,
+# Slice B — is wired to this Gitea's SSH remote directly, in-cluster; there
+# is no need for anything here to be reachable from outside the cluster).
+#
+# Bootstrap is responsible for (OUT OF THIS TASK'S SCOPE):
+#   - seeding the `gitops-credential` Secret (console.gitops.credentialSecret)
+#     with an SSH keypair Gitea's admin/repo setup already trusts, and
+#   - creating the `.Values.gitea.repo` repository under the `gitea` org/user
+#     inside this instance.
+# Without that bootstrap wiring, this Deployment renders and runs, but the
+# Console's first commit attempt will fail (no repo / no accepted key) —
+# exactly as it would against a misconfigured EXTERNAL git host.
+#
+# Service naming — MUST stay in sync with chart/templates/console/
+# console.yaml's GITOPS_REPO_URL fallback string
+# (`ssh://git@gitea-ssh.<ns>.svc:22/gitea/<repo>.git`):
+#   - `gitea-ssh`  (port 22)   — the git remote the Console commits/pushes to.
+#   - `gitea-http` (port 3000) — Gitea's web UI/API (not wired to anything
+#     else in this chart yet; kept for admin/debugging access only).
+---
 # Source: lakehouse/templates/17-minio.yaml
 # MinIO — DEV/PoC/e2e-ONLY in-cluster S3-compatible object store (Product
 # Foundation Task 8). Gated by `.Values.components.minio` (DEFAULT FALSE).
@@ -2288,8 +2352,8 @@ spec:
 #
 # Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
 # (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
-# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
-# console/).
+# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — Console'un
+# add-source wizard'ının uyguladığı KafkaConnector CR'leri).
 #
 # Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
 # Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`
@@ -2977,8 +3041,10 @@ spec:
 # LOAD-BEARING (do not change without re-reading spec + sub-project A —
 # docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
 #   - `config.providers=directory` + DirectoryConfigProvider class — every
-#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference
-#     in 13-connectors.yaml resolves through THIS provider + THESE
+#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference on
+#     any KafkaConnector CR applied to this cluster (Console-generated
+#     per-source connectors — console/backend/app/orchestrator.py) resolves
+#     through THIS provider + THESE
 #     `spec.template.pod.volumes` / `spec.template.connectContainer.
 #     volumeMounts` mount `name:`s (mssql/mongo/s3/debezium-src/kafka-ca),
 #     each mounted at the exact `/mnt/external-configuration/<name>`
@@ -3081,211 +3147,6 @@ spec:
         - {name: s3, mountPath: /mnt/external-configuration/s3}
         - {name: debezium-src, mountPath: /mnt/external-configuration/debezium-src}
         - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
----
-# Source: lakehouse/templates/13-connectors.yaml
-# Kafka Connectors — per-source ingest (Debezium CDC + scheduled JDBC) + the
-# global Iceberg fan-out sink. Only parameterized + made namespace-aware.
-#
-# TWO independent gates in this one file (see values.yaml `components.connectors`):
-#   - `iceberg-sink-cdc` (`cdc.*`/`jdbc.*`, Avro/Apicurio) + `iceberg-sink-mongo`
-#     (`mongo.*`, JSON — Mongo has no Avro schema, see that connector's own
-#     comment) -> BOTH gated by `.Values.components.connectors.enabled` only.
-#     Together they are CORE ingest infrastructure, not an example: the pair
-#     is the source-agnostic sink that lands every `cdc.*`/`jdbc.*`/`mongo.*`
-#     topic into Iceberg via the `_target_table` SMT field the source
-#     connectors below set. Nothing else in this chart (and nothing in the
-#     Console, `console/backend/app/render_service.py`) ever generates a
-#     replacement for either, so — unlike the three source connectors below —
-#     neither is gated behind the `examples` flag; without them the ingest
-#     pipeline has no sink at all, in ANY environment.
-#   - `dbz-mssql-students` / `jdbc-mssql-scheduled` / `dbz-mongo-lms` (the
-#     three EXAMPLE per-source connectors) -> ALSO requires
-#     `.Values.components.connectors.examples.enabled` (default `false`).
-#     These are demo/reference instances of the ingest pattern for a
-#     specific PoC source (MSSQL "OgrenciDB", Mongo "lms") — real
-#     per-source CRs are generated at runtime by the scaffold script
-#     (`scaffold-source.sh`) or the Console's add-source wizard
-#     (`console/backend/app/orchestrator.py`), not by this chart.
-#
-# LOAD-BEARING (do not change without re-reading spec + sub-project A —
-# docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
-#   - Debezium SMTs: `unwrap` (ExtractNewRecordState, delete.handling.mode=
-#     rewrite, drop.tombstones=false) + `route` (InsertField$Value,
-#     `_target_table` static value) — the Iceberg sink's dynamic routing
-#     depends on EVERY source connector setting this field.
-#   - COLON-form `${directory:/mnt/external-configuration/<vol>:<key>}`
-#     credential references — resolved by 12-kafka-connect.yaml's
-#     `config.providers=directory` + the matching `externalConfiguration`
-#     volume `name:`s. Never rewritten to `${file:...}` or any other form.
-#   - `schema.history.internal.*` SASL_SSL/SCRAM-SHA-512 + truststore block
-#     (Debezium's own producer/consumer to the `schema-history.*` topic;
-#     the `debezium-src` KafkaUser, 03-kafka-strimzi.yaml, only has ACLs
-#     for that prefix — nothing else).
-#   - `errors.deadletterqueue.*` on the source connectors is a documented
-#     no-op (DLQ is a sink-only Connect feature; real DLQ delivery happens
-#     via `iceberg-sink-cdc` below) — preserved verbatim anyway, unchanged
-#     from source.
-#
-# Service wiring (spec §3.1/§8):
-#   - schema-history bootstrap servers + Apicurio registry URL resolve via
-#     `lakehouse.svc.kafkaBootstrap` / `lakehouse.svc.apicurio` — the SAME
-#     helpers 12-kafka-connect.yaml / 11-apicurio-registry.yaml render under.
-#   - iceberg-sink-cdc's Nessie catalog URI resolves via `lakehouse.svc.nessie`
-#     — the SAME helper 05-spark-operator.yaml/04-nessie-ha.yaml/
-#     06-trino-ha.yaml use (path stays the source's exact `/iceberg/v1`).
-#   - The MSSQL_HOST / MONGO_HOST / S3_ENDPOINT source hostnames
-#     are PRE-Helm double-brace placeholder tokens held in `values.yaml`
-#     (same convention as `postgres.nessie.backup.endpointURL`) — plain
-#     values-file string data, never parsed by Helm's template engine. They
-#     are deliberately NOT spelled out with literal double braces in this
-#     comment: doing so inside a template file (even in a YAML `#` comment)
-#     makes Helm's Go-template engine try to parse them as an action, since
-#     it processes raw text before any YAML/comment parsing — the exact
-#     `helm lint` failure this phrasing avoids.
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaConnector
-metadata:
-  name: iceberg-sink-cdc
-  namespace: example
-  labels: {strimzi.io/cluster: connect}
-spec:
-  class: org.apache.iceberg.connect.IcebergSinkConnector
-  tasksMax: 2
-  config:
-    # Deterministic dedup tie-break (silver-merge): stamp each record's Kafka
-    # offset + partition into Bronze. InsertField's offset/partition fields are
-    # sink-only Connect record metadata. Debezium keys by PK -> same key -> same
-    # partition -> offset monotonic per key -> the MERGE's final ORDER BY key.
-    transforms: "kafkameta"
-    transforms.kafkameta.type: "org.apache.kafka.connect.transforms.InsertField$Value"
-    transforms.kafkameta.offset.field: "__kafka_offset"
-    transforms.kafkameta.partition.field: "__kafka_partition"
-    # AVRO (Apicurio) sources only — relational CDC (cdc.*) + scheduled JDBC
-    # (jdbc.*). Mongo (mongo.*) is JSON, NOT Avro: one Connect sink has a SINGLE
-    # value.converter, so a JSON source cannot share this Avro sink. Mongo needs
-    # its OWN sink (JsonConverter).
-    topics.regex: "cdc\\..*|jdbc\\..*"
-    # Sink deserializes Avro via Apicurio (matches Debezium/Aiven relational
-    # producers). Without this the sink uses the worker-default JsonConverter and
-    # fails with "Illegal character (CTRL-CHAR)" on Avro bytes.
-    key.converter: io.apicurio.registry.utils.converter.AvroConverter
-    value.converter: io.apicurio.registry.utils.converter.AvroConverter
-    key.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
-    value.converter.apicurio.registry.url: "http://apicurio-registry:8080/apis/registry/v2"
-    # --- Nessie REST katalog ---
-    iceberg.catalog.type: rest
-    # Nessie Iceberg REST base — MUST end at /iceberg/ (Trino/Spark use the same).
-    # A trailing /v1 makes Nessie parse "v1" as a named reference (branch) →
-    # "Named reference 'v1' not found".
-    iceberg.catalog.uri: "http://nessie:19120/iceberg/"
-    iceberg.catalog.warehouse: "rawdata"
-    # --- S3 ---
-    iceberg.catalog.io-impl: org.apache.iceberg.aws.s3.S3FileIO
-    iceberg.catalog.s3.endpoint: "https://s3.example.com"
-    iceberg.catalog.s3.path-style-access: "true"
-    iceberg.catalog.s3.access-key-id: "${directory:/mnt/external-configuration/s3:access-key-id}"
-    iceberg.catalog.s3.secret-access-key: "${directory:/mnt/external-configuration/s3:secret-access-key}"
-    # --- Fan-out (dinamik routing) ---
-    iceberg.tables.dynamic-enabled: "true"
-    iceberg.tables.route-field: "_target_table"
-    iceberg.tables.auto-create-enabled: "true"
-    iceberg.tables.evolve-schema-enabled: "true"
-    # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
-    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
-    # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
-    # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
-    # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
-    # --- Commit ---
-    iceberg.control.commit.interval-ms: "60000"
-    # commit.timeout-ms: koordinatörün, worker'ların DATA_COMPLETE'ini beklediği
-    # süre. Kaynak-kısıtlı tek-worker Connect'te sink'in control-consumer'ı
-    # (cg-control-*) Kafka 4.2 grup koordinatörüne karşı ~commit-interval
-    # periyoduyla rebalance/flap yaşayabiliyor; varsayılan 30s pencere worker'ın
-    # geç DATA_COMPLETE'ini kaçırıp "committed to 0 table(s)" üretiyor. Kısıtlı
-    # overlay'de bunu büyütmek (ör. 180000) commit'i güvenilir kılar; prod'da
-    # varsayılan yeterli.
-    iceberg.control.commit.timeout-ms: "30000"
-    # --- Kafka client overrides (iceberg.kafka.* -> all sink Kafka clients) ---
-    # --- Hata/DLQ ---
-    errors.tolerance: all
-    errors.log.enable: "true"
-    errors.deadletterqueue.topic.name: "iceberg-sink.dlq"
-    # DLQ topic replication factor — Connect auto-creates the DLQ topic with
-    # this RF; the default (3) fails on a <3-broker cluster ("Could not
-    # initialize dead letter queue"). Tracks broker count via the same knob as
-    # Connect's internal topics (1 on microk8s-ingest, 3 in prod).
-    errors.deadletterqueue.topic.replication.factor: "3"
-    errors.deadletterqueue.context.headers.enable: "true"
----
-# Source: lakehouse/templates/13-connectors.yaml
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaConnector
-metadata:
-  name: iceberg-sink-mongo
-  namespace: example
-  labels: {strimzi.io/cluster: connect}
-spec:
-  class: org.apache.iceberg.connect.IcebergSinkConnector
-  tasksMax: 2
-  config:
-    # Deterministic dedup tie-break (silver-merge): stamp each record's Kafka
-    # offset + partition into Bronze. InsertField's offset/partition fields are
-    # sink-only Connect record metadata. Debezium keys by PK -> same key -> same
-    # partition -> offset monotonic per key -> the MERGE's final ORDER BY key.
-    transforms: "kafkameta"
-    transforms.kafkameta.type: "org.apache.kafka.connect.transforms.InsertField$Value"
-    transforms.kafkameta.offset.field: "__kafka_offset"
-    transforms.kafkameta.partition.field: "__kafka_partition"
-    # Mongo (mongo.*) is JSON, NOT Avro (see the topics.regex comment on
-    # iceberg-sink-cdc above) — a separate sink with JsonConverter, since one
-    # Connect sink can only have a single value.converter.
-    topics.regex: "mongo\\..*"
-    key.converter: org.apache.kafka.connect.json.JsonConverter
-    value.converter: org.apache.kafka.connect.json.JsonConverter
-    key.converter.schemas.enable: "false"
-    value.converter.schemas.enable: "false"
-    # --- Nessie REST katalog ---
-    iceberg.catalog.type: rest
-    # Same /iceberg/ (NOT /v1) base as iceberg-sink-cdc above — see that
-    # connector's comment on why a trailing /v1 breaks Nessie's ref parsing.
-    iceberg.catalog.uri: "http://nessie:19120/iceberg/"
-    iceberg.catalog.warehouse: "rawdata"
-    # --- S3 ---
-    iceberg.catalog.io-impl: org.apache.iceberg.aws.s3.S3FileIO
-    iceberg.catalog.s3.endpoint: "https://s3.example.com"
-    iceberg.catalog.s3.path-style-access: "true"
-    iceberg.catalog.s3.access-key-id: "${directory:/mnt/external-configuration/s3:access-key-id}"
-    iceberg.catalog.s3.secret-access-key: "${directory:/mnt/external-configuration/s3:secret-access-key}"
-    # --- Fan-out (dinamik routing) ---
-    iceberg.tables.dynamic-enabled: "true"
-    iceberg.tables.route-field: "_target_table"
-    iceberg.tables.auto-create-enabled: "true"
-    iceberg.tables.evolve-schema-enabled: "true"
-    # APPEND-ONLY: the Apache Iceberg sink cannot upsert (no cdc-field/upsert key
-    # exists — verified against apache-iceberg-1.9.0 source). This sink writes the
-    # raw CDC change-log to Bronze (rawdata warehouse); current-state upsert happens
-    # downstream in the `silver-merge` Spark job (MERGE INTO lakehouse.<ns>.<t>).
-    # See docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md.
-    # --- Commit ---
-    iceberg.control.commit.interval-ms: "60000"
-    # commit.timeout-ms — kısıtlı tek-worker Connect'te control-consumer flap'ine
-    # karşı büyütülür (iceberg-sink-cdc'deki ayrıntılı nota bkz.).
-    iceberg.control.commit.timeout-ms: "30000"
-    # --- Kafka client overrides (iceberg.kafka.* -> all sink Kafka clients) ---
-    # --- Hata/DLQ ---
-    errors.tolerance: all
-    errors.log.enable: "true"
-    errors.deadletterqueue.topic.name: "iceberg-mongo.dlq"
-    errors.deadletterqueue.topic.replication.factor: "3"
-    errors.deadletterqueue.context.headers.enable: "true"
-
-# POC-DOĞRULA (spec §15.1 — en yüksek risk): Iceberg sink v1.6.x tam anahtar
-# isimleri; sink'in Bronze (rawdata warehouse) append-only changelog yazdığı
-# ve current-state upsert'ün downstream `silver-merge` Spark job'ında
-# (MERGE INTO) gerçekleştiği medallion akışı — bkz.
-# docs/superpowers/specs/2026-07-21-medallion-cdc-merge-design.md; S3
-# credential geçişi (${file:...} external config veya env). Kümede uçtan uca
-# doğrulanacak.
 ---
 # Source: lakehouse/templates/03-kafka-strimzi.yaml
 # Strimzi Kafka (KRaft mode, node pools) — Kafka omurgası (backbone). Only
@@ -3461,32 +3322,13 @@ spec:
   authentication: {type: scram-sha-512}
   authorization:
     type: simple
-    acls:
-      # NOT: boş kaynak adı (`name: "" patternType: prefix`) Kafka ACL API'since
-      # reddedilir (InvalidRequestException: Invalid empty resource name), bu yüzden
-      # ACL'ler ingest topic namespace'lerine daraltılmış haldedir. POC-DOĞRULA:
-      # Iceberg sink control topic/consumer-group ve DLQ adları sürüme bağlı —
-      # OpenShift'te connector'lar çalışınca teyit/genişlet.
-      - {resource: {type: group, name: connect, patternType: prefix}, operations: [Read]}          # connect-cluster + sink consumer group'ları
-      # Iceberg sink control consumer group (cg-control-<uuid>) — separate from
-      # the `connect` prefix. Without this the sink fails with
-      # GroupAuthorizationException. (POC-DOĞRULA Iceberg-sink control-group item.)
-      - {resource: {type: group, name: cg-control-, patternType: prefix}, operations: [Read, Describe]}
-      - {resource: {type: topic, name: connect-cluster-, patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Connect internal topic'leri
-      - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
-      - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
-      - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
-      - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel HTTP source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel MQTT source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel RabbitMQ source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
-      - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
-      # Iceberg sink exactly-once: coordinator/worker transactional producers
-      # (transactional.id = coordinator-txn-*/worker-txn-*). Without these the
-      # sink task dies with TransactionalIdAuthorizationException. (POC-DOĞRULA
-      # Iceberg-sink ACL item.)
-      - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
-      - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
+    # ACLs are RUNTIME-OWNED (not templated here) so helm/ArgoCD never clobber
+    # the per-source literal topic ACLs the Console adds for existing-Kafka
+    # (stream/kafka) sources. The static BASE ACLs are merge-seeded at
+    # install/upgrade by chart/templates/20-connect-acl-seed.yaml
+    # (.Values.kafkaConnect.connectBaseAcls); the orchestrator adds/removes the
+    # dynamic per-source ones. See docs/superpowers/specs/2026-08-01-existing-
+    # kafka-acl-runtime-owned-design.md.
 ---
 # Source: lakehouse/templates/03-kafka-strimzi.yaml
 apiVersion: kafka.strimzi.io/v1
@@ -4477,6 +4319,93 @@ spec:
     exposeDriverMetrics: true
     exposeExecutorMetrics: true
 ---
+# Source: lakehouse/templates/20-connect-acl-seed.yaml
+# connect-acl-seed — dual-hook (helm post-install,post-upgrade + ArgoCD
+# PostSync) Job that merge-ADDS `.Values.kafkaConnect.connectBaseAcls` onto
+# the `connect` KafkaUser via kubectl+jq.
+#
+# The `connect` KafkaUser's ACLs are RUNTIME-OWNED: 03-kafka-strimzi.yaml
+# declares that KafkaUser WITHOUT an `acls` field (see that file's comment)
+# so a plain `helm upgrade`/ArgoCD sync never clobbers the per-source ACLs
+# the Console adds at runtime for each newly-configured source connector
+# (Task 4 of this project removed the static ACL list from the chart's
+# KafkaUser CR for exactly this reason — this Job is what now seeds the
+# static BASE set that used to live there).
+#
+# This Job is intentionally a MERGE-ADD, never a replace/remove: it reads
+# the CURRENT `spec.authorization.acls` off the live KafkaUser, appends any
+# base-ACL entry not already present (deduped by type|name|patternType,
+# existing entries win so Console-added per-source ACLs are never
+# overwritten or dropped), and patches the merged list back. Safe to re-run
+# on every install/upgrade/PostSync — idempotent, and additive only.
+#
+# Mirrors chart/templates/prereq-check-job.yaml's SA/Role/RoleBinding/
+# hook-Job pattern (RBAC scoped to exactly one verb pair on one resource)
+# and chart/templates/18-bucket-init.yaml's dual-hook annotation set (this
+# Job, like bucket-init, must run on BOTH plain `helm install/upgrade` AND
+# ArgoCD PostSync — see gitops/apps/app-of-apps.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lakehouse-connect-acl-seed
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+---
+# Source: lakehouse/templates/20-connect-acl-seed.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lakehouse-connect-acl-seed
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+rules:
+- apiGroups: [kafka.strimzi.io]
+  resources: [kafkausers]
+  verbs: [get, patch]
+---
+# Source: lakehouse/templates/20-connect-acl-seed.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lakehouse-connect-acl-seed
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+subjects:
+- kind: ServiceAccount
+  name: lakehouse-connect-acl-seed
+  namespace: example
+roleRef:
+  kind: Role
+  name: lakehouse-connect-acl-seed
+  apiGroup: rbac.authorization.k8s.io
+---
 # Source: lakehouse/templates/18-bucket-init.yaml
 # Bucket-init Job — vendor-generic S3 bucket bootstrap (Product Foundation
 # Task 8). Gated by `.Values.storage.createBuckets` (DEFAULT TRUE) — NOT
@@ -4559,6 +4488,68 @@ spec:
         - {name: S3_ENDPOINT,    valueFrom: {secretKeyRef: {name: s3-credentials, key: endpoint}}}
         - {name: S3_ACCESS_KEY,  valueFrom: {secretKeyRef: {name: s3-credentials, key: access-key-id}}}
         - {name: S3_SECRET_KEY,  valueFrom: {secretKeyRef: {name: s3-credentials, key: secret-access-key}}}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+---
+# Source: lakehouse/templates/20-connect-acl-seed.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-connect-acl-seed
+  namespace: example
+  labels:
+    app.kubernetes.io/part-of: lakehouse
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: lakehouse
+    helm.sh/chart: lakehouse-0.1.0
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: lakehouse
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: lakehouse
+        helm.sh/chart: lakehouse-0.1.0
+        app: lakehouse-connect-acl-seed
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: lakehouse-connect-acl-seed
+      restartPolicy: Never
+      containers:
+      - name: connect-acl-seed
+        image: "alpine/k8s:1.29.2"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        command: ["/bin/sh", "-ceu"]
+        args:
+        - |
+          BASE='[{"operations":["Read"],"resource":{"name":"connect","patternType":"prefix","type":"group"}},{"operations":["Read","Describe"],"resource":{"name":"cg-control-","patternType":"prefix","type":"group"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"connect-cluster-","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"cdc.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"jdbc.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"mongo.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"http.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"mqtt.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"amqp.","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"control","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"iceberg","patternType":"prefix","type":"topic"}},{"operations":["Read","Write","Create","Describe"],"resource":{"name":"kafka-ingest-","patternType":"prefix","type":"topic"}},{"operations":["Write","Describe"],"resource":{"name":"coordinator-txn-","patternType":"prefix","type":"transactionalId"}},{"operations":["Write","Describe"],"resource":{"name":"worker-txn-","patternType":"prefix","type":"transactionalId"}}]'
+          # Merge-add: keep every existing entry (incl. Console-added per-source
+          # ACLs), append any base entry not already present (dedupe by
+          # type|name|patternType), then patch. Never removes.
+          MERGED=$(kubectl get kafkauser connect -n example -o json \
+            | jq -c --argjson base "$BASE" '
+                (.spec.authorization.acls // []) as $cur
+                | ($cur + $base)
+                | unique_by(.resource.type + "|" + .resource.name + "|" + .resource.patternType)
+                | {spec: {authorization: {acls: .}}}')
+          kubectl patch kafkauser connect -n example --type merge -p "$MERGED"
+          echo "connect ACLs seeded (merge-add)."
         resources:
           requests: {cpu: 50m, memory: 64Mi}
           limits: {cpu: 200m, memory: 128Mi}

@@ -12,9 +12,6 @@
 # replicas to 1 — the memory-minimal shape the ingest e2e test needs.
 components:
   kafkaConnect: true            # F: Connect gerekli
-  connectors:
-    enabled: true               # iceberg-sink-cdc (+ iceberg-sink-mongo) fan-out sink
-    examples: {enabled: false}
   sparkOperator: false          # ileride açılır
   monitoring: false
   keycloak: false
@@ -22,35 +19,6 @@ components:
   kafkaUi: false
   routesTls: false
   zeppelin: false
-# Dev/test override (TOP-LEVEL connectors, NOT components.connectors): canlı
-# ingest testi hızlı iterasyon için Apicurio auto-register açık ister
-# (chart/values.yaml `connectors.schemaAutoRegister` prod-safe varsayılanı false).
-connectors:
-  schemaAutoRegister: true
-  icebergSink:
-    # In-cluster MinIO (fixtures/minio.yaml) — prod overlay points this at the
-    # prod S3 endpoint. Iceberg sink uses S3FileIO against this endpoint.
-    s3Endpoint: "http://minio.lakehouse-test.svc:9000"
-    # Tek-broker/tek-worker Connect'te sink control-consumer'ı Kafka 4.2 grup
-    # koordinatörüne karşı flap yaşayabiliyor; 30s'lik varsayılan commit
-    # penceresi worker'ın geç DATA_COMPLETE'ini kaçırıp "committed to 0
-    # table(s)" üretebiliyor. Pencereyi büyütmek commit'i güvenilir kılar.
-    commitIntervalMs: "120000"
-    commitTimeoutMs: "180000"
-    tasksMax: 1
-    # On a single-broker Connect, the 2-phase-commit control consumer
-    # (cg-control-*) can hit "Disconnecting from node 0 due to socket
-    # connection setup timeout" against the client default 10s
-    # socket.connection.setup.timeout.ms and fail to join its group. Raising
-    # these iceberg.kafka.* client timeouts (passed through to ALL of the
-    # sink's Kafka clients) avoids that — see chart/values.yaml
-    # `connectors.icebergSink.kafkaClientOverrides` comment.
-    kafkaClientOverrides:
-      socket.connection.setup.timeout.ms: "30000"
-      socket.connection.setup.timeout.max.ms: "120000"
-      request.timeout.ms: "60000"
-      session.timeout.ms: "120000"
-      default.api.timeout.ms: "120000"
 # sparkOperator itself stays disabled here (components.sparkOperator: false,
 # ileride açılır) — these sizing overrides just pre-shrink silver-merge for
 # this memory-minimal node once that gate flips.

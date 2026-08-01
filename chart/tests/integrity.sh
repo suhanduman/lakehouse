@@ -45,13 +45,7 @@ NAMESPACES=(strayprobe lakehouse-test)
 
 # Toggle sets: label -> extra `helm template --set ...` args (may be empty).
 # - defaults               : values-prod.example.yaml as-is (components.ai=
-#                             false, components.connectors.examples.enabled=
 #                             false — the shipped production defaults).
-# - connectors-examples-on : flips components.connectors.examples.enabled to
-#                             true, exercising the three demo per-source
-#                             KafkaConnector CRs (chart/templates/
-#                             13-connectors.yaml) and their consumer-side
-#                             Kafka Connect / bootstrap references.
 #
 # NOTE: the follow-up-component toggles (components.ai / .superset /
 # .jupyter) are DELIBERATELY not exercised here: each renders a Route whose
@@ -75,12 +69,10 @@ NAMESPACES=(strayprobe lakehouse-test)
 #                            on top so both render shapes are covered.)
 TOGGLE_LABELS=(
   "defaults"
-  "connectors-examples-on"
   "monitoring-oidc-on"
 )
 TOGGLE_ARGS=(
   ""
-  "--set components.connectors.examples.enabled=true"
   "--set components.monitoring=true --set monitoring.grafana.oidc.enabled=true"
 )
 

@@ -32,21 +32,18 @@ DEFAULT_POLL_MS = "3600000"
 # incompatible version and can break downstream consumers); prod schemas are
 # deployed via CI/CD with backward-compat checks run against Apicurio BEFORE
 # rollout, so an unknown/unregistered schema at connector-start time should
-# fail fast instead. This module has no chart-values access (unlike
-# chart/templates/13-connectors.yaml, which reads
-# `.Values.connectors.schemaAutoRegister`), so this constant IS the contract
-# here — a dev/test deployment that wants auto-register=true overrides the
-# generated connector config (e.g. via the Console's edit-before-apply step)
-# after render_connector() returns it.
+# fail fast instead. This module has no chart-values access, so this constant
+# IS the contract here — a dev/test deployment that wants auto-register=true
+# overrides the generated connector config (e.g. via the Console's
+# edit-before-apply step) after render_connector() returns it.
 SCHEMA_AUTO_REGISTER = "false"
-# DLQ topic replication factor for connectors that render one (mirrors
-# chart/templates/13-connectors.yaml's `errors.deadletterqueue.topic.
-# replication.factor`). Prod default: "3" (3+ broker cluster). A single-
-# broker/dev deployment (e.g. microk8s-ingest) must override the generated
-# config down to "1", same as `kafkaConnect.internalTopicReplicationFactor`
-# does chart-side — Connect auto-creates the DLQ topic with this RF, and
-# RF=3 fails on a <3-broker cluster ("Could not initialize dead letter
-# queue").
+# DLQ topic replication factor for every dedicated Iceberg sink this module
+# renders (`errors.deadletterqueue.topic.replication.factor`). Prod default:
+# "3" (3+ broker cluster). A single-broker/dev deployment (e.g.
+# microk8s-ingest) must override the generated config down to "1", same as
+# `kafkaConnect.internalTopicReplicationFactor` does chart-side — Connect
+# auto-creates the DLQ topic with this RF, and RF=3 fails on a <3-broker
+# cluster ("Could not initialize dead letter queue").
 DLQ_REPLICATION_FACTOR = "3"
 # Annotation namespace stamped on every rendered CR (KafkaConnector,
 # dedicated sink, ScheduledSparkApplication) so Console/GitOps callers can
@@ -580,28 +577,11 @@ def _kafka_consumer_override(spec: SourceSpec) -> dict:
     }
 
 
-def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
-    """Shared dedicated-Iceberg-sink config: JSON (schemaless) converters +
-    Nessie/S3 rawdata catalog + fan-out route/auto-create/evolve + control-group
-    stability + medallion SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) +
-    DLQ. Used by _render_kafka_ingest (stream/kafka) and render_camel_sink (Camel
-    lanes). value.converter deserializes JSON to a Map BEFORE the SMTs, so
-    InsertField$Value works on the Map (unlike a Camel source's byte[] value).
-
-    `name` is this sink's own KafkaConnector name (e.g. "kafka-ingest-k1-orders"
-    or "http-h1-prices-sink") and is used to derive a PER-CONNECTOR
-    `iceberg.control.topic` ("control-<name>"). Without this, every dedicated
-    sink defaults to the connector's shared "control-iceberg" topic; two
-    concurrent dedicated sinks would then cross-read each other's control
-    events (commit-request/commit-response) and can silently commit 0 rows.
-    The chart's `control` ACL prefix already covers `control-*`, so no ACL
-    change is needed for this."""
-    config: dict = {
-        "topics": topics,
-        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": "false",
-        "value.converter.schemas.enable": "false",
+def _iceberg_catalog_io() -> dict:
+    """Nessie REST catalog + S3 (rawdata Bronze warehouse) + dynamic-routing
+    knobs shared by every Console-rendered Iceberg sink. Routing reads the
+    source-stamped `_target_table` field."""
+    return {
         "iceberg.catalog.type": "rest",
         "iceberg.catalog.uri": NESSIE_URI,
         "iceberg.catalog.warehouse": "rawdata",
@@ -614,24 +594,58 @@ def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: s
         "iceberg.tables.route-field": "_target_table",
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
+    }
+
+
+def _iceberg_control_tuning(name: str) -> dict:
+    """Per-connector control topic (`control-<name>`) + commit windows +
+    Kafka client tuning. A per-connector control topic keeps two concurrent
+    dedicated sinks from cross-reading each other's commit-request/response
+    control events (which silently commits 0 rows). The long session/commit
+    windows keep the `cg-control-*` consumer from flapping on a resource-
+    constrained/single-worker Connect. The chart's `control` ACL prefix covers
+    `control-*`, so no ACL change is needed."""
+    return {
         "iceberg.control.topic": _k8s_topic_name(f"control-{name}"),
         "iceberg.control.commit.interval-ms": "60000",
-        # Control-group stability. This dedicated sink is Console-rendered, so
-        # (unlike the chart's shared sinks) it does NOT inherit
-        # `connectors.icebergSink.kafkaClientOverrides`. Without a long control
-        # consumer session/commit window, the sink's `cg-control-*` consumer
-        # flaps (JoinGroup UNKNOWN_MEMBER_ID) on a resource-constrained/single-
-        # worker Connect and every commit reports "committed to 0 table(s)" —
-        # rows never land in Bronze. These are Console-specific defaults tuned
-        # for a constrained/single-worker Connect (NOT synced to the chart's
-        # shared-sink `kafkaClientOverrides`, which differ per overlay) and are
-        # overridable via the Console edit-before-apply step. Verified necessary
-        # on constrained microk8s (Plan B1 Task 7).
         "iceberg.control.commit.timeout-ms": "120000",
         "iceberg.kafka.session.timeout.ms": "120000",
         "iceberg.kafka.heartbeat.interval.ms": "15000",
         "iceberg.kafka.request.timeout.ms": "130000",
         "iceberg.kafka.max.poll.interval.ms": "300000",
+    }
+
+
+def _dlq_config(dlq_name: str) -> dict:
+    """Dead-letter-queue block shared by every Console-rendered Iceberg sink
+    (raw-body `_iceberg_sink_config` and the leaner CDC-family
+    `_cdc_dedicated_sink_config`): tolerate all errors, route them to
+    `dlq_name` (under the source's own topic prefix so the runtime-owned
+    `connect` ACLs already cover it), RF from the module default, headers on
+    for debuggability."""
+    return {
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": dlq_name,
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+
+
+def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
+    """Shared dedicated-Iceberg-sink config for RAW-BODY lanes (kafka-ingest,
+    Camel): JSON converters + shared catalog/S3/routing (`_iceberg_catalog_io`)
+    + per-connector control tuning (`_iceberg_control_tuning`) + the medallion
+    SMT chain (route/setop/setdel/tsms/tsconv/kafkameta) + DLQ. value.converter
+    deserializes JSON to a Map BEFORE the SMTs, so InsertField$Value works on the
+    Map (unlike a Camel source's byte[] value)."""
+    config: dict = {
+        "topics": topics,
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter.schemas.enable": "false",
+        **_iceberg_catalog_io(),
+        **_iceberg_control_tuning(name),
         "transforms": "route,setop,setdel,tsms,tsconv,kafkameta",
         "transforms.setop.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.setop.static.field": "__op",
@@ -647,10 +661,7 @@ def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: s
         "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.kafkameta.offset.field": "__kafka_offset",
         "transforms.kafkameta.partition.field": "__kafka_partition",
-        "errors.tolerance": "all",
-        "errors.deadletterqueue.topic.name": dlq_name,
-        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
-        "errors.deadletterqueue.context.headers.enable": "true",
+        **_dlq_config(dlq_name),
     }
     config.update(_route_transform(target_ns, target_table))
     return config
@@ -777,6 +788,65 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
     )
 
 
+def _cdc_dedicated_sink_config(name: str, topic: str, avro: bool, dlq_name: str) -> dict:
+    """Leaner dedicated Iceberg sink for CDC/JDBC/mongo lanes. The Debezium/Aiven
+    SOURCE already stamped `_target_table` + medallion metadata (op/ts_ms/deleted)
+    and converted `__ts_ms`, so this sink does NOT re-run the medallion SMTs and
+    does NOT call `_route_transform` — it only decodes, stamps the Kafka
+    offset/partition (sink-side Connect record metadata, the silver-merge dedup
+    tie-break), and writes to Bronze via dynamic routing on the source-stamped
+    `_target_table`.
+
+    `avro`: relational/jdbc/mysql produce Avro via Apicurio (URL only — the sink
+    deserializes, it does not register schemas); mongo produces JSON."""
+    if avro:
+        converter = {
+            "key.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+            "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+            "key.converter.apicurio.registry.url": APICURIO_URL,
+            "value.converter.apicurio.registry.url": APICURIO_URL,
+        }
+    else:
+        converter = {
+            "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "key.converter.schemas.enable": "false",
+            "value.converter.schemas.enable": "false",
+        }
+    return {
+        "topics": topic,
+        **converter,
+        **_iceberg_catalog_io(),
+        **_iceberg_control_tuning(name),
+        "transforms": "kafkameta",
+        "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.kafkameta.offset.field": "__kafka_offset",
+        "transforms.kafkameta.partition.field": "__kafka_partition",
+        **_dlq_config(dlq_name),
+        # Parity with the retired shared iceberg-sink-cdc/mongo chart
+        # connectors (both had this set): log each DLQ'd record's error to the
+        # Connect worker log, not just the DLQ topic, for operator visibility.
+        # CDC-family-only -- NOT added to _dlq_config, which is also used by
+        # _iceberg_sink_config (raw-body kafka-ingest/Camel path, which never
+        # had this key and must keep its proven output unchanged).
+        "errors.log.enable": "true",
+    }
+
+
+def render_cdc_sink(spec: SourceSpec) -> dict:
+    """Dedicated Iceberg sink for a CDC/JDBC/mongo lane. Mirrors render_camel_sink:
+    reads the source's topic, writes Bronze, DLQ under the source topic prefix so
+    the connect KafkaUser ACL covers it. Avro for relational/jdbc/mysql, JSON for
+    mongo (the only JSON CDC lane)."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    avro = descriptor.render_key != "cdc-mongo"
+    topic = topic_name(spec)
+    src_name = render_connector(spec)["metadata"]["name"]
+    name = _k8s_name(src_name, "sink")
+    config = _cdc_dedicated_sink_config(name, topic, avro, f"{topic}.dlq")
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config, spec.source)
+
+
 def render_camel_sink(spec: SourceSpec) -> dict:
     """Dedicated Iceberg sink for a Camel lane: reads the source's topic, JSON-
     deserializes to a Map, applies the medallion SMTs, routes to <ns>_raw.<tbl>.
@@ -817,6 +887,10 @@ def render_connector(spec: SourceSpec) -> dict:
 
 
 _SINK_RENDERERS = {
+    "cdc-relational": render_cdc_sink,
+    "cdc-mysql": render_cdc_sink,
+    "scheduled-jdbc": render_cdc_sink,
+    "cdc-mongo": render_cdc_sink,
     "camel-http": render_camel_sink,
     "camel-mqtt": render_camel_sink,
     "camel-rabbitmq": render_camel_sink,

@@ -42,7 +42,8 @@ BRONZE_METADATA_COLS = [
     {"name": "__deleted", "type": "string"},
     {"name": "__lsn", "type": "long"},
     # Deterministic dedup tie-break: Kafka offset+partition of each record,
-    # inserted by the Iceberg sink's InsertField SMT (chart 13-connectors.yaml).
+    # inserted by the Console-rendered dedicated Iceberg sink's InsertField SMT
+    # (render_service._iceberg_sink_config / _cdc_dedicated_sink_config).
     {"name": "__kafka_offset", "type": "long"},
     {"name": "__kafka_partition", "type": "int"},
 ]

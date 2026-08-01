@@ -88,10 +88,6 @@ components:
   kafkaConnect: false     # Strimzi spec.build needs a container registry to push the
                           # built Connect image to; microk8s registry addon not enabled
                           # here. OpenShift's internal registry covers this natively.
-  connectors:
-    enabled: false        # depends on Connect (above) being up
-    examples:
-      enabled: false
   nginxIngest: false      # depends on Spark Operator (above)
   console: false          # internally-built images not built/pushed anywhere reachable
   kafkaUi: false          # same as console
