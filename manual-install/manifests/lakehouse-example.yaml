@@ -2352,8 +2352,8 @@ spec:
 #
 # Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
 # (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
-# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, 13-connectors.yaml,
-# console/).
+# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — Console'un
+# add-source wizard'ının uyguladığı KafkaConnector CR'leri).
 #
 # Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
 # Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`
@@ -3041,8 +3041,10 @@ spec:
 # LOAD-BEARING (do not change without re-reading spec + sub-project A —
 # docs/superpowers/specs/2026-07-17-ingest-omurgasi-design.md):
 #   - `config.providers=directory` + DirectoryConfigProvider class — every
-#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference
-#     in 13-connectors.yaml resolves through THIS provider + THESE
+#     `${directory:/mnt/external-configuration/<vol>:<key>}` reference on
+#     any KafkaConnector CR applied to this cluster (Console-generated
+#     per-source connectors — console/backend/app/orchestrator.py) resolves
+#     through THIS provider + THESE
 #     `spec.template.pod.volumes` / `spec.template.connectContainer.
 #     volumeMounts` mount `name:`s (mssql/mongo/s3/debezium-src/kafka-ca),
 #     each mounted at the exact `/mnt/external-configuration/<name>`
