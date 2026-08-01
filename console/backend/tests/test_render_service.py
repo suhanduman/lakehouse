@@ -120,9 +120,7 @@ def test_cdc_mssql_connector():
 def test_cdc_mssql_schema_auto_register_prod_safe_default():
     # Prod must NOT auto-register schemas (uncontrolled schema evolution) --
     # render_service has no chart-values access, so SCHEMA_AUTO_REGISTER is
-    # the documented prod-safe ("false") contract constant (see
-    # chart/values.yaml `connectors.schemaAutoRegister` for the equivalent
-    # chart-side default).
+    # the documented prod-safe ("false") contract constant.
     cfg = r.render_connector(_cdc_mssql())["spec"]["config"]
     assert cfg["key.converter.apicurio.registry.auto-register"] == "false"
     assert cfg["value.converter.apicurio.registry.auto-register"] == "false"
@@ -798,6 +796,8 @@ def test_cdc_dedicated_sink_avro_lanes():
         assert c["iceberg.control.topic"].startswith("control-")
         assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
         assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
+        # parity with the retired shared iceberg-sink-cdc/mongo chart connectors
+        assert c["errors.log.enable"] == "true"
         # sink name derives from the source connector name + "-sink"
         assert body["metadata"]["name"].endswith("-sink")
 
@@ -811,6 +811,7 @@ def test_cdc_dedicated_sink_mongo_is_json():
     assert c["transforms"] == "kafkameta"
     assert c["topics"] == r.topic_name(spec)
     assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+    assert c["errors.log.enable"] == "true"
 
 
 def test_cdc_dedicated_sink_carries_source_annotation():

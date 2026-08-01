@@ -32,21 +32,18 @@ DEFAULT_POLL_MS = "3600000"
 # incompatible version and can break downstream consumers); prod schemas are
 # deployed via CI/CD with backward-compat checks run against Apicurio BEFORE
 # rollout, so an unknown/unregistered schema at connector-start time should
-# fail fast instead. This module has no chart-values access (unlike
-# chart/templates/13-connectors.yaml, which reads
-# `.Values.connectors.schemaAutoRegister`), so this constant IS the contract
-# here — a dev/test deployment that wants auto-register=true overrides the
-# generated connector config (e.g. via the Console's edit-before-apply step)
-# after render_connector() returns it.
+# fail fast instead. This module has no chart-values access, so this constant
+# IS the contract here — a dev/test deployment that wants auto-register=true
+# overrides the generated connector config (e.g. via the Console's
+# edit-before-apply step) after render_connector() returns it.
 SCHEMA_AUTO_REGISTER = "false"
-# DLQ topic replication factor for connectors that render one (mirrors
-# chart/templates/13-connectors.yaml's `errors.deadletterqueue.topic.
-# replication.factor`). Prod default: "3" (3+ broker cluster). A single-
-# broker/dev deployment (e.g. microk8s-ingest) must override the generated
-# config down to "1", same as `kafkaConnect.internalTopicReplicationFactor`
-# does chart-side — Connect auto-creates the DLQ topic with this RF, and
-# RF=3 fails on a <3-broker cluster ("Could not initialize dead letter
-# queue").
+# DLQ topic replication factor for every dedicated Iceberg sink this module
+# renders (`errors.deadletterqueue.topic.replication.factor`). Prod default:
+# "3" (3+ broker cluster). A single-broker/dev deployment (e.g.
+# microk8s-ingest) must override the generated config down to "1", same as
+# `kafkaConnect.internalTopicReplicationFactor` does chart-side — Connect
+# auto-creates the DLQ topic with this RF, and RF=3 fails on a <3-broker
+# cluster ("Could not initialize dead letter queue").
 DLQ_REPLICATION_FACTOR = "3"
 # Annotation namespace stamped on every rendered CR (KafkaConnector,
 # dedicated sink, ScheduledSparkApplication) so Console/GitOps callers can
@@ -826,6 +823,13 @@ def _cdc_dedicated_sink_config(name: str, topic: str, avro: bool, dlq_name: str)
         "transforms.kafkameta.offset.field": "__kafka_offset",
         "transforms.kafkameta.partition.field": "__kafka_partition",
         **_dlq_config(dlq_name),
+        # Parity with the retired shared iceberg-sink-cdc/mongo chart
+        # connectors (both had this set): log each DLQ'd record's error to the
+        # Connect worker log, not just the DLQ topic, for operator visibility.
+        # CDC-family-only -- NOT added to _dlq_config, which is also used by
+        # _iceberg_sink_config (raw-body kafka-ingest/Camel path, which never
+        # had this key and must keep its proven output unchanged).
+        "errors.log.enable": "true",
     }
 
 
