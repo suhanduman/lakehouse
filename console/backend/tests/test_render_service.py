@@ -69,10 +69,14 @@ def test_pipeline_bucket_names():
 
 
 def test_pipeline_bucket_name_long_no_collision():
-    a = r.bronze_bucket_name("n" * 40, "t1_" + "x" * 40)
-    b = r.bronze_bucket_name("n" * 40, "t2_" + "x" * 40)
+    # Long shared prefix + short differing tails: the differing chars land
+    # PAST the 54-char slice _pipeline_bucket keeps before appending the
+    # crc32 suffix, so a truncate-only implementation (no crc32 branch)
+    # WOULD collide here -- only the crc32 suffix can distinguish these two.
+    a = r.bronze_bucket_name("n" * 60, "aaa")
+    b = r.bronze_bucket_name("n" * 60, "bbb")
     assert len(a) <= 63 and len(b) <= 63
-    assert a != b   # truncation must not collide distinct pipelines
+    assert a != b   # only the crc32 suffix can distinguish these past truncation
 
 
 def test_render_namespace_ddl_is_locationless():
