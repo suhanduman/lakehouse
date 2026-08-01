@@ -239,8 +239,11 @@ def test_add_source_happy_path_step_order_and_ok():
 
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
+    # CDC lanes now render a dedicated Iceberg sink (Task 2) -- the "sink"
+    # step lights up between "connector" and "verify", exactly as it already
+    # does for Camel lanes (see test_camel_http_applies_source_and_dedicated_sink).
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
+        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert all(s.ok for s in res.steps)
     assert res.ok is True
@@ -260,11 +263,17 @@ def test_add_source_happy_path_calls_services_with_expected_data():
     ]
     expected_topic = render_service.topic_name(CDC_MSSQL_SPEC)
     assert [t["metadata"]["name"] for t in k8s.applied_topics] == [expected_topic]
+    # source connector AND its dedicated sink are both applied, source first.
     expected_connector = render_service.render_connector(CDC_MSSQL_SPEC)
+    expected_sink = render_service.render_sink(CDC_MSSQL_SPEC)
     assert [c["metadata"]["name"] for c in k8s.applied_connectors] == [
-        expected_connector["metadata"]["name"]
+        expected_connector["metadata"]["name"], expected_sink["metadata"]["name"],
     ]
-    assert k8s.status_calls == [expected_connector["metadata"]["name"]]
+    # verify polls both the source AND the dedicated sink (Finding 2: the sink
+    # does the Bronze write, not the source).
+    assert k8s.status_calls == [
+        expected_connector["metadata"]["name"], expected_sink["metadata"]["name"],
+    ]
     # nothing rolled back on a successful run
     assert k8s.deleted_secrets == []
     assert k8s.deleted_topics == []
@@ -339,25 +348,32 @@ def test_rollback_deletes_topic_by_sanitized_cr_name_not_raw_name():
 
 
 def test_rollback_on_verify_failed_state_deletes_connector_topic_secret():
-    # get_status reports FAILED -> verify step fails -> full rollback.
+    # get_status reports FAILED -> verify step fails -> full rollback. The
+    # source is polled first and raises immediately (shared status_states),
+    # so the sink's own state never matters here -- but the sink WAS applied
+    # (the "sink" step ran and succeeded before "verify"), so its undo is on
+    # the rollback stack too and must fire, same as a Camel lane (see
+    # test_camel_sink_failed_state_fails_add_source_not_ok).
     orch, k8s, s3, trino = _orch(status_states=["FAILED"])
 
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
     assert res.ok is False
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
+        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert res.steps[-1].ok is False
     assert "FAILED" in res.steps[-1].detail
 
     connector = render_service.render_connector(CDC_MSSQL_SPEC)["metadata"]["name"]
+    sink = render_service.render_sink(CDC_MSSQL_SPEC)["metadata"]["name"]
     topic = render_service.topic_name(CDC_MSSQL_SPEC)
-    assert k8s.deleted_connectors == [connector]
+    assert k8s.deleted_connectors == [sink, connector]
     assert k8s.deleted_topics == [topic]
     assert k8s.deleted_secrets == ["mssql1"]
-    # reverse undo order asserted via the unified log tail: connector, topic, secret.
-    assert k8s.calls[-3:] == [
+    # reverse undo order asserted via the unified log tail: sink, connector, topic, secret.
+    assert k8s.calls[-4:] == [
+        ("delete_connector", sink),
         ("delete_connector", connector),
         ("delete_topic", topic),
         ("delete_secret", "mssql1"),
@@ -371,7 +387,9 @@ def test_rollback_on_get_status_raising_also_deletes_connector():
 
     assert res.ok is False
     connector = render_service.render_connector(CDC_MSSQL_SPEC)["metadata"]["name"]
-    assert k8s.deleted_connectors == [connector]
+    sink = render_service.render_sink(CDC_MSSQL_SPEC)["metadata"]["name"]
+    # sink applied (before verify raised) -> its undo also fires, reverse order.
+    assert k8s.deleted_connectors == [sink, connector]
     assert k8s.deleted_topics == [render_service.topic_name(CDC_MSSQL_SPEC)]
     assert k8s.deleted_secrets == ["mssql1"]
 
@@ -432,14 +450,27 @@ def test_verify_running_is_ok_no_rollback():
 
 def test_verify_pending_then_running_polls_until_ok():
     # status starts empty (pending) then becomes RUNNING -> ok, connector kept.
-    orch, k8s, s3, trino = _orch(status_states=[None, None, "RUNNING"], verify_attempts=5)
+    # Dedicated sink also gets polled (verify checks source AND sink, per
+    # Finding 2) -- status_states_by_name gives each its own sequence so both
+    # polling loops are positively exercised, mirroring
+    # test_camel_sink_failed_state_fails_add_source_not_ok's per-name control.
+    connector = render_service.render_connector(CDC_MSSQL_SPEC)["metadata"]["name"]
+    sink = render_service.render_sink(CDC_MSSQL_SPEC)["metadata"]["name"]
+    orch, k8s, s3, trino = _orch(
+        status_states_by_name={
+            connector: [None, None, "RUNNING"],
+            sink: [None, "RUNNING"],
+        },
+        verify_attempts=5,
+    )
 
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
     assert res.ok is True
     assert res.steps[-1].ok is True
     assert res.steps[-1].detail == ""
-    assert len(k8s.status_calls) == 3  # polled twice pending, third RUNNING
+    assert k8s.status_calls.count(connector) == 3  # polled twice pending, third RUNNING
+    assert k8s.status_calls.count(sink) == 2       # polled once pending, second RUNNING
     assert k8s.deleted_connectors == []
 
 
@@ -447,7 +478,7 @@ def test_verify_still_pending_after_all_attempts_is_ok_with_detail_no_rollback()
     from app.orchestrator import VERIFY_PENDING_DETAIL
 
     # never reaches RUNNING/FAILED -> ok=True but flagged pending; do NOT
-    # roll back a healthy-but-not-yet-reconciled connector.
+    # roll back a healthy-but-not-yet-reconciled connector OR sink.
     orch, k8s, s3, trino = _orch(status_states=[None], verify_attempts=3)
 
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
@@ -456,7 +487,9 @@ def test_verify_still_pending_after_all_attempts_is_ok_with_detail_no_rollback()
     verify = res.steps[-1]
     assert verify.name == "verify" and verify.ok is True
     assert verify.detail == VERIFY_PENDING_DETAIL
-    assert len(k8s.status_calls) == 3  # exhausted all attempts
+    # source exhausts its 3 attempts pending, then the dedicated sink is
+    # polled too and also exhausts its 3 attempts pending -- 6 calls total.
+    assert len(k8s.status_calls) == 6
     assert k8s.deleted_connectors == []
     assert k8s.deleted_topics == []
     assert k8s.deleted_secrets == []
@@ -577,7 +610,7 @@ def test_add_source_is_idempotent_across_two_full_runs():
     assert first.ok is True
     assert second.ok is True
     assert [s.name for s in second.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
+        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
 
 
@@ -818,13 +851,15 @@ def test_scheduled_mongo_still_rejected():
 def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():
     # Guard against regressing the entity/CDC/JDBC path while adding the
     # kafka-ingest skips above: secret+topic+Bronze+Silver must all still run.
+    # CDC lanes now also get their dedicated Iceberg sink applied (Task 2),
+    # same as Camel already does.
     orch, fakes = _orch_fakes()
 
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
     assert res.ok is True
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "verify",
+        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]
 

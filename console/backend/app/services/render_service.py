@@ -619,6 +619,21 @@ def _iceberg_control_tuning(name: str) -> dict:
     }
 
 
+def _dlq_config(dlq_name: str) -> dict:
+    """Dead-letter-queue block shared by every Console-rendered Iceberg sink
+    (raw-body `_iceberg_sink_config` and the leaner CDC-family
+    `_cdc_dedicated_sink_config`): tolerate all errors, route them to
+    `dlq_name` (under the source's own topic prefix so the runtime-owned
+    `connect` ACLs already cover it), RF from the module default, headers on
+    for debuggability."""
+    return {
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": dlq_name,
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+
+
 def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: str, dlq_name: str) -> dict:
     """Shared dedicated-Iceberg-sink config for RAW-BODY lanes (kafka-ingest,
     Camel): JSON converters + shared catalog/S3/routing (`_iceberg_catalog_io`)
@@ -649,10 +664,7 @@ def _iceberg_sink_config(name: str, topics: str, target_ns: str, target_table: s
         "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.kafkameta.offset.field": "__kafka_offset",
         "transforms.kafkameta.partition.field": "__kafka_partition",
-        "errors.tolerance": "all",
-        "errors.deadletterqueue.topic.name": dlq_name,
-        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
-        "errors.deadletterqueue.context.headers.enable": "true",
+        **_dlq_config(dlq_name),
     }
     config.update(_route_transform(target_ns, target_table))
     return config
@@ -813,10 +825,7 @@ def _cdc_dedicated_sink_config(name: str, topic: str, avro: bool, dlq_name: str)
         "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
         "transforms.kafkameta.offset.field": "__kafka_offset",
         "transforms.kafkameta.partition.field": "__kafka_partition",
-        "errors.tolerance": "all",
-        "errors.deadletterqueue.topic.name": dlq_name,
-        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
-        "errors.deadletterqueue.context.headers.enable": "true",
+        **_dlq_config(dlq_name),
     }
 
 
