@@ -243,32 +243,13 @@ spec:
   authentication: {type: scram-sha-512}
   authorization:
     type: simple
-    acls:
-      # NOT: boş kaynak adı (`name: "" patternType: prefix`) Kafka ACL API'since
-      # reddedilir (InvalidRequestException: Invalid empty resource name), bu yüzden
-      # ACL'ler ingest topic namespace'lerine daraltılmış haldedir. POC-DOĞRULA:
-      # Iceberg sink control topic/consumer-group ve DLQ adları sürüme bağlı —
-      # OpenShift'te connector'lar çalışınca teyit/genişlet.
-      - {resource: {type: group, name: connect, patternType: prefix}, operations: [Read]}          # connect-cluster + sink consumer group'ları
-      # Iceberg sink control consumer group (cg-control-<uuid>) — separate from
-      # the `connect` prefix. Without this the sink fails with
-      # GroupAuthorizationException. (POC-DOĞRULA Iceberg-sink control-group item.)
-      - {resource: {type: group, name: cg-control-, patternType: prefix}, operations: [Read, Describe]}
-      - {resource: {type: topic, name: connect-cluster-, patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Connect internal topic'leri
-      - {resource: {type: topic, name: cdc., patternType: prefix}, operations: [Read, Write, Create, Describe]}    # Debezium CDC ingest + .dlq
-      - {resource: {type: topic, name: jdbc., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Aiven JDBC scheduled ingest
-      - {resource: {type: topic, name: mongo., patternType: prefix}, operations: [Read, Write, Create, Describe]}  # Mongo CDC ingest + .dlq
-      - {resource: {type: topic, name: http., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel HTTP source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: mqtt., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel MQTT source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: amqp., patternType: prefix}, operations: [Read, Write, Create, Describe]}   # Camel RabbitMQ source (B3) produce + its dedicated per-source Iceberg sink consume + creates <topic>.dlq
-      - {resource: {type: topic, name: control, patternType: prefix}, operations: [Read, Write, Create, Describe]} # Iceberg sink control topic (control-iceberg)
-      - {resource: {type: topic, name: iceberg, patternType: prefix}, operations: [Read, Write, Create, Describe]} # iceberg-sink.dlq vb.
-      # Iceberg sink exactly-once: coordinator/worker transactional producers
-      # (transactional.id = coordinator-txn-*/worker-txn-*). Without these the
-      # sink task dies with TransactionalIdAuthorizationException. (POC-DOĞRULA
-      # Iceberg-sink ACL item.)
-      - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
-      - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
+    # ACLs are RUNTIME-OWNED (not templated here) so helm/ArgoCD never clobber
+    # the per-source literal topic ACLs the Console adds for existing-Kafka
+    # (stream/kafka) sources. The static BASE ACLs are merge-seeded at
+    # install/upgrade by chart/templates/20-connect-acl-seed.yaml
+    # (.Values.kafkaConnect.connectBaseAcls); the orchestrator adds/removes the
+    # dynamic per-source ones. See docs/superpowers/specs/2026-08-01-existing-
+    # kafka-acl-runtime-owned-design.md.
 ---
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaUser

@@ -31,3 +31,43 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "kafka-ingest-"
         documentSelector: {path: kind, value: Job}
+
+---
+# Separate suite document (own `templates:` scope — verified helm-unittest
+# behavior, see chart/tests/monitoring_test.yaml's comment on why a
+# suite-level `templates:` list is a per-suite allowlist): proves the
+# `connect` KafkaUser (chart/templates/03-kafka-strimzi.yaml) no longer
+# templates its own `acls` — Task 4 makes the seed Job above the SOLE
+# chart-owned source of the connect user's base ACLs, so helm/ArgoCD never
+# clobber the per-source literal ACLs the Console/orchestrator adds/removes
+# for existing-Kafka (stream/kafka) sources at runtime.
+suite: connect KafkaUser ACLs are runtime-owned (no chart-templated acls)
+templates:
+  - templates/03-kafka-strimzi.yaml
+tests:
+  - it: "connect KafkaUser is authorization:simple with NO acls (runtime-owned)"
+    documentSelector: {path: metadata.name, value: connect}
+    asserts:
+      - equal: {path: spec.authorization.type, value: simple}
+      - notExists: {path: spec.authorization.acls}
+
+---
+# Separate suite document (own `templates:` scope, same reasoning as
+# above): proves the console Role (chart/templates/console/console.yaml)
+# grants `kafkausers` get/patch alongside the existing
+# kafkaconnectors/kafkatopics rule — the orchestrator's ACL step
+# (console/backend k8s_service ensure/remove_user_acl) reads+patches the
+# `connect` KafkaUser CR directly and needs this RBAC.
+suite: console Role kafka.strimzi.io rule includes kafkausers (orchestrator ACL step RBAC)
+templates:
+  - templates/console/console.yaml
+tests:
+  - it: "console Role kafka.strimzi.io rule lists kafkausers alongside kafkaconnectors/kafkatopics"
+    documentSelector: {path: metadata.name, value: lakehouse-console-role}
+    asserts:
+      - contains:
+          path: rules[0].resources
+          content: kafkausers
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: kafka.strimzi.io
