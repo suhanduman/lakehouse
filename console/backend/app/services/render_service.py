@@ -779,6 +779,61 @@ def _render_camel_rabbitmq(spec: SourceSpec) -> dict:
     )
 
 
+def _cdc_dedicated_sink_config(name: str, topic: str, avro: bool, dlq_name: str) -> dict:
+    """Leaner dedicated Iceberg sink for CDC/JDBC/mongo lanes. The Debezium/Aiven
+    SOURCE already stamped `_target_table` + medallion metadata (op/ts_ms/deleted)
+    and converted `__ts_ms`, so this sink does NOT re-run the medallion SMTs and
+    does NOT call `_route_transform` — it only decodes, stamps the Kafka
+    offset/partition (sink-side Connect record metadata, the silver-merge dedup
+    tie-break), and writes to Bronze via dynamic routing on the source-stamped
+    `_target_table`.
+
+    `avro`: relational/jdbc/mysql produce Avro via Apicurio (URL only — the sink
+    deserializes, it does not register schemas); mongo produces JSON."""
+    if avro:
+        converter = {
+            "key.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+            "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+            "key.converter.apicurio.registry.url": APICURIO_URL,
+            "value.converter.apicurio.registry.url": APICURIO_URL,
+        }
+    else:
+        converter = {
+            "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "key.converter.schemas.enable": "false",
+            "value.converter.schemas.enable": "false",
+        }
+    return {
+        "topics": topic,
+        **converter,
+        **_iceberg_catalog_io(),
+        **_iceberg_control_tuning(name),
+        "transforms": "kafkameta",
+        "transforms.kafkameta.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.kafkameta.offset.field": "__kafka_offset",
+        "transforms.kafkameta.partition.field": "__kafka_partition",
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": dlq_name,
+        "errors.deadletterqueue.topic.replication.factor": DLQ_REPLICATION_FACTOR,
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+
+
+def render_cdc_sink(spec: SourceSpec) -> dict:
+    """Dedicated Iceberg sink for a CDC/JDBC/mongo lane. Mirrors render_camel_sink:
+    reads the source's topic, writes Bronze, DLQ under the source topic prefix so
+    the connect KafkaUser ACL covers it. Avro for relational/jdbc/mysql, JSON for
+    mongo (the only JSON CDC lane)."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    avro = descriptor.render_key != "cdc-mongo"
+    topic = topic_name(spec)
+    src_name = render_connector(spec)["metadata"]["name"]
+    name = _k8s_name(src_name, "sink")
+    config = _cdc_dedicated_sink_config(name, topic, avro, f"{topic}.dlq")
+    return _connector(name, "org.apache.iceberg.connect.IcebergSinkConnector", config, spec.source)
+
+
 def render_camel_sink(spec: SourceSpec) -> dict:
     """Dedicated Iceberg sink for a Camel lane: reads the source's topic, JSON-
     deserializes to a Map, applies the medallion SMTs, routes to <ns>_raw.<tbl>.
@@ -819,6 +874,10 @@ def render_connector(spec: SourceSpec) -> dict:
 
 
 _SINK_RENDERERS = {
+    "cdc-relational": render_cdc_sink,
+    "cdc-mysql": render_cdc_sink,
+    "scheduled-jdbc": render_cdc_sink,
+    "cdc-mongo": render_cdc_sink,
     "camel-http": render_camel_sink,
     "camel-mqtt": render_camel_sink,
     "camel-rabbitmq": render_camel_sink,

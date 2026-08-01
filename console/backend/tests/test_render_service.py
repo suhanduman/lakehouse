@@ -769,6 +769,57 @@ def test_render_camel_sink_carries_source_annotation():
 
 
 # --------------------------------------------------------------------------
+# CDC/JDBC/mongo dedicated Iceberg sinks (per-source sink for every lane)
+# --------------------------------------------------------------------------
+
+def test_cdc_dedicated_sink_avro_lanes():
+    for spec in (_cdc_mssql(), _cdc_pg(), _scheduled_mssql(), _mysql()):
+        assert r.has_dedicated_sink(spec) is True
+        body = r.render_sink(spec)
+        assert body["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
+        c = body["spec"]["config"]
+        # Avro (Apicurio) decode, URL only — no auto-register on the sink side
+        assert c["value.converter"] == "io.apicurio.registry.utils.converter.AvroConverter"
+        assert c["value.converter.apicurio.registry.url"] == r.APICURIO_URL
+        assert "value.converter.apicurio.registry.auto-register" not in c
+        # leaner SMT chain: kafkameta ONLY (source already stamped the rest)
+        assert c["transforms"] == "kafkameta"
+        assert c["transforms.kafkameta.offset.field"] == "__kafka_offset"
+        assert c["transforms.kafkameta.partition.field"] == "__kafka_partition"
+        for absent in ("transforms.route.type", "transforms.setop.type",
+                       "transforms.setdel.type", "transforms.tsms.type",
+                       "transforms.tsconv.type"):
+            assert absent not in c
+        # dynamic routing via source-stamped _target_table
+        assert c["iceberg.tables.dynamic-enabled"] == "true"
+        assert c["iceberg.tables.route-field"] == "_target_table"
+        # single topic + per-connector control topic + DLQ under source prefix
+        assert c["topics"] == r.topic_name(spec)
+        assert c["iceberg.control.topic"].startswith("control-")
+        assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+        assert c["errors.deadletterqueue.topic.replication.factor"] == r.DLQ_REPLICATION_FACTOR
+        # sink name derives from the source connector name + "-sink"
+        assert body["metadata"]["name"].endswith("-sink")
+
+
+def test_cdc_dedicated_sink_mongo_is_json():
+    spec = _cdc_mongo()
+    assert r.has_dedicated_sink(spec) is True
+    c = r.render_sink(spec)["spec"]["config"]
+    assert c["value.converter"] == "org.apache.kafka.connect.json.JsonConverter"
+    assert c["value.converter.schemas.enable"] == "false"
+    assert c["transforms"] == "kafkameta"
+    assert c["topics"] == r.topic_name(spec)
+    assert c["errors.deadletterqueue.topic.name"] == f"{r.topic_name(spec)}.dlq"
+
+
+def test_cdc_dedicated_sink_carries_source_annotation():
+    # gitops delete routing recovers spec.source from the sink CR's annotation
+    body = r.render_sink(_cdc_mssql())
+    assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == "mssql1"
+
+
+# --------------------------------------------------------------------------
 # RFC1123-safe CR names (_k8s_name / _k8s_topic_name) — Task 1
 # --------------------------------------------------------------------------
 
