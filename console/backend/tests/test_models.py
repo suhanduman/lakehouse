@@ -236,24 +236,42 @@ def test_source_accepts_rfc1123():
 
 
 # --------------------------------------------------------------------------
-# `target_ns` canonical [a-z0-9_] validator (B-v2 safety fix): target_ns
-# doubles as the Silver Iceberg namespace AND the seed for the per-pipeline
-# Bronze/Silver bucket names -- render_service's bucket-name sanitization is
-# LOSSY (lowercases + collapses non-[a-z0-9-] runs), so two
-# namespace-DISTINCT target_ns values could otherwise sanitize-collide onto
-# the SAME bucket (e.g. "MyPipe"/"mypipe" or "a.b"/"a_b" -> same bucket),
-# passing the orchestrator's namespace-uniqueness check yet sharing storage
-# -- reintroducing the shared-bucket/data-loss class B-v2 exists to
-# eliminate. Requiring target_ns to already be canonical makes the
-# namespace -> bucket mapping injective.
+# `target_ns` canonical validator (B-v2 safety fix): target_ns doubles as
+# the Silver Iceberg namespace AND the seed for the per-pipeline Bronze/
+# Silver bucket names -- render_service's bucket-name sanitization is LOSSY
+# (lowercases + collapses any RUN of non-[a-z0-9-] chars, including '_',
+# into a SINGLE '-'). A bare "[a-z0-9_]+" check is NOT enough: doubled or
+# leading/trailing underscores still collapse together ("a_b"/"a__b"/
+# "a___b" all -> "bronze-a-b"; "_ab"/"ab" and "ab_"/"ab" both -> "bronze-ab"),
+# so two namespace-DISTINCT target_ns values could sanitize-collide onto the
+# SAME bucket, passing the orchestrator's namespace-uniqueness check yet
+# sharing storage -- reintroducing the shared-bucket/data-loss class B-v2
+# exists to eliminate. The validator requires lowercase alnum segments
+# joined by exactly one '_' each (no leading/trailing/doubled '_') so '_' ->
+# '-' is the ONLY transformation ever applied -- genuinely injective, not
+# just "less lossy".
 # --------------------------------------------------------------------------
 
 def test_target_ns_rejects_non_canonical():
-    for bad in ("MyPipe", "a.b", "", "has space", "a/b", "a$b"):
+    for bad in ("MyPipe", "a.b", "", "has space", "a/b", "a$b",
+                "a__b", "a___b", "_ab", "ab_", "_", "__"):
         with pytest.raises(ValidationError):
             SourceSpec(**_base_source(target_ns=bad))
 
 
 def test_target_ns_accepts_canonical():
-    for ok in ("mssql1_students", "ns", "a_b", "depo2", "mssql_ogrenci"):
+    for ok in ("mssql1_students", "ns", "a_b", "depo2", "mssql_ogrenci", "q"):
         assert SourceSpec(**_base_source(target_ns=ok)).target_ns == ok
+
+
+def test_target_ns_distinct_canonical_names_map_to_distinct_buckets():
+    # Direct injectivity check (not just "the validator rejects known-bad
+    # inputs"): for every pair of DISTINCT canonical names accepted above,
+    # their Bronze bucket names must also be distinct -- this is the actual
+    # property the validator exists to guarantee, proven against the real
+    # render_service.bronze_bucket_name, not re-derived logic.
+    from app.services import render_service
+
+    names = ["mssql1_students", "ns", "a_b", "depo2", "mssql_ogrenci", "q"]
+    buckets = [render_service.bronze_bucket_name(n) for n in names]
+    assert len(set(buckets)) == len(names)
