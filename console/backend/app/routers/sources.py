@@ -425,6 +425,92 @@ def source_connectors(
     return {"connectors": connectors}
 
 
+# NB: same circular-import rationale as `source_connectors` above --
+# `assemble_pipelines` is imported inside the handler, not at module level.
+@router.get("/{name}/ingest-config", dependencies=[Depends(require_action(Action.READ))])
+def ingest_config(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+    trino: TrinoService = Depends(get_trino),
+) -> Dict[str, Any]:
+    """Filled-in collector/producer snippets + the producer credential for a
+    kafka-ingest (existing-Kafka) source, so a customer team can wire their
+    own log shipper (Fluent Bit / Vector / Logstash / any generic producer)
+    straight from the Console instead of hand-assembling bootstrap/topic/
+    SASL config.
+
+    `disposition`/`authoritative_fqn` are NOT read off the connector CR --
+    the kafka-ingest connector config carries no identifier/PK (that lives in
+    the Iceberg table, not `spec.config`; `_iceberg_sink_config` only sets a
+    `transforms.setdel` chain, which can't tell entity-without-delete_field
+    apart from event). Instead this reuses `assemble_pipelines` (the same
+    topology builder `/api/pipelines` and `source_connectors` above use),
+    which already resolves both fields authoritatively by checking whether
+    the Silver table exists.
+
+    For the same reason, `pk`/`expected_json` are best-effort `None` -- the
+    rendered snippet simply omits the key-field hint. This is a deliberate,
+    documented degradation, not an oversight.
+    """
+    from app.services.pipeline_topology import assemble_pipelines
+
+    cr = _find_source(k8s, name)
+    topic = _kafka_ingest_topic(cr)
+    if topic is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ingest-config is only available for kafka-ingest sources",
+        )
+
+    sources = k8s.list_sources()
+    namespaces = {
+        ns: set(trino.list_tables("lakehouse", ns)) for ns in trino.list_namespaces("lakehouse")
+    }
+    pipelines = assemble_pipelines(sources, namespaces, k8s.get_status, k8s.get_spark_status)
+    pipe = next(
+        (p for p in pipelines
+         if p.get("name") == name
+         or any(n.get("name") == name for n in p.get("nodes", []))),
+        None,
+    )
+    disposition = "event"
+    authoritative_fqn: Optional[str] = None
+    if pipe and "error" not in pipe:
+        disposition = pipe.get("disposition") or "event"
+        authoritative_fqn = (pipe.get("authoritative") or {}).get("fqn")
+
+    # Producer username MUST match what `add_source`/`delete_source` use --
+    # recovered from the CR's own round-trip annotation (Task 5), never
+    # rebuilt from `name` (the composite CR name, not the bare source id).
+    producer = _kafka_ingest_producer(cr) or ""
+    secret = k8s.read_secret(producer) if producer else None
+    password = (secret or {}).get("password")   # never logged
+
+    snippets = render_service.render_ingest_snippets(
+        bootstrap=settings.kafka_external_bootstrap,
+        topic=topic,
+        user=producer,
+        password=password or "",
+        disposition=disposition,
+        pk=None,
+    )
+
+    return {
+        "external_bootstrap": settings.kafka_external_bootstrap,
+        "topic": topic,
+        "disposition": disposition,
+        "authoritative_fqn": authoritative_fqn,
+        "producer": {
+            "user": producer,
+            "mechanism": "SCRAM-SHA-512",
+            "password": password,
+            "secret_ref": producer,
+        },
+        "expected_json": None,
+        "snippets": snippets,
+    }
+
+
 # --------------------------------------------------------------------------
 # Edit / pause / resume
 # --------------------------------------------------------------------------

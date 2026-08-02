@@ -201,6 +201,16 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "path": f"/api/sources/{SOURCE_NAME}/connectors",
     },
     {
+        # SOURCE_NAME/CONNECTOR_CR above is a CDC (cdc-mssql) source, not
+        # kafka-ingest, so this deliberately exercises the 400 branch (not
+        # the 2xx happy path) -- test_route_never_500s only asserts
+        # not-500, and the happy-path shape is covered by
+        # test_sources_ingest_config.py's own fakes/fixtures.
+        "method": "GET",
+        "template": "/api/sources/{name}/ingest-config",
+        "path": f"/api/sources/{SOURCE_NAME}/ingest-config",
+    },
+    {
         "method": "PATCH",
         "template": "/api/sources/{name}",
         "path": f"/api/sources/{SOURCE_NAME}",
