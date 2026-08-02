@@ -69,6 +69,9 @@ export interface SourceSpec {
   columns?: { name: string; type: string }[];
   identifier?: string[];
   delete_field?: string;
+  create_topic?: boolean;
+  topic_partitions?: number;
+  topic_replication_factor?: number;
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
@@ -99,6 +102,33 @@ export interface SourceStepResult {
   name: string;
   ok: boolean;
   detail: string;
+}
+
+/** Mirrors app.models.IngestSnippets from ingest-config endpoint. */
+export interface IngestSnippets {
+  fluentbit: string;
+  vector: string;
+  logstash: string;
+  generic: string;
+}
+
+/** Mirrors app.models.IngestProducer from ingest-config endpoint. */
+export interface IngestProducer {
+  user: string;
+  mechanism: string;
+  password: string | null;
+  secret_ref: string;
+}
+
+/** Mirrors app.routers.sources.get_ingest_config()'s dict shape. */
+export interface IngestConfig {
+  external_bootstrap: string;
+  topic: string;
+  disposition: "event" | "entity";
+  authoritative_fqn: string;
+  producer: IngestProducer;
+  expected_json: Record<string, unknown> | null;
+  snippets: IngestSnippets;
 }
 
 /** Mirrors app.routers.sources.preview_source()'s dict shape: a dry-run of
@@ -361,6 +391,11 @@ export async function deleteSource(
     `/sources/${encodeURIComponent(name)}?mode=${encodeURIComponent(mode)}`,
     { method: "DELETE" },
   );
+}
+
+/** GET /api/sources/{name}/ingest-config -> Kafka log ingestion config for a source. */
+export async function getIngestConfig(name: string): Promise<IngestConfig> {
+  return request(`/sources/${encodeURIComponent(name)}/ingest-config`);
 }
 
 // --------------------------------------------------------------------------
