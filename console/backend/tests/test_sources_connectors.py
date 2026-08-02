@@ -42,6 +42,34 @@ SOURCE_CR: Dict[str, Any] = {
     "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
 }
 
+# A spark-batch pipeline's ScheduledSparkApplication CR -- mirrors
+# test_pipeline_topology.py's `_spark_cr` fixture shape (round-tripped
+# lakehouse.solus.dev/ annotations + a `template.arguments` fallback, though
+# the connectors route only needs the annotation-based grouping/name).
+SPARK_CR: Dict[str, Any] = {
+    "kind": "ScheduledSparkApplication",
+    "metadata": {
+        "name": "s3-register-invoices-batch",
+        "annotations": {
+            _SRC_ANN: "invoices-batch",
+            "lakehouse.solus.dev/target-ns": "rawlake",
+            "lakehouse.solus.dev/target-table": "invoices",
+            "lakehouse.solus.dev/s3-bucket": "raw-bucket",
+            "lakehouse.solus.dev/s3-prefix": "invoices/",
+            "lakehouse.solus.dev/file-format": "parquet",
+            "lakehouse.solus.dev/cron": "0 * * * *",
+        },
+    },
+    "spec": {
+        "suspend": False,
+        "template": {
+            "arguments": ["--bucket", "raw-bucket", "--prefix", "invoices/",
+                          "--format", "parquet", "--target", "rawlake.invoices-batch.invoices"],
+        },
+    },
+    "status": {"scheduleState": "Scheduled"},
+}
+
 SINK_CR: Dict[str, Any] = {
     "metadata": {"name": "students-sink", "annotations": {_SRC_ANN: "students"}},
     "spec": {
@@ -129,6 +157,25 @@ def test_source_connectors_resolves_by_sink_node_name_too():
     assert resp.status_code == 200
     roles = {c["role"] for c in resp.json()["connectors"]}
     assert roles == {"source", "sink"}
+
+
+def test_source_connectors_excludes_spark_batch_node():
+    """A spark-batch source's pipeline node is type:"connector",
+    kind:"ScheduledSparkApplication" (see pipeline_topology._batch_pipeline)
+    -- it is NOT a Kafka Connect connector, so the resolver must exclude it
+    rather than return a connector the frontend would render a dead Restart
+    control for (a restart POST against it 404s; the spec's non-goal is
+    explicit: "Spark job 'restart' -- connectors only")."""
+    app.dependency_overrides[get_roles] = lambda: {Role.ADMIN}
+    app.dependency_overrides[get_k8s] = lambda: FakeK8s([SPARK_CR])
+    app.dependency_overrides[get_trino] = lambda: FakeTrino()
+    client = TestClient(app)
+
+    resp = client.get("/api/sources/invoices-batch/connectors")
+    assert resp.status_code == 200
+    connectors = resp.json()["connectors"]
+    assert connectors == []
+    assert all(c.get("kind") != "ScheduledSparkApplication" for c in connectors)
 
 
 def test_source_connectors_requires_read_action():

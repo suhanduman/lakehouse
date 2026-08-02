@@ -394,6 +394,11 @@ def source_connectors(
          "kind": n.get("kind"), "state": n.get("state")}
         for n in pipe.get("nodes", [])
         if n.get("type") in role_by_type
+        # A ScheduledSparkApplication is emitted as a type:"connector" node
+        # (see pipeline_topology._batch_pipeline) but it is NOT a Kafka
+        # Connect connector -- a restart POST against it 404s. The spec's
+        # non-goal is explicit: "Spark job 'restart' -- connectors only."
+        and n.get("kind") != "ScheduledSparkApplication"
     ]
     return {"connectors": connectors}
 

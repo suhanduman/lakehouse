@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import settings
@@ -73,9 +74,23 @@ def connector_restart(
     payload: RestartRequest = RestartRequest(),
     connect: ConnectService = Depends(get_connect),
 ) -> Dict[str, Any]:
-    connect.restart_connector(
-        name, include_tasks=payload.include_tasks, only_failed=payload.only_failed
-    )
+    try:
+        connect.restart_connector(
+            name, include_tasks=payload.include_tasks, only_failed=payload.only_failed
+        )
+    except httpx.HTTPStatusError as exc:
+        # surface the upstream Connect status verbatim (esp. 409
+        # rebalance-in-progress -> retryable, not a hard failure)
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"connector restart failed: {exc.response.text}",
+        ) from exc
+    except httpx.RequestError as exc:
+        # Connect worker unreachable -> upstream failure, not a client error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"kafka connect unreachable: {exc}",
+        ) from exc
     return {
         "ok": True,
         "name": name,

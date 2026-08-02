@@ -88,6 +88,26 @@ def test_restart_maps_body_to_service():
     assert seen["query"]["includeTasks"] == "true"
 
 
+def test_restart_maps_connect_409_to_409_not_500():
+    def handler(request):
+        return httpx.Response(409, text="Rebalance in progress")
+
+    client = _client(handler)
+    resp = client.post("/api/connectors/dbz-students/restart", json={})
+    assert resp.status_code == 409
+    assert "Rebalance in progress" in resp.json()["detail"]
+
+
+def test_restart_maps_connect_unreachable_to_502():
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    client = _client(handler)
+    resp = client.post("/api/connectors/dbz-students/restart", json={})
+    assert resp.status_code == 502
+    assert "kafka connect unreachable" in resp.json()["detail"]
+
+
 def test_debug_requires_read_role():
     def handler(request):
         raise AssertionError("must not reach Connect -- authz gate should short-circuit")
