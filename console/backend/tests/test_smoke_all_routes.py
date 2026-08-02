@@ -109,6 +109,9 @@ class FakeS3:
     def empty_bucket(self, name: str) -> None:
         pass
 
+    def object_count(self, name: str) -> Dict[str, Any]:
+        return {"count": 0, "capped": False}
+
 
 class FakeTrino:
     def list_namespaces(self, catalog: str) -> List[str]:
