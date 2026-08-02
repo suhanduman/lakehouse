@@ -125,7 +125,10 @@ export interface IngestConfig {
   external_bootstrap: string;
   topic: string;
   disposition: "event" | "entity";
-  authoritative_fqn: string;
+  // Optional[str] backend-side -- the pipeline's authoritative table may not
+  // be resolvable yet (e.g. Silver merge not provisioned), so callers must
+  // null-check rather than assume a resolved FQN.
+  authoritative_fqn: string | null;
   producer: IngestProducer;
   expected_json: Record<string, unknown> | null;
   snippets: IngestSnippets;
