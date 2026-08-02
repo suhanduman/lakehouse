@@ -33,6 +33,15 @@ const ORPHAN_BUCKET: client.BucketEntry = {
   objects: { count: 1000, capped: true },
 };
 
+// object_count failed server-side (e.g. AccessDenied/timeout) -- the router
+// degrades this one bucket's `objects` to null rather than 500ing the page.
+const BROKEN_COUNT_BUCKET: client.BucketEntry = {
+  name: "broken-bucket",
+  used: false,
+  hint: "no active pipeline — leftover from a deleted pipeline or hand-created",
+  objects: null,
+};
+
 describe("TablesBuckets", () => {
   it("renders namespaces/tables and buckets fetched from the API, with used/orphan badges and counts", async () => {
     vi.spyOn(client, "listTables").mockResolvedValue({
@@ -70,6 +79,18 @@ describe("TablesBuckets", () => {
     const orphanBucketRow = screen.getByText("leftover-bucket").closest("li");
     expect(orphanBucketRow).toHaveTextContent("1000+");
     expect(orphanBucketRow).toHaveTextContent(/no active pipeline/i);
+  });
+
+  it("renders \"—\" for a bucket whose object count failed server-side (objects: null)", async () => {
+    vi.spyOn(client, "listTables").mockResolvedValue({ catalog: "lakehouse", namespaces: [] });
+    vi.spyOn(client, "listBuckets").mockResolvedValue([BROKEN_COUNT_BUCKET]);
+
+    render(<TablesBuckets />);
+
+    expect(await screen.findByText("broken-bucket")).toBeInTheDocument();
+    const row = screen.getByText("broken-bucket").closest("li");
+    expect(row).toHaveTextContent("—");
+    expect(row).toHaveTextContent(/no active pipeline/i);
   });
 
   it("shows an error message when the tables API call fails", async () => {

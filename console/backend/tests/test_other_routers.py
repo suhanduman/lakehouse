@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
 from app.deps import get_apicurio, get_connect, get_iceberg, get_k8s, get_roles, get_s3, get_trino
@@ -134,10 +135,15 @@ class FakeS3:
         self,
         buckets: Optional[List[str]] = None,
         objects: Optional[Dict[str, Dict[str, Any]]] = None,
+        raise_for: Optional[List[str]] = None,
     ):
         self._buckets = buckets if buckets is not None else ["src-mssql-ogrenci"]
         self.created: List[str] = []
         self._objects = objects or {}
+        # Bucket names whose object_count call should raise a non-
+        # NoSuchBucket ClientError (e.g. AccessDenied) -- mirrors a real S3
+        # permission/timeout failure on just ONE bucket in the listing.
+        self._raise_for = set(raise_for or [])
         self.object_count_calls: List[str] = []
 
     def list_buckets(self):
@@ -149,6 +155,8 @@ class FakeS3:
 
     def object_count(self, name):
         self.object_count_calls.append(name)
+        if name in self._raise_for:
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
         return self._objects.get(name, {"count": 0, "capped": False})
 
 
@@ -469,6 +477,39 @@ def test_buckets_labels_used_and_orphan_with_counts():
 
     # object_count was actually called for every bucket, not just used ones.
     assert set(s3.object_count_calls) == {bronze_bucket, silver_bucket, "src-orphan"}
+
+
+def test_buckets_degrades_gracefully_when_object_count_fails_for_one_bucket():
+    # One bucket's object_count raises a non-NoSuchBucket ClientError (e.g.
+    # AccessDenied, a transient timeout) -- S3Service.object_count itself
+    # re-raises that (fail-loud, by design -- see test_s3_service.py's
+    # test_object_count_reraises_other_client_errors), so list_buckets must
+    # catch it AT THE CALL SITE and degrade that one bucket's `objects` to
+    # None rather than 500ing the whole catalog page; every other bucket
+    # must still come back intact.
+    s3 = FakeS3(
+        buckets=["ok-bucket", "broken-bucket"],
+        objects={"ok-bucket": {"count": 3, "capped": False}},
+        raise_for=["broken-bucket"],
+    )
+    client = _client_as({Role.STUDENT}, s3=s3)
+    r = client.get("/api/buckets")
+    assert r.status_code == 200
+    body = r.json()
+
+    def _find(name):
+        return next(b for b in body["buckets"] if b["name"] == name)
+
+    ok = _find("ok-bucket")
+    assert ok["objects"] == {"count": 3, "capped": False}
+
+    broken = _find("broken-bucket")
+    assert broken["objects"] is None
+    # used/orphan labeling still resolves normally -- only the count degrades.
+    assert broken["used"] is False
+    assert "leftover" in broken["hint"].lower()
+
+    assert set(s3.object_count_calls) == {"ok-bucket", "broken-bucket"}
 
 
 def test_create_bucket_forbidden_for_student(client_as_student):

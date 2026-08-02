@@ -177,14 +177,18 @@ export interface TablesResponse {
  * same `used`/`pipeline`/`role`/`hint` used/orphan labeling as `TableEntry`,
  * plus `objects` -- the full `{count, capped}` dict from
  * `S3Service.object_count` (a bounded/paginated count; `capped: true` means
- * the real count may exceed `count`, so the UI should render it as "N+"). */
+ * the real count may exceed `count`, so the UI should render it as "N+").
+ * `null` when the router's `object_count` call itself failed (e.g. a
+ * non-NoSuchBucket ClientError -- AccessDenied, a transient timeout) --
+ * mirrors `TableEntry.records`'s `null`-on-no-snapshot degrade-gracefully
+ * shape, so the UI can render "—" the same way. */
 export interface BucketEntry {
   name: string;
   used: boolean;
   pipeline?: string;
   role?: "authoritative" | "bronze" | "silver";
   hint?: string;
-  objects: { count: number; capped: boolean };
+  objects: { count: number; capped: boolean } | null;
 }
 
 export interface StatusEntry {

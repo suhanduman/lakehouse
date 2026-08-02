@@ -141,8 +141,11 @@ export default function TablesBuckets() {
           <ul>
             {buckets.map((entry) => (
               <li key={entry.name}>
-                <span>{entry.name}</span> — {entry.objects.count}
-                {entry.objects.capped ? "+" : ""} objects
+                <span>{entry.name}</span> —{" "}
+                {entry.objects !== null
+                  ? `${entry.objects.count}${entry.objects.capped ? "+" : ""}`
+                  : "—"}{" "}
+                objects
                 <UsedBadge entry={entry} />
               </li>
             ))}

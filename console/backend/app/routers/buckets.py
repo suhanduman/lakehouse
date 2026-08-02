@@ -50,6 +50,32 @@ def _owned_map(pipelines: List[Dict[str, Any]], key: str) -> Dict[str, Tuple[str
     return out
 
 
+def _safe_object_count(s3: S3Service, name: str) -> Any:
+    """`s3.object_count(name)`, degrading to `None` on ANY unexpected
+    exception instead of propagating.
+
+    `S3Service.object_count` deliberately RE-RAISES any `ClientError` that
+    isn't `NoSuchBucket`/`NoSuchKey` (see its docstring/`test_s3_service.py`'s
+    `test_object_count_reraises_other_client_errors`) -- that helper stays
+    fail-loud on purpose, so a genuine AWS-side misconfiguration surfaces
+    to whatever calls it directly. But `list_buckets` renders the WHOLE
+    catalog page from a loop over every bucket -- one bucket hitting
+    AccessDenied/a transient timeout must not 500 the other N-1 buckets'
+    listing. So the call site (here, not the service) is where the
+    degrade-gracefully policy belongs: mirrors `iceberg.table_stats`'s own
+    broad `except Exception: return None` on the tables side (see
+    `app.routers.tables.list_tables`), keeping the two enrichment paths
+    symmetric per the design's "count enrichment degrades gracefully (count
+    shows -)" intent. `None` (not `{"count": 0, "capped": False}`) is
+    returned on failure so the frontend can render "-" and distinguish
+    "unknown" from "confirmed empty" (`TablesBuckets.tsx` already draws this
+    distinction for `TableEntry.records`)."""
+    try:
+        return s3.object_count(name)
+    except Exception:
+        return None
+
+
 class CreateBucketRequest(BaseModel):
     name: str
 
@@ -73,7 +99,7 @@ def list_buckets(
         entry: Dict[str, Any] = {
             "name": name,
             "used": name in used_buckets,
-            "objects": s3.object_count(name),
+            "objects": _safe_object_count(s3, name),
         }
         if name in used_buckets:
             pipeline_name, role = used_buckets[name]
