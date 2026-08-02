@@ -40,11 +40,16 @@ class FakeCustom:
         sparks: list | None = None,
         spark_crd_absent: bool = False,
         conflict_on_patch_once: bool = False,
+        not_found_on_delete: bool = False,
     ):
         self.conflict_on_create = conflict_on_create
         self.connectors = connectors
         self.sparks = sparks
         self.spark_crd_absent = spark_crd_absent
+        # When True, delete_namespaced_custom_object raises a 404 instead of
+        # succeeding -- exercises delete_user's 404-tolerance (a KafkaUser
+        # that never existed / was already deleted).
+        self.not_found_on_delete = not_found_on_delete
         # When True, the *first* patch_namespaced_custom_object call raises a
         # 409 (simulating a concurrent modification losing the optimistic-
         # concurrency race); every call after that succeeds normally. Used to
@@ -79,6 +84,8 @@ class FakeCustom:
         return kw["body"]
 
     def delete_namespaced_custom_object(self, **kw):
+        if self.not_found_on_delete:
+            raise ApiException(status=404, reason="NotFound")
         self.deleted.append(kw)
         return {}
 
@@ -100,13 +107,23 @@ class FakeCustom:
 
 
 class FakeCore:
-    def __init__(self, conflict_on_create: bool = False, secret_data: dict | None = None, secret_not_found: bool = False):
+    def __init__(
+        self,
+        conflict_on_create: bool = False,
+        secret_data: dict | None = None,
+        secret_not_found: bool = False,
+        not_found_on_delete: bool = False,
+    ):
         self.conflict_on_create = conflict_on_create
         self.created_secrets = []
         self.replaced_secrets = []
         self.deleted_secrets = []
         self.secret_data = secret_data
         self.secret_not_found = secret_not_found
+        # When True, delete_namespaced_secret raises a 404 instead of
+        # succeeding -- exercises delete_secret's 404-tolerance (a producer
+        # Secret that never materialized / was already deleted).
+        self.not_found_on_delete = not_found_on_delete
 
     def create_namespaced_secret(self, **kw):
         if self.conflict_on_create:
@@ -119,6 +136,8 @@ class FakeCore:
         return kw["body"]
 
     def delete_namespaced_secret(self, **kw):
+        if self.not_found_on_delete:
+            raise ApiException(status=404, reason="NotFound")
         self.deleted_secrets.append(kw)
         return {}
 
@@ -355,6 +374,32 @@ def test_delete_secret():
     svc.delete_secret("mssql1")
 
     assert fake_core.deleted_secrets == [{"name": "mssql1", "namespace": "example"}]
+
+
+def test_delete_secret_swallows_404():
+    # FINAL-REVIEW Fix 2: a kafka-ingest source predating per-pipeline
+    # producer provisioning (or one caught in the window before Strimzi
+    # materializes the Secret) has no producer Secret at all -- deleting it
+    # must be a no-op, not a raised ApiException that would abort
+    # `delete_source`'s teardown before `delete_connector` runs.
+    fake_core = FakeCore(not_found_on_delete=True)
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    result = svc.delete_secret("k1-producer")
+
+    assert result is None
+    assert fake_core.deleted_secrets == []
+
+
+def test_delete_secret_reraises_non_404():
+    class RaisingCore(FakeCore):
+        def delete_namespaced_secret(self, **kw):
+            raise ApiException(status=500, reason="Boom")
+
+    svc = K8sService(custom_api=None, core_api=RaisingCore(), namespace=NAMESPACE)
+
+    with pytest.raises(ApiException):
+        svc.delete_secret("k1-producer")
 
 
 # --------------------------------------------------------------------------
@@ -643,6 +688,31 @@ def test_delete_user_hits_kafkausers_plural():
         "plural": "kafkausers",
         "name": "nginx-producer",
     }
+
+
+def test_delete_user_swallows_404():
+    # FINAL-REVIEW Fix 2: a kafka-ingest source predating per-pipeline
+    # producer provisioning has no producer KafkaUser at all -- deleting it
+    # must be a no-op, not a raised ApiException that would abort
+    # `delete_source`'s teardown before `delete_connector` runs.
+    fake = FakeCustom(not_found_on_delete=True)
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+
+    result = svc.delete_user("k1-producer")
+
+    assert result is None
+    assert fake.deleted == []
+
+
+def test_delete_user_reraises_non_404():
+    class RaisingCustom(FakeCustom):
+        def delete_namespaced_custom_object(self, **kw):
+            raise ApiException(status=500, reason="Boom")
+
+    svc = K8sService(custom_api=RaisingCustom(), core_api=None, namespace=NAMESPACE)
+
+    with pytest.raises(ApiException):
+        svc.delete_user("k1-producer")
 
 
 def test_read_secret_decodes_base64_data():
