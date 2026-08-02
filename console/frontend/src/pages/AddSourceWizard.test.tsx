@@ -526,6 +526,83 @@ describe("AddSourceWizard", () => {
 
   it("fetches and renders the ingest config panel after a successful stream/kafka create", async () => {
     vi.spyOn(client, "previewSource").mockResolvedValue(PREVIEW_RESPONSE);
+    vi.spyOn(client, "createSource").mockResolvedValue({
+      ok: true,
+      steps: [],
+      connector_name: "kafka-ingest-k1-orders",
+    });
+    const ingestConfigSpy = vi.spyOn(client, "getIngestConfig").mockResolvedValue({
+      external_bootstrap: "kafka.example:9092",
+      topic: "kafka1.raw",
+      disposition: "event",
+      authoritative_fqn: "lakehouse.kafka1.raw",
+      producer: {
+        user: "kafka1-producer",
+        mechanism: "SCRAM-SHA-512",
+        password: "s3cr3t-pass",
+        secret_ref: "kafka1-producer-credentials",
+      },
+      expected_json: null,
+      snippets: {
+        fluentbit: "fluentbit config for kafka1",
+        vector: "vector config for kafka1",
+        logstash: "logstash config for kafka1",
+        generic: "generic config for kafka1",
+      },
+    });
+
+    render(<AddSourceWizard />);
+    await screen.findByRole("option", { name: /^stream$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
+    await screen.findByRole("option", { name: /^kafka$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "kafka" } });
+
+    // Step 1 -> 2: source name.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.change(screen.getByLabelText(/source name/i), {
+      target: { value: "kafka1" },
+    });
+    // Step 2 -> 3 -> 4: no required fields for stream/kafka; fill the target.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.change(screen.getByLabelText(/pipeline name/i), {
+      target: { value: "ns1" },
+    });
+    fireEvent.change(screen.getByLabelText(/target table/i), {
+      target: { value: "tbl1" },
+    });
+    // Step 4 -> 5: fetch preview.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("io.debezium.connector.sqlserver.SqlServerConnector"),
+      ).toBeInTheDocument(),
+    );
+
+    // Step 5 -> 6: create the source.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create source/i }));
+
+    expect(await screen.findByText(/source created/i)).toBeInTheDocument();
+    // Residual fix: fetch ingestion config by the CREATED connector's
+    // composite name (returned by createSource), not the bare source id --
+    // the bare id is ambiguous when one source id owns multiple kafka-ingest
+    // target tables.
+    await waitFor(() => expect(ingestConfigSpy).toHaveBeenCalledWith("kafka-ingest-k1-orders"));
+    expect(await screen.findByText("kafka1.raw")).toBeInTheDocument();
+    // Credential stays hidden until the reveal toggle is clicked.
+    expect(screen.queryByText("s3cr3t-pass")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /reveal/i }));
+    expect(await screen.findByText("s3cr3t-pass")).toBeInTheDocument();
+  });
+
+  it("falls back to the bare source id when createSource omits connector_name", async () => {
+    // Safety net for older/partial responses (e.g. gitops/spark-batch lanes,
+    // or a backend that hasn't been upgraded yet): if connector_name is
+    // absent, the wizard must preserve its previous behavior of fetching by
+    // the bare source id.
+    vi.spyOn(client, "previewSource").mockResolvedValue(PREVIEW_RESPONSE);
     vi.spyOn(client, "createSource").mockResolvedValue({ ok: true, steps: [] });
     const ingestConfigSpy = vi.spyOn(client, "getIngestConfig").mockResolvedValue({
       external_bootstrap: "kafka.example:9092",
@@ -582,10 +659,5 @@ describe("AddSourceWizard", () => {
 
     expect(await screen.findByText(/source created/i)).toBeInTheDocument();
     await waitFor(() => expect(ingestConfigSpy).toHaveBeenCalledWith("kafka1"));
-    expect(await screen.findByText("kafka1.raw")).toBeInTheDocument();
-    // Credential stays hidden until the reveal toggle is clicked.
-    expect(screen.queryByText("s3cr3t-pass")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /reveal/i }));
-    expect(await screen.findByText("s3cr3t-pass")).toBeInTheDocument();
   });
 });

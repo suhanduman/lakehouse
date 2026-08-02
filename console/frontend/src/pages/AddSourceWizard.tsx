@@ -532,7 +532,7 @@ export default function AddSourceWizard() {
       // skip this fetch.
       if (result.ok && isKafka) {
         try {
-          const config = await getIngestConfig(form.source);
+          const config = await getIngestConfig(result.connector_name ?? form.source);
           setIngestConfig(config);
         } catch (err) {
           setIngestConfigError(errorMessage(err));

@@ -1023,6 +1023,19 @@ def test_kafka_ingest_has_no_separate_sink_step():
     assert "sink" not in [s.name for s in res.steps]
 
 
+def test_kafka_ingest_returns_composite_connector_name():
+    # Residual fix: add_source must surface the CREATED connector's composite
+    # name (kafka-ingest-<source>-<target_table>) so the wizard can fetch
+    # ingestion config unambiguously -- the bare source id ("k1") is ambiguous
+    # when one source id owns multiple kafka-ingest target tables.
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert res.connector_name == "kafka-ingest-k1-orders"
+
+
 # --------------------------------------------------------------------------
 # Task 5: kafka-ingest producer provisioning (optional topic pre-create +
 # per-pipeline producer KafkaUser), with rollback.

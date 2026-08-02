@@ -158,6 +158,14 @@ export interface PreviewResult {
 export interface CreateSourceResult {
   steps: SourceStepResult[];
   ok: boolean;
+  /** Composite connector name (e.g. `kafka-ingest-<source>-<target_table>`)
+   * for the connector this add-source run created, when applicable -- see
+   * app.orchestrator.AddSourceResult.connector_name. Absent/null on the
+   * gitops and spark-batch lanes (no KafkaConnector created) or on in-band
+   * failure. Callers should fetch ingestion config by THIS name rather than
+   * the bare source id, which is ambiguous when one source id owns multiple
+   * kafka-ingest target tables. */
+  connector_name?: string | null;
 }
 
 /** Mirrors app.routers.sources.delete_source()'s dict shape across both

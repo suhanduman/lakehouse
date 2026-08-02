@@ -128,6 +128,7 @@ class StepResult:
 class AddSourceResult:
     steps: List[StepResult] = field(default_factory=list)
     ok: bool = True
+    connector_name: Optional[str] = None
 
 
 class AddSourceOrchestrator:
@@ -542,4 +543,4 @@ class AddSourceOrchestrator:
         if not run("verify", _verify):
             return fail()
 
-        return AddSourceResult(steps=steps, ok=True)
+        return AddSourceResult(steps=steps, ok=True, connector_name=ctx.get("connector_name"))
