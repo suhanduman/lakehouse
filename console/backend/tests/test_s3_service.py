@@ -23,6 +23,7 @@ class FakeS3:
         self.buckets = ["src-existing"]
         self.objects = {}  # bucket -> list of keys
         self.list_objects_calls = []
+        self.log = []  # shared ordered log: ("empty", name) / ("delbucket", name)
 
     def create_bucket(self, Bucket):
         if self.already_owned:
@@ -40,11 +41,17 @@ class FakeS3:
     def list_objects_v2(self, Bucket, ContinuationToken=None):
         self.list_objects_calls.append(Bucket)
         keys = self.objects.get(Bucket, [])
-        return {"Contents": [{"Key": k} for k in keys]} if keys else {}
+        if not keys:
+            return {"Contents": [], "IsTruncated": False}
+        return {"Contents": [{"Key": k} for k in keys], "IsTruncated": False}
 
     def delete_objects(self, Bucket, Delete):
         self.deleted_objects_calls.append((Bucket, Delete))
+        self.log.append(("empty", Bucket))
         return {"Deleted": Delete["Objects"]}
+
+    def delete_bucket(self, Bucket):
+        self.log.append(("delbucket", Bucket))
 
 
 # --------------------------------------------------------------------------
@@ -115,3 +122,26 @@ def test_empty_bucket_noop_when_already_empty():
 
     assert fake.deleted_objects_calls == []
     assert len(fake.list_objects_calls) == 1
+
+
+# --------------------------------------------------------------------------
+# delete_bucket
+# --------------------------------------------------------------------------
+
+def test_delete_bucket_empties_then_removes():
+    fake = FakeS3()
+    svc = S3Service(fake)
+    fake.objects["b1"] = ["k"]
+    svc.delete_bucket("b1")
+    assert fake.log == [("empty", "b1"), ("delbucket", "b1")]
+
+
+def test_delete_bucket_missing_is_noop():
+    class Missing:
+        def list_objects_v2(self, **k):
+            return {"Contents": [], "IsTruncated": False}
+
+        def delete_bucket(self, Bucket):
+            raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "DeleteBucket")
+
+    S3Service(Missing()).delete_bucket("gone")  # must not raise
