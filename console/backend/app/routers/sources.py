@@ -225,6 +225,28 @@ def _kafka_ingest_topic(cr: Dict[str, Any]) -> Optional[str]:
     return (cr.get("spec") or {}).get("config", {}).get("topics") or None
 
 
+def _kafka_ingest_producer(cr: Dict[str, Any]) -> Optional[str]:
+    """The per-pipeline producer KafkaUser name (Task 5) a kafka-ingest
+    source's `add_source` provisions -- `render_service._k8s_name(spec.source,
+    "producer")` -- recovered from the CR's own `{_SPARK_ANN}source`
+    round-trip annotation (stamped on every rendered connector by
+    `render_service._connector`), NOT from this route's `name` path param:
+    `name` is the CR's own composite `metadata.name`
+    (`kafka-ingest-<source>-<target_table>`, see `_kafka_ingest_topic`'s
+    docstring), never the bare `spec.source` the producer username is keyed
+    on -- so `_k8s_name(name, "producer")` would build the WRONG username and
+    silently orphan the real producer KafkaUser/Secret on delete.
+
+    Returns None (skip, best-effort -- matching `_kafka_ingest_topic`'s tone)
+    when the annotation is missing (e.g. a CR pre-dating this feature or
+    applied by hand)."""
+    ann = (cr.get("metadata") or {}).get("annotations") or {}
+    source = ann.get(f"{_SPARK_ANN}source")
+    if not source:
+        return None
+    return render_service._k8s_name(source, "producer")
+
+
 def _spark_target(cr: Dict[str, Any]) -> Tuple[str, str]:
     """(target_ns, target_table) for a spark source, from its round-trip
     annotations, falling back to parsing `--target rawlake.<ns>.<tbl>` from the
@@ -552,6 +574,15 @@ def delete_source(
     CR (best-effort: a CR that isn't a kafka-ingest connector, or is missing
     the expected topic config, is silently skipped -- never fails the
     delete).
+
+    Producer KafkaUser teardown (Task 5): a kafka-ingest source's add_source
+    also provisions a per-pipeline producer KafkaUser (`<source>-producer`,
+    see `AddSourceOrchestrator.add_source`'s "producer" step). Its Strimzi
+    identity/Secret are direct K8s API objects too (not GitOps-managed), so
+    they are deleted here alongside the ACL revocation above -- same
+    best-effort posture (`_kafka_ingest_producer` returns None, silently
+    skipping, if the CR predates this feature and lacks the round-trip
+    annotation the username is recovered from).
     """
     if settings.deploy_mode == "gitops":
         cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
@@ -568,6 +599,9 @@ def delete_source(
         kafka_ingest_topic = _kafka_ingest_topic(cr)
         if kafka_ingest_topic:
             k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
+            producer = render_service._k8s_name(source, "producer")
+            k8s.delete_user(producer)
+            k8s.delete_secret(producer)
         commit = orchestrator.git_writer.remove_source(source)
         result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
         if mode != "with_data":
@@ -610,6 +644,10 @@ def delete_source(
     kafka_ingest_topic = _kafka_ingest_topic(cr)
     if kafka_ingest_topic:
         k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
+        producer = _kafka_ingest_producer(cr)
+        if producer:
+            k8s.delete_user(producer)
+            k8s.delete_secret(producer)
 
     k8s.delete_connector(name)
     if mode != "with_data":

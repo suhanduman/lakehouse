@@ -449,6 +449,39 @@ class AddSourceOrchestrator:
                        lambda: self.k8s.remove_user_acl("connect", topic_acl)):
                 return fail()
 
+            # 4b/4c. kafka-ingest producer provisioning (Task 5): optional
+            # topic pre-create (spec.create_topic) + a per-pipeline producer
+            # KafkaUser (least-privilege Write+Describe(+Create) -- see
+            # render_service.render_producer_user's docstring) so a
+            # log-shipper/app has scoped SCRAM creds to PRODUCE to this
+            # source's topic. Distinct from the `connect` READ ACL above,
+            # which is what the Iceberg sink CONSUMES with.
+            from app.config import settings
+
+            if spec.create_topic:
+                def _apply_ingest_topic() -> Optional[str]:
+                    body = self.render.render_kafka_topic(
+                        spec.table, spec.topic_partitions, spec.topic_replication_factor)
+                    self.k8s.apply_topic(body)
+                    return None
+
+                if not run(
+                    "ingest-topic", _apply_ingest_topic,
+                    lambda: self.k8s.delete_topic(self.render._k8s_topic_name(spec.table)),
+                ):
+                    return fail()
+
+            producer = self.render._k8s_name(spec.source, "producer")
+
+            def _apply_producer() -> Optional[str]:
+                self.k8s.apply_user(self.render.render_producer_user(
+                    producer, spec.table, allow_create=not spec.create_topic,
+                    cluster=settings.kafka_cluster_name))
+                return None
+
+            if not run("producer", _apply_producer, lambda: self.k8s.delete_user(producer)):
+                return fail()
+
         # 5. connector
         def _apply_connector() -> Optional[str]:
             ctx["connector_body"] = self.render.render_connector(spec)
