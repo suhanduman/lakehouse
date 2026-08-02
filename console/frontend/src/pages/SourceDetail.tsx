@@ -2,13 +2,20 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DeleteModal, { type Role } from "../components/DeleteModal";
 import {
+  ApiError,
   editSparkSource,
+  getConnectorDebug,
   getSource,
+  getSourceConnectors,
   getStatus,
   pauseSource,
   patchSource,
+  restartConnector,
   resumeSource,
+  type ConnectorDebug,
+  type ConnectorRef,
   type DeleteSourceResult,
+  type GitopsRemediation,
   type Source,
   type SourceSpec,
   type StatusEntry,
@@ -25,6 +32,15 @@ interface SourceDetailProps {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Status dot for a connector row's `state` -- green when healthy, red for
+ * FAILED (or anything else unrecognized, since an unknown state is worth
+ * flagging rather than quietly treating as fine), grey while paused. */
+function connectorStatusDot(state: string | null): string {
+  if (state === "RUNNING") return "\u{1F7E2}"; // 🟢
+  if (state === "PAUSED") return "\u{26AA}"; // ⚪
+  return "\u{1F534}"; // 🔴 (FAILED / unknown)
 }
 
 /** Options for the spark edit form's `file_format` select -- mirrors
@@ -63,12 +79,26 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleted, setDeleted] = useState<DeleteSourceResult | null>(null);
 
+  const [connectors, setConnectors] = useState<ConnectorRef[]>([]);
+  const [debug, setDebug] = useState<ConnectorDebug | null>(null);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
+  const [remediation, setRemediation] = useState<GitopsRemediation | null>(null);
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     getSource(name)
       .then((src) => {
         if (cancelled) return;
         setSource(src);
+        getSourceConnectors(name)
+          .then((r) => {
+            if (!cancelled) setConnectors(r.connectors);
+          })
+          .catch(() => {
+            // Connector list is a nice-to-have enrichment (restart/debug
+            // controls); a failure here shouldn't block showing the source.
+          });
         return getStatus()
           .then((statusResp) => {
             if (cancelled) return;
@@ -87,14 +117,37 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     };
   }, [name]);
 
+  /** Shared by handlePause/handleResume: a gitops-mode source can't be
+   * paused/resumed directly (the Console isn't the source of truth -- a
+   * git repo reconciled by ArgoCD is), so that request 409s with a
+   * `{detail: {message, remediation}}` body instead of applying the change.
+   * Surface that as an actionable "edit this file" recipe instead of the
+   * generic error message. */
+  function handleGitopsBlockedError(err: unknown): void {
+    if (err instanceof ApiError && err.status === 409) {
+      try {
+        const rem = JSON.parse(err.body)?.detail?.remediation as GitopsRemediation | undefined;
+        if (rem) {
+          setRemediation(rem);
+          return;
+        }
+      } catch {
+        // body wasn't the expected JSON shape -- fall through to the
+        // generic error message below.
+      }
+    }
+    setActionError(errorMessage(err));
+  }
+
   async function handlePause() {
     setActionError(null);
+    setRemediation(null);
     setActionPending(true);
     try {
       const result = await pauseSource(name);
       setSource((prev) => (prev ? { ...prev, paused: result.paused } : prev));
     } catch (err) {
-      setActionError(errorMessage(err));
+      handleGitopsBlockedError(err);
     } finally {
       setActionPending(false);
     }
@@ -102,14 +155,71 @@ export default function SourceDetail({ role }: SourceDetailProps) {
 
   async function handleResume() {
     setActionError(null);
+    setRemediation(null);
     setActionPending(true);
     try {
       const result = await resumeSource(name);
       setSource((prev) => (prev ? { ...prev, paused: result.paused } : prev));
     } catch (err) {
-      setActionError(errorMessage(err));
+      handleGitopsBlockedError(err);
     } finally {
       setActionPending(false);
+    }
+  }
+
+  /** Returns true on success, false on failure (having already set
+   * actionError) -- the return value is additive: every existing
+   * single-connector call site (the per-row Restart/Only-failed buttons)
+   * ignores it, so their behavior is unchanged. handleRestartPipeline below
+   * uses it to stop the loop and skip the combined confirmation as soon as
+   * one connector fails. */
+  async function handleRestart(connName: string, onlyFailed = false): Promise<boolean> {
+    setActionError(null);
+    setRestartNotice(null);
+    setActionPending(true);
+    try {
+      await restartConnector(connName, { only_failed: onlyFailed });
+      setRestartNotice(`Restart triggered: ${connName}`);
+      return true;
+    } catch (err) {
+      setActionError(
+        err instanceof ApiError && err.status === 409
+          ? "Rebalance in progress — try again shortly."
+          : errorMessage(err),
+      );
+      return false;
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  /** Restarts every connector in the pipeline sequentially, then shows ONE
+   * combined confirmation naming all of them -- calling handleRestart in a
+   * loop and leaving its per-call `restartNotice` in place would have each
+   * call overwrite the last, so only the final connector's "Restart
+   * triggered" line would ever be visible. If any connector fails (e.g.
+   * 409 rebalance-in-progress), handleRestart has already set actionError
+   * (surfaced the same way a single-connector restart would); the loop
+   * stops there rather than piling on a misleading combined confirmation
+   * for connectors that were never reached. */
+  async function handleRestartPipeline() {
+    const restarted: string[] = [];
+    for (const c of connectors) {
+      // eslint-disable-next-line no-await-in-loop -- connectors within one
+      // pipeline must restart sequentially, not all at once.
+      const ok = await handleRestart(c.name);
+      if (!ok) return;
+      restarted.push(c.name);
+    }
+    setRestartNotice(`Restart triggered: ${restarted.join(", ")}`);
+  }
+
+  async function handleDebug(connName: string) {
+    setActionError(null);
+    try {
+      setDebug(await getConnectorDebug(connName));
+    } catch (err) {
+      setActionError(errorMessage(err));
     }
   }
 
@@ -222,6 +332,120 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       <button type="button" onClick={() => setDeleteModalOpen(true)} disabled={actionPending}>
         Delete source
       </button>
+
+      {restartNotice && <p role="status">{restartNotice}</p>}
+
+      {connectors.length > 0 && (
+        <section aria-label="connectors">
+          <h3>Connectors</h3>
+          {connectors.length > 1 && (
+            <button type="button" onClick={handleRestartPipeline} disabled={actionPending}>
+              Restart pipeline
+            </button>
+          )}
+          <ul>
+            {connectors.map((c) => (
+              <li key={c.name}>
+                <span aria-hidden="true">{connectorStatusDot(c.state)}</span> {c.role}: {c.name}{" "}
+                ({c.state ?? "unknown"})
+                <button
+                  type="button"
+                  onClick={() => handleRestart(c.name)}
+                  disabled={actionPending}
+                >
+                  Restart
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRestart(c.name, true)}
+                  disabled={actionPending}
+                >
+                  Only failed tasks
+                </button>
+                <button
+                  type="button"
+                  className={c.state === "FAILED" ? "danger" : undefined}
+                  onClick={() => handleDebug(c.name)}
+                  disabled={actionPending}
+                >
+                  Debug
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {debug && (
+        <section aria-label="debug">
+          <h3>
+            Debug: {debug.name} ({debug.state})
+          </h3>
+          <table>
+            <thead>
+              <tr>
+                <th>task</th>
+                <th>state</th>
+                <th>worker</th>
+              </tr>
+            </thead>
+            <tbody>
+              {debug.tasks.map((t) => (
+                <tr key={t.id ?? "?"}>
+                  <td>{t.id}</td>
+                  <td>{t.state}</td>
+                  <td>{t.worker_id}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {debug.tasks
+            .filter((t) => t.trace)
+            .map((t) => (
+              <details key={`tr-${t.id}`} open={t.state === "FAILED"}>
+                <summary>trace (task {t.id})</summary>
+                <pre>{t.trace}</pre>
+              </details>
+            ))}
+          <h4>How to inspect deeper</h4>
+          <p>Search terms: {debug.logs_hint.search_terms.join(", ")}</p>
+          <code>{debug.logs_hint.oc_command}</code>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(debug.logs_hint.oc_command);
+              setCopied(true);
+            }}
+          >
+            Copy
+          </button>
+          {copied && <span> Copied</span>}
+          {debug.logs_hint.external_link && (
+            <p>
+              <a href={debug.logs_hint.external_link} target="_blank" rel="noreferrer">
+                Open in logging ↗
+              </a>
+            </p>
+          )}
+        </section>
+      )}
+
+      {remediation && (
+        <section role="alert" aria-label="remediation">
+          <h3>Do this in the pipeline repo / ArgoCD</h3>
+          <p>
+            {remediation.repo} — {remediation.path}
+          </p>
+          <p>
+            Set <code>{remediation.field}</code> = <code>{String(remediation.value)}</code>
+          </p>
+          <ol>
+            {remediation.steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {editing && source.cr_kind === "ScheduledSparkApplication" ? (
         <div>

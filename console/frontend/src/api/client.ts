@@ -227,6 +227,23 @@ export interface GitopsStatusResponse {
   outOfSync: GitopsResource[];
 }
 
+/** Thrown by `request()` on a non-ok HTTP response. Carries the raw status
+ * code + response body text alongside the same message string a plain
+ * `Error` used to have, so callers that only care about the message keep
+ * working unmodified while callers that need to branch on status (e.g. a
+ * 409 rebalance-in-progress or a gitops-remediation payload) can do so
+ * without re-parsing the message string. */
+export class ApiError extends Error {
+  status: number;
+  body: string;
+  constructor(message: string, status: number, body: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -234,7 +251,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`${init?.method ?? "GET"} ${path} failed: ${res.status} ${detail}`);
+    throw new ApiError(
+      `${init?.method ?? "GET"} ${path} failed: ${res.status} ${detail}`,
+      res.status,
+      detail,
+    );
   }
   if (res.status === 204) {
     return undefined as T;
@@ -340,6 +361,90 @@ export async function deleteSource(
     `/sources/${encodeURIComponent(name)}?mode=${encodeURIComponent(mode)}`,
     { method: "DELETE" },
   );
+}
+
+// --------------------------------------------------------------------------
+// Connectors (restart / debug)
+// --------------------------------------------------------------------------
+
+/** Mirrors app.routers.sources.source_connectors()'s per-connector dict
+ * (Task 3/4): the KafkaConnector CR(s) a source's pipeline owns -- a CDC/
+ * stream source has one `role:"source"` connector, an event-lane pipeline
+ * also has a `role:"sink"` connector. `kind`/`state` are `null` when the
+ * backend couldn't resolve the connector class/status. */
+export interface ConnectorRef {
+  name: string;
+  role: "source" | "sink";
+  kind: string | null;
+  state: string | null;
+}
+
+/** Mirrors a single entry of app.routers.connectors.connector_debug()'s
+ * `tasks` list -- one Kafka Connect task's id/state/worker + its most recent
+ * trace (`null` when the task has no error trace to show). */
+export interface ConnectorTask {
+  id: number | null;
+  state: string | null;
+  worker_id: string | null;
+  trace: string | null;
+}
+
+/** Mirrors app.routers.connectors.connector_debug()'s `logs_hint` dict:
+ * a ready-to-run `oc logs` recipe (never fetched by the Console itself --
+ * Console never proxies pod logs) plus an optional deep link into an
+ * external logging UI (`null` when none is configured). */
+export interface LogsHint {
+  namespace: string;
+  connect_pods_selector: string;
+  search_terms: string[];
+  oc_command: string;
+  external_link: string | null;
+}
+
+/** Mirrors app.routers.connectors.connector_debug()'s top-level dict. */
+export interface ConnectorDebug {
+  name: string;
+  state: string;
+  tasks: ConnectorTask[];
+  logs_hint: LogsHint;
+}
+
+/** Mirrors the `remediation` dict nested in the 409 response body a
+ * gitops-mode pause/resume returns (`{detail: {message, remediation}}`) --
+ * the actionable "edit this file in the pipeline repo" recipe shown in
+ * place of the generic error when Console can't apply the change directly. */
+export interface GitopsRemediation {
+  reason: string;
+  where: string;
+  repo: string;
+  path: string;
+  field: string;
+  value: string | boolean;
+  steps: string[];
+}
+
+/** GET /api/sources/{name}/connectors -> the KafkaConnector CR(s) (source
+ * and, for event-lane pipelines, sink) that belong to this source. */
+export async function getSourceConnectors(name: string): Promise<{ connectors: ConnectorRef[] }> {
+  return request(`/sources/${encodeURIComponent(name)}/connectors`);
+}
+
+/** GET /api/connectors/{name}/debug -> per-task state/trace + a log-search
+ * recipe for a single connector. */
+export async function getConnectorDebug(name: string): Promise<ConnectorDebug> {
+  return request(`/connectors/${encodeURIComponent(name)}/debug`);
+}
+
+/** POST /api/connectors/{name}/restart -> restart a connector (optionally
+ * its tasks, optionally only the failed ones). */
+export async function restartConnector(
+  name: string,
+  opts: { include_tasks?: boolean; only_failed?: boolean } = {},
+): Promise<{ ok: boolean; name: string }> {
+  return request(`/connectors/${encodeURIComponent(name)}/restart`, {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
 }
 
 // --------------------------------------------------------------------------

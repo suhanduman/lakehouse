@@ -164,6 +164,30 @@ def _kind_of(cr: Dict[str, Any]) -> str:
     return cr.get("kind") or "KafkaConnector"
 
 
+def _gitops_remediation(cr: Dict[str, Any], pause: bool) -> Dict[str, Any]:
+    """Concrete 'do this in the pipeline repo / ArgoCD' recipe -- the Console
+    never writes to git itself (see the operational-controls spec)."""
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        field, value = "spec.suspend", (True if pause else False)
+    else:  # KafkaConnector
+        field, value = "spec.state", ("paused" if pause else "running")
+    name = (cr.get("metadata") or {}).get("name")
+    return {
+        "reason": "pause/resume changes the CR spec and is reconciled from git",
+        "where": "gitops",
+        "repo": f"{settings.gitops_repo_url}@{settings.gitops_branch}",
+        "path": f"{settings.gitops_path}/{name}",
+        "field": field,
+        "value": value,
+        "steps": [
+            "edit the source's manifest in the pipeline repo",
+            f"set {field} = {value}",
+            "commit & push",
+            "ArgoCD syncs the change to the cluster",
+        ],
+    }
+
+
 def _connect_topic_acl(topic: str) -> Dict[str, Any]:
     """The scoped literal READ/DESCRIBE ACL AddSourceOrchestrator.add_source
     grants `connect` for a stream/kafka (kafka-ingest) source's customer
@@ -330,6 +354,55 @@ def get_source(
     return _summary(_find_source(k8s, name))
 
 
+# NB: `app.services.pipeline_topology` imports several helpers (
+# `_kafka_ingest_topic`/`_spark_target`/`_target_ns_table`/`_topic_from_config`)
+# FROM this module, so a module-level `from app.services.pipeline_topology
+# import assemble_pipelines` here would be circular (this module's own
+# top-level import of pipeline_topology would run before those helper
+# functions are defined, since pipeline_topology's own top-level import of
+# THIS module -- triggered first, e.g. via `app.routers.pipelines` -- would
+# see this module only partially initialized). Importing inside the handler
+# defers it until call time, by which point both modules are fully loaded.
+@router.get("/{name}/connectors", dependencies=[Depends(require_action(Action.READ))])
+def source_connectors(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+    trino: TrinoService = Depends(get_trino),
+) -> Dict[str, Any]:
+    """Resolve `name` (either the pipeline's own name or any of its node
+    names -- e.g. a dedicated sink's CR name) to its source + dedicated-sink
+    connectors, reusing the same `assemble_pipelines` topology `/api/pipelines`
+    builds (no second topology/grouping implementation)."""
+    from app.services.pipeline_topology import assemble_pipelines
+
+    sources = k8s.list_sources()
+    namespaces = {
+        ns: set(trino.list_tables("lakehouse", ns)) for ns in trino.list_namespaces("lakehouse")
+    }
+    pipelines = assemble_pipelines(sources, namespaces, k8s.get_status, k8s.get_spark_status)
+    pipe = next(
+        (p for p in pipelines
+         if p.get("name") == name
+         or any(n.get("name") == name for n in p.get("nodes", []))),
+        None,
+    )
+    if pipe is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no pipeline for '{name}'")
+    role_by_type = {"connector": "source", "sink": "sink"}
+    connectors = [
+        {"name": n.get("name"), "role": role_by_type[n["type"]],
+         "kind": n.get("kind"), "state": n.get("state")}
+        for n in pipe.get("nodes", [])
+        if n.get("type") in role_by_type
+        # A ScheduledSparkApplication is emitted as a type:"connector" node
+        # (see pipeline_topology._batch_pipeline) but it is NOT a Kafka
+        # Connect connector -- a restart POST against it 404s. The spec's
+        # non-goal is explicit: "Spark job 'restart' -- connectors only."
+        and n.get("kind") != "ScheduledSparkApplication"
+    ]
+    return {"connectors": connectors}
+
+
 # --------------------------------------------------------------------------
 # Edit / pause / resume
 # --------------------------------------------------------------------------
@@ -376,17 +449,20 @@ def pause_source(
     """Neither CR kind has gitops routing for pause -- a direct
     `k8s.set_paused`/`set_spark_suspended` write in gitops mode would be
     silently reverted by ArgoCD selfHeal on its next sync (a misleading
-    no-op), so this fails loud (409) in gitops mode instead (follow-up:
-    gitops-route pause/resume, e.g. a `suspend`/`state` field commit)."""
+    no-op), so this fails loud (409) in gitops mode instead. The 409's
+    `detail` carries a structured `remediation` recipe (see
+    `_gitops_remediation`) so the frontend can render concrete "do this in
+    the pipeline repo / ArgoCD" steps -- the Console still never writes to
+    git itself here (no GitWriter/ArgoCD client involved)."""
+    cr = _find_source(k8s, name)
     if settings.deploy_mode == "gitops":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "pause not supported in gitops mode -- edit the source in the pipeline "
-                "repo (git); the cluster is reconciled from git"
-            ),
+            detail={
+                "message": "pause not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, pause=True),
+            },
         )
-    cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, True)
     else:
@@ -399,16 +475,17 @@ def resume_source(
     name: str,
     k8s: K8sService = Depends(get_k8s),
 ) -> Dict[str, Any]:
-    """See pause_source's docstring -- same gitops fail-loud guard."""
+    """See pause_source's docstring -- same gitops fail-loud guard, same
+    structured `remediation` recipe in the 409 `detail`."""
+    cr = _find_source(k8s, name)
     if settings.deploy_mode == "gitops":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "resume not supported in gitops mode -- edit the source in the pipeline "
-                "repo (git); the cluster is reconciled from git"
-            ),
+            detail={
+                "message": "resume not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, pause=False),
+            },
         )
-    cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
         k8s.set_spark_suspended(name, False)
     else:

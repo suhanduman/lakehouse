@@ -548,7 +548,10 @@ def test_pause_gitops_mode_is_409(monkeypatch):
     r = client.post("/api/sources/dbz-mssql1-students/pause")
 
     assert r.status_code == 409
-    assert "gitops mode" in r.json()["detail"]
+    # Task 5: detail is now a structured {"message", "remediation"} dict, not
+    # a bare string -- see test_sources_pause_remediation.py for full
+    # remediation-shape coverage.
+    assert "gitops mode" in r.json()["detail"]["message"]
     assert k8s.paused_calls == []
     assert k8s.spark_suspended_calls == []
 
@@ -561,7 +564,10 @@ def test_resume_gitops_mode_is_409(monkeypatch):
     r = client.post("/api/sources/dbz-mssql1-students/resume")
 
     assert r.status_code == 409
-    assert "gitops mode" in r.json()["detail"]
+    # Task 5: detail is now a structured {"message", "remediation"} dict, not
+    # a bare string -- see test_sources_pause_remediation.py for full
+    # remediation-shape coverage.
+    assert "gitops mode" in r.json()["detail"]["message"]
     assert k8s.paused_calls == []
     assert k8s.spark_suspended_calls == []
 
