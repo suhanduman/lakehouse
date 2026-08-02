@@ -70,9 +70,10 @@ beforeEach(() => {
 });
 
 const PREVIEW_RESPONSE = {
-  bucket: "src-mssql-ogrenci",
+  bronze_bucket: "bronze-mssql_ogrenci",
+  silver_bucket: "silver-mssql_ogrenci",
   namespace_ddl:
-    "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci WITH (location='s3://src-mssql-ogrenci/warehouse')",
+    "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci WITH (location='s3://silver-mssql_ogrenci/warehouse')",
   connector: {
     apiVersion: "kafka.strimzi.io/v1beta2",
     kind: "KafkaConnector",
@@ -126,7 +127,7 @@ function fillStep3() {
 }
 
 function fillStep4() {
-  fireEvent.change(screen.getByLabelText(/target namespace/i), {
+  fireEvent.change(screen.getByLabelText(/pipeline name/i), {
     target: { value: "mssql_ogrenci" },
   });
   fireEvent.change(screen.getByLabelText(/target table/i), {
@@ -162,12 +163,14 @@ describe("AddSourceWizard", () => {
 
     await fillThroughPreview();
 
-    // Preview shows connector class, topic name, bucket, and DDL.
+    // Preview shows connector class, topic name, both per-pipeline buckets,
+    // and DDL.
     expect(
       screen.getByText("io.debezium.connector.sqlserver.SqlServerConnector"),
     ).toBeInTheDocument();
     expect(screen.getByText("cdc.mssql1.dbo.students")).toBeInTheDocument();
-    expect(screen.getByText("src-mssql-ogrenci")).toBeInTheDocument();
+    expect(screen.getByText("bronze-mssql_ogrenci")).toBeInTheDocument();
+    expect(screen.getByText("silver-mssql_ogrenci")).toBeInTheDocument();
     expect(
       screen.getByText(/CREATE NAMESPACE IF NOT EXISTS lakehouse\.mssql_ogrenci/),
     ).toBeInTheDocument();
@@ -205,6 +208,44 @@ describe("AddSourceWizard", () => {
     );
 
     expect(await screen.findByText(/source created/i)).toBeInTheDocument();
+  });
+
+  it("labels the target_ns field \"Pipeline name\" (per-pipeline unique namespace, B-v2)", async () => {
+    render(<AddSourceWizard />);
+    fillStep1();
+    await fillStep2();
+    fillStep3();
+
+    expect(screen.getByLabelText(/^pipeline name$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/target namespace/i)).not.toBeInTheDocument();
+  });
+
+  it("auto-fills the pipeline name from source+target_table, but stays editable", async () => {
+    render(<AddSourceWizard />);
+    fillStep1();
+    await fillStep2(); // sets source to "mssql1"
+    fillStep3();
+
+    const pipelineName = screen.getByLabelText(/^pipeline name$/i) as HTMLInputElement;
+    // Neither field has a target_table yet -- stays empty.
+    expect(pipelineName.value).toBe("");
+
+    fireEvent.change(screen.getByLabelText(/target table/i), {
+      target: { value: "dbo.students" },
+    });
+    // Auto-fills to a sanitized "<source>_<target_table>": lowercased, with
+    // the "." (and any other non-alnum run) collapsed to "_".
+    expect(pipelineName.value).toBe("mssql1_dbo_students");
+
+    // The field stays editable -- an explicit edit overrides the default...
+    fireEvent.change(pipelineName, { target: { value: "custom_pipeline" } });
+    expect(pipelineName.value).toBe("custom_pipeline");
+
+    // ...and a later target_table edit must not clobber that override.
+    fireEvent.change(screen.getByLabelText(/target table/i), {
+      target: { value: "dbo.other" },
+    });
+    expect(pipelineName.value).toBe("custom_pipeline");
   });
 
   it("shows a failure state (not success) when createSource resolves with ok:false", async () => {
@@ -420,7 +461,7 @@ describe("AddSourceWizard", () => {
     // Step 2 -> 3 -> 4: no required fields for stream/kafka; fill the target.
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
-    fireEvent.change(screen.getByLabelText(/target namespace/i), {
+    fireEvent.change(screen.getByLabelText(/pipeline name/i), {
       target: { value: "ns1" },
     });
     fireEvent.change(screen.getByLabelText(/target table/i), {

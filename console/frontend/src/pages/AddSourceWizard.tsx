@@ -4,6 +4,7 @@ import {
   getSourceTypes,
   previewSource,
   type CreateSourceResult,
+  type PreviewResult,
   type SourceCredentials,
   type SourceSpec,
   type SourceTypeDescriptor,
@@ -85,6 +86,11 @@ interface FormState {
   rabbitmq_uri: string;
   rabbitmq_queue: string;
   target_ns: string;
+  // Tracks whether the user has explicitly edited the pipeline-name field
+  // (step 4) -- until they do, it auto-fills from source+target_table
+  // (see the effect below) rather than staying blank or fighting the user's
+  // own edit.
+  targetNsTouched: boolean;
   target_table: string;
   user: string;
   password: string;
@@ -123,6 +129,7 @@ const INITIAL_STATE: FormState = {
   rabbitmq_uri: "",
   rabbitmq_queue: "",
   target_ns: "",
+  targetNsTouched: false,
   target_table: "",
   user: "",
   password: "",
@@ -158,6 +165,16 @@ const KNOWN_SPEC_FIELDS = new Set([
 function humanizeFieldName(field: string): string {
   const spaced = field.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** Default pipeline name (step 4's `target_ns` -- the pipeline's unique
+ * namespace identity, Sub-project B-v2) derived from source+target_table:
+ * lowercased, with every run of non-alphanumeric characters (including the
+ * joining "_" itself, and any "." in a qualified table name) collapsed to a
+ * single "_". Only ever used to *pre-fill* the field -- the user can always
+ * edit it afterward (see `targetNsTouched`). */
+function defaultPipelineName(source: string, targetTable: string): string {
+  return `${source}_${targetTable}`.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
 
 const STEP_TITLES = [
@@ -290,7 +307,7 @@ export default function AddSourceWizard() {
   const [types, setTypes] = useState<SourceTypeDescriptor[]>([]);
   const [typesError, setTypesError] = useState<string | null>(null);
 
-  const [preview, setPreview] = useState<any>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
@@ -318,6 +335,25 @@ export default function AddSourceWizard() {
       cancelled = true;
     };
   }, []);
+
+  // Pipeline name (step 4's `target_ns`) auto-fills from source+target_table
+  // whenever it's still empty/untouched -- see `defaultPipelineName`. Once
+  // the user types a non-empty value into the field itself (`targetNsTouched`
+  // -- set by the input's own onChange below), their value always wins,
+  // even across further source/target_table edits.
+  useEffect(() => {
+    if (form.targetNsTouched && form.target_ns !== "") {
+      return;
+    }
+    if (!form.source || !form.target_table) {
+      return;
+    }
+    const defaultNs = defaultPipelineName(form.source, form.target_table);
+    if (defaultNs !== form.target_ns) {
+      setForm((prev) => ({ ...prev, target_ns: defaultNs }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.source, form.target_table, form.targetNsTouched, form.target_ns]);
 
   // Unique kinds, and the types available under the currently-selected
   // kind, in registry order (not alphabetized/hard-coded).
@@ -741,11 +777,17 @@ export default function AddSourceWizard() {
       {step === 4 && (
         <fieldset>
           <div>
-            <label htmlFor="target_ns">Target namespace</label>
+            <label htmlFor="target_ns">Pipeline name</label>
             <input
               id="target_ns"
               value={form.target_ns}
-              onChange={(e) => set("target_ns", e.target.value)}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  target_ns: e.target.value,
+                  targetNsTouched: true,
+                }))
+              }
             />
           </div>
           <div>
@@ -783,7 +825,10 @@ export default function AddSourceWizard() {
                 Kafka topic: <strong>{preview.kafka_topic?.metadata?.name ?? "(none)"}</strong>
               </p>
               <p>
-                Bucket: <strong>{preview.bucket}</strong>
+                Bronze bucket: <strong>{preview.bronze_bucket}</strong>
+              </p>
+              <p>
+                Silver bucket: <strong>{preview.silver_bucket}</strong>
               </p>
               <pre>{preview.namespace_ddl}</pre>
             </div>
