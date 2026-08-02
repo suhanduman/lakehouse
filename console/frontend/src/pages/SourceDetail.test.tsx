@@ -68,6 +68,7 @@ async function openDeleteModal() {
 function mockLoad() {
   vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
   vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+  vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
 }
 
 describe("SourceDetail", () => {
@@ -189,6 +190,7 @@ describe("SourceDetail", () => {
   it("shows a prefilled field form for a spark-batch source and saves via editSparkSource", async () => {
     vi.spyOn(client, "getSource").mockResolvedValue(SPARK_SOURCE);
     vi.spyOn(client, "getStatus").mockResolvedValue({ connectors: [], reachable: true });
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
     const editSparkSpy = vi
       .spyOn(client, "editSparkSource")
       .mockResolvedValue({ ok: true, name: SPARK_SOURCE_NAME });
@@ -246,5 +248,77 @@ describe("SourceDetail", () => {
     renderDetail("ADMIN");
 
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();
+  });
+
+  it("restarts a connector and shows confirmation", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({
+      connectors: [{ name: SOURCE_NAME, role: "source", kind: "io...Debezium", state: "RUNNING" }],
+    });
+    const restartSpy = vi
+      .spyOn(client, "restartConnector")
+      .mockResolvedValue({ ok: true, name: SOURCE_NAME });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /^restart$/i }));
+    await waitFor(() => expect(restartSpy).toHaveBeenCalledWith(SOURCE_NAME, expect.any(Object)));
+    expect(await screen.findByText(/restart triggered/i)).toBeInTheDocument();
+  });
+
+  it("opens the debug panel and shows the failure trace + oc command", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({
+      connectors: [{ name: SOURCE_NAME, role: "source", kind: null, state: "FAILED" }],
+    });
+    vi.spyOn(client, "getConnectorDebug").mockResolvedValue({
+      name: SOURCE_NAME,
+      state: "FAILED",
+      tasks: [{ id: 0, state: "FAILED", worker_id: "10.0.0.1:8083", trace: "boom-stacktrace" }],
+      logs_hint: {
+        namespace: "lakehouse",
+        connect_pods_selector: "strimzi.io/cluster=connect,strimzi.io/kind=KafkaConnect",
+        search_terms: [SOURCE_NAME, "task-0"],
+        oc_command: "oc logs -n lakehouse -l ... | grep 'src'",
+        external_link: null,
+      },
+    });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /^debug$/i }));
+    expect(await screen.findByText(/boom-stacktrace/)).toBeInTheDocument();
+    expect(screen.getByText(/oc logs -n lakehouse/)).toBeInTheDocument();
+  });
+
+  it("renders the gitops remediation recipe when pause 409s", async () => {
+    mockLoad();
+    vi.spyOn(client, "pauseSource").mockRejectedValue(
+      new client.ApiError(
+        "409",
+        409,
+        JSON.stringify({
+          detail: {
+            message: "not supported",
+            remediation: {
+              reason: "r",
+              where: "gitops",
+              repo: "x@main",
+              path: "pipelines/src",
+              field: "spec.state",
+              value: "paused",
+              steps: ["edit", "commit"],
+            },
+          },
+        }),
+      ),
+    );
+
+    renderDetail("ADMIN");
+    fireEvent.click(await screen.findByRole("button", { name: /^pause$/i }));
+    expect(await screen.findByText(/spec\.state/)).toBeInTheDocument();
+    expect(screen.getByText(/commit/)).toBeInTheDocument();
   });
 });
