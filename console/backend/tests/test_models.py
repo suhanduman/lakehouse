@@ -233,3 +233,27 @@ def test_source_rejects_non_rfc1123():
 def test_source_accepts_rfc1123():
     for ok in ("mssql1", "k1", "src-1", "a", "a1-b2"):
         assert SourceSpec(**_base_source(source=ok)).source == ok
+
+
+# --------------------------------------------------------------------------
+# `target_ns` canonical [a-z0-9_] validator (B-v2 safety fix): target_ns
+# doubles as the Silver Iceberg namespace AND the seed for the per-pipeline
+# Bronze/Silver bucket names -- render_service's bucket-name sanitization is
+# LOSSY (lowercases + collapses non-[a-z0-9-] runs), so two
+# namespace-DISTINCT target_ns values could otherwise sanitize-collide onto
+# the SAME bucket (e.g. "MyPipe"/"mypipe" or "a.b"/"a_b" -> same bucket),
+# passing the orchestrator's namespace-uniqueness check yet sharing storage
+# -- reintroducing the shared-bucket/data-loss class B-v2 exists to
+# eliminate. Requiring target_ns to already be canonical makes the
+# namespace -> bucket mapping injective.
+# --------------------------------------------------------------------------
+
+def test_target_ns_rejects_non_canonical():
+    for bad in ("MyPipe", "a.b", "", "has space", "a/b", "a$b"):
+        with pytest.raises(ValidationError):
+            SourceSpec(**_base_source(target_ns=bad))
+
+
+def test_target_ns_accepts_canonical():
+    for ok in ("mssql1_students", "ns", "a_b", "depo2", "mssql_ogrenci"):
+        assert SourceSpec(**_base_source(target_ns=ok)).target_ns == ok

@@ -91,6 +91,29 @@ class SourceSpec(BaseModel):
             )
         return v
 
+    @field_validator("target_ns")
+    @classmethod
+    def _target_ns_is_canonical(cls, v: str) -> str:
+        """target_ns doubles as this pipeline's Silver Iceberg namespace AND the
+        seed for its per-pipeline Bronze/Silver bucket names (B-v2, see
+        render_service._pipeline_bucket / _k8s_name). _k8s_name's bucket-name
+        sanitization is LOSSY (lowercases + maps any non-[a-z0-9-] run to a
+        single '-'), so two namespace-DISTINCT values (e.g. "MyPipe" vs
+        "mypipe", or "a.b" vs "a_b") can sanitize-collide onto the SAME
+        bucket even though they pass the orchestrator's namespace-uniqueness
+        check -- reintroducing the shared-bucket/data-loss class B-v2 exists
+        to eliminate (deleting one pipeline would wipe the other's data).
+        Requiring target_ns to already be canonical lowercase [a-z0-9_]
+        up front makes the namespace -> bucket mapping injective (only
+        '_' -> '-' is applied, no case-fold/dot-collapse)."""
+        import re
+        if not re.fullmatch(r"[a-z0-9_]+", v):
+            raise ValueError(
+                "target_ns is the pipeline name / Silver Iceberg namespace and must "
+                f"be lowercase [a-z0-9_] (non-empty) — got {v!r}"
+            )
+        return v
+
     @model_validator(mode="after")
     def _validate_kind_type_requirements(self) -> "SourceSpec":
         try:
