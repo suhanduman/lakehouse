@@ -181,27 +181,54 @@ class FakeTrino:
 
 
 class FakeIcebergOrch:
-    """IcebergService double for the orchestrator "table" pre-create step.
+    """IcebergService double for the orchestrator "uniqueness"/"table" steps.
     `fail_on='table'` makes create_table raise (rollback testi). The "table"
     step calls create_table TWICE (bronze then silver) — `created` records
-    BOTH calls, in order, as (namespace, table, identifier, layer)."""
+    BOTH calls, in order, as (namespace, table, identifier, layer, location) --
+    `location` is captured (B-v2 Task 4) so per-pipeline-bucket-location
+    assertions are real, not just structural.
+
+    `_tables_by_ns` backs `namespace_tables` (the uniqueness-check read) and is
+    updated both by `seed_table` (pre-seeding a collision for the uniqueness
+    test) and by `create_table` itself (so a second add_source run against the
+    same pipeline sees its own previously-created table and does NOT
+    self-collide -- mirrors the real IcebergService/Nessie behavior)."""
 
     def __init__(self, fail_on: Optional[str] = None):
         self.fail_on = fail_on
         self.created: List[tuple] = []
+        self._tables_by_ns: Dict[str, set] = {}
+
+    def seed_table(self, namespace: str, table: str) -> None:
+        """Pre-seed `namespace` as already holding `table` -- for the
+        uniqueness-collision test (no create_table call involved)."""
+        self._tables_by_ns.setdefault(namespace, set()).add(table)
+
+    def namespace_tables(self, namespace: str, layer: str = "bronze") -> set:
+        return set(self._tables_by_ns.get(namespace, set()))
+
+    def location_for(self, layer: str):
+        """The `location=` passed to the create_table call for `layer`
+        ("bronze"/"silver"), or None if that layer was never created."""
+        for (_ns, _table, _identifier, l, location) in self.created:
+            if l == layer:
+                return location
+        return None
 
     def create_table(self, namespace, table, columns, identifier, location=None, layer="silver"):
         if self.fail_on == "table":
             raise RuntimeError("table boom")
-        self.created.append((namespace, table, tuple(identifier), layer))
+        self.created.append((namespace, table, tuple(identifier), layer, location))
+        self._tables_by_ns.setdefault(namespace, set()).add(table)
         return f"{namespace}.{table}"
 
     @property
     def created_layers(self) -> List[str]:
         """Convenience view over `created` for lane/disposition tests that only
         care which layers were pre-created, not the full (ns, table, identifier,
-        layer) tuple — `layer` was already captured above, this just projects it."""
-        return [layer for (_ns, _table, _identifier, layer) in self.created]
+        layer, location) tuple — `layer` was already captured above, this just
+        projects it."""
+        return [layer for (_ns, _table, _identifier, layer, _location) in self.created]
 
 
 def _orch(fail_on: Optional[str] = None, status_states=None, verify_attempts: int = 5,
@@ -243,7 +270,7 @@ def test_add_source_happy_path_step_order_and_ok():
     # step lights up between "connector" and "verify", exactly as it already
     # does for Camel lanes (see test_camel_http_applies_source_and_dedicated_sink).
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert all(s.ok for s in res.steps)
     assert res.ok is True
@@ -254,12 +281,14 @@ def test_add_source_happy_path_calls_services_with_expected_data():
 
     orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
+    p = "mssql_ogrenci"
     assert k8s.created_secrets == [("mssql1", {"user": "sa", "pass": "s3cret"})]
-    assert s3.created_buckets == [render_service.bucket_name("mssql_ogrenci")]
+    # B-v2: per-pipeline Bronze+Silver buckets (entity disposition -> both).
+    assert s3.created_buckets == [
+        render_service.bronze_bucket_name(p), render_service.silver_bucket_name(p),
+    ]
     assert trino.ddls == [
-        render_service.render_namespace_ddl(
-            "mssql_ogrenci", render_service.bucket_name("mssql_ogrenci")
-        )
+        render_service.render_namespace_ddl(p, render_service.silver_bucket_name(p))
     ]
     expected_topic = render_service.topic_name(CDC_MSSQL_SPEC)
     assert [t["metadata"]["name"] for t in k8s.applied_topics] == [expected_topic]
@@ -291,7 +320,7 @@ def test_rollback_on_connector_failure_deletes_topic_and_secret():
 
     assert res.ok is False
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector",
     ]
     assert res.steps[-1].ok is False
     assert "connector boom" in res.steps[-1].detail
@@ -315,7 +344,10 @@ def test_rollback_on_connector_failure_deletes_topic_and_secret():
     # bucket/namespace are deliberately NOT rolled back (see orchestrator
     # module docstring "Rollback scope") -- they're cheap+idempotent to
     # leave behind and may already hold state worth keeping.
-    assert s3.created_buckets == [render_service.bucket_name("mssql_ogrenci")]
+    p = "mssql_ogrenci"
+    assert s3.created_buckets == [
+        render_service.bronze_bucket_name(p), render_service.silver_bucket_name(p),
+    ]
     assert len(trino.ddls) == 1
 
 
@@ -340,7 +372,7 @@ def test_rollback_deletes_topic_by_sanitized_cr_name_not_raw_name():
     # topic step itself succeeded (applied under the sanitized CR name); the
     # LATER connector step is what fails and triggers rollback.
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector",
     ]
     assert res.steps[-2].name == "topic" and res.steps[-2].ok is True
 
@@ -360,7 +392,7 @@ def test_rollback_on_verify_failed_state_deletes_connector_topic_secret():
 
     assert res.ok is False
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert res.steps[-1].ok is False
     assert "FAILED" in res.steps[-1].detail
@@ -416,7 +448,7 @@ def test_rollback_on_bucket_failure_undoes_only_secret_no_bucket_undo():
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
 
     assert res.ok is False
-    assert [s.name for s in res.steps] == ["secret", "bucket"]
+    assert [s.name for s in res.steps] == ["secret", "uniqueness", "bucket"]
     assert res.steps[-1].ok is False
     # secret rolled back
     assert k8s.deleted_secrets == ["mssql1"]
@@ -610,7 +642,7 @@ def test_add_source_is_idempotent_across_two_full_runs():
     assert first.ok is True
     assert second.ok is True
     assert [s.name for s in second.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
 
 
@@ -624,9 +656,12 @@ def test_table_step_precreates_with_identifier_before_connector():
     assert res.ok is True
     # BOTH layers pre-created — Bronze (<ns>_raw, no identifier) first, then
     # Silver (<ns>, identifier).
+    p = "mssql_ogrenci"
     assert orch.iceberg.created == [
-        ("mssql_ogrenci_raw", "students", (), "bronze"),
-        ("mssql_ogrenci", "students", ("id",), "silver"),
+        ("mssql_ogrenci_raw", "students", (), "bronze",
+         f"s3://{render_service.bronze_bucket_name(p)}/warehouse"),
+        ("mssql_ogrenci", "students", ("id",), "silver",
+         f"s3://{render_service.silver_bucket_name(p)}/warehouse"),
     ]
     # "table" adımı connector'dan (ve topic'ten) ÖNCE
     names = [s.name for s in res.steps]
@@ -642,9 +677,10 @@ def test_table_identifier_fallback_scheduled_incrementing_col():
     orch, *_ = _orch()
     res = orch.add_source(spec, CREDS)
     assert res.ok is True
+    p = "pg_ns"
     assert orch.iceberg.created == [
-        ("pg_ns_raw", "t", (), "bronze"),
-        ("pg_ns", "t", ("pk",), "silver"),
+        ("pg_ns_raw", "t", (), "bronze", f"s3://{render_service.bronze_bucket_name(p)}/warehouse"),
+        ("pg_ns", "t", ("pk",), "silver", f"s3://{render_service.silver_bucket_name(p)}/warehouse"),
     ]
 
 
@@ -657,9 +693,10 @@ def test_table_identifier_fallback_mongo_id():
     orch, *_ = _orch()
     res = orch.add_source(spec, CREDS)
     assert res.ok is True
+    p = "m_ns"
     assert orch.iceberg.created == [
-        ("m_ns_raw", "c", (), "bronze"),
-        ("m_ns", "c", ("_id",), "silver"),
+        ("m_ns_raw", "c", (), "bronze", f"s3://{render_service.bronze_bucket_name(p)}/warehouse"),
+        ("m_ns", "c", ("_id",), "silver", f"s3://{render_service.silver_bucket_name(p)}/warehouse"),
     ]
 
 
@@ -702,7 +739,7 @@ def test_rollback_on_table_failure_undoes_only_secret():
     orch, k8s, s3, trino = _orch(fail_on="table")
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
     assert res.ok is False
-    assert [s.name for s in res.steps] == ["secret", "bucket", "namespace", "table"]
+    assert [s.name for s in res.steps] == ["secret", "uniqueness", "bucket", "namespace", "table"]
     # secret geri alındı; topic/connector hiç uygulanmadı (table connector'dan önce)
     assert k8s.deleted_secrets == ["mssql1"]
     assert k8s.applied_topics == [] and k8s.applied_connectors == []
@@ -733,7 +770,7 @@ def test_kafka_event_skips_secret_topic_and_silver():
     assert "topic" not in names    # existing topic: descriptor.topic_key == "" -> none created
     # Task 2: "acl" grants `connect` a scoped literal READ on the customer
     # topic (kafka-ingest lane only) -- runs before "connector".
-    assert names == ["bucket", "namespace", "table", "acl", "connector", "verify"]
+    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "connector", "verify"]
     assert ("connect", CONNECT_TOPIC_ACL) in fakes["k8s"].ensured_acls
     # Bronze only (event disposition) -- no Silver create_table call at all.
     assert fakes["iceberg"].created_layers == ["bronze"]
@@ -859,7 +896,7 @@ def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():
 
     assert res.ok is True
     assert [s.name for s in res.steps] == [
-        "secret", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
+        "secret", "uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify",
     ]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]
 
@@ -884,7 +921,7 @@ def test_mqtt_event_creates_topic_and_bronze_no_secret_no_silver():
     assert "secret" not in names   # no creds supplied -> no secret step
     # Camel source DOES create its own topic (topic_key set) -- unlike stream/kafka.
     # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
+    assert names == ["uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze"]   # event -> Bronze only, no Silver
 
 
@@ -979,7 +1016,7 @@ def test_http_entity_creates_topic_bronze_and_silver():
     assert res.ok is True
     names = [s.name for s in res.steps]
     # Camel lane also gets its dedicated Iceberg sink applied (Task 2).
-    assert names == ["bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
+    assert names == ["uniqueness", "bucket", "namespace", "table", "topic", "connector", "sink", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
 
 
@@ -1004,5 +1041,79 @@ def test_stream_kafka_entity_precreates_bronze_and_silver():
     names = [s.name for s in res.steps]
     # kafka-ingest still has no topic step (consumes an existing topic) and
     # no dedicated sink (it IS the sink) -- disposition doesn't change that.
-    assert names == ["bucket", "namespace", "table", "acl", "connector", "verify"]
+    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "connector", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
+
+
+# --------------------------------------------------------------------------
+# B-v2 Task 4: uniqueness step + per-pipeline Bronze/Silver buckets + Nessie
+# namespace-level locations (create_table's location mechanism itself is
+# UNCHANGED -- see IcebergService.create_table docstring; only the orchestrator
+# now passes per-pipeline bucket locations into it instead of location=None).
+# --------------------------------------------------------------------------
+
+def test_uniqueness_rejects_namespace_collision():
+    orch, fakes = _orch_fakes()
+    # pre-seed the Bronze namespace with a DIFFERENT table -- simulates two
+    # distinct pipelines colliding on the same target_ns (would force them to
+    # share a bucket).
+    bronze_ns = f"{CDC_MSSQL_SPEC.target_ns}{render_service.BRONZE_NAMESPACE_SUFFIX}"
+    fakes["iceberg"].seed_table(bronze_ns, "other_table")
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is False
+    assert any(s.name == "uniqueness" and not s.ok for s in res.steps)
+    # fails BEFORE any bucket/namespace/table side effect
+    assert fakes["s3"].created_buckets == []
+    assert fakes["trino"].ddls == []
+    assert fakes["iceberg"].created == []
+    # only the secret (already applied) is rolled back
+    assert fakes["k8s"].deleted_secrets == ["mssql1"]
+
+
+def test_uniqueness_allows_resubmit_of_the_same_pipeline():
+    # A pipeline re-adding ITSELF (the table it already pre-created) must NOT
+    # be treated as a collision -- this is what makes add_source idempotent
+    # across retries (see test_add_source_is_idempotent_across_two_full_runs).
+    orch, fakes = _orch_fakes()
+    bronze_ns = f"{CDC_MSSQL_SPEC.target_ns}{render_service.BRONZE_NAMESPACE_SUFFIX}"
+    fakes["iceberg"].seed_table(bronze_ns, CDC_MSSQL_SPEC.target_table)
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is True
+    assert all(s.ok for s in res.steps)
+
+
+def test_entity_add_creates_two_buckets_and_per_pipeline_locations():
+    orch, fakes = _orch_fakes()
+    p = CDC_MSSQL_SPEC.target_ns
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is True
+    assert render_service.bronze_bucket_name(p) in fakes["s3"].created_buckets
+    assert render_service.silver_bucket_name(p) in fakes["s3"].created_buckets
+    # Bronze table created with the bronze-bucket location (moves it off ham-veri)
+    assert fakes["iceberg"].location_for("bronze") == f"s3://{render_service.bronze_bucket_name(p)}/warehouse"
+    assert fakes["iceberg"].location_for("silver") == f"s3://{render_service.silver_bucket_name(p)}/warehouse"
+    # Silver namespace DDL used the silver bucket
+    assert any(
+        f"s3://{render_service.silver_bucket_name(p)}/warehouse" in ddl for ddl in fakes["trino"].ddls
+    )
+
+
+def test_event_add_only_bronze_bucket_and_no_silver_ns():
+    orch, fakes = _orch_fakes()
+    spec = _kafka_spec()
+    p = spec.target_ns
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert render_service.bronze_bucket_name(p) in fakes["s3"].created_buckets
+    assert render_service.silver_bucket_name(p) not in fakes["s3"].created_buckets
+    assert not fakes["trino"].ddls   # no Silver namespace DDL for event
+    assert fakes["iceberg"].location_for("bronze") == f"s3://{render_service.bronze_bucket_name(p)}/warehouse"
+    assert fakes["iceberg"].location_for("silver") is None   # no Silver table for event

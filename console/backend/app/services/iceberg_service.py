@@ -230,3 +230,13 @@ class IcebergService:
         else:
             cat.create_table(fq, schema=schema, properties=properties)
         return fq
+
+    def namespace_tables(self, namespace: str, layer: str = "bronze") -> set:
+        """Table names in `namespace` (empty set if the namespace is absent).
+        Read-only — used by the orchestrator uniqueness check."""
+        warehouse = _BRONZE_WAREHOUSE if layer == "bronze" else None
+        cat = self._catalog_(warehouse=warehouse)
+        try:
+            return {t[1] for t in cat.list_tables(namespace)}
+        except Exception:
+            return set()
