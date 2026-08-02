@@ -8,20 +8,43 @@ Mirrors `test_sources_router.py`'s fake/override pattern.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
-from app.deps import get_apicurio, get_connect, get_iceberg, get_roles, get_s3, get_trino
+from app.deps import get_apicurio, get_connect, get_iceberg, get_k8s, get_roles, get_s3, get_trino
 from app.main import app
 from app.services.authz import Role
 from app.services.iceberg_service import IdentifierMismatch
 
+# A single-CR CDC pipeline (mirrors CONNECTOR_CR in test_sources_router.py +
+# the `lakehouse.solus.dev/source` grouping annotation `assemble_pipelines`
+# groups by, see test_pipeline_topology.py) used by the tables/buckets
+# used-vs-orphan tests below: route value "pgdemo_customers_raw.customers" ->
+# ns="pgdemo_customers", table="customers"; entity disposition (Silver
+# already exists per FakeTrino's tables) -> authoritative = the Silver FQN.
+PGDEMO_CR = {
+    "metadata": {
+        "name": "dbz-pgdemo-customers",
+        "annotations": {"lakehouse.solus.dev/source": "pgdemo_customers"},
+    },
+    "spec": {
+        "class": "io.debezium.connector.postgresql.PostgresConnector",
+        "config": {
+            "topic.prefix": "cdc.pgdemo",
+            "table.include.list": "public.customers",
+            "transforms.route.static.value": "pgdemo_customers_raw.customers",
+        },
+    },
+    "status": {"connectorStatus": {"connector": {"state": "RUNNING"}}},
+}
+
 
 # --------------------------------------------------------------------------
 # Fakes -- hand-rolled doubles for TrinoService / S3Service / ApicurioClient
-# / ConnectService.
+# / ConnectService / K8sService.
 # --------------------------------------------------------------------------
 
 class FakeTrino:
@@ -50,11 +73,21 @@ class FakeTrino:
 
 class FakeIceberg:
     """IcebergService double — tablo pre-create'i pyiceberg'e gitmeden kaydeder.
-    `mismatch=True` ise create_table IdentifierMismatch fırlatır (409 testi)."""
+    `mismatch=True` ise create_table IdentifierMismatch fırlatır (409 testi).
+    `stats` seeds `table_stats`'s return value, keyed by (namespace, table,
+    layer); every call is recorded in `stats_calls` so tests can assert
+    table_stats was actually invoked (not just that a fake default leaked
+    through)."""
 
-    def __init__(self, mismatch: bool = False):
+    def __init__(
+        self,
+        mismatch: bool = False,
+        stats: Optional[Dict[Tuple[str, str, str], Dict[str, int]]] = None,
+    ):
         self.created: List[Dict[str, Any]] = []
         self._mismatch = mismatch
+        self._stats = stats or {}
+        self.stats_calls: List[Tuple[str, str, str]] = []
 
     def create_table(self, namespace, table, columns, identifier, location=None):
         # gerçek IcebergService sözleşmesini yansıt: identifier zorunlu.
@@ -73,11 +106,45 @@ class FakeIceberg:
         )
         return f"{namespace}.{table}"
 
+    def table_stats(self, namespace, table, layer="silver"):
+        self.stats_calls.append((namespace, table, layer))
+        return self._stats.get((namespace, table, layer))
+
+
+class FakeK8s:
+    """K8sService double for assemble_pipelines' three inputs -- `sources`
+    defaults to empty (no active pipeline), so every table/bucket in the
+    default FakeTrino/FakeS3 fixtures is an orphan unless a test passes its
+    own `sources`."""
+
+    def __init__(self, sources: Optional[List[Dict[str, Any]]] = None):
+        self._sources = sources if sources is not None else []
+
+    def list_sources(self):
+        return self._sources
+
+    def get_status(self, name):
+        return {"connector": {"state": "RUNNING"}}
+
+    def get_spark_status(self, name):
+        return {"scheduleState": "Scheduled"}
+
 
 class FakeS3:
-    def __init__(self, buckets: Optional[List[str]] = None):
+    def __init__(
+        self,
+        buckets: Optional[List[str]] = None,
+        objects: Optional[Dict[str, Dict[str, Any]]] = None,
+        raise_for: Optional[List[str]] = None,
+    ):
         self._buckets = buckets if buckets is not None else ["src-mssql-ogrenci"]
         self.created: List[str] = []
+        self._objects = objects or {}
+        # Bucket names whose object_count call should raise a non-
+        # NoSuchBucket ClientError (e.g. AccessDenied) -- mirrors a real S3
+        # permission/timeout failure on just ONE bucket in the listing.
+        self._raise_for = set(raise_for or [])
+        self.object_count_calls: List[str] = []
 
     def list_buckets(self):
         return self._buckets
@@ -85,6 +152,12 @@ class FakeS3:
     def create_bucket(self, name):
         self.created.append(name)
         return True
+
+    def object_count(self, name):
+        self.object_count_calls.append(name)
+        if name in self._raise_for:
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+        return self._objects.get(name, {"count": 0, "capped": False})
 
 
 class FakeApicurio:
@@ -137,10 +210,13 @@ class ExplodingProvider:
 # Client helper -- swaps every dependency via app.dependency_overrides.
 # --------------------------------------------------------------------------
 
-def _client_as(roles, trino=None, s3=None, apicurio=None, connect=None, iceberg=None) -> TestClient:
+def _client_as(
+    roles, trino=None, s3=None, apicurio=None, connect=None, iceberg=None, k8s=None
+) -> TestClient:
     app.dependency_overrides[get_roles] = lambda: roles
     app.dependency_overrides[get_trino] = lambda: (trino if trino is not None else FakeTrino())
     app.dependency_overrides[get_iceberg] = lambda: (iceberg if iceberg is not None else FakeIceberg())
+    app.dependency_overrides[get_k8s] = lambda: (k8s if k8s is not None else FakeK8s())
     app.dependency_overrides[get_s3] = lambda: (s3 if s3 is not None else FakeS3())
     app.dependency_overrides[get_apicurio] = lambda: (
         apicurio if apicurio is not None else FakeApicurio()
@@ -181,7 +257,53 @@ def test_list_tables_readable_by_student(client_as_student):
     assert r.status_code == 200
     body = r.json()
     assert body["catalog"] == "lakehouse"
-    assert body["namespaces"] == [{"name": "mssql_ogrenci", "tables": ["students"]}]
+    assert len(body["namespaces"]) == 1
+    ns = body["namespaces"][0]
+    assert ns["name"] == "mssql_ogrenci"
+    assert len(ns["tables"]) == 1
+    table = ns["tables"][0]
+    # no active pipeline owns it (default FakeK8s has no sources) -> orphan.
+    assert table["table"] == "students"
+    assert table["used"] is False
+    assert "leftover" in table["hint"].lower()
+    assert table["records"] is None
+
+
+def test_tables_labels_used_and_orphan_with_counts():
+    # pipeline owns lakehouse.pgdemo_customers.customers (authoritative,
+    # since Silver already exists per FakeTrino's tables -> entity
+    # disposition) + an orphan lakehouse.old_ns.gone exists alongside it.
+    trino = FakeTrino(
+        namespaces=["pgdemo_customers", "old_ns"],
+        tables={"pgdemo_customers": ["customers"], "old_ns": ["gone"]},
+    )
+    iceberg = FakeIceberg(
+        stats={("pgdemo_customers", "customers", "silver"): {"records": 42, "data_files": 3}}
+    )
+    k8s = FakeK8s(sources=[PGDEMO_CR])
+    client = _client_as({Role.STUDENT}, trino=trino, iceberg=iceberg, k8s=k8s)
+    r = client.get("/api/tables?catalog=lakehouse")
+    assert r.status_code == 200
+    body = r.json()
+
+    def _find(ns_name, table_name):
+        ns = next(n for n in body["namespaces"] if n["name"] == ns_name)
+        return next(t for t in ns["tables"] if t["table"] == table_name)
+
+    used = _find("pgdemo_customers", "customers")
+    assert used["used"] is True
+    assert used["role"] == "authoritative"
+    assert used["pipeline"] == "pgdemo_customers"
+    assert used["records"] == 42
+
+    orphan = _find("old_ns", "gone")
+    assert orphan["used"] is False
+    assert "leftover" in orphan["hint"].lower()
+    assert orphan["records"] is None
+
+    # table_stats was actually called (both namespaces are non-"_raw" -> silver layer).
+    assert ("pgdemo_customers", "customers", "silver") in iceberg.stats_calls
+    assert ("old_ns", "gone", "silver") in iceberg.stats_calls
 
 
 def test_create_table_forbidden_for_student(client_as_student):
@@ -302,7 +424,92 @@ def test_unauthorized_delete_table_does_not_build_provider():
 def test_list_buckets_readable_by_student(client_as_student):
     r = client_as_student.get("/api/buckets")
     assert r.status_code == 200
-    assert r.json() == {"buckets": ["src-mssql-ogrenci"]}
+    body = r.json()
+    assert len(body["buckets"]) == 1
+    bucket = body["buckets"][0]
+    # no active pipeline owns it (default FakeK8s has no sources) -> orphan.
+    assert bucket["name"] == "src-mssql-ogrenci"
+    assert bucket["used"] is False
+    assert "leftover" in bucket["hint"].lower()
+    assert bucket["objects"] == {"count": 0, "capped": False}
+
+
+def test_buckets_labels_used_and_orphan_with_counts():
+    # pipeline owns bronze-pgdemo_customers (role=bronze) + silver-pgdemo_customers
+    # (role=silver, since Silver already exists -> entity disposition) + an
+    # orphan src-orphan bucket exists alongside them.
+    from app.services import render_service
+
+    bronze_bucket = render_service.bronze_bucket_name("pgdemo_customers")
+    silver_bucket = render_service.silver_bucket_name("pgdemo_customers")
+    s3 = FakeS3(
+        buckets=[bronze_bucket, silver_bucket, "src-orphan"],
+        objects={silver_bucket: {"count": 7, "capped": False}},
+    )
+    k8s = FakeK8s(sources=[PGDEMO_CR])
+    trino = FakeTrino(
+        namespaces=["pgdemo_customers"], tables={"pgdemo_customers": ["customers"]}
+    )
+    client = _client_as({Role.STUDENT}, s3=s3, k8s=k8s, trino=trino)
+    r = client.get("/api/buckets")
+    assert r.status_code == 200
+    body = r.json()
+
+    def _find(name):
+        return next(b for b in body["buckets"] if b["name"] == name)
+
+    bronze = _find(bronze_bucket)
+    assert bronze["used"] is True
+    assert bronze["role"] == "bronze"
+    assert bronze["pipeline"] == "pgdemo_customers"
+    assert bronze["objects"] == {"count": 0, "capped": False}
+
+    silver = _find(silver_bucket)
+    assert silver["used"] is True
+    assert silver["role"] == "silver"
+    assert silver["pipeline"] == "pgdemo_customers"
+    assert silver["objects"] == {"count": 7, "capped": False}
+
+    orphan = _find("src-orphan")
+    assert orphan["used"] is False
+    assert "leftover" in orphan["hint"].lower()
+    assert orphan["objects"] == {"count": 0, "capped": False}
+
+    # object_count was actually called for every bucket, not just used ones.
+    assert set(s3.object_count_calls) == {bronze_bucket, silver_bucket, "src-orphan"}
+
+
+def test_buckets_degrades_gracefully_when_object_count_fails_for_one_bucket():
+    # One bucket's object_count raises a non-NoSuchBucket ClientError (e.g.
+    # AccessDenied, a transient timeout) -- S3Service.object_count itself
+    # re-raises that (fail-loud, by design -- see test_s3_service.py's
+    # test_object_count_reraises_other_client_errors), so list_buckets must
+    # catch it AT THE CALL SITE and degrade that one bucket's `objects` to
+    # None rather than 500ing the whole catalog page; every other bucket
+    # must still come back intact.
+    s3 = FakeS3(
+        buckets=["ok-bucket", "broken-bucket"],
+        objects={"ok-bucket": {"count": 3, "capped": False}},
+        raise_for=["broken-bucket"],
+    )
+    client = _client_as({Role.STUDENT}, s3=s3)
+    r = client.get("/api/buckets")
+    assert r.status_code == 200
+    body = r.json()
+
+    def _find(name):
+        return next(b for b in body["buckets"] if b["name"] == name)
+
+    ok = _find("ok-bucket")
+    assert ok["objects"] == {"count": 3, "capped": False}
+
+    broken = _find("broken-bucket")
+    assert broken["objects"] is None
+    # used/orphan labeling still resolves normally -- only the count degrades.
+    assert broken["used"] is False
+    assert "leftover" in broken["hint"].lower()
+
+    assert set(s3.object_count_calls) == {"ok-bucket", "broken-bucket"}
 
 
 def test_create_bucket_forbidden_for_student(client_as_student):

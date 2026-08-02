@@ -37,6 +37,7 @@ export default function Nav() {
       <NavLink to="/schemas">Schemas</NavLink>
       <NavLink to="/status">Status</NavLink>
       <NavLink to="/gitops">GitOps</NavLink>
+      <NavLink to="/pipelines">Pipeline Map</NavLink>
 
       <span aria-hidden="true"> | </span>
 

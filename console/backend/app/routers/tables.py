@@ -15,18 +15,44 @@ equally destructive/data-losing.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.deps import get_iceberg, get_trino, require_action
+from app.deps import get_iceberg, get_k8s, get_trino, require_action
 from app.services import render_service
 from app.services.authz import Action
 from app.services.iceberg_service import IcebergService, IdentifierMismatch
+from app.services.k8s_service import K8sService
+from app.services.pipeline_topology import assemble_pipelines
 from app.services.trino_service import TrinoService
 
 router = APIRouter(prefix="/api/tables", tags=["tables"])
+
+# Surfaced on any table not owned by an active pipeline's owned_tables set
+# (see `_owned_map` below) -- either a deleted pipeline's leftover, or a
+# table someone created by hand outside the console.
+_ORPHAN_HINT = "no active pipeline — leftover from a deleted pipeline or hand-created"
+
+
+def _owned_map(pipelines: List[Dict[str, Any]], key: str) -> Dict[str, Tuple[str, str]]:
+    """`fqn -> (pipeline_name, role)` for every item in every pipeline's
+    `owned_tables`/`owned_buckets` list (`key`). `role` is `authoritative`
+    when the item equals that pipeline's `authoritative.fqn`; otherwise
+    `bronze` for the first owned slot, `silver` for the second (mirrors
+    `assemble_pipelines`: `owned_tables[0]`/`owned_buckets[0]` is always the
+    Bronze side, `[1]` -- present only for the `entity` disposition -- is
+    Silver). A pipeline that failed to assemble (`error` key, no owned_tables/
+    owned_buckets) contributes nothing rather than raising."""
+    out: Dict[str, Tuple[str, str]] = {}
+    for pipeline in pipelines:
+        owned = pipeline.get(key) or []
+        authoritative_fqn = (pipeline.get("authoritative") or {}).get("fqn")
+        for idx, item in enumerate(owned):
+            role = "authoritative" if item == authoritative_fqn else ("bronze" if idx == 0 else "silver")
+            out[item] = (pipeline["name"], role)
+    return out
 
 
 class ColumnSpec(BaseModel):
@@ -55,11 +81,41 @@ class CreateTableRequest(BaseModel):
 def list_tables(
     catalog: str = "lakehouse",
     trino: TrinoService = Depends(get_trino),
+    k8s: K8sService = Depends(get_k8s),
+    iceberg: IcebergService = Depends(get_iceberg),
 ) -> Dict[str, Any]:
-    namespaces = [
-        {"name": ns, "tables": trino.list_tables(catalog, ns)}
-        for ns in trino.list_namespaces(catalog)
-    ]
+    # Silver-existence inventory (ALWAYS the "lakehouse" catalog, regardless
+    # of `catalog` -- mirrors app.routers.pipelines.list_pipelines) so
+    # assemble_pipelines's entity/event disposition call is correct even when
+    # this endpoint is queried for a different catalog (e.g. "rawlake").
+    lakehouse_namespaces = {
+        ns: set(trino.list_tables("lakehouse", ns)) for ns in trino.list_namespaces("lakehouse")
+    }
+    pipelines = assemble_pipelines(
+        k8s.list_sources(), lakehouse_namespaces, k8s.get_status, k8s.get_spark_status
+    )
+    used_tables = _owned_map(pipelines, "owned_tables")
+
+    namespaces = []
+    for ns in trino.list_namespaces(catalog):
+        layer = "bronze" if ns.endswith(render_service.BRONZE_NAMESPACE_SUFFIX) else "silver"
+        tables = []
+        for table in trino.list_tables(catalog, ns):
+            fqn = f"{catalog}.{ns}.{table}"
+            stats = iceberg.table_stats(ns, table, layer)
+            entry: Dict[str, Any] = {
+                "table": table,
+                "used": fqn in used_tables,
+                "records": stats["records"] if stats else None,
+            }
+            if fqn in used_tables:
+                pipeline_name, role = used_tables[fqn]
+                entry["pipeline"] = pipeline_name
+                entry["role"] = role
+            else:
+                entry["hint"] = _ORPHAN_HINT
+            tables.append(entry)
+        namespaces.append({"name": ns, "tables": tables})
     return {"catalog": catalog, "namespaces": namespaces}
 
 

@@ -80,6 +80,12 @@ class FakeK8s:
     def list_sources(self) -> List[Dict[str, Any]]:
         return [CONNECTOR_CR]
 
+    def get_status(self, name: str) -> Dict[str, Any]:
+        return {"connector": {"state": "RUNNING"}}
+
+    def get_spark_status(self, name: str) -> Dict[str, Any]:
+        return {"scheduleState": "Scheduled"}
+
     def patch_connector(self, name: str, config: Dict[str, Any]) -> None:
         pass
 
@@ -102,6 +108,9 @@ class FakeS3:
 
     def empty_bucket(self, name: str) -> None:
         pass
+
+    def object_count(self, name: str) -> Dict[str, Any]:
+        return {"count": 0, "capped": False}
 
 
 class FakeTrino:
@@ -229,6 +238,7 @@ ENDPOINTS: List[Dict[str, Any]] = [
     {"method": "GET", "template": "/api/schemas", "path": "/api/schemas"},
     {"method": "GET", "template": "/api/status", "path": "/api/status"},
     {"method": "GET", "template": "/gitops/status", "path": "/gitops/status"},
+    {"method": "GET", "template": "/api/pipelines", "path": "/api/pipelines"},
 ]
 
 

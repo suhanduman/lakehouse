@@ -87,3 +87,31 @@ class S3Service:
             code = exc.response.get("Error", {}).get("Code")
             if code not in _NO_SUCH_BUCKET_CODES:
                 raise
+
+    # ----------------------------------------------------------------
+    # object_count — best-effort paginated count for the Console Pipeline
+    # Map (on-demand, NOT polled). Bounded by `cap` so a huge bucket can't
+    # turn a UI call into an unbounded full listing; missing bucket -> 0
+    # (mirrors delete_bucket's idempotent-missing semantics).
+    # ----------------------------------------------------------------
+
+    def object_count(self, name: str, cap: int = 100_000) -> dict:
+        """Best-effort object count via paginated list_objects_v2 (on-demand, NOT
+        polled). Stops at `cap` and flags `capped`. Missing bucket -> count 0."""
+        total, token = 0, None
+        try:
+            while True:
+                kw = {"Bucket": name}
+                if token:
+                    kw["ContinuationToken"] = token
+                resp = self.client.list_objects_v2(**kw)
+                total += resp.get("KeyCount", len(resp.get("Contents", [])))
+                if total >= cap:
+                    return {"count": cap, "capped": True}
+                if not resp.get("IsTruncated"):
+                    return {"count": total, "capped": False}
+                token = resp.get("NextContinuationToken")
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in _NO_SUCH_BUCKET_CODES:
+                return {"count": 0, "capped": False}
+            raise

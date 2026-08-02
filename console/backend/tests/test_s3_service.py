@@ -6,6 +6,7 @@ idempotent-create behaviour is exercised without a real bucket store.
 
 from __future__ import annotations
 
+import pytest
 from botocore.exceptions import ClientError
 
 from app.services.s3_service import S3Service
@@ -145,3 +146,48 @@ def test_delete_bucket_missing_is_noop():
             raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "DeleteBucket")
 
     S3Service(Missing()).delete_bucket("gone")  # must not raise
+
+
+# --------------------------------------------------------------------------
+# object_count — paginated, bounded best-effort count. Pipeline Map + catalog
+# enrichment (2026-08-02 spike), Task 1.
+# --------------------------------------------------------------------------
+
+def test_object_count_sums_pages():
+    fake = FakeS3()
+    fake.objects["b1"] = ["k1", "k2", "k3"]
+    assert S3Service(fake).object_count("b1") == {"count": 3, "capped": False}
+
+
+def test_object_count_missing_bucket_is_zero():
+    class Missing:
+        def list_objects_v2(self, **k):
+            raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "ListObjectsV2")
+
+    assert S3Service(Missing()).object_count("gone") == {"count": 0, "capped": False}
+
+
+def test_object_count_stops_at_cap():
+    class ManyPages:
+        """Two pages of 3 objects each — cap of 4 should stop mid-second-page
+        and report capped=True with count clamped to the cap."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def list_objects_v2(self, Bucket, ContinuationToken=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {"KeyCount": 3, "IsTruncated": True, "NextContinuationToken": "tok"}
+            return {"KeyCount": 3, "IsTruncated": False}
+
+    assert S3Service(ManyPages()).object_count("big", cap=4) == {"count": 4, "capped": True}
+
+
+def test_object_count_reraises_other_client_errors():
+    class Broken:
+        def list_objects_v2(self, **k):
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+
+    with pytest.raises(ClientError):
+        S3Service(Broken()).object_count("nope")

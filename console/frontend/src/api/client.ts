@@ -148,14 +148,47 @@ export interface DeleteSourceResult {
   ref?: string;
 }
 
+/** Mirrors app.routers.tables.list_tables()'s per-table dict (Task 3):
+ * `used` distinguishes tables owned by an active pipeline's `owned_tables`
+ * (in which case `pipeline`/`role` are set) from orphans (leftover from a
+ * deleted pipeline, or hand-created -- `hint` explains which). `records` is
+ * `null` when `IcebergService.table_stats` couldn't resolve a snapshot
+ * (empty/never-committed table), never a missing key. */
+export interface TableEntry {
+  table: string;
+  used: boolean;
+  pipeline?: string;
+  role?: "authoritative" | "bronze" | "silver";
+  hint?: string;
+  records: number | null;
+}
+
 export interface TableNamespace {
   name: string;
-  tables: string[];
+  tables: TableEntry[];
 }
 
 export interface TablesResponse {
   catalog: string;
   namespaces: TableNamespace[];
+}
+
+/** Mirrors app.routers.buckets.list_buckets()'s per-bucket dict (Task 3):
+ * same `used`/`pipeline`/`role`/`hint` used/orphan labeling as `TableEntry`,
+ * plus `objects` -- the full `{count, capped}` dict from
+ * `S3Service.object_count` (a bounded/paginated count; `capped: true` means
+ * the real count may exceed `count`, so the UI should render it as "N+").
+ * `null` when the router's `object_count` call itself failed (e.g. a
+ * non-NoSuchBucket ClientError -- AccessDenied, a transient timeout) --
+ * mirrors `TableEntry.records`'s `null`-on-no-snapshot degrade-gracefully
+ * shape, so the UI can render "—" the same way. */
+export interface BucketEntry {
+  name: string;
+  used: boolean;
+  pipeline?: string;
+  role?: "authoritative" | "bronze" | "silver";
+  hint?: string;
+  objects: { count: number; capped: boolean } | null;
 }
 
 export interface StatusEntry {
@@ -318,9 +351,9 @@ export async function listTables(catalog = "lakehouse"): Promise<TablesResponse>
   return request<TablesResponse>(`/tables?catalog=${encodeURIComponent(catalog)}`);
 }
 
-/** GET /api/buckets -> S3 bucket names. */
-export async function listBuckets(): Promise<string[]> {
-  const data = await request<{ buckets: string[] }>("/buckets");
+/** GET /api/buckets -> S3 buckets with used/orphan labeling + object counts. */
+export async function listBuckets(): Promise<BucketEntry[]> {
+  const data = await request<{ buckets: BucketEntry[] }>("/buckets");
   return data.buckets;
 }
 
@@ -339,4 +372,48 @@ export async function getStatus(): Promise<StatusResponse> {
  * {mode:"direct"} when the Console is in direct-apply mode. */
 export async function getGitopsStatus(): Promise<GitopsStatusResponse> {
   return request<GitopsStatusResponse>("/gitops/status");
+}
+
+// --------------------------------------------------------------------------
+// Pipelines (Pipeline Map)
+// --------------------------------------------------------------------------
+
+/** Mirrors `app.services.pipeline_topology._assemble_one`'s per-node dicts
+ * (Task 2). Discriminated on `type`; each variant carries exactly the keys
+ * that node's builder emits -- e.g. only `connector`/`sink`/`merge` carry a
+ * `state` (from `_safe_status`, always a string, degrading to `"unknown"`
+ * rather than ever being absent/null). */
+export type PipelineNode =
+  | { type: "source"; name: string }
+  | { type: "connector"; name: string | null; kind: string | null; state: string }
+  | { type: "topic"; name: string }
+  | { type: "sink"; name: string | null; state: string }
+  | { type: "bronze"; fqn: string }
+  | { type: "merge"; name: string; state: string }
+  | { type: "silver"; fqn: string }
+  | { type: "buckets"; buckets: string[] };
+
+/** Mirrors `app.services.pipeline_topology._assemble_one`/`_batch_pipeline`'s
+ * top-level dict. On the error path (`_assemble_one`'s `except` branch) the
+ * backend omits `disposition`/`authoritative`/`owned_tables`/`owned_buckets`
+ * entirely and sets `error` -- those fields are optional here to match. */
+export interface Pipeline {
+  name: string;
+  cr_kind: string | null;
+  disposition?: "entity" | "event" | "batch";
+  authoritative?: { fqn: string; layer: string };
+  nodes: PipelineNode[];
+  owned_tables?: string[];
+  owned_buckets?: string[];
+  error?: string;
+}
+
+export interface PipelinesResponse {
+  pipelines: Pipeline[];
+}
+
+/** GET /api/pipelines -> one topology entry per pipeline (grouped by the
+ * `lakehouse.solus.dev/source` annotation), for the Pipeline Map page. */
+export async function getPipelines(): Promise<PipelinesResponse> {
+  return request<PipelinesResponse>("/pipelines");
 }
