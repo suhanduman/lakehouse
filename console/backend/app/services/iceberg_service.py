@@ -231,6 +231,23 @@ class IcebergService:
             cat.create_table(fq, schema=schema, properties=properties)
         return fq
 
+    def table_stats(self, namespace: str, table: str, layer: str = "silver") -> Dict[str, int] | None:
+        """{'records','data_files'} from the current snapshot summary (metadata
+        read, no scan), or None if the table is absent / has no snapshot."""
+        warehouse = _BRONZE_WAREHOUSE if layer == "bronze" else None
+        try:
+            tbl = self._catalog_(warehouse=warehouse).load_table(f"{namespace}.{table}")
+            snap = tbl.current_snapshot()
+        except Exception:
+            return None
+        if snap is None:
+            return None
+        summary = snap.summary or {}
+        return {
+            "records": int(summary.get("total-records", 0)),
+            "data_files": int(summary.get("total-data-files", 0)),
+        }
+
     def namespace_tables(self, namespace: str, layer: str = "bronze") -> set:
         """Table names in `namespace` (empty set if the namespace is absent).
         Read-only — used by the orchestrator uniqueness check."""

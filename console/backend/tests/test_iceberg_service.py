@@ -12,9 +12,18 @@ import pytest
 from app.services.iceberg_service import IcebergService, IdentifierMismatch
 
 
+class FakeSnapshot:
+    """Mirrors pyiceberg's Snapshot enough for table_stats: a `.summary` dict
+    (string-valued, as the real Iceberg snapshot summary is)."""
+
+    def __init__(self, summary):
+        self.summary = summary
+
+
 class FakeTable:
-    def __init__(self, identifier_names):
+    def __init__(self, identifier_names, snapshot_summary=None):
         self._ids = list(identifier_names)
+        self._snapshot_summary = snapshot_summary
 
     def schema(self):
         table = self
@@ -24,6 +33,13 @@ class FakeTable:
                 return table._ids
 
         return _S()
+
+    def current_snapshot(self):
+        """Mirrors pyiceberg's Table.current_snapshot() -> Optional[Snapshot]:
+        None when no snapshot has been seeded (fresh/empty table)."""
+        if self._snapshot_summary is None:
+            return None
+        return FakeSnapshot(self._snapshot_summary)
 
 
 class FakeCatalog:
@@ -36,6 +52,7 @@ class FakeCatalog:
         self.namespaces = []       # [(ns, properties)]
         self.table_properties = {}  # {fq: properties} — Iceberg CREATE-time table properties
         self.tables_by_ns = {}     # {namespace: {table, ...}} — populated by create_table
+        self.snapshots = {}       # {fq: summary_dict} — populated by seed_snapshot
 
     def create_namespace(self, namespace, properties=None):
         self.namespaces.append((namespace, properties))
@@ -50,7 +67,18 @@ class FakeCatalog:
         return [(namespace, t) for t in names]
 
     def load_table(self, fq):
-        return FakeTable(self.existing[fq.split(".")[-1]])
+        # `.get(..., [])` (not a bare index) so table_stats can load_table()
+        # for a table that was only seeded via seed_snapshot (never listed in
+        # `existing`) -- identifier-mismatch call sites only reach load_table
+        # after confirming `table in existing`, so this is additive.
+        ids = self.existing.get(fq.split(".")[-1], [])
+        return FakeTable(ids, snapshot_summary=self.snapshots.get(fq))
+
+    def seed_snapshot(self, fq, summary_dict):
+        """Test helper: makes a subsequent `load_table(fq).current_snapshot()`
+        return a FakeSnapshot wrapping `summary_dict` — used by table_stats
+        tests."""
+        self.snapshots[fq] = summary_dict
 
     def create_table(self, fq, schema=None, partition_spec=None, properties=None):
         self.created.append((fq, schema))
@@ -268,3 +296,19 @@ def test_namespace_tables_returns_names(fake_catalog_iceberg):
     svc.create_table("ns1", "t1", COLS, ["id"], location="s3://x/warehouse")
     assert svc.namespace_tables("ns1") == {"t1"}
     assert svc.namespace_tables("absent") == set()
+
+
+# --------------------------------------------------------------------------
+# table_stats — current-snapshot summary read (metadata only, no scan). Pipeline
+# Map + catalog enrichment (2026-08-02 spike), Task 1.
+# --------------------------------------------------------------------------
+
+def test_table_stats_reads_snapshot_summary(fake_catalog_iceberg):
+    svc, cat = fake_catalog_iceberg
+    cat.seed_snapshot("depo.customers", {"total-records": "42", "total-data-files": "7"})
+    assert svc.table_stats("depo", "customers", layer="silver") == {"records": 42, "data_files": 7}
+
+
+def test_table_stats_none_when_absent(fake_catalog_iceberg):
+    svc, _ = fake_catalog_iceberg
+    assert svc.table_stats("nope", "missing") is None
