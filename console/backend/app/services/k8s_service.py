@@ -261,6 +261,35 @@ class K8sService:
         return (obj or {}).get("status")
 
     # ----------------------------------------------------------------
+    # apply_user / delete_user — KafkaUser CR lifecycle (producer/consumer identity)
+    # ----------------------------------------------------------------
+
+    def apply_user(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return self._apply(GROUP, VERSION, USER_PLURAL, body)
+
+    def delete_user(self, name: str) -> Dict[str, Any]:
+        return self._delete(GROUP, VERSION, USER_PLURAL, name)
+
+    # ----------------------------------------------------------------
+    # read_secret — read a Secret and decode its base64 data. Used to
+    # retrieve KafkaUser SCRAM password Secret (materializes asynchronously
+    # with the same name as the user); returns None on 404 (not yet present).
+    # ----------------------------------------------------------------
+
+    def read_secret(self, name: str) -> Optional[Dict[str, str]]:
+        """Base64-decoded `.data` of a Secret, or None if it isn't there yet
+        (Strimzi materializes a KafkaUser's SCRAM password Secret asynchronously,
+        named exactly like the user)."""
+        try:
+            obj = self.core_api.read_namespaced_secret(name=name, namespace=self.namespace)
+        except ApiException as exc:
+            if exc.status == HTTP_NOT_FOUND:
+                return None
+            raise
+        data = getattr(obj, "data", None) or {}
+        return {k: base64.b64decode(v).decode("utf-8") for k, v in data.items()}
+
+    # ----------------------------------------------------------------
     # ensure_user_acl / remove_user_acl — read-modify-write a KafkaUser CR's
     # spec.authorization.acls. Used by the add-source/remove-source
     # orchestrator to grant/revoke a scoped topic READ on the `connect` user

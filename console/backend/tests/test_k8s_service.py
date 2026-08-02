@@ -100,11 +100,13 @@ class FakeCustom:
 
 
 class FakeCore:
-    def __init__(self, conflict_on_create: bool = False):
+    def __init__(self, conflict_on_create: bool = False, secret_data: dict | None = None, secret_not_found: bool = False):
         self.conflict_on_create = conflict_on_create
         self.created_secrets = []
         self.replaced_secrets = []
         self.deleted_secrets = []
+        self.secret_data = secret_data
+        self.secret_not_found = secret_not_found
 
     def create_namespaced_secret(self, **kw):
         if self.conflict_on_create:
@@ -119,6 +121,16 @@ class FakeCore:
     def delete_namespaced_secret(self, **kw):
         self.deleted_secrets.append(kw)
         return {}
+
+    def read_namespaced_secret(self, **kw):
+        if self.secret_not_found:
+            raise ApiException(status=404, reason="NotFound")
+
+        class FakeSecret:
+            def __init__(self, data):
+                self.data = data
+
+        return FakeSecret(self.secret_data or {})
 
 
 # --------------------------------------------------------------------------
@@ -580,3 +592,95 @@ def test_remove_user_acl_retries_once_on_patch_conflict():
     patched = fake.last_patch["body"]["spec"]["authorization"]["acls"]
     assert ACL not in patched
     assert len(patched) == 1
+
+
+# --------------------------------------------------------------------------
+# apply_user / delete_user / read_secret
+# --------------------------------------------------------------------------
+
+def test_apply_user_hits_kafkausers_plural():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.apply_user({"metadata": {"name": "nginx-producer"}, "spec": {}})
+
+    assert len(fake.created) == 1
+    call = fake.created[0]
+    assert call["plural"] == "kafkausers"
+    assert call["group"] == "kafka.strimzi.io"
+    assert call["version"] == "v1beta2"
+    assert call["namespace"] == "example"
+    assert call["body"] == {"metadata": {"name": "nginx-producer"}, "spec": {}}
+
+
+def test_apply_user_falls_back_to_patch_on_409():
+    fake = FakeCustom(conflict_on_create=True)
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    body = {"metadata": {"name": "nginx-producer"}, "spec": {}}
+
+    svc.apply_user(body)
+
+    assert fake.created == []
+    assert len(fake.patched) == 1
+    patch_call = fake.patched[0]
+    assert patch_call["group"] == "kafka.strimzi.io"
+    assert patch_call["version"] == "v1beta2"
+    assert patch_call["plural"] == "kafkausers"
+    assert patch_call["namespace"] == "example"
+    assert patch_call["name"] == "nginx-producer"
+    assert patch_call["body"] == body
+
+
+def test_delete_user_hits_kafkausers_plural():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.delete_user("nginx-producer")
+
+    assert len(fake.deleted) == 1
+    assert fake.deleted[0] == {
+        "group": "kafka.strimzi.io",
+        "version": "v1beta2",
+        "namespace": "example",
+        "plural": "kafkausers",
+        "name": "nginx-producer",
+    }
+
+
+def test_read_secret_decodes_base64_data():
+    fake_core = FakeCore(secret_data={"password": base64.b64encode(b"mysecretpw").decode("utf-8")})
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    result = svc.read_secret("nginx-producer")
+
+    assert result == {"password": "mysecretpw"}
+
+
+def test_read_secret_handles_multiple_keys():
+    fake_core = FakeCore(secret_data={
+        "user": base64.b64encode(b"admin").decode("utf-8"),
+        "password": base64.b64encode(b"secret123").decode("utf-8"),
+    })
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    result = svc.read_secret("nginx-producer")
+
+    assert result == {"user": "admin", "password": "secret123"}
+
+
+def test_read_secret_returns_none_on_404():
+    fake_core = FakeCore(secret_not_found=True)
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    result = svc.read_secret("missing")
+
+    assert result is None
+
+
+def test_read_secret_reraises_non_404_errors():
+    class ExplodingCore(FakeCore):
+        def read_namespaced_secret(self, **kw):
+            raise ApiException(status=500, reason="Boom")
+
+    svc = K8sService(custom_api=None, core_api=ExplodingCore(), namespace=NAMESPACE)
+    with pytest.raises(ApiException) as exc_info:
+        svc.read_secret("nginx-producer")
+    assert exc_info.value.status == 500
