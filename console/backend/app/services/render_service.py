@@ -261,7 +261,7 @@ def topic_name(spec: SourceSpec) -> str:
     return fn(spec)
 
 
-def render_kafka_topic(topic_name: str) -> dict:
+def render_kafka_topic(topic_name: str, partitions: int = 6, replicas: int = 3) -> dict:
     """Matches tools/templates/kafkatopic.yaml field-for-field.
 
     NB: no `metadata.namespace` here on purpose — see `_connector`'s
@@ -276,8 +276,8 @@ def render_kafka_topic(topic_name: str) -> dict:
     """
     cr_name = _k8s_topic_name(topic_name)
     spec: dict = {
-        "partitions": 6,
-        "replicas": 3,
+        "partitions": partitions,
+        "replicas": replicas,
         "config": {"retention.ms": "604800000", "cleanup.policy": "delete"},
     }
     if cr_name != topic_name:
@@ -290,6 +290,30 @@ def render_kafka_topic(topic_name: str) -> dict:
             "labels": {"strimzi.io/cluster": "kafka"},
         },
         "spec": spec,
+    }
+
+
+def render_producer_user(username: str, topic: str, allow_create: bool, cluster: str) -> dict:
+    """A per-pipeline Strimzi KafkaUser that a log-shipper/app authenticates as
+    to PRODUCE to `topic` (SCRAM-SHA-512). Least-privilege: Write+Describe on
+    the one literal topic (+Create only when the topic is not pre-created, so
+    the producer can lazily create it). `cluster` -> strimzi.io/cluster label
+    (Strimzi reconciles the user + materializes its password Secret <username>)."""
+    ops = ["Write", "Describe"] + (["Create"] if allow_create else [])
+    return {
+        "apiVersion": "kafka.strimzi.io/v1beta2",
+        "kind": "KafkaUser",
+        "metadata": {"name": username, "labels": {"strimzi.io/cluster": cluster}},
+        "spec": {
+            "authentication": {"type": "scram-sha-512"},
+            "authorization": {
+                "type": "simple",
+                "acls": [
+                    {"resource": {"type": "topic", "name": topic, "patternType": "literal"},
+                     "operations": ops},
+                ],
+            },
+        },
     }
 
 
