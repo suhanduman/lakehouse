@@ -367,7 +367,7 @@ export async function deleteSource(
 // Connectors (restart / debug)
 // --------------------------------------------------------------------------
 
-/** Mirrors app.routers.sources.list_source_connectors()'s per-connector dict
+/** Mirrors app.routers.sources.source_connectors()'s per-connector dict
  * (Task 3/4): the KafkaConnector CR(s) a source's pipeline owns -- a CDC/
  * stream source has one `role:"source"` connector, an event-lane pipeline
  * also has a `role:"sink"` connector. `kind`/`state` are `null` when the
@@ -379,7 +379,7 @@ export interface ConnectorRef {
   state: string | null;
 }
 
-/** Mirrors a single entry of app.routers.connectors.get_connector_debug()'s
+/** Mirrors a single entry of app.routers.connectors.connector_debug()'s
  * `tasks` list -- one Kafka Connect task's id/state/worker + its most recent
  * trace (`null` when the task has no error trace to show). */
 export interface ConnectorTask {
@@ -389,7 +389,7 @@ export interface ConnectorTask {
   trace: string | null;
 }
 
-/** Mirrors app.routers.connectors.get_connector_debug()'s `logs_hint` dict:
+/** Mirrors app.routers.connectors.connector_debug()'s `logs_hint` dict:
  * a ready-to-run `oc logs` recipe (never fetched by the Console itself --
  * Console never proxies pod logs) plus an optional deep link into an
  * external logging UI (`null` when none is configured). */
@@ -401,7 +401,7 @@ export interface LogsHint {
   external_link: string | null;
 }
 
-/** Mirrors app.routers.connectors.get_connector_debug()'s top-level dict. */
+/** Mirrors app.routers.connectors.connector_debug()'s top-level dict. */
 export interface ConnectorDebug {
   name: string;
   state: string;

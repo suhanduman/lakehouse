@@ -167,22 +167,51 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     }
   }
 
-  async function handleRestart(connName: string, onlyFailed = false) {
+  /** Returns true on success, false on failure (having already set
+   * actionError) -- the return value is additive: every existing
+   * single-connector call site (the per-row Restart/Only-failed buttons)
+   * ignores it, so their behavior is unchanged. handleRestartPipeline below
+   * uses it to stop the loop and skip the combined confirmation as soon as
+   * one connector fails. */
+  async function handleRestart(connName: string, onlyFailed = false): Promise<boolean> {
     setActionError(null);
     setRestartNotice(null);
     setActionPending(true);
     try {
       await restartConnector(connName, { only_failed: onlyFailed });
       setRestartNotice(`Restart triggered: ${connName}`);
+      return true;
     } catch (err) {
       setActionError(
         err instanceof ApiError && err.status === 409
           ? "Rebalance in progress — try again shortly."
           : errorMessage(err),
       );
+      return false;
     } finally {
       setActionPending(false);
     }
+  }
+
+  /** Restarts every connector in the pipeline sequentially, then shows ONE
+   * combined confirmation naming all of them -- calling handleRestart in a
+   * loop and leaving its per-call `restartNotice` in place would have each
+   * call overwrite the last, so only the final connector's "Restart
+   * triggered" line would ever be visible. If any connector fails (e.g.
+   * 409 rebalance-in-progress), handleRestart has already set actionError
+   * (surfaced the same way a single-connector restart would); the loop
+   * stops there rather than piling on a misleading combined confirmation
+   * for connectors that were never reached. */
+  async function handleRestartPipeline() {
+    const restarted: string[] = [];
+    for (const c of connectors) {
+      // eslint-disable-next-line no-await-in-loop -- connectors within one
+      // pipeline must restart sequentially, not all at once.
+      const ok = await handleRestart(c.name);
+      if (!ok) return;
+      restarted.push(c.name);
+    }
+    setRestartNotice(`Restart triggered: ${restarted.join(", ")}`);
   }
 
   async function handleDebug(connName: string) {
@@ -191,14 +220,6 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       setDebug(await getConnectorDebug(connName));
     } catch (err) {
       setActionError(errorMessage(err));
-    }
-  }
-
-  async function handleRestartPipeline() {
-    for (const c of connectors) {
-      // eslint-disable-next-line no-await-in-loop -- connectors within one
-      // pipeline must restart sequentially, not all at once.
-      await handleRestart(c.name);
     }
   }
 
