@@ -330,6 +330,50 @@ def get_source(
     return _summary(_find_source(k8s, name))
 
 
+# NB: `app.services.pipeline_topology` imports several helpers (
+# `_kafka_ingest_topic`/`_spark_target`/`_target_ns_table`/`_topic_from_config`)
+# FROM this module, so a module-level `from app.services.pipeline_topology
+# import assemble_pipelines` here would be circular (this module's own
+# top-level import of pipeline_topology would run before those helper
+# functions are defined, since pipeline_topology's own top-level import of
+# THIS module -- triggered first, e.g. via `app.routers.pipelines` -- would
+# see this module only partially initialized). Importing inside the handler
+# defers it until call time, by which point both modules are fully loaded.
+@router.get("/{name}/connectors", dependencies=[Depends(require_action(Action.READ))])
+def source_connectors(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+    trino: TrinoService = Depends(get_trino),
+) -> Dict[str, Any]:
+    """Resolve `name` (either the pipeline's own name or any of its node
+    names -- e.g. a dedicated sink's CR name) to its source + dedicated-sink
+    connectors, reusing the same `assemble_pipelines` topology `/api/pipelines`
+    builds (no second topology/grouping implementation)."""
+    from app.services.pipeline_topology import assemble_pipelines
+
+    sources = k8s.list_sources()
+    namespaces = {
+        ns: set(trino.list_tables("lakehouse", ns)) for ns in trino.list_namespaces("lakehouse")
+    }
+    pipelines = assemble_pipelines(sources, namespaces, k8s.get_status, k8s.get_spark_status)
+    pipe = next(
+        (p for p in pipelines
+         if p.get("name") == name
+         or any(n.get("name") == name for n in p.get("nodes", []))),
+        None,
+    )
+    if pipe is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no pipeline for '{name}'")
+    role_by_type = {"connector": "source", "sink": "sink"}
+    connectors = [
+        {"name": n.get("name"), "role": role_by_type[n["type"]],
+         "kind": n.get("kind"), "state": n.get("state")}
+        for n in pipe.get("nodes", [])
+        if n.get("type") in role_by_type
+    ]
+    return {"connectors": connectors}
+
+
 # --------------------------------------------------------------------------
 # Edit / pause / resume
 # --------------------------------------------------------------------------

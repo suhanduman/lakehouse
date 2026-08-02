@@ -196,6 +196,11 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "path": f"/api/sources/{SOURCE_NAME}",
     },
     {
+        "method": "GET",
+        "template": "/api/sources/{name}/connectors",
+        "path": f"/api/sources/{SOURCE_NAME}/connectors",
+    },
+    {
         "method": "PATCH",
         "template": "/api/sources/{name}",
         "path": f"/api/sources/{SOURCE_NAME}",
