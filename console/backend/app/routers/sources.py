@@ -109,6 +109,42 @@ def _find_source(k8s: K8sService, name: str) -> Dict[str, Any]:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"source not found: {name}")
 
 
+def _resolve_kafka_ingest_cr(k8s: K8sService, name: str) -> Dict[str, Any]:
+    """Resolve `name` to a source CR, tolerating BOTH identities a
+    kafka-ingest source is addressed by:
+
+    - the connector's own composite CR name (`kafka-ingest-<source>-
+      <target_table>`) -- what `SourceDetail` passes, and what `_find_source`
+      already resolves directly via `metadata.name`;
+    - the BARE source id (e.g. "kafka1", i.e. `spec.source`) -- what the
+      Add-Source wizard passes (`getIngestConfig(form.source)`) right after
+      create, which `_find_source` 404s on since no CR is ever named just
+      "kafka1".
+
+    Tries `_find_source` first (covers the composite-name path unchanged,
+    for ANY source kind). Only on its 404 does this fall back to scanning
+    `k8s.list_sources()` for the kafka-ingest connector (`metadata.name`
+    startswith "kafka-ingest-", see `_kafka_ingest_topic`'s docstring) whose
+    `{_SPARK_ANN}source` round-trip annotation equals `name` -- the same
+    annotation `_kafka_ingest_producer` reads the producer username from, so
+    a hit here guarantees `_kafka_ingest_producer` resolves the SAME CR
+    either way. Re-raises the original 404 if neither lookup finds a CR."""
+    try:
+        return _find_source(k8s, name)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        for item in k8s.list_sources():
+            metadata = item.get("metadata") or {}
+            cr_name = metadata.get("name") or ""
+            if not cr_name.startswith("kafka-ingest-"):
+                continue
+            annotations = metadata.get("annotations") or {}
+            if annotations.get(f"{_SPARK_ANN}source") == name:
+                return item
+        raise
+
+
 def _target_ns_table(cr: Dict[str, Any]) -> Tuple[str, str]:
     """Recover (target_ns, target_table) -- `target_ns` being the unique
     per-pipeline namespace (Sub-project B-v2), NOT a shared group label --
@@ -454,7 +490,7 @@ def ingest_config(
     """
     from app.services.pipeline_topology import assemble_pipelines
 
-    cr = _find_source(k8s, name)
+    cr = _resolve_kafka_ingest_cr(k8s, name)
     topic = _kafka_ingest_topic(cr)
     if topic is None:
         raise HTTPException(

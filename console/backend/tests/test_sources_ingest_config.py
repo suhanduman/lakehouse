@@ -172,6 +172,28 @@ def test_ingest_config_400_for_non_kafka_ingest():
     assert resp.status_code == 400
 
 
+def test_ingest_config_resolves_by_bare_source_id_same_as_composite_name():
+    # FINAL-REVIEW Fix 1 regression guard: SourceDetail calls this route with
+    # the connector's composite CR name (`kafka-ingest-k1-orders`), which
+    # already worked. The Add-Source wizard instead calls
+    # `getIngestConfig(form.source)` with the BARE source id ("k1") right
+    # after create -- `_find_source`'s exact `metadata.name` match 404s on
+    # that, so the on-create ingestion panel never rendered. Both paths must
+    # now resolve the SAME kafka-ingest CR and return the same producer/topic.
+    cr = _kafka_ingest_cr(source="k1", ns="orders", table="orders")
+    client = _client([cr], silver={}, secret={"password": "SECRET123"})
+
+    by_composite = client.get(f"/api/sources/{cr['metadata']['name']}/ingest-config")
+    by_bare_id = client.get("/api/sources/k1/ingest-config")
+
+    assert by_composite.status_code == 200
+    assert by_bare_id.status_code == 200
+    composite_body, bare_body = by_composite.json(), by_bare_id.json()
+    assert composite_body["topic"] == bare_body["topic"] == "orders-topic"
+    assert composite_body["producer"]["user"] == bare_body["producer"]["user"] == "k1-producer"
+    assert composite_body["producer"]["password"] == bare_body["producer"]["password"] == "SECRET123"
+
+
 def test_ingest_config_404_for_missing_source():
     client = _client([], silver={}, secret=None)
 
