@@ -139,6 +139,11 @@ class FakeConnect:
     def connector_status(self, name: str) -> Dict[str, Any]:
         return {"connector": {"state": "RUNNING"}, "tasks": [{"state": "RUNNING"}]}
 
+    def restart_connector(
+        self, name: str, include_tasks: bool = True, only_failed: bool = False
+    ) -> None:
+        pass
+
 
 class FakeApicurio:
     def list_schemas(self) -> List[Dict[str, Any]]:
@@ -239,6 +244,17 @@ ENDPOINTS: List[Dict[str, Any]] = [
     {"method": "GET", "template": "/api/status", "path": "/api/status"},
     {"method": "GET", "template": "/gitops/status", "path": "/gitops/status"},
     {"method": "GET", "template": "/api/pipelines", "path": "/api/pipelines"},
+    {
+        "method": "GET",
+        "template": "/api/connectors/{name}/debug",
+        "path": f"/api/connectors/{SOURCE_NAME}/debug",
+    },
+    {
+        "method": "POST",
+        "template": "/api/connectors/{name}/restart",
+        "path": f"/api/connectors/{SOURCE_NAME}/restart",
+        "json": {},
+    },
 ]
 
 
