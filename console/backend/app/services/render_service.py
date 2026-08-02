@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import zlib
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from app.models import SourceSpec
@@ -1047,3 +1047,67 @@ def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) ->
             f"render_spark_job: no Spark-batch renderer for {descriptor.id} (lane={descriptor.lane})"
         )
     return fn(spec, spark_image, s3_secret_name)
+
+
+def render_ingest_snippets(*, bootstrap: str, topic: str, user: str, password: str,
+                           disposition: str, pk: Optional[List[str]] = None) -> Dict[str, str]:
+    """Copyable, filled-in producer configs for the 3 most-used log shippers +
+    a generic any-app snippet (SCRAM-SHA-512 over SSL, Strimzi external
+    listener). Missing bootstrap/password degrade to clearly-marked
+    placeholders (never blank). For entity disposition the generic snippet
+    notes the expected key field(s)."""
+    bs = bootstrap or "<external bootstrap>"
+    pw = password or "<password from the producer secret>"
+    pk_note = ""
+    if disposition == "entity" and pk:
+        pk_note = f"\n# NOTE: send keyed JSON; business key field(s): {', '.join(pk)}"
+
+    fluentbit = (
+        "[OUTPUT]\n"
+        "    Name           kafka\n"
+        "    Match          *\n"
+        f"    Brokers        {bs}\n"
+        f"    Topics         {topic}\n"
+        "    rdkafka.security.protocol  SASL_SSL\n"
+        "    rdkafka.sasl.mechanism     SCRAM-SHA-512\n"
+        f"    rdkafka.sasl.username      {user}\n"
+        f"    rdkafka.sasl.password      {pw}"
+        + pk_note
+    )
+    vector = (
+        "[sinks.lakehouse]\n"
+        'type = "kafka"\n'
+        f'bootstrap_servers = "{bs}"\n'
+        f'topic = "{topic}"\n'
+        'encoding.codec = "json"\n'
+        'sasl.enabled = true\n'
+        'sasl.mechanism = "SCRAM-SHA-512"\n'
+        f'sasl.username = "{user}"\n'
+        f'sasl.password = "{pw}"\n'
+        'tls.enabled = true'
+        + pk_note
+    )
+    logstash = (
+        "output {\n"
+        "  kafka {\n"
+        f'    bootstrap_servers => "{bs}"\n'
+        f'    topic_id => "{topic}"\n'
+        '    security_protocol => "SASL_SSL"\n'
+        '    sasl_mechanism => "SCRAM-SHA-512"\n'
+        '    sasl_jaas_config => "org.apache.kafka.common.security.scram.ScramLoginModule '
+        f'required username=\\"{user}\\" password=\\"{pw}\\";"\n'
+        "  }\n"
+        "}"
+        + pk_note
+    )
+    generic = (
+        "# Any producer (librdkafka / kafka-python / etc.)\n"
+        f"bootstrap.servers = {bs}\n"
+        f"topic             = {topic}\n"
+        "security.protocol = SASL_SSL\n"
+        "sasl.mechanism    = SCRAM-SHA-512\n"
+        f"sasl.username     = {user}\n"
+        f"sasl.password     = {pw}"
+        + pk_note
+    )
+    return {"fluentbit": fluentbit, "vector": vector, "logstash": logstash, "generic": generic}

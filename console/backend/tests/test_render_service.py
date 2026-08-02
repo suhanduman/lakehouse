@@ -950,3 +950,36 @@ def test_s3_register_stamps_roundtrip_annotations():
     assert ann["lakehouse.solus.dev/source"] == "s1"
     assert ann["lakehouse.solus.dev/s3-bucket"] == "b"
     assert ann["lakehouse.solus.dev/cron"] == "0 * * * *"
+
+
+# --------------------------------------------------------------------------
+# render_ingest_snippets (log shipper producer configs)
+# --------------------------------------------------------------------------
+
+def test_render_ingest_snippets_all_collectors_filled():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="kafka.example:9094", topic="nginx-logs",
+        user="nginx-producer", password="SECRET123", disposition="event")
+    assert set(s) == {"fluentbit", "vector", "logstash", "generic"}
+    for snippet in s.values():
+        assert "kafka.example:9094" in snippet
+        assert "nginx-logs" in snippet
+        assert "nginx-producer" in snippet
+        assert "SECRET123" in snippet
+
+
+def test_render_ingest_snippets_entity_mentions_pk():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="b:9094", topic="orders", user="orders-producer",
+        password="p", disposition="entity", pk=["order_id"])
+    assert "order_id" in s["generic"]
+
+
+def test_render_ingest_snippets_placeholder_when_bootstrap_or_password_missing():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="", topic="t", user="u", password="", disposition="event")
+    assert "<external bootstrap>" in s["fluentbit"]
+    assert "<password" in s["fluentbit"]
