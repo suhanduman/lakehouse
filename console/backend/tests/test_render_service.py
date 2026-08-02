@@ -60,6 +60,19 @@ def test_bucket_name_multiple_underscores():
     assert r.bucket_name("mongo_lms_prod") == "src-mongo-lms-prod"
 
 
+def test_pipeline_bucket_names():
+    assert r.bronze_bucket_name("mssql1_students") == "bronze-mssql1-students"
+    assert r.silver_bucket_name("mssql1_students") == "silver-mssql1-students"
+    for name in (r.bronze_bucket_name("A_B.C"), r.silver_bucket_name("A_B.C")):
+        assert name == name.lower() and "_" not in name and len(name) <= 63
+
+
+def test_pipeline_bucket_name_long_no_collision():
+    a = r.bronze_bucket_name("p" * 60 + "aaa")
+    b = r.bronze_bucket_name("p" * 60 + "bbb")
+    assert len(a) <= 63 and len(b) <= 63 and a != b
+
+
 def test_namespace_ddl():
     ddl = r.render_namespace_ddl("mssql_ogrenci", "src-mssql-ogrenci")
     assert "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci" in ddl

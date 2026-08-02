@@ -16,6 +16,7 @@ Template parity (sub-project A, read for this task):
 from __future__ import annotations
 
 import re
+import zlib
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -62,6 +63,31 @@ SPARK_ANNOTATION_PREFIX = "lakehouse.solus.dev/"
 def bucket_name(target_ns: str) -> str:
     """`src-<ns>`, RFC1123-safe (e.g. mssql_ogrenci -> src-mssql-ogrenci)."""
     return _k8s_name("src", target_ns)
+
+
+def _pipeline_bucket(prefix: str, pipeline: str) -> str:
+    """`<prefix>-<pipeline>`, S3-bucket-safe (lowercase/hyphen/<=63). If the clean
+    join exceeds 63 (risking a truncation collision between two distinct
+    pipelines), append a short deterministic crc32 suffix of the full untruncated
+    join so distinct pipeline names never map to the same bucket."""
+    full = _k8s_name(prefix, pipeline)
+    joined_raw = f"{prefix}-{pipeline}"
+    sanitized_uncapped = re.sub(r"[^a-z0-9-]+", "-", joined_raw.lower())
+    sanitized_uncapped = re.sub(r"-{2,}", "-", sanitized_uncapped).strip("-")
+    if len(sanitized_uncapped) > 63:
+        suffix = format(zlib.crc32(joined_raw.encode()) & 0xFFFFFFFF, "08x")
+        full = f"{full[:63 - 9].rstrip('-')}-{suffix}"
+    return full
+
+
+def bronze_bucket_name(pipeline: str) -> str:
+    """`bronze-<pipeline>` — per-pipeline Bronze bucket (Sub-project B-v2)."""
+    return _pipeline_bucket("bronze", pipeline)
+
+
+def silver_bucket_name(pipeline: str) -> str:
+    """`silver-<pipeline>` — per-pipeline Silver bucket (entity only)."""
+    return _pipeline_bucket("silver", pipeline)
 
 
 def _cred(source: str, key: str) -> str:
