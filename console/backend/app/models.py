@@ -56,6 +56,9 @@ class SourceSpec(BaseModel):
     # the __deleted metadata column). Unset => upsert-only (no deletes).
     delete_field: Optional[str] = None
     kafka_bootstrap: Optional[str] = None   # existing-Kafka: external brokers (None => in-cluster)
+    create_topic: bool = False
+    topic_partitions: int = 6
+    topic_replication_factor: int = 3
 
     # batch/s3: platform's own S3 file-set registered as an Iceberg table via a
     # scheduled Spark job (spark-batch lane). Schedule reuses `cron` above.
