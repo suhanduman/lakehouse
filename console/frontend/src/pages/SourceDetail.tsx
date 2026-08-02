@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DeleteModal, { type Role } from "../components/DeleteModal";
+import IngestConfigPanel from "../components/IngestConfigPanel";
 import {
   ApiError,
   editSparkSource,
   getConnectorDebug,
+  getIngestConfig,
   getSource,
   getSourceConnectors,
   getStatus,
@@ -16,6 +18,7 @@ import {
   type ConnectorRef,
   type DeleteSourceResult,
   type GitopsRemediation,
+  type IngestConfig,
   type Source,
   type SourceSpec,
   type StatusEntry,
@@ -84,6 +87,18 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
   const [remediation, setRemediation] = useState<GitopsRemediation | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Ingestion/collector config section (Task 9): lazy-loaded on first open,
+  // never polled. `ingestUnavailable` is set when the backend 400s (the
+  // reliable "not a kafka-ingest source" signal per get_ingest_config --
+  // cr_kind alone can't distinguish a kafka-ingest KafkaConnector from any
+  // other), and is distinct from ingestError (an actual failure, which must
+  // not block the rest of the page).
+  const [ingestOpen, setIngestOpen] = useState(false);
+  const [ingestConfig, setIngestConfig] = useState<IngestConfig | null>(null);
+  const [ingestUnavailable, setIngestUnavailable] = useState(false);
+  const [ingestError, setIngestError] = useState<string | null>(null);
+  const [ingestLoading, setIngestLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +298,28 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       setFileFormat(source.spark.file_format as SourceSpec["file_format"]);
     }
     setEditing((v) => !v);
+  }
+
+  /** Toggles the ingestion/collector config section; fetches lazily on the
+   * first open only (subsequent toggles just show/hide what's already
+   * loaded -- no re-fetch, no polling). */
+  function handleToggleIngest() {
+    const opening = !ingestOpen;
+    setIngestOpen(opening);
+    if (opening && ingestConfig === null && !ingestUnavailable && !ingestLoading) {
+      setIngestLoading(true);
+      setIngestError(null);
+      getIngestConfig(name)
+        .then((cfg) => setIngestConfig(cfg))
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 400) {
+            setIngestUnavailable(true);
+          } else {
+            setIngestError(errorMessage(err));
+          }
+        })
+        .finally(() => setIngestLoading(false));
+    }
   }
 
   function handleDeleted(result: DeleteSourceResult) {
@@ -506,6 +543,20 @@ export default function SourceDetail({ role }: SourceDetailProps) {
           </div>
         )
       )}
+
+      <section aria-label="ingest-config">
+        <button type="button" onClick={handleToggleIngest}>
+          {ingestOpen ? "Hide" : "Show"} ingestion / collector config
+        </button>
+        {ingestOpen && (
+          <>
+            {ingestLoading && <p>Loading…</p>}
+            {ingestUnavailable && <p>Only available for kafka-ingest sources</p>}
+            {ingestError && <p role="alert">{ingestError}</p>}
+            {ingestConfig && <IngestConfigPanel config={ingestConfig} />}
+          </>
+        )}
+      </section>
 
       {deleteModalOpen && (
         <DeleteModal

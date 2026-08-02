@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import zlib
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from app.models import SourceSpec
@@ -261,7 +261,7 @@ def topic_name(spec: SourceSpec) -> str:
     return fn(spec)
 
 
-def render_kafka_topic(topic_name: str) -> dict:
+def render_kafka_topic(topic_name: str, partitions: int = 6, replicas: int = 3) -> dict:
     """Matches tools/templates/kafkatopic.yaml field-for-field.
 
     NB: no `metadata.namespace` here on purpose — see `_connector`'s
@@ -276,8 +276,8 @@ def render_kafka_topic(topic_name: str) -> dict:
     """
     cr_name = _k8s_topic_name(topic_name)
     spec: dict = {
-        "partitions": 6,
-        "replicas": 3,
+        "partitions": partitions,
+        "replicas": replicas,
         "config": {"retention.ms": "604800000", "cleanup.policy": "delete"},
     }
     if cr_name != topic_name:
@@ -290,6 +290,30 @@ def render_kafka_topic(topic_name: str) -> dict:
             "labels": {"strimzi.io/cluster": "kafka"},
         },
         "spec": spec,
+    }
+
+
+def render_producer_user(username: str, topic: str, allow_create: bool, cluster: str) -> dict:
+    """A per-pipeline Strimzi KafkaUser that a log-shipper/app authenticates as
+    to PRODUCE to `topic` (SCRAM-SHA-512). Least-privilege: Write+Describe on
+    the one literal topic (+Create only when the topic is not pre-created, so
+    the producer can lazily create it). `cluster` -> strimzi.io/cluster label
+    (Strimzi reconciles the user + materializes its password Secret <username>)."""
+    ops = ["Write", "Describe"] + (["Create"] if allow_create else [])
+    return {
+        "apiVersion": "kafka.strimzi.io/v1beta2",
+        "kind": "KafkaUser",
+        "metadata": {"name": username, "labels": {"strimzi.io/cluster": cluster}},
+        "spec": {
+            "authentication": {"type": "scram-sha-512"},
+            "authorization": {
+                "type": "simple",
+                "acls": [
+                    {"resource": {"type": "topic", "name": topic, "patternType": "literal"},
+                     "operations": ops},
+                ],
+            },
+        },
     }
 
 
@@ -1023,3 +1047,67 @@ def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) ->
             f"render_spark_job: no Spark-batch renderer for {descriptor.id} (lane={descriptor.lane})"
         )
     return fn(spec, spark_image, s3_secret_name)
+
+
+def render_ingest_snippets(*, bootstrap: str, topic: str, user: str, password: str,
+                           disposition: str, pk: Optional[List[str]] = None) -> Dict[str, str]:
+    """Copyable, filled-in producer configs for the 3 most-used log shippers +
+    a generic any-app snippet (SCRAM-SHA-512 over SSL, Strimzi external
+    listener). Missing bootstrap/password degrade to clearly-marked
+    placeholders (never blank). For entity disposition the generic snippet
+    notes the expected key field(s)."""
+    bs = bootstrap or "<external bootstrap>"
+    pw = password or "<password from the producer secret>"
+    pk_note = ""
+    if disposition == "entity" and pk:
+        pk_note = f"\n# NOTE: send keyed JSON; business key field(s): {', '.join(pk)}"
+
+    fluentbit = (
+        "[OUTPUT]\n"
+        "    Name           kafka\n"
+        "    Match          *\n"
+        f"    Brokers        {bs}\n"
+        f"    Topics         {topic}\n"
+        "    rdkafka.security.protocol  SASL_SSL\n"
+        "    rdkafka.sasl.mechanism     SCRAM-SHA-512\n"
+        f"    rdkafka.sasl.username      {user}\n"
+        f"    rdkafka.sasl.password      {pw}"
+        + pk_note
+    )
+    vector = (
+        "[sinks.lakehouse]\n"
+        'type = "kafka"\n'
+        f'bootstrap_servers = "{bs}"\n'
+        f'topic = "{topic}"\n'
+        'encoding.codec = "json"\n'
+        'sasl.enabled = true\n'
+        'sasl.mechanism = "SCRAM-SHA-512"\n'
+        f'sasl.username = "{user}"\n'
+        f'sasl.password = "{pw}"\n'
+        'tls.enabled = true'
+        + pk_note
+    )
+    logstash = (
+        "output {\n"
+        "  kafka {\n"
+        f'    bootstrap_servers => "{bs}"\n'
+        f'    topic_id => "{topic}"\n'
+        '    security_protocol => "SASL_SSL"\n'
+        '    sasl_mechanism => "SCRAM-SHA-512"\n'
+        '    sasl_jaas_config => "org.apache.kafka.common.security.scram.ScramLoginModule '
+        f'required username=\\"{user}\\" password=\\"{pw}\\";"\n'
+        "  }\n"
+        "}"
+        + pk_note
+    )
+    generic = (
+        "# Any producer (librdkafka / kafka-python / etc.)\n"
+        f"bootstrap.servers = {bs}\n"
+        f"topic             = {topic}\n"
+        "security.protocol = SASL_SSL\n"
+        "sasl.mechanism    = SCRAM-SHA-512\n"
+        f"sasl.username     = {user}\n"
+        f"sasl.password     = {pw}"
+        + pk_note
+    )
+    return {"fluentbit": fluentbit, "vector": vector, "logstash": logstash, "generic": generic}

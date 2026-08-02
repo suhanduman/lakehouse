@@ -275,3 +275,23 @@ def test_target_ns_distinct_canonical_names_map_to_distinct_buckets():
     names = ["mssql1_students", "ns", "a_b", "depo2", "mssql_ogrenci", "q"]
     buckets = [render_service.bronze_bucket_name(n) for n in names]
     assert len(set(buckets)) == len(names)
+
+
+# --------------------------------------------------------------------------
+# Topic provisioning (Task 1)
+# --------------------------------------------------------------------------
+
+def test_source_spec_topic_provisioning_defaults():
+    s = SourceSpec(source="nginx", kind="stream", type="kafka", db="-", table="nginx-logs",
+                   target_ns="logs", target_table="nginx_logs")
+    assert s.create_topic is False
+    assert s.topic_partitions == 6
+    assert s.topic_replication_factor == 3
+
+
+def test_source_spec_topic_provisioning_overrides():
+    s = SourceSpec(source="nginx", kind="stream", type="kafka", db="-", table="nginx-logs",
+                   target_ns="logs", target_table="nginx_logs",
+                   create_topic=True, topic_partitions=1, topic_replication_factor=1)
+    assert s.create_topic is True
+    assert (s.topic_partitions, s.topic_replication_factor) == (1, 1)

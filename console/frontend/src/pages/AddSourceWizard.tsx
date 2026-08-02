@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import {
   createSource,
+  getIngestConfig,
   getSourceTypes,
   previewSource,
   type CreateSourceResult,
+  type IngestConfig,
   type PreviewResult,
   type SourceCredentials,
   type SourceSpec,
   type SourceTypeDescriptor,
 } from "../api/client";
+import IngestConfigPanel from "../components/IngestConfigPanel";
 
 /**
  * Multi-step "add source" form, per docs/superpowers/sdd/task-12-brief.md:
@@ -101,6 +104,14 @@ interface FormState {
   columnsText: string;
   identifierText: string;
   delete_field: string;
+  // stream/kafka only (Kafka log-ingestion helper, Task 8): self-service
+  // topic creation, written into buildSpec as create_topic/topic_partitions/
+  // topic_replication_factor when the user opts in. partitions/replication
+  // are kept as text so the number input can be edited freely; buildSpec
+  // Number()s them only when create_topic is checked.
+  create_topic: boolean;
+  topic_partitions: string;
+  topic_replication_factor: string;
   // Values for any required field the registry lists that FIELD_META
   // doesn't know a dedicated input for -- keeps a brand-new source type
   // fully usable (not just visible) without a frontend edit.
@@ -138,6 +149,9 @@ const INITIAL_STATE: FormState = {
   columnsText: "",
   identifierText: "",
   delete_field: "",
+  create_topic: false,
+  topic_partitions: "6",
+  topic_replication_factor: "3",
   extraFields: {},
 };
 
@@ -175,6 +189,43 @@ function humanizeFieldName(field: string): string {
  * edit it afterward (see `targetNsTouched`). */
 function defaultPipelineName(source: string, targetTable: string): string {
   return `${source}_${targetTable}`.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+/** Best-effort "name:type" pair parser for the entity disposition's
+ * `columnsText` textarea -- shared by `buildSpec` (the real payload) and the
+ * live expected-JSON preview so the two never drift apart. */
+function parseColumnsText(columnsText: string): { name: string; type: string }[] {
+  return columnsText
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [name, type] = pair.split(":").map((x) => x.trim());
+      return { name, type };
+    });
+}
+
+/** Same best-effort split for the identifier/PK textarea. */
+function parseIdentifierText(identifierText: string): string[] {
+  return identifierText
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Live preview of the expected event JSON shape for the entity disposition
+ * (Task 8): `{col: "<type>", ...}` derived from the same textareas buildSpec
+ * parses, with the identifier/PK field(s) marked so the user can eyeball
+ * that the columns + PK line up before submitting. Best-effort only -- an
+ * unparseable/blank row is simply skipped rather than erroring. */
+function buildExpectedJsonPreview(form: FormState): Record<string, string> {
+  const ids = new Set(parseIdentifierText(form.identifierText));
+  const preview: Record<string, string> = {};
+  for (const { name, type } of parseColumnsText(form.columnsText)) {
+    if (!name) continue;
+    preview[name] = ids.has(name) ? `${type ?? ""} (PK)`.trim() : (type ?? "");
+  }
+  return preview;
 }
 
 const STEP_TITLES = [
@@ -267,27 +318,26 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
     spec.kafka_bootstrap = form.kafka_bootstrap;
   }
   if (form.disposition === "entity" && form.type === "kafka") {
-    const cols = form.columnsText
-      .split(/[\n,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((pair) => {
-        const [name, type] = pair.split(":").map((x) => x.trim());
-        return { name, type };
-      });
+    const cols = parseColumnsText(form.columnsText);
     if (cols.length) {
       spec.columns = cols;
     }
-    const ids = form.identifierText
-      .split(/[\n,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const ids = parseIdentifierText(form.identifierText);
     if (ids.length) {
       spec.identifier = ids;
     }
     if (form.delete_field.trim()) {
       spec.delete_field = form.delete_field.trim();
     }
+  }
+  // Self-service topic creation (Task 8) -- only meaningful for stream/kafka,
+  // and only sent when the user actually opted in (an unchecked box means
+  // "topic already exists / managed elsewhere", so omitting it here lets the
+  // backend's own default stand rather than explicitly asserting false).
+  if (form.type === "kafka" && form.create_topic) {
+    spec.create_topic = true;
+    spec.topic_partitions = Number(form.topic_partitions);
+    spec.topic_replication_factor = Number(form.topic_replication_factor);
   }
   return spec;
 }
@@ -314,6 +364,14 @@ export default function AddSourceWizard() {
   const [submitResult, setSubmitResult] = useState<CreateSourceResult | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
+
+  // Kafka log-ingestion helper (Task 8): once a stream/kafka source is
+  // actually created, fetch its ready-to-paste collector config so the user
+  // doesn't have to hunt for the topic/bootstrap/credential by hand. Kept
+  // separate from submitError -- a failed ingest-config fetch shouldn't be
+  // confused with the source creation itself failing.
+  const [ingestConfig, setIngestConfig] = useState<IngestConfig | null>(null);
+  const [ingestConfigError, setIngestConfigError] = useState<string | null>(null);
 
   // Fetch the source-type registry once on mount -- the whole point of
   // this task is that Step 1's options, and steps 2/3's field visibility,
@@ -377,7 +435,14 @@ export default function AddSourceWizard() {
   // Upsert-from-Kafka (Plan B1 Task 4): only stream/kafka + an explicit
   // "entity" disposition choice collects columns/identifier/delete_field --
   // the unset default (effective disposition "event") keeps them hidden.
-  const showEntityFields = selectedDescriptor?.type === "kafka" && form.disposition === "entity";
+  const isKafka = selectedDescriptor?.type === "kafka";
+  const showEntityFields = isKafka && form.disposition === "entity";
+  // The event/entity fork reads as an explicit choice for stream-kafka (Task
+  // 8) rather than the generic disposition <select> other multi-disposition
+  // types (e.g. stream/http) still use -- both write into the same
+  // `form.disposition` state via `set`.
+  const showKafkaDispositionFork = showDisposition && isKafka;
+  const showDispositionSelect = showDisposition && !isKafka;
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -403,6 +468,9 @@ export default function AddSourceWizard() {
       columnsText: "",
       identifierText: "",
       delete_field: "",
+      create_topic: false,
+      topic_partitions: INITIAL_STATE.topic_partitions,
+      topic_replication_factor: INITIAL_STATE.topic_replication_factor,
     }));
   }
 
@@ -415,6 +483,9 @@ export default function AddSourceWizard() {
       columnsText: "",
       identifierText: "",
       delete_field: "",
+      create_topic: false,
+      topic_partitions: INITIAL_STATE.topic_partitions,
+      topic_replication_factor: INITIAL_STATE.topic_replication_factor,
     }));
   }
 
@@ -443,6 +514,8 @@ export default function AddSourceWizard() {
   async function handleSubmit() {
     setSubmitError(null);
     setSubmitResult(null);
+    setIngestConfig(null);
+    setIngestConfigError(null);
     setSubmitLoading(true);
     try {
       // A resolved promise here only means the HTTP request succeeded
@@ -454,6 +527,17 @@ export default function AddSourceWizard() {
       // throw" -- decides success vs. failure here.
       const result = await createSource(buildSpec(form, selectedDescriptor), buildCredentials(form));
       setSubmitResult(result);
+      // Only a genuinely-created stream/kafka source has ingestion config
+      // to show -- an in-band failure (ok:false) or a non-kafka source both
+      // skip this fetch.
+      if (result.ok && isKafka) {
+        try {
+          const config = await getIngestConfig(result.connector_name ?? form.source);
+          setIngestConfig(config);
+        } catch (err) {
+          setIngestConfigError(errorMessage(err));
+        }
+      }
     } catch (err) {
       setSubmitResult(null);
       setSubmitError(errorMessage(err));
@@ -498,7 +582,7 @@ export default function AddSourceWizard() {
               ))}
             </select>
           </div>
-          {showDisposition && (
+          {showDispositionSelect && (
             <div>
               <label htmlFor="disposition">Disposition</label>
               <select
@@ -513,6 +597,62 @@ export default function AddSourceWizard() {
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+          {showKafkaDispositionFork && (
+            <fieldset>
+              <legend>What are you sending to this topic?</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="kafka-disposition"
+                  value="event"
+                  checked={form.disposition !== "entity"}
+                  onChange={() => set("disposition", "event")}
+                />
+                Ham log/event → Bronze
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="kafka-disposition"
+                  value="entity"
+                  checked={form.disposition === "entity"}
+                  onChange={() => set("disposition", "entity")}
+                />
+                Anahtarlı entity → Silver upsert
+              </label>
+            </fieldset>
+          )}
+          {isKafka && (
+            <div>
+              <label htmlFor="create_topic">
+                <input
+                  id="create_topic"
+                  type="checkbox"
+                  checked={form.create_topic}
+                  onChange={(e) => set("create_topic", e.target.checked)}
+                />
+                Create this topic
+              </label>
+              <div>
+                <label htmlFor="topic_partitions">Topic partitions</label>
+                <input
+                  id="topic_partitions"
+                  type="number"
+                  value={form.topic_partitions}
+                  onChange={(e) => set("topic_partitions", e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="topic_replication_factor">Topic replication factor</label>
+                <input
+                  id="topic_replication_factor"
+                  type="number"
+                  value={form.topic_replication_factor}
+                  onChange={(e) => set("topic_replication_factor", e.target.value)}
+                />
+              </div>
             </div>
           )}
           {showKafkaBootstrap && (
@@ -556,6 +696,10 @@ export default function AddSourceWizard() {
                 field must be a boolean present on every record and must not be listed in
                 columns.
               </p>
+              <div>
+                <p>Expected JSON shape (preview):</p>
+                <pre>{JSON.stringify(buildExpectedJsonPreview(form), null, 2)}</pre>
+              </div>
             </>
           )}
           <button type="button" onClick={goNext}>
@@ -849,6 +993,10 @@ export default function AddSourceWizard() {
           </button>
           {submitError && <p role="alert">Create failed: {submitError}</p>}
           {submitResult && submitResult.ok && <p>Source created.</p>}
+          {ingestConfigError && (
+            <p role="alert">Failed to load ingest config: {ingestConfigError}</p>
+          )}
+          {ingestConfig && <IngestConfigPanel config={ingestConfig} />}
           {submitResult && !submitResult.ok && (
             <div role="alert" data-testid="create-failed">
               <p>Source creation failed.</p>

@@ -146,11 +146,22 @@ class K8sService:
 
     # ----------------------------------------------------------------
     # delete_secret — best-effort counterpart used by the add-source
-    # orchestrator's rollback.
+    # orchestrator's rollback, AND by `delete_source`'s kafka-ingest producer
+    # teardown. 404-tolerant (mirrors `delete_spark_job` above): a producer
+    # Secret may never have materialized yet (Strimzi creates it
+    # asynchronously after the KafkaUser, see `read_secret`'s docstring), or
+    # may already be gone -- either way that must be a no-op, not a raised
+    # ApiException that aborts the caller's teardown before later steps
+    # (e.g. `delete_connector`) run. Any OTHER status still propagates.
     # ----------------------------------------------------------------
 
-    def delete_secret(self, name: str) -> Dict[str, Any]:
-        return self.core_api.delete_namespaced_secret(name=name, namespace=self.namespace)
+    def delete_secret(self, name: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.core_api.delete_namespaced_secret(name=name, namespace=self.namespace)
+        except ApiException as exc:
+            if exc.status != HTTP_NOT_FOUND:
+                raise
+            return None
 
     # ----------------------------------------------------------------
     # patch_connector — merge new connector `spec.config` (edit flow)
@@ -259,6 +270,46 @@ class K8sService:
                 return None
             raise
         return (obj or {}).get("status")
+
+    # ----------------------------------------------------------------
+    # apply_user / delete_user — KafkaUser CR lifecycle (producer/consumer identity)
+    # ----------------------------------------------------------------
+
+    def apply_user(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return self._apply(GROUP, VERSION, USER_PLURAL, body)
+
+    def delete_user(self, name: str) -> Optional[Dict[str, Any]]:
+        """404-tolerant (mirrors `delete_spark_job`/`delete_secret`): a
+        kafka-ingest source created before per-pipeline producer
+        provisioning existed has no producer KafkaUser at all, so
+        `delete_source`'s teardown must not abort (and skip
+        `delete_connector`) just because there is nothing here to delete.
+        Any OTHER status still propagates."""
+        try:
+            return self._delete(GROUP, VERSION, USER_PLURAL, name)
+        except ApiException as exc:
+            if exc.status != HTTP_NOT_FOUND:
+                raise
+            return None
+
+    # ----------------------------------------------------------------
+    # read_secret — read a Secret and decode its base64 data. Used to
+    # retrieve KafkaUser SCRAM password Secret (materializes asynchronously
+    # with the same name as the user); returns None on 404 (not yet present).
+    # ----------------------------------------------------------------
+
+    def read_secret(self, name: str) -> Optional[Dict[str, str]]:
+        """Base64-decoded `.data` of a Secret, or None if it isn't there yet
+        (Strimzi materializes a KafkaUser's SCRAM password Secret asynchronously,
+        named exactly like the user)."""
+        try:
+            obj = self.core_api.read_namespaced_secret(name=name, namespace=self.namespace)
+        except ApiException as exc:
+            if exc.status == HTTP_NOT_FOUND:
+                return None
+            raise
+        data = getattr(obj, "data", None) or {}
+        return {k: base64.b64decode(v).decode("utf-8") for k, v in data.items()}
 
     # ----------------------------------------------------------------
     # ensure_user_acl / remove_user_acl — read-modify-write a KafkaUser CR's

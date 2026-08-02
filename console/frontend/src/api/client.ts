@@ -69,6 +69,9 @@ export interface SourceSpec {
   columns?: { name: string; type: string }[];
   identifier?: string[];
   delete_field?: string;
+  create_topic?: boolean;
+  topic_partitions?: number;
+  topic_replication_factor?: number;
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
@@ -101,6 +104,36 @@ export interface SourceStepResult {
   detail: string;
 }
 
+/** Mirrors app.models.IngestSnippets from ingest-config endpoint. */
+export interface IngestSnippets {
+  fluentbit: string;
+  vector: string;
+  logstash: string;
+  generic: string;
+}
+
+/** Mirrors app.models.IngestProducer from ingest-config endpoint. */
+export interface IngestProducer {
+  user: string;
+  mechanism: string;
+  password: string | null;
+  secret_ref: string;
+}
+
+/** Mirrors app.routers.sources.get_ingest_config()'s dict shape. */
+export interface IngestConfig {
+  external_bootstrap: string;
+  topic: string;
+  disposition: "event" | "entity";
+  // Optional[str] backend-side -- the pipeline's authoritative table may not
+  // be resolvable yet (e.g. Silver merge not provisioned), so callers must
+  // null-check rather than assume a resolved FQN.
+  authoritative_fqn: string | null;
+  producer: IngestProducer;
+  expected_json: Record<string, unknown> | null;
+  snippets: IngestSnippets;
+}
+
 /** Mirrors app.routers.sources.preview_source()'s dict shape: a dry-run of
  * the CRs (and per-pipeline Bronze/Silver buckets + Silver namespace DDL,
  * Sub-project B-v2) an add-source call would produce, without touching a
@@ -125,6 +158,14 @@ export interface PreviewResult {
 export interface CreateSourceResult {
   steps: SourceStepResult[];
   ok: boolean;
+  /** Composite connector name (e.g. `kafka-ingest-<source>-<target_table>`)
+   * for the connector this add-source run created, when applicable -- see
+   * app.orchestrator.AddSourceResult.connector_name. Absent/null on the
+   * gitops and spark-batch lanes (no KafkaConnector created) or on in-band
+   * failure. Callers should fetch ingestion config by THIS name rather than
+   * the bare source id, which is ambiguous when one source id owns multiple
+   * kafka-ingest target tables. */
+  connector_name?: string | null;
 }
 
 /** Mirrors app.routers.sources.delete_source()'s dict shape across both
@@ -361,6 +402,11 @@ export async function deleteSource(
     `/sources/${encodeURIComponent(name)}?mode=${encodeURIComponent(mode)}`,
     { method: "DELETE" },
   );
+}
+
+/** GET /api/sources/{name}/ingest-config -> Kafka log ingestion config for a source. */
+export async function getIngestConfig(name: string): Promise<IngestConfig> {
+  return request(`/sources/${encodeURIComponent(name)}/ingest-config`);
 }
 
 // --------------------------------------------------------------------------

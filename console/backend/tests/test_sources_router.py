@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi.testclient import TestClient
+from kubernetes.client.exceptions import ApiException
 
 from app.deps import (
     get_k8s,
@@ -25,6 +26,7 @@ from app.orchestrator import AddSourceResult, StepResult
 from app.services import render_service
 from app.services.authz import Role
 from app.services.git_writer import CommitResult
+from app.services.k8s_service import K8sService
 
 VALID_SPEC = {
     "source": "mssql1",
@@ -101,6 +103,8 @@ class FakeK8s:
         self.spark_suspended_calls: List[tuple] = []
         self.deleted_spark_jobs: List[str] = []
         self.removed_acls: List[tuple] = []
+        self.deleted_users: List[str] = []
+        self.deleted_secrets: List[str] = []
 
     def list_sources(self):
         return self._sources
@@ -119,6 +123,12 @@ class FakeK8s:
 
     def remove_user_acl(self, user, acl):
         self.removed_acls.append((user, acl))
+
+    def delete_user(self, name):
+        self.deleted_users.append(name)
+
+    def delete_secret(self, name):
+        self.deleted_secrets.append(name)
 
     def set_spark_suspended(self, name, suspended):
         self.spark_suspended_calls.append((name, suspended))
@@ -837,7 +847,12 @@ def test_delete_missing_source_is_404_for_admin():
 # --------------------------------------------------------------------------
 
 KAFKA_INGEST_CR = {
-    "metadata": {"name": "kafka-ingest-k1-orders"},
+    # `annotations` mirrors what render_service._connector always stamps in
+    # production (Task 5: recovered by `_kafka_ingest_producer` to build the
+    # producer-KafkaUser teardown name -- NOT from `metadata.name`, which is
+    # the composite "kafka-ingest-k1-orders", not the bare source "k1").
+    "metadata": {"name": "kafka-ingest-k1-orders",
+                 "annotations": {"lakehouse.solus.dev/source": "k1"}},
     "spec": {
         "class": "org.apache.iceberg.connect.IcebergSinkConnector",
         "config": {
@@ -908,6 +923,103 @@ def test_delete_camel_sink_does_not_revoke_acl_despite_topics_key():
     assert k8s.deleted_connectors == ["http-h1-prices-sink"]
 
 
+def test_delete_kafka_ingest_tears_down_producer():
+    # Task 5: deleting a kafka-ingest source must also tear down the
+    # per-pipeline producer KafkaUser + its Secret that add_source
+    # provisioned -- name recovered from the CR's round-trip
+    # `{_SPARK_ANN}source` annotation (see KAFKA_INGEST_CR), NOT from the
+    # route's `name` path param (the composite CR name).
+    k8s, s3, trino = FakeK8s(sources=[KAFKA_INGEST_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/kafka-ingest-k1-orders?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.deleted_users == ["k1-producer"]
+    assert k8s.deleted_secrets == ["k1-producer"]
+
+
+class _RawCustomApi:
+    """Low-level `custom_api` double wired straight into a REAL `K8sService`
+    (not `FakeK8s`) -- so this test exercises the actual Fix 2 code path
+    (`K8sService.delete_user`/`delete_connector`), not a hand-rolled router
+    fake that could silently diverge from it.
+
+    `list_namespaced_custom_object` returns `[KAFKA_INGEST_CR]` (connectors)
+    / `[]` (spark CRD absent, matching every other test's `FakeK8s`
+    default). `get_namespaced_custom_object` (used by `remove_user_acl`'s
+    read-modify-write) returns an empty-ACL KafkaUser so the ACL-revocation
+    step no-ops cleanly regardless of which KafkaUser name it's asked for.
+    `delete_namespaced_custom_object` raises 404 for `kafkausers` -- the
+    producer KafkaUser this kafka-ingest source's CR predates (Fix 2's
+    scenario) -- but succeeds (and is recorded) for `kafkaconnectors`, so the
+    test can assert `delete_connector` still ran.
+    """
+
+    def __init__(self):
+        self.deleted: List[Dict[str, Any]] = []
+
+    def list_namespaced_custom_object(self, **kw):
+        if kw["plural"] == "scheduledsparkapplications":
+            return {"items": []}
+        return {"items": [KAFKA_INGEST_CR]}
+
+    def get_namespaced_custom_object(self, **kw):
+        return {"metadata": {"resourceVersion": "1"}, "spec": {"authorization": {"acls": []}}}
+
+    def delete_namespaced_custom_object(self, **kw):
+        if kw["plural"] == "kafkausers":
+            raise ApiException(status=404, reason="NotFound")
+        self.deleted.append(kw)
+        return {}
+
+    def patch_namespaced_custom_object(self, **kw):
+        raise AssertionError("no ACL patch expected -- empty-ACL KafkaUser is already a no-op")
+
+
+class _RawCoreApi:
+    """Low-level `core_api` double: the producer Secret doesn't exist either
+    (Fix 2's other half) -- `delete_namespaced_secret` always 404s."""
+
+    def delete_namespaced_secret(self, **kw):
+        raise ApiException(status=404, reason="NotFound")
+
+
+def test_delete_kafka_ingest_survives_missing_producer_user_and_secret():
+    # FINAL-REVIEW Fix 2 regression guard: a kafka-ingest source created
+    # BEFORE per-pipeline producer provisioning existed has the
+    # `{_SPARK_ANN}source` annotation (long pre-existing, see
+    # KAFKA_INGEST_CR) but no producer KafkaUser/Secret -- deleting it must
+    # NOT 500 (both delete_user and delete_secret would previously raise the
+    # K8s 404 straight through, aborting before delete_connector ran), and
+    # delete_connector must still run so the source is actually removed.
+    real_k8s = K8sService(custom_api=_RawCustomApi(), core_api=_RawCoreApi(), namespace="lakehouse")
+    s3, trino = FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=real_k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/kafka-ingest-k1-orders?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert {"plural": "kafkaconnectors", "name": "kafka-ingest-k1-orders",
+            "group": "kafka.strimzi.io", "version": "v1beta2", "namespace": "lakehouse"} \
+        in real_k8s.custom_api.deleted
+
+
+def test_delete_camel_sink_does_not_tear_down_any_producer():
+    # Regression guard, mirroring test_delete_camel_sink_does_not_revoke_acl_
+    # despite_topics_key: a Camel dedicated sink is never kafka-ingest, so its
+    # delete must not touch any producer KafkaUser/Secret.
+    k8s, s3, trino = FakeK8s(sources=[CAMEL_SINK_CR]), FakeS3(), FakeTrino()
+    client = _client_as({Role.ANALYST}, k8s=k8s, s3=s3, trino=trino)
+
+    r = client.delete("/api/sources/http-h1-prices-sink?mode=pipeline_only")
+
+    assert r.status_code == 200
+    assert k8s.deleted_users == []
+    assert k8s.deleted_secrets == []
+
+
 def test_delete_gitops_mode_stream_kafka_revokes_connect_topic_acl(monkeypatch):
     # ACL revocation is a direct K8s API mutation (Task 1's `remove_user_acl`),
     # not GitOps-managed, so it must run even in gitops mode -- same rationale
@@ -935,6 +1047,10 @@ def test_delete_gitops_mode_stream_kafka_revokes_connect_topic_acl(monkeypatch):
         ("connect", {"resource": {"type": "topic", "name": "orders-topic", "patternType": "literal"},
                      "operations": ["Read", "Describe"]})
     ]
+    # Task 5: producer teardown is a direct K8s mutation too (not GitOps
+    # managed), so it must fire in gitops mode exactly like the ACL revocation.
+    assert k8s.deleted_users == ["k1-producer"]
+    assert k8s.deleted_secrets == ["k1-producer"]
     assert git_writer.removed == ["k1"]
 
 

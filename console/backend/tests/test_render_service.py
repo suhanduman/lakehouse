@@ -861,6 +861,45 @@ def test_topic_cr_name_valid_and_preserves_real_topic():
     assert "topicName" not in clean["spec"]
 
 
+def test_render_kafka_topic_parametrized():
+    from app.services import render_service
+    body = render_service.render_kafka_topic("nginx-logs", partitions=1, replicas=1)
+    assert body["spec"]["partitions"] == 1
+    assert body["spec"]["replicas"] == 1
+
+
+def test_render_kafka_topic_defaults_unchanged():
+    from app.services import render_service
+    body = render_service.render_kafka_topic("nginx-logs")
+    assert body["spec"]["partitions"] == 6
+    assert body["spec"]["replicas"] == 3
+
+
+def test_render_producer_user_scram_write_acl():
+    from app.services import render_service
+    u = render_service.render_producer_user("nginx-producer", "nginx-logs",
+                                             allow_create=False, cluster="kafka")
+    assert u["kind"] == "KafkaUser"
+    assert u["metadata"]["labels"]["strimzi.io/cluster"] == "kafka"
+    assert u["spec"]["authentication"]["type"] == "scram-sha-512"
+    assert u["spec"]["authorization"]["type"] == "simple"
+    acls = u["spec"]["authorization"]["acls"]
+    topic_acl = next(a for a in acls if a["resource"]["name"] == "nginx-logs")
+    assert topic_acl["resource"]["type"] == "topic"
+    assert topic_acl["resource"]["patternType"] == "literal"
+    assert set(topic_acl["operations"]) >= {"Write", "Describe"}
+    assert "Create" not in topic_acl["operations"]  # pre-created topic
+
+
+def test_render_producer_user_allow_create_adds_create_op():
+    from app.services import render_service
+    u = render_service.render_producer_user("nginx-producer", "nginx-logs",
+                                             allow_create=True, cluster="kafka")
+    topic_acl = next(a for a in u["spec"]["authorization"]["acls"]
+                     if a["resource"]["name"] == "nginx-logs")
+    assert "Create" in topic_acl["operations"]
+
+
 def test_camel_http_source_is_raw_json_no_smts():
     from app.models import SourceSpec
     c = r.render_connector(SourceSpec(source="h1", kind="stream", type="http", db="-", table="-",
@@ -911,3 +950,36 @@ def test_s3_register_stamps_roundtrip_annotations():
     assert ann["lakehouse.solus.dev/source"] == "s1"
     assert ann["lakehouse.solus.dev/s3-bucket"] == "b"
     assert ann["lakehouse.solus.dev/cron"] == "0 * * * *"
+
+
+# --------------------------------------------------------------------------
+# render_ingest_snippets (log shipper producer configs)
+# --------------------------------------------------------------------------
+
+def test_render_ingest_snippets_all_collectors_filled():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="kafka.example:9094", topic="nginx-logs",
+        user="nginx-producer", password="SECRET123", disposition="event")
+    assert set(s) == {"fluentbit", "vector", "logstash", "generic"}
+    for snippet in s.values():
+        assert "kafka.example:9094" in snippet
+        assert "nginx-logs" in snippet
+        assert "nginx-producer" in snippet
+        assert "SECRET123" in snippet
+
+
+def test_render_ingest_snippets_entity_mentions_pk():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="b:9094", topic="orders", user="orders-producer",
+        password="p", disposition="entity", pk=["order_id"])
+    assert "order_id" in s["generic"]
+
+
+def test_render_ingest_snippets_placeholder_when_bootstrap_or_password_missing():
+    from app.services import render_service
+    s = render_service.render_ingest_snippets(
+        bootstrap="", topic="t", user="u", password="", disposition="event")
+    assert "<external bootstrap>" in s["fluentbit"]
+    assert "<password" in s["fluentbit"]

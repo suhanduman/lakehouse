@@ -69,6 +69,24 @@ function mockLoad() {
   vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
   vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
   vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
+  // Ingestion/collector config section (Task 9) fetches lazily -- only on
+  // open -- so most existing tests never trigger this call. Still spied
+  // here with a safe default so any test that does open it doesn't hit an
+  // unmocked network call.
+  vi.spyOn(client, "getIngestConfig").mockResolvedValue({
+    external_bootstrap: "kafka.example:9094",
+    topic: "nginx-logs",
+    disposition: "event",
+    authoritative_fqn: "rawlake.nginx_raw.nginx_logs",
+    producer: {
+      user: "nginx-producer",
+      mechanism: "SCRAM-SHA-512",
+      password: null,
+      secret_ref: "nginx-producer",
+    },
+    expected_json: null,
+    snippets: { fluentbit: "f", vector: "v", logstash: "l", generic: "g" },
+  });
 }
 
 describe("SourceDetail", () => {
@@ -320,5 +338,53 @@ describe("SourceDetail", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^pause$/i }));
     expect(await screen.findByText(/spec\.state/)).toBeInTheDocument();
     expect(screen.getByText(/commit/)).toBeInTheDocument();
+  });
+
+  it("shows the ingestion/collector config for a kafka-ingest source", async () => {
+    mockLoad();
+    vi.spyOn(client, "getIngestConfig").mockResolvedValue({
+      external_bootstrap: "kafka.example:9094",
+      topic: "nginx-logs",
+      disposition: "event",
+      authoritative_fqn: "rawlake.nginx_raw.nginx_logs",
+      producer: {
+        user: "nginx-producer",
+        mechanism: "SCRAM-SHA-512",
+        password: "SECRET123",
+        secret_ref: "nginx-producer",
+      },
+      expected_json: null,
+      snippets: { fluentbit: "FLUENTBIT-SNIPPET", vector: "v", logstash: "l", generic: "g" },
+    });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /collector config|ingestion/i }),
+    );
+
+    expect(await screen.findByText(/FLUENTBIT-SNIPPET/)).toBeInTheDocument();
+    expect(screen.getByText(/rawlake\.nginx_raw\.nginx_logs/)).toBeInTheDocument();
+    expect(screen.queryByText("SECRET123")).toBeNull(); // hidden until revealed
+
+    fireEvent.click(screen.getByRole("button", { name: /reveal|göster|show/i }));
+    expect(await screen.findByText(/SECRET123/)).toBeInTheDocument();
+  });
+
+  it("shows a note instead of the panel when getIngestConfig 400s (not a kafka-ingest source)", async () => {
+    mockLoad();
+    vi.spyOn(client, "getIngestConfig").mockRejectedValue(
+      new client.ApiError("Bad Request", 400, "only available for kafka-ingest sources"),
+    );
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /collector config|ingestion/i }),
+    );
+
+    expect(
+      await screen.findByText(/only available for kafka-ingest sources/i),
+    ).toBeInTheDocument();
   });
 });

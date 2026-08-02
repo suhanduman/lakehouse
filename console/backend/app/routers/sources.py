@@ -109,6 +109,42 @@ def _find_source(k8s: K8sService, name: str) -> Dict[str, Any]:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"source not found: {name}")
 
 
+def _resolve_kafka_ingest_cr(k8s: K8sService, name: str) -> Dict[str, Any]:
+    """Resolve `name` to a source CR, tolerating BOTH identities a
+    kafka-ingest source is addressed by:
+
+    - the connector's own composite CR name (`kafka-ingest-<source>-
+      <target_table>`) -- what `SourceDetail` passes, and what `_find_source`
+      already resolves directly via `metadata.name`;
+    - the BARE source id (e.g. "kafka1", i.e. `spec.source`) -- what the
+      Add-Source wizard passes (`getIngestConfig(form.source)`) right after
+      create, which `_find_source` 404s on since no CR is ever named just
+      "kafka1".
+
+    Tries `_find_source` first (covers the composite-name path unchanged,
+    for ANY source kind). Only on its 404 does this fall back to scanning
+    `k8s.list_sources()` for the kafka-ingest connector (`metadata.name`
+    startswith "kafka-ingest-", see `_kafka_ingest_topic`'s docstring) whose
+    `{_SPARK_ANN}source` round-trip annotation equals `name` -- the same
+    annotation `_kafka_ingest_producer` reads the producer username from, so
+    a hit here guarantees `_kafka_ingest_producer` resolves the SAME CR
+    either way. Re-raises the original 404 if neither lookup finds a CR."""
+    try:
+        return _find_source(k8s, name)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        for item in k8s.list_sources():
+            metadata = item.get("metadata") or {}
+            cr_name = metadata.get("name") or ""
+            if not cr_name.startswith("kafka-ingest-"):
+                continue
+            annotations = metadata.get("annotations") or {}
+            if annotations.get(f"{_SPARK_ANN}source") == name:
+                return item
+        raise
+
+
 def _target_ns_table(cr: Dict[str, Any]) -> Tuple[str, str]:
     """Recover (target_ns, target_table) -- `target_ns` being the unique
     per-pipeline namespace (Sub-project B-v2), NOT a shared group label --
@@ -223,6 +259,28 @@ def _kafka_ingest_topic(cr: Dict[str, Any]) -> Optional[str]:
     if not name.startswith("kafka-ingest-"):
         return None
     return (cr.get("spec") or {}).get("config", {}).get("topics") or None
+
+
+def _kafka_ingest_producer(cr: Dict[str, Any]) -> Optional[str]:
+    """The per-pipeline producer KafkaUser name (Task 5) a kafka-ingest
+    source's `add_source` provisions -- `render_service._k8s_name(spec.source,
+    "producer")` -- recovered from the CR's own `{_SPARK_ANN}source`
+    round-trip annotation (stamped on every rendered connector by
+    `render_service._connector`), NOT from this route's `name` path param:
+    `name` is the CR's own composite `metadata.name`
+    (`kafka-ingest-<source>-<target_table>`, see `_kafka_ingest_topic`'s
+    docstring), never the bare `spec.source` the producer username is keyed
+    on -- so `_k8s_name(name, "producer")` would build the WRONG username and
+    silently orphan the real producer KafkaUser/Secret on delete.
+
+    Returns None (skip, best-effort -- matching `_kafka_ingest_topic`'s tone)
+    when the annotation is missing (e.g. a CR pre-dating this feature or
+    applied by hand)."""
+    ann = (cr.get("metadata") or {}).get("annotations") or {}
+    source = ann.get(f"{_SPARK_ANN}source")
+    if not source:
+        return None
+    return render_service._k8s_name(source, "producer")
 
 
 def _spark_target(cr: Dict[str, Any]) -> Tuple[str, str]:
@@ -403,6 +461,92 @@ def source_connectors(
     return {"connectors": connectors}
 
 
+# NB: same circular-import rationale as `source_connectors` above --
+# `assemble_pipelines` is imported inside the handler, not at module level.
+@router.get("/{name}/ingest-config", dependencies=[Depends(require_action(Action.READ))])
+def ingest_config(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+    trino: TrinoService = Depends(get_trino),
+) -> Dict[str, Any]:
+    """Filled-in collector/producer snippets + the producer credential for a
+    kafka-ingest (existing-Kafka) source, so a customer team can wire their
+    own log shipper (Fluent Bit / Vector / Logstash / any generic producer)
+    straight from the Console instead of hand-assembling bootstrap/topic/
+    SASL config.
+
+    `disposition`/`authoritative_fqn` are NOT read off the connector CR --
+    the kafka-ingest connector config carries no identifier/PK (that lives in
+    the Iceberg table, not `spec.config`; `_iceberg_sink_config` only sets a
+    `transforms.setdel` chain, which can't tell entity-without-delete_field
+    apart from event). Instead this reuses `assemble_pipelines` (the same
+    topology builder `/api/pipelines` and `source_connectors` above use),
+    which already resolves both fields authoritatively by checking whether
+    the Silver table exists.
+
+    For the same reason, `pk`/`expected_json` are best-effort `None` -- the
+    rendered snippet simply omits the key-field hint. This is a deliberate,
+    documented degradation, not an oversight.
+    """
+    from app.services.pipeline_topology import assemble_pipelines
+
+    cr = _resolve_kafka_ingest_cr(k8s, name)
+    topic = _kafka_ingest_topic(cr)
+    if topic is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ingest-config is only available for kafka-ingest sources",
+        )
+
+    sources = k8s.list_sources()
+    namespaces = {
+        ns: set(trino.list_tables("lakehouse", ns)) for ns in trino.list_namespaces("lakehouse")
+    }
+    pipelines = assemble_pipelines(sources, namespaces, k8s.get_status, k8s.get_spark_status)
+    pipe = next(
+        (p for p in pipelines
+         if p.get("name") == name
+         or any(n.get("name") == name for n in p.get("nodes", []))),
+        None,
+    )
+    disposition = "event"
+    authoritative_fqn: Optional[str] = None
+    if pipe and "error" not in pipe:
+        disposition = pipe.get("disposition") or "event"
+        authoritative_fqn = (pipe.get("authoritative") or {}).get("fqn")
+
+    # Producer username MUST match what `add_source`/`delete_source` use --
+    # recovered from the CR's own round-trip annotation (Task 5), never
+    # rebuilt from `name` (the composite CR name, not the bare source id).
+    producer = _kafka_ingest_producer(cr) or ""
+    secret = k8s.read_secret(producer) if producer else None
+    password = (secret or {}).get("password")   # never logged
+
+    snippets = render_service.render_ingest_snippets(
+        bootstrap=settings.kafka_external_bootstrap,
+        topic=topic,
+        user=producer,
+        password=password or "",
+        disposition=disposition,
+        pk=None,
+    )
+
+    return {
+        "external_bootstrap": settings.kafka_external_bootstrap,
+        "topic": topic,
+        "disposition": disposition,
+        "authoritative_fqn": authoritative_fqn,
+        "producer": {
+            "user": producer,
+            "mechanism": "SCRAM-SHA-512",
+            "password": password,
+            "secret_ref": producer,
+        },
+        "expected_json": None,
+        "snippets": snippets,
+    }
+
+
 # --------------------------------------------------------------------------
 # Edit / pause / resume
 # --------------------------------------------------------------------------
@@ -552,6 +696,15 @@ def delete_source(
     CR (best-effort: a CR that isn't a kafka-ingest connector, or is missing
     the expected topic config, is silently skipped -- never fails the
     delete).
+
+    Producer KafkaUser teardown (Task 5): a kafka-ingest source's add_source
+    also provisions a per-pipeline producer KafkaUser (`<source>-producer`,
+    see `AddSourceOrchestrator.add_source`'s "producer" step). Its Strimzi
+    identity/Secret are direct K8s API objects too (not GitOps-managed), so
+    they are deleted here alongside the ACL revocation above -- same
+    best-effort posture (`_kafka_ingest_producer` returns None, silently
+    skipping, if the CR predates this feature and lacks the round-trip
+    annotation the username is recovered from).
     """
     if settings.deploy_mode == "gitops":
         cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
@@ -568,6 +721,9 @@ def delete_source(
         kafka_ingest_topic = _kafka_ingest_topic(cr)
         if kafka_ingest_topic:
             k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
+            producer = render_service._k8s_name(source, "producer")
+            k8s.delete_user(producer)
+            k8s.delete_secret(producer)
         commit = orchestrator.git_writer.remove_source(source)
         result: Dict[str, Any] = {"ok": commit.committed, "name": name, "mode": mode, "ref": commit.ref}
         if mode != "with_data":
@@ -610,6 +766,10 @@ def delete_source(
     kafka_ingest_topic = _kafka_ingest_topic(cr)
     if kafka_ingest_topic:
         k8s.remove_user_acl("connect", _connect_topic_acl(kafka_ingest_topic))
+        producer = _kafka_ingest_producer(cr)
+        if producer:
+            k8s.delete_user(producer)
+            k8s.delete_secret(producer)
 
     k8s.delete_connector(name)
     if mode != "with_data":

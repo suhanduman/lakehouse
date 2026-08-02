@@ -86,6 +86,9 @@ class FakeK8s:
         self.applied_spark_jobs: List[Dict[str, Any]] = []
         self.ensured_acls: List[tuple] = []
         self.removed_acls: List[tuple] = []
+        self.applied_users: List[Dict[str, Any]] = []
+        self.deleted_users: List[str] = []
+        self.read_secrets: List[str] = []
         self.status_calls: List[str] = []
         self.status_states = list(status_states) if status_states is not None else ["RUNNING"]
         self.status_states_by_name = (
@@ -142,6 +145,21 @@ class FakeK8s:
     def remove_user_acl(self, user, acl):
         self.calls.append(("remove_user_acl", user))
         self.removed_acls.append((user, acl))
+
+    def apply_user(self, body):
+        if self.fail_on == "producer":
+            raise RuntimeError("producer boom")
+        self.calls.append(("apply_user", body["metadata"]["name"]))
+        self.applied_users.append(body)
+
+    def delete_user(self, name):
+        self.calls.append(("delete_user", name))
+        self.deleted_users.append(name)
+
+    def read_secret(self, name):
+        self.calls.append(("read_secret", name))
+        self.read_secrets.append(name)
+        return None
 
     def get_status(self, name):
         if self.fail_on == "verify":
@@ -769,8 +787,10 @@ def test_kafka_event_skips_secret_topic_and_silver():
     assert "secret" not in names   # in-cluster: no creds -> no secret step
     assert "topic" not in names    # existing topic: descriptor.topic_key == "" -> none created
     # Task 2: "acl" grants `connect` a scoped literal READ on the customer
-    # topic (kafka-ingest lane only) -- runs before "connector".
-    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "connector", "verify"]
+    # topic (kafka-ingest lane only) -- runs before "connector". Task 5:
+    # "producer" always runs for kafka-ingest (create_topic=False here ->
+    # no "ingest-topic" step).
+    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "producer", "connector", "verify"]
     assert ("connect", CONNECT_TOPIC_ACL) in fakes["k8s"].ensured_acls
     # Bronze only (event disposition) -- no Silver create_table call at all.
     assert fakes["iceberg"].created_layers == ["bronze"]
@@ -1003,6 +1023,76 @@ def test_kafka_ingest_has_no_separate_sink_step():
     assert "sink" not in [s.name for s in res.steps]
 
 
+def test_kafka_ingest_returns_composite_connector_name():
+    # Residual fix: add_source must surface the CREATED connector's composite
+    # name (kafka-ingest-<source>-<target_table>) so the wizard can fetch
+    # ingestion config unambiguously -- the bare source id ("k1") is ambiguous
+    # when one source id owns multiple kafka-ingest target tables.
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert res.connector_name == "kafka-ingest-k1-orders"
+
+
+# --------------------------------------------------------------------------
+# Task 5: kafka-ingest producer provisioning (optional topic pre-create +
+# per-pipeline producer KafkaUser), with rollback.
+# --------------------------------------------------------------------------
+
+def test_kafka_ingest_provisions_producer_user():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(), SourceCredentials(user="", password=""))  # create_topic=False (default)
+
+    assert res.ok is True
+    assert "producer" in [s.name for s in res.steps]
+    assert "ingest-topic" not in [s.name for s in res.steps]   # no topic pre-create requested
+    applied = fakes["k8s"].applied_users[-1]
+    assert applied["metadata"]["name"] == "k1-producer"
+    assert applied["metadata"]["labels"]["strimzi.io/cluster"] == "kafka"   # settings.kafka_cluster_name default
+    acls = applied["spec"]["authorization"]["acls"]
+    ops = acls[0]["operations"]
+    assert "Write" in ops
+    # create_topic=False -> the producer may need to lazily create the topic itself.
+    assert "Create" in ops
+
+
+def test_kafka_ingest_creates_topic_only_when_requested():
+    orch, fakes = _orch_fakes()
+
+    res = orch.add_source(_kafka_spec(create_topic=True), SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert "ingest-topic" in [s.name for s in res.steps]
+    assert fakes["k8s"].applied_topics
+    assert fakes["k8s"].applied_topics[-1]["metadata"]["name"] == "orders-topic"
+    # topic is pre-created here -> producer must NOT also get Create (least-privilege).
+    ops = fakes["k8s"].applied_users[-1]["spec"]["authorization"]["acls"][0]["operations"]
+    assert "Create" not in ops
+
+    orch2, fakes2 = _orch_fakes()
+    res2 = orch2.add_source(_kafka_spec(), SourceCredentials(user="", password=""))   # create_topic=False
+
+    assert res2.ok is True
+    assert "ingest-topic" not in [s.name for s in res2.steps]
+    assert fakes2["k8s"].applied_topics == []
+
+
+def test_kafka_ingest_rolls_back_producer_on_later_failure():
+    # A step AFTER "producer" (here: "connector") raises -> full rollback must
+    # undo the producer KafkaUser (and, since create_topic=True here, the
+    # pre-created ingest topic) via delete_user/delete_topic.
+    orch, fakes = _orch_fakes(fail_on="connector")
+
+    res = orch.add_source(_kafka_spec(create_topic=True), SourceCredentials(user="", password=""))
+
+    assert res.ok is False
+    assert fakes["k8s"].deleted_users == ["k1-producer"]
+    assert fakes["k8s"].deleted_topics == ["orders-topic"]
+
+
 def test_http_entity_creates_topic_bronze_and_silver():
     orch, fakes = _orch_fakes()
     spec = _http_spec(
@@ -1041,7 +1131,8 @@ def test_stream_kafka_entity_precreates_bronze_and_silver():
     names = [s.name for s in res.steps]
     # kafka-ingest still has no topic step (consumes an existing topic) and
     # no dedicated sink (it IS the sink) -- disposition doesn't change that.
-    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "connector", "verify"]
+    # Task 5: "producer" always runs for kafka-ingest.
+    assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "producer", "connector", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
 
 

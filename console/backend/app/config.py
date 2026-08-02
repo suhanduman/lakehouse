@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     trino_user: str = "lakehouse-console"
     connect_url: str = "http://connect-connect-api:8083"
     connect_cluster_name: str = "connect"    # Strimzi KafkaConnect cluster name (pod label selector)
+    kafka_external_bootstrap: str = ""   # external listener a cluster-outside producer uses (ingest-config)
+    kafka_cluster_name: str = "kafka"   # strimzi.io/cluster label on provisioned KafkaUsers
     # Optional deep-link into an external logging UI (OpenShift logging / Kibana /
     # Grafana). Placeholders {namespace} {connector} {connect_cluster} are filled;
     # empty -> no link is produced (the oc-command recipe is always present).
