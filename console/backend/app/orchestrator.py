@@ -1,7 +1,7 @@
 """AddSourceOrchestrator: the "add source" multi-step pipeline with rollback.
 
-Step order (exact): secret -> bucket -> namespace -> table -> topic ->
-connector -> verify. Each step is idempotent on its own (K8sService.apply_*/
+Step order (exact): secret -> uniqueness -> bucket -> namespace -> table ->
+topic -> connector -> verify. Each step is idempotent on its own (K8sService.apply_*/
 create_secret and S3Service.create_bucket already tolerate "already exists"
 — see their docstrings), so re-running add_source against an already-
 provisioned source is a cheap no-op all the way through.
@@ -304,19 +304,43 @@ class AddSourceOrchestrator:
             if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):
                 return fail()
 
-        # 2. bucket -- no undo pushed, see module docstring "Rollback scope"
-        bucket = self.render.bucket_name(spec.target_ns)
+        # 1b. uniqueness -- a pipeline name (target_ns) maps to exactly one
+        # pipeline. Reject if the Bronze namespace <p>_raw already holds a
+        # DIFFERENT table (would force two pipelines to share a bucket).
+        bronze_ns = f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}"
 
-        def _create_bucket() -> Optional[str]:
-            self.s3.create_bucket(bucket)
+        def _check_unique() -> Optional[str]:
+            if self.iceberg is None:
+                return None
+            others = self.iceberg.namespace_tables(bronze_ns, layer="bronze") - {spec.target_table}
+            if others:
+                raise RuntimeError(
+                    f"pipeline adı '{spec.target_ns}' zaten kullanımda "
+                    f"(namespace '{bronze_ns}' başka tablo içeriyor: {sorted(others)})"
+                )
             return None
 
-        if not run("bucket", _create_bucket):
+        if not run("uniqueness", _check_unique):
             return fail()
 
-        # 3. namespace -- no undo pushed, see module docstring "Rollback scope"
+        # 2. buckets -- per-pipeline (B-v2). Bronze always; Silver only for
+        # entity. No undo (see "Rollback scope").
+        bronze_bucket = self.render.bronze_bucket_name(spec.target_ns)
+        silver_bucket = self.render.silver_bucket_name(spec.target_ns)
+
+        def _create_buckets() -> Optional[str]:
+            self.s3.create_bucket(bronze_bucket)
+            if disposition == "entity":
+                self.s3.create_bucket(silver_bucket)
+            return None
+
+        if not run("bucket", _create_buckets):
+            return fail()
+
+        # 3. namespace -- Silver only (entity); event has no Silver ns/bucket.
         def _run_ns_ddl() -> Optional[str]:
-            self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns, bucket))
+            if disposition == "entity":
+                self.trino.run_ddl(self.render.render_namespace_ddl(spec.target_ns, silver_bucket))
             return None
 
         if not run("namespace", _run_ns_ddl):
@@ -342,8 +366,10 @@ class AddSourceOrchestrator:
                     "IcebergService enjekte edilmedi — tablo identifier field ile "
                     "pre-create edilemez (upsert append-only'e düşer)"
                 )
-            # location=None: namespace + konumu yukarıdaki Trino adımı kurdu;
-            # iceberg yalnızca tabloyu (identifier field ile) yaratır.
+            # location=... : per-pipeline bucket konumları (B-v2) — Nessie
+            # namespace-level location'ı honor eder (per-table location'ı
+            # YOK sayar, bkz. IcebergService.create_table docstring), bu
+            # yüzden konum burada, create_table'a location= olarak geçirilir.
             cols = [c.model_dump() for c in spec.columns] if spec.columns else []
             if disposition == "entity":
                 # Validate BEFORE any Iceberg write: a misconfigured entity
@@ -369,11 +395,11 @@ class AddSourceOrchestrator:
                     )
                 bronze_fq = self.iceberg.create_table(
                     f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
-                    location=None, layer="bronze",
+                    location=f"s3://{bronze_bucket}/warehouse", layer="bronze",
                 )
                 silver_fq = self.iceberg.create_table(
                     spec.target_ns, spec.target_table, cols, identifier,
-                    location=None, layer="silver",
+                    location=f"s3://{silver_bucket}/warehouse", layer="silver",
                 )
                 return f"{bronze_fq} + {silver_fq} (identifier={identifier})"
             # event/append-only: Bronze skeleton only (columns may be empty —
@@ -382,7 +408,7 @@ class AddSourceOrchestrator:
             # silver-merge skips this source entirely.
             bronze_fq = self.iceberg.create_table(
                 f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],
-                location=None, layer="bronze",
+                location=f"s3://{bronze_bucket}/warehouse", layer="bronze",
             )
             return f"{bronze_fq} (event/append-only, no Silver)"
 

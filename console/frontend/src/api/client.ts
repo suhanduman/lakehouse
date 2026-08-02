@@ -101,6 +101,21 @@ export interface SourceStepResult {
   detail: string;
 }
 
+/** Mirrors app.routers.sources.preview_source()'s dict shape: a dry-run of
+ * the CRs (and per-pipeline Bronze/Silver buckets + Silver namespace DDL,
+ * Sub-project B-v2) an add-source call would produce, without touching a
+ * cluster/bucket/warehouse. `connector`/`kafka_topic` are `null` for the
+ * spark-batch lane (no KafkaConnector/KafkaTopic CR to render there);
+ * otherwise each is a full K8s manifest (apiVersion/kind/metadata/spec) --
+ * only the paths the wizard's preview step actually reads are typed here. */
+export interface PreviewResult {
+  bronze_bucket: string;
+  silver_bucket: string;
+  namespace_ddl: string;
+  connector: { spec?: { class?: string } } | null;
+  kafka_topic: { metadata?: { name?: string } } | null;
+}
+
 /** Mirrors app.orchestrator.AddSourceResult (asdict()'d by the
  * `create_source` router). `ok: false` is an IN-BAND pipeline failure --
  * the HTTP request itself succeeded (201 or 207, both res.ok under
@@ -112,13 +127,25 @@ export interface CreateSourceResult {
   ok: boolean;
 }
 
+/** Mirrors app.routers.sources.delete_source()'s dict shape across both
+ * lanes it can take: the spark-batch branch still returns the original
+ * singular `dropped_table`/`emptied_bucket` (rawlake-only, no Silver
+ * table/bucket to speak of), while the CDC/kafka/camel branch (Sub-project
+ * B-v2: per-pipeline Bronze+Silver) returns the plural `dropped_tables`/
+ * `deleted_buckets` (Bronze changelog + Silver merge target/bucket, the
+ * latter a no-op pair for an event-lane source with no Silver side). `ref`
+ * is the git commit ref returned by the gitops-mode branch
+ * (`orchestrator.git_writer.remove_source`); absent in direct mode. */
 export interface DeleteSourceResult {
   ok: boolean;
   name: string;
   mode: DeleteMode;
   dropped_table?: string;
   emptied_bucket?: string;
+  dropped_tables?: string[];
+  deleted_buckets?: string[];
   deleted_topic?: string | null;
+  ref?: string;
 }
 
 export interface TableNamespace {
@@ -225,11 +252,11 @@ export async function createSource(
 }
 
 /** POST /api/sources/preview -> dry-run a spec without provisioning
- * anything (no such route exists in the backend yet as of Task 11; this
- * calls the endpoint later tasks are expected to add so callers can start
- * integrating against a stable client surface now). */
-export async function previewSource(spec: SourceSpec): Promise<unknown> {
-  return request<unknown>("/sources/preview", {
+ * anything (render-only route added in app.routers.sources.preview_source;
+ * it takes no K8s/S3/Trino dependency, so it can never reach a live
+ * cluster/bucket/warehouse no matter what the caller sends). */
+export async function previewSource(spec: SourceSpec): Promise<PreviewResult> {
+  return request<PreviewResult>("/sources/preview", {
     method: "POST",
     body: JSON.stringify({ spec }),
   });

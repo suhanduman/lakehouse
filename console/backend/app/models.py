@@ -35,6 +35,9 @@ class SourceSpec(BaseModel):
     type: Literal["mssql", "pg", "mongo", "mysql", "kafka", "s3", "http", "mqtt", "rabbitmq"]
     db: str
     table: str
+    # Unique pipeline namespace (Sub-project B-v2): each source owns its own
+    # target_ns (used to derive that pipeline's own Bronze/Silver buckets and
+    # Iceberg namespaces) -- NOT a shared group label multiple sources land into.
     target_ns: str
     target_table: str
 
@@ -85,6 +88,38 @@ class SourceSpec(BaseModel):
             raise ValueError(
                 "source must be an RFC1123 label (lowercase letters, digits, '-'; "
                 f"must start/end alphanumeric) — got {v!r}"
+            )
+        return v
+
+    @field_validator("target_ns")
+    @classmethod
+    def _target_ns_is_canonical(cls, v: str) -> str:
+        """target_ns doubles as this pipeline's Silver Iceberg namespace AND the
+        seed for its per-pipeline Bronze/Silver bucket names (B-v2, see
+        render_service._pipeline_bucket / _k8s_name). _k8s_name's bucket-name
+        sanitization is LOSSY: it lowercases the input AND collapses any RUN
+        of non-[a-z0-9-] characters (which includes '_', since S3 bucket
+        names forbid it) into a SINGLE '-'. A merely "[a-z0-9_]+" check is
+        NOT enough to make the mapping injective -- doubled/leading/trailing
+        underscores still collapse together: "a_b"/"a__b"/"a___b" all ->
+        "bronze-a-b", and "_ab"/"ab" or "ab_"/"ab" both -> "bronze-ab". Two
+        namespace-DISTINCT target_ns values could then sanitize-collide onto
+        the SAME bucket even though both pass the orchestrator's
+        namespace-uniqueness check -- reintroducing the shared-bucket/
+        data-loss class B-v2 exists to eliminate (deleting one pipeline
+        would wipe the other's data). Requiring target_ns to be canonical
+        lowercase alnum "segments" joined by exactly one '_' each (no
+        leading/trailing/doubled '_') makes '_' -> '-' the ONLY
+        transformation _k8s_name/_pipeline_bucket ever applies to it --
+        a single, injective, reversible substitution -- so the namespace
+        -> bucket mapping is genuinely injective, not just "less lossy"."""
+        import re
+        if not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", v):
+            raise ValueError(
+                "target_ns is the pipeline name / Silver Iceberg namespace and must "
+                "be lowercase alphanumeric segments joined by single underscores "
+                "(no leading/trailing/doubled underscores, e.g. 'mssql1_students') "
+                f"— got {v!r}"
             )
         return v
 

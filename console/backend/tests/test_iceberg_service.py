@@ -35,12 +35,19 @@ class FakeCatalog:
         self.partition_specs = []  # [(fq, partition_spec)] — bronze day(__ts_ms)
         self.namespaces = []       # [(ns, properties)]
         self.table_properties = {}  # {fq: properties} — Iceberg CREATE-time table properties
+        self.tables_by_ns = {}     # {namespace: {table, ...}} — populated by create_table
 
     def create_namespace(self, namespace, properties=None):
         self.namespaces.append((namespace, properties))
 
     def list_tables(self, namespace):
-        return [(namespace, t) for t in self.existing]
+        # Backward-compatible global `existing` (ignores namespace, as before
+        # -- tests that pre-seed `existing=` always query a single namespace)
+        # UNION namespace-scoped tables actually created via create_table
+        # (tracked below) -- this is what lets namespace_tables() tell two
+        # DIFFERENT namespaces apart (e.g. "ns1" vs "absent").
+        names = set(self.existing) | self.tables_by_ns.get(namespace, set())
+        return [(namespace, t) for t in names]
 
     def load_table(self, fq):
         return FakeTable(self.existing[fq.split(".")[-1]])
@@ -49,7 +56,14 @@ class FakeCatalog:
         self.created.append((fq, schema))
         self.partition_specs.append((fq, partition_spec))
         self.table_properties[fq] = properties or {}
-        self.existing[fq.split(".")[-1]] = list(schema.identifier_field_names())
+        namespace, table = fq.rsplit(".", 1)
+        # NOTE: intentionally does NOT also write into `self.existing` --
+        # `existing` is the backward-compatible "pre-seeded at construction"
+        # dict (global, ignores namespace); `tables_by_ns` is the accurate,
+        # namespace-scoped record of what THIS create_table call actually
+        # created, which is what makes namespace_tables() correctly return
+        # set() for a namespace nothing was ever created in.
+        self.tables_by_ns.setdefault(namespace, set()).add(table)
         return FakeTable(schema.identifier_field_names())
 
 
@@ -233,3 +247,24 @@ def test_bronze_table_created_with_target_file_size():
     props = cat.table_properties[fq]
     assert props["write.target-file-size-bytes"] == "134217728"
     assert "write.merge.mode" not in props  # Bronze is append-only, no merge mode
+
+
+# --------------------------------------------------------------------------
+# namespace_tables — read-only helper, orchestrator uniqueness check (F-spike
+# B-v2 Task 4). Does NOT touch create_table's location handling.
+# --------------------------------------------------------------------------
+
+COLS = [{"name": "id", "type": "int"}]
+
+
+@pytest.fixture
+def fake_catalog_iceberg():
+    cat = FakeCatalog()
+    return _svc(cat), cat
+
+
+def test_namespace_tables_returns_names(fake_catalog_iceberg):
+    svc, cat = fake_catalog_iceberg
+    svc.create_table("ns1", "t1", COLS, ["id"], location="s3://x/warehouse")
+    assert svc.namespace_tables("ns1") == {"t1"}
+    assert svc.namespace_tables("absent") == set()
