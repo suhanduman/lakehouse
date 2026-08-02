@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     trino_port: int = 8080
     trino_user: str = "lakehouse-console"
     connect_url: str = "http://connect-connect-api:8083"
+    connect_cluster_name: str = "connect"    # Strimzi KafkaConnect cluster name (pod label selector)
+    # Optional deep-link into an external logging UI (OpenShift logging / Kibana /
+    # Grafana). Placeholders {namespace} {connector} {connect_cluster} are filled;
+    # empty -> no link is produced (the oc-command recipe is always present).
+    external_logging_url_template: str = ""
     apicurio_url: str = "http://apicurio-registry:8080/apis/registry/v2"
     oidc_issuer: str = ""
     oidc_audience: str = "lakehouse-console"
