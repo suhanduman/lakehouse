@@ -35,6 +35,9 @@ class SourceSpec(BaseModel):
     type: Literal["mssql", "pg", "mongo", "mysql", "kafka", "s3", "http", "mqtt", "rabbitmq"]
     db: str
     table: str
+    # Unique pipeline namespace (Sub-project B-v2): each source owns its own
+    # target_ns (used to derive that pipeline's own Bronze/Silver buckets and
+    # Iceberg namespaces) -- NOT a shared group label multiple sources land into.
     target_ns: str
     target_table: str
 

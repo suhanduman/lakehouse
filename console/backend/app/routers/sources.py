@@ -110,17 +110,19 @@ def _find_source(k8s: K8sService, name: str) -> Dict[str, Any]:
 
 
 def _target_ns_table(cr: Dict[str, Any]) -> Tuple[str, str]:
-    """Recover (target_ns, target_table) -- the SILVER identifier -- from a
-    KafkaConnector CR by parsing the `transforms.route.static.value` config
-    key. That value carries the BRONZE identifier
+    """Recover (target_ns, target_table) -- `target_ns` being the unique
+    per-pipeline namespace (Sub-project B-v2), NOT a shared group label --
+    from a KafkaConnector CR by parsing the `transforms.route.static.value`
+    config key. That value carries the BRONZE identifier
     (`"<target_ns>_raw.<target_table>"`, see render_service._route_transform):
-    the sink appends the CDC change-log to Bronze, not Silver. The Silver
-    table (the `silver-merge` MERGE target this teardown must actually drop)
-    is derived by stripping the `_raw` (BRONZE_NAMESPACE_SUFFIX) suffix back
-    off the namespace half.
+    the sink appends the CDC change-log to Bronze, not Silver. The pipeline
+    namespace half is recovered by stripping the `_raw` (BRONZE_NAMESPACE_SUFFIX)
+    suffix back off.
 
-    NB: this only derives the Silver drop target -- teardown of the Bronze
-    changelog table itself (`<ns>_raw.<table>`) is out of scope here (follow-up)."""
+    Callers (`delete_source`'s `with_data` teardown) reconstruct BOTH the
+    Bronze changelog table (`rawlake.<ns>_raw.<table>`) and the Silver merge
+    target (`lakehouse.<ns>.<table>`) from this same (ns, table) pair -- this
+    helper is not Silver-only despite its historical name."""
     config = (cr.get("spec") or {}).get("config") or {}
     route_value = config.get("transforms.route.static.value")
     if not route_value or "." not in route_value:
@@ -262,10 +264,12 @@ def create_source(
 )
 def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
     spec = payload.spec
-    bucket = render_service.bucket_name(spec.target_ns)
+    bronze_bucket = render_service.bronze_bucket_name(spec.target_ns)
+    silver_bucket = render_service.silver_bucket_name(spec.target_ns)
     preview: Dict[str, Any] = {
-        "bucket": bucket,
-        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns, bucket),
+        "bronze_bucket": bronze_bucket,
+        "silver_bucket": silver_bucket,
+        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns, silver_bucket),
         "connector": None,
         "kafka_topic": None,
     }
@@ -428,11 +432,16 @@ def delete_source(
 ) -> Dict[str, Any]:
     """`pipeline_only` tears down only the KafkaConnector CR (data already
     landed in the lakehouse is untouched). `with_data` (admin-only, gated by
-    `require_delete_mode`) additionally deletes the KafkaTopic, drops the
-    Iceberg table (`lakehouse.<ns>.<table>`) and empties the source bucket --
-    the destructive, data-loss path. `<ns>`/`<table>` are recovered from the
-    connector's own `transforms.route.static.value` config, and the bucket
-    from `render_service.bucket_name(ns)`.
+    `require_delete_mode`) additionally deletes the KafkaTopic and performs a
+    per-pipeline data teardown (Sub-project B-v2): drops BOTH the Bronze
+    changelog table (`rawlake.<ns>_raw.<table>`) and the Silver merge target
+    (`lakehouse.<ns>.<table>`, IF EXISTS -- idempotent no-op for an event-lane
+    source with no Silver table), and deletes BOTH the per-pipeline Bronze and
+    Silver buckets (`render_service.bronze_bucket_name(ns)` /
+    `silver_bucket_name(ns)`, also idempotent no-ops) -- the destructive,
+    data-loss path. `<ns>`/`<table>` are recovered from the connector's own
+    `transforms.route.static.value` config; `<ns>` here IS the unique
+    per-pipeline namespace/bucket-suffix, not a shared group label.
 
     gitops mode (`settings.deploy_mode == "gitops"`): the direct
     connector/topic (or spark-job) teardown above is replaced by a git commit
@@ -460,7 +469,7 @@ def delete_source(
     add_source grants `connect` a scoped literal topic READ/DESCRIBE (see
     `AddSourceOrchestrator.add_source`'s "acl" step). That grant is a direct
     K8s API mutation on the `connect` KafkaUser, not a chart-templated/GitOps
-    -managed resource, so -- like `with_data`'s drop_table/empty_bucket --
+    -managed resource, so -- like `with_data`'s drop_table/delete_bucket --
     it is revoked here directly regardless of `deploy_mode`/`mode`, via
     `_kafka_ingest_topic` recovering the source's topic straight off its own
     CR (best-effort: a CR that isn't a kafka-ingest connector, or is missing
@@ -494,13 +503,18 @@ def delete_source(
             s3.empty_bucket(bucket)
             result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=None)
             return result
-        ns, table = _target_ns_table(cr)
-        fqn = f"lakehouse.{ns}.{table}"
-        bucket = render_service.bucket_name(ns)
+        ns, table = _target_ns_table(cr)   # ns is the pipeline name
+        bronze_fqn = f"rawlake.{ns}{render_service.BRONZE_NAMESPACE_SUFFIX}.{table}"
+        silver_fqn = f"lakehouse.{ns}.{table}"
+        bronze_bucket = render_service.bronze_bucket_name(ns)
+        silver_bucket = render_service.silver_bucket_name(ns)
         topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
-        trino.drop_table(fqn)
-        s3.empty_bucket(bucket)
-        result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=topic)
+        trino.drop_table(bronze_fqn)      # DROP TABLE IF EXISTS
+        trino.drop_table(silver_fqn)      # no-op for event
+        s3.delete_bucket(bronze_bucket)
+        s3.delete_bucket(silver_bucket)   # no-op for event
+        result.update(dropped_tables=[bronze_fqn, silver_fqn],
+                      deleted_buckets=[bronze_bucket, silver_bucket], deleted_topic=topic)
         return result
 
     cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
@@ -524,19 +538,23 @@ def delete_source(
     if mode != "with_data":
         return {"ok": True, "name": name, "mode": mode}
 
-    ns, table = _target_ns_table(cr)
-    fqn = f"lakehouse.{ns}.{table}"
-    bucket = render_service.bucket_name(ns)
+    ns, table = _target_ns_table(cr)   # ns is the pipeline name
+    bronze_fqn = f"rawlake.{ns}{render_service.BRONZE_NAMESPACE_SUFFIX}.{table}"
+    silver_fqn = f"lakehouse.{ns}.{table}"
+    bronze_bucket = render_service.bronze_bucket_name(ns)
+    silver_bucket = render_service.silver_bucket_name(ns)
     topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
     if topic:
         k8s.delete_topic(_k8s_topic_name(topic))   # delete by CR name (Task 1 sanitized it)
-    trino.drop_table(fqn)
-    s3.empty_bucket(bucket)
+    trino.drop_table(bronze_fqn)      # DROP TABLE IF EXISTS
+    trino.drop_table(silver_fqn)      # no-op for event
+    s3.delete_bucket(bronze_bucket)
+    s3.delete_bucket(silver_bucket)   # no-op for event
     return {
         "ok": True,
         "name": name,
         "mode": mode,
-        "dropped_table": fqn,
-        "emptied_bucket": bucket,
+        "dropped_tables": [bronze_fqn, silver_fqn],
+        "deleted_buckets": [bronze_bucket, silver_bucket],
         "deleted_topic": topic,
     }
