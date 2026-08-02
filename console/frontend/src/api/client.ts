@@ -340,3 +340,47 @@ export async function getStatus(): Promise<StatusResponse> {
 export async function getGitopsStatus(): Promise<GitopsStatusResponse> {
   return request<GitopsStatusResponse>("/gitops/status");
 }
+
+// --------------------------------------------------------------------------
+// Pipelines (Pipeline Map)
+// --------------------------------------------------------------------------
+
+/** Mirrors `app.services.pipeline_topology._assemble_one`'s per-node dicts
+ * (Task 2). Discriminated on `type`; each variant carries exactly the keys
+ * that node's builder emits -- e.g. only `connector`/`sink`/`merge` carry a
+ * `state` (from `_safe_status`, always a string, degrading to `"unknown"`
+ * rather than ever being absent/null). */
+export type PipelineNode =
+  | { type: "source"; name: string }
+  | { type: "connector"; name: string | null; kind: string | null; state: string }
+  | { type: "topic"; name: string }
+  | { type: "sink"; name: string | null; state: string }
+  | { type: "bronze"; fqn: string }
+  | { type: "merge"; name: string; state: string }
+  | { type: "silver"; fqn: string }
+  | { type: "buckets"; buckets: string[] };
+
+/** Mirrors `app.services.pipeline_topology._assemble_one`/`_batch_pipeline`'s
+ * top-level dict. On the error path (`_assemble_one`'s `except` branch) the
+ * backend omits `disposition`/`authoritative`/`owned_tables`/`owned_buckets`
+ * entirely and sets `error` -- those fields are optional here to match. */
+export interface Pipeline {
+  name: string;
+  cr_kind: string | null;
+  disposition?: "entity" | "event" | "batch";
+  authoritative?: { fqn: string; layer: string };
+  nodes: PipelineNode[];
+  owned_tables?: string[];
+  owned_buckets?: string[];
+  error?: string;
+}
+
+export interface PipelinesResponse {
+  pipelines: Pipeline[];
+}
+
+/** GET /api/pipelines -> one topology entry per pipeline (grouped by the
+ * `lakehouse.solus.dev/source` annotation), for the Pipeline Map page. */
+export async function getPipelines(): Promise<PipelinesResponse> {
+  return request<PipelinesResponse>("/pipelines");
+}

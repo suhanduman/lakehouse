@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import Nav from "./components/Nav";
 import AddSourceWizard from "./pages/AddSourceWizard";
 import GitopsStatus from "./pages/GitopsStatus";
+import PipelineMap from "./pages/PipelineMap";
 import Schemas from "./pages/Schemas";
 import SourceDetail, { type Role } from "./pages/SourceDetail";
 import SourcesList from "./pages/SourcesList";
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/schemas" element={<Schemas />} />
           <Route path="/status" element={<StatusDashboard />} />
           <Route path="/gitops" element={<GitopsStatus />} />
+          <Route path="/pipelines" element={<PipelineMap />} />
         </Routes>
       </main>
     </div>
