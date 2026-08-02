@@ -148,14 +148,43 @@ export interface DeleteSourceResult {
   ref?: string;
 }
 
+/** Mirrors app.routers.tables.list_tables()'s per-table dict (Task 3):
+ * `used` distinguishes tables owned by an active pipeline's `owned_tables`
+ * (in which case `pipeline`/`role` are set) from orphans (leftover from a
+ * deleted pipeline, or hand-created -- `hint` explains which). `records` is
+ * `null` when `IcebergService.table_stats` couldn't resolve a snapshot
+ * (empty/never-committed table), never a missing key. */
+export interface TableEntry {
+  table: string;
+  used: boolean;
+  pipeline?: string;
+  role?: "authoritative" | "bronze" | "silver";
+  hint?: string;
+  records: number | null;
+}
+
 export interface TableNamespace {
   name: string;
-  tables: string[];
+  tables: TableEntry[];
 }
 
 export interface TablesResponse {
   catalog: string;
   namespaces: TableNamespace[];
+}
+
+/** Mirrors app.routers.buckets.list_buckets()'s per-bucket dict (Task 3):
+ * same `used`/`pipeline`/`role`/`hint` used/orphan labeling as `TableEntry`,
+ * plus `objects` -- the full `{count, capped}` dict from
+ * `S3Service.object_count` (a bounded/paginated count; `capped: true` means
+ * the real count may exceed `count`, so the UI should render it as "N+"). */
+export interface BucketEntry {
+  name: string;
+  used: boolean;
+  pipeline?: string;
+  role?: "authoritative" | "bronze" | "silver";
+  hint?: string;
+  objects: { count: number; capped: boolean };
 }
 
 export interface StatusEntry {
@@ -318,9 +347,9 @@ export async function listTables(catalog = "lakehouse"): Promise<TablesResponse>
   return request<TablesResponse>(`/tables?catalog=${encodeURIComponent(catalog)}`);
 }
 
-/** GET /api/buckets -> S3 bucket names. */
-export async function listBuckets(): Promise<string[]> {
-  const data = await request<{ buckets: string[] }>("/buckets");
+/** GET /api/buckets -> S3 buckets with used/orphan labeling + object counts. */
+export async function listBuckets(): Promise<BucketEntry[]> {
+  const data = await request<{ buckets: BucketEntry[] }>("/buckets");
   return data.buckets;
 }
 
