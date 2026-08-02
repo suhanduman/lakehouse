@@ -13,9 +13,9 @@ from typing import Any, Dict, List
 
 
 class ConnectService:
-    """Read-only wrapper over Kafka Connect's REST API. `http` is an
-    injected `httpx.Client` (or hand-rolled fake in tests) — see class
-    docstring."""
+    """Read + a runtime restart (no CR spec mutation) wrapper over Kafka
+    Connect's REST API. `http` is an injected `httpx.Client` (or hand-rolled
+    fake in tests) — see class docstring."""
 
     def __init__(self, base_url: str, http: Any) -> None:
         self.base_url = base_url.rstrip("/")
@@ -30,6 +30,23 @@ class ConnectService:
         response = self.http.get(f"{self.base_url}/connectors")
         response.raise_for_status()
         return response.json()
+
+    def restart_connector(
+        self, name: str, include_tasks: bool = True, only_failed: bool = False
+    ) -> None:
+        """Runtime restart via Kafka Connect's REST API. Touches no CR spec
+        (momentary) -> safe under Strimzi/ArgoCD in both deploy modes.
+        `include_tasks` restarts the connector's tasks too; `only_failed`
+        limits it to FAILED tasks. Raises `httpx.HTTPStatusError` on a
+        non-2xx (e.g. 409 'rebalance in progress' -> caller retries)."""
+        response = self.http.post(
+            f"{self.base_url}/connectors/{name}/restart",
+            params={
+                "includeTasks": "true" if include_tasks else "false",
+                "onlyFailed": "true" if only_failed else "false",
+            },
+        )
+        response.raise_for_status()
 
 
 class ApicurioClient:

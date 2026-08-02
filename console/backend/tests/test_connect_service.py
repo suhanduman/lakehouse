@@ -102,3 +102,50 @@ def test_apicurio_list_schemas_empty():
         httpx.Client(transport=httpx.MockTransport(handler)),
     )
     assert client.list_schemas() == []
+
+
+# --------------------------------------------------------------------------
+# ConnectService.restart_connector
+# --------------------------------------------------------------------------
+
+def test_restart_connector_posts_with_query_params():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(204)
+
+    c = ConnectService(
+        "http://connect-connect-api:8083",
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert c.restart_connector("dbz-x") is None
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/connectors/dbz-x/restart"
+    assert seen["query"] == {"includeTasks": "true", "onlyFailed": "false"}
+
+
+def test_restart_connector_only_failed_tasks():
+    seen = {}
+
+    def handler(request):
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(202)
+
+    c = ConnectService("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
+    c.restart_connector("dbz-x", include_tasks=True, only_failed=True)
+    assert seen["query"] == {"includeTasks": "true", "onlyFailed": "true"}
+
+
+def test_restart_connector_raises_on_error():
+    def handler(request):
+        return httpx.Response(409, json={"message": "rebalance in progress"})
+
+    c = ConnectService("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
+    try:
+        c.restart_connector("dbz-x")
+        assert False, "expected HTTPStatusError"
+    except httpx.HTTPStatusError as exc:
+        assert exc.response.status_code == 409
