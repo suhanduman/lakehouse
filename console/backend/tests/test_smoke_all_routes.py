@@ -44,8 +44,15 @@ SOURCE_NAME = "dbz-mssql1-students"
 # A KafkaConnector CR shaped like render_service.render_connector's output
 # (mirrors test_sources_router.py's CONNECTOR_CR) so GET/PATCH/pause/resume/
 # DELETE `/api/sources/{name}` all resolve against a source that "exists".
+# Carries the `lakehouse.solus.dev/source` round-trip annotation too, so
+# POST `/api/sources/{name}/credentials` also resolves a credential Secret
+# name (`_source_of`) and hits its 200 happy path here rather than the 400
+# no-annotation branch.
 CONNECTOR_CR = {
-    "metadata": {"name": SOURCE_NAME},
+    "metadata": {
+        "name": SOURCE_NAME,
+        "annotations": {"lakehouse.solus.dev/source": "mssql1"},
+    },
     "spec": {
         "class": "io.debezium.connector.sqlserver.SqlServerConnector",
         "config": {
@@ -98,6 +105,9 @@ class FakeK8s:
 
     def delete_topic(self, name: str) -> None:
         pass
+
+    def create_secret(self, name: str, data: Dict[str, str]) -> Dict[str, Any]:
+        return {"ok": True}
 
 
 class FakeS3:
@@ -241,6 +251,12 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "template": "/api/sources/{name}",
         "path": f"/api/sources/{SOURCE_NAME}",
         "json": {"config": {"poll.interval.ms": "1000"}},
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/credentials",
+        "path": f"/api/sources/{SOURCE_NAME}/credentials",
+        "json": {"user": "u", "password": "p"},
     },
     {
         "method": "POST",
