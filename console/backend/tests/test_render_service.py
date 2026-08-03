@@ -1126,3 +1126,54 @@ def test_cdc_render_signal_data_collection_when_set():
                       signal_data_collection="public.debezium_signal")
     cfg = render_service.render_connector(spec)["spec"]["config"]
     assert cfg["signal.data.collection"] == "public.debezium_signal"
+
+
+# --------------------------------------------------------------------------
+# render_signal_table_dml (Task 7, snapshot-lifecycle)
+# --------------------------------------------------------------------------
+
+def _spec(dbtype: str, **overrides) -> "SourceSpec":
+    from app.models import SourceSpec
+    base = dict(source="src1", kind="cdc", type=dbtype, db="app", table="dbo.customers",
+                target_ns="ns", target_table="customers", db_host="h:1433",
+                identifier=["id"], columns=[{"name": "id", "type": "int"}])
+    base.update(overrides)
+    return SourceSpec(**base)
+
+
+def test_render_signal_table_dml_pg_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("pg"))
+    assert "CREATE TABLE public.debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.debezium_signal TO <debezium_db_user>;" in ddl
+    assert "<debezium_db_user>" in ddl
+
+
+def test_render_signal_table_dml_mssql_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mssql"))
+    assert "CREATE TABLE dbo.debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.debezium_signal TO <debezium_db_user>;" in ddl
+
+
+def test_render_signal_table_dml_mysql_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mysql"))
+    assert "CREATE TABLE debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON debezium_signal TO <debezium_db_user>;" in ddl
+
+
+@pytest.mark.parametrize("dbtype", ["pg", "mssql", "mysql"])
+def test_render_signal_table_dml_honors_signal_data_collection(dbtype):
+    from app.services import render_service
+    spec = _spec(dbtype, signal_data_collection="custom.sig_table")
+    ddl = render_service.render_signal_table_dml(spec)
+    assert "CREATE TABLE custom.sig_table" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON custom.sig_table TO <debezium_db_user>;" in ddl
+
+
+def test_render_signal_table_dml_mongo_is_not_relational_ddl():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mongo", mongo_uri="mongodb://h:27017"))
+    assert "CREATE TABLE" not in ddl
+    assert "signal.data.collection" in ddl

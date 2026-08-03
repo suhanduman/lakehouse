@@ -269,6 +269,11 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "path": f"/api/sources/{SOURCE_NAME}/resume",
     },
     {
+        "method": "POST",
+        "template": "/api/sources/{name}/enable-snapshots",
+        "path": f"/api/sources/{SOURCE_NAME}/enable-snapshots",
+    },
+    {
         "method": "DELETE",
         "template": "/api/sources/{name}",
         "path": f"/api/sources/{SOURCE_NAME}",

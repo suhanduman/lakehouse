@@ -766,6 +766,49 @@ def resume_source(
     return {"ok": True, "name": name, "paused": False}
 
 
+@router.post("/{name}/enable-snapshots", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def enable_snapshots(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """Retrofit an EXISTING CDC connector with the Kafka signal channel +
+    notification sink config (snapshot-lifecycle) -- for a connector that
+    predates Task 2's render-time signal/notification block, or one whose
+    config drifted. Same gitops fail-loud guard as pause_source/resume_source
+    (a direct `patch_connector` write in gitops mode would be silently
+    reverted by ArgoCD selfHeal on its next sync): 409 with a structured
+    `remediation` recipe instead.
+
+    Only applies to CDC connectors (KafkaConnector CRs) -- a
+    ScheduledSparkApplication (spark-batch lane) has no Debezium signal
+    channel to enable, so that's a 400, not a gitops/direct branch.
+
+    Deliberately omits `signal.data.collection` from the patch: the operator
+    configures the signaling table/collection separately (see
+    `render_signal_table_dml`); this route's job is only to turn the channel
+    on, not to assert where signals are read from."""
+    cr = _find_source(k8s, name)
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        raise HTTPException(
+            status_code=400,
+            detail="enable-snapshots applies only to CDC connectors",
+        )
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "enable-snapshots not supported from the Console in gitops mode -- "
+                    "add the signal-channel config to the connector in the pipeline repo (git)"
+                ),
+                "remediation": _gitops_remediation(cr, pause=False),
+            },
+        )
+    patch = render_service._signal_and_notification_config()
+    k8s.patch_connector(name, patch)
+    return {"ok": True, "name": name, "snapshots_enabled": True}
+
+
 # --------------------------------------------------------------------------
 # Delete -- per-mode authz gate runs (via require_delete_mode) before any
 # provider is built; with_data performs the full data teardown.
