@@ -54,24 +54,31 @@ class S3Service:
     # ----------------------------------------------------------------
     # empty_bucket — delete every object (paginated), so the bucket can
     # then be deleted (S3/MinIO refuse to delete a non-empty bucket).
+    # Idempotent: missing bucket is a no-op success (mirrors delete_bucket's
+    # missing-bucket tolerance below) -- a caller may target a bucket that
+    # was never created or was already removed by a prior call.
     # ----------------------------------------------------------------
 
     def empty_bucket(self, name: str) -> None:
-        continuation_token = None
-        while True:
-            kwargs = {"Bucket": name}
-            if continuation_token:
-                kwargs["ContinuationToken"] = continuation_token
-            response = self.client.list_objects_v2(**kwargs)
-            contents = response.get("Contents", [])
-            if contents:
-                self.client.delete_objects(
-                    Bucket=name,
-                    Delete={"Objects": [{"Key": obj["Key"]} for obj in contents]},
-                )
-            if not response.get("IsTruncated"):
-                break
-            continuation_token = response.get("NextContinuationToken")
+        try:
+            continuation_token = None
+            while True:
+                kwargs = {"Bucket": name}
+                if continuation_token:
+                    kwargs["ContinuationToken"] = continuation_token
+                response = self.client.list_objects_v2(**kwargs)
+                contents = response.get("Contents", [])
+                if contents:
+                    self.client.delete_objects(
+                        Bucket=name,
+                        Delete={"Objects": [{"Key": obj["Key"]} for obj in contents]},
+                    )
+                if not response.get("IsTruncated"):
+                    break
+                continuation_token = response.get("NextContinuationToken")
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in _NO_SUCH_BUCKET_CODES:
+                raise
 
     # ----------------------------------------------------------------
     # delete_bucket — empty then remove; idempotent: missing bucket is a

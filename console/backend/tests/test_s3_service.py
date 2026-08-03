@@ -125,6 +125,27 @@ def test_empty_bucket_noop_when_already_empty():
     assert len(fake.list_objects_calls) == 1
 
 
+def test_empty_bucket_missing_bucket_is_noop():
+    # Bugfix regression (spark-batch delete): a caller may target a bucket
+    # that was never created (e.g. batch/s3 sources have no per-source
+    # bucket) or was already removed by a prior call -- NoSuchBucket must be
+    # swallowed, mirroring delete_bucket's missing-bucket tolerance.
+    class Missing:
+        def list_objects_v2(self, **k):
+            raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "ListObjectsV2")
+
+    S3Service(Missing()).empty_bucket("gone")  # must not raise
+
+
+def test_empty_bucket_reraises_other_client_errors():
+    class Broken:
+        def list_objects_v2(self, **k):
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+
+    with pytest.raises(ClientError):
+        S3Service(Broken()).empty_bucket("nope")
+
+
 # --------------------------------------------------------------------------
 # delete_bucket
 # --------------------------------------------------------------------------
