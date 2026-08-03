@@ -577,7 +577,7 @@ def list_source_types() -> Dict[str, List[Dict[str, Any]]]:
             "disposition": d.disposition,
             "dispositions": list(source_types.allowed_dispositions(d)),
             "required_fields": list(d.required_fields),
-            "needs_bootstrap": d.type == "kafka",
+            "needs_bootstrap": d.needs_bootstrap,
         })
     return {"types": out}
 

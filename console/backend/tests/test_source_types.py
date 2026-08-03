@@ -72,3 +72,10 @@ def test_b3_lanes_registered():
         assert d.lane == "kafka-connect-source"
         assert d.render_key and d.topic_key           # they create a topic + a connector
         assert st.allowed_dispositions(d) == disp
+
+
+def test_stream_kafka_needs_bootstrap_true_others_false():
+    kafka = st.get("stream", "kafka")
+    assert kafka.needs_bootstrap is True
+    cdc = st.get("cdc", "pg")
+    assert cdc.needs_bootstrap is False
