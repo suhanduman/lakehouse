@@ -10,9 +10,14 @@ provisioned source is a cheap no-op all the way through.
 ever applies. entity sources (CDC/JDBC) pre-create BOTH layers — Bronze
 (`<ns>_raw`, partitioned changelog, no identifier, rawdata warehouse) first,
 then Silver (`<ns>`, current-state, identifier/PK) — fail-loud on either.
-event sources (e.g. stream+kafka) pre-create Bronze ONLY, as a metadata
-skeleton (no identifier/columns required) — no Silver, so silver-merge skips
-them; see `SourceSpec.effective_disposition()`.
+`spec.columns` only needs to contain the identifier/PK column(s) — it is NOT
+the full table schema; any non-PK business columns are optional at this
+step. The rest of the schema evolves at runtime: the Iceberg sink's
+`evolve-schema-enabled`/auto-create widens Bronze from the incoming record,
+and `silver-merge._apply_reconcile`'s `ALTER TABLE ... ADD COLUMN` widens
+Silver. event sources (e.g. stream+kafka) pre-create Bronze ONLY, as a
+metadata skeleton (no identifier/columns required) — no Silver, so
+silver-merge skips them; see `SourceSpec.effective_disposition()`.
 
 Rollback: if any step raises, already-completed steps are undone in REVERSE
 order via a stack of undo callables, the failure is recorded as a
@@ -83,10 +88,14 @@ Lane/disposition-aware steps (Plan B1): the secret step is skipped when
 external creds); the topic step is skipped when the descriptor's
 `topic_key == ""` (kafka-ingest consumes an existing topic, creates none);
 the table step always pre-creates Bronze but only pre-creates Silver — and
-only requires `spec.identifier`/`spec.columns` — when
-`spec.effective_disposition() == "entity"`. event sources get a Bronze-only
-skeleton (metadata columns + day(__ts_ms) partition; no business columns
-required) and are append-only (no Silver, so silver-merge skips them).
+only requires `spec.identifier` plus `spec.columns` containing (at least)
+those identifier column(s) — when `spec.effective_disposition() == "entity"`.
+PK-only `columns` (just the identifier column(s), no business columns) is a
+supported, intentional shape: the table is pre-created with just the PK,
+and the schema evolves at runtime as real data arrives (see "table" above).
+event sources get a Bronze-only skeleton (metadata columns + day(__ts_ms)
+partition; no business columns required) and are append-only (no Silver, so
+silver-merge skips them).
 """
 
 from __future__ import annotations
@@ -359,8 +368,13 @@ class AddSourceOrchestrator:
         # biri fail-loud olursa "table" adımı fail olur ve
         # secret/bucket/namespace'ten sonra henüz hiçbir topic/connector apply
         # edilmediği için rollback sadece secret'ı geri alır (bkz. undo
-        # stack). Şema veya PK eksikse fail-loud → connector asla apply
-        # edilmez.
+        # stack). PK eksikse (identifier) veya columns tamamen boşsa
+        # fail-loud → connector asla apply edilmez. PK-only columns (sadece
+        # identifier kolon(lar)ı, business kolonu YOK) desteklenen, kasıtlı
+        # bir şekildir — tablo(lar) sadece PK ile pre-create edilir; kalan
+        # şema runtime'da evolve olur (Bronze: sink evolve-schema-enabled/
+        # auto-create; Silver: silver-merge._apply_reconcile'ın ALTER TABLE
+        # ADD COLUMN'ı).
         def _precreate_table() -> Optional[str]:
             if self.iceberg is None:
                 raise RuntimeError(
@@ -389,10 +403,20 @@ class AddSourceOrchestrator:
                         f"{spec.kind}+{spec.type}: identifier (PK) gerekli — spec.identifier "
                         "verin (sink auto-create identifier koymaz → upsert append-only)"
                     )
+                # "spec.columns gerekli" burada TAM şema anlamına gelmez — en
+                # az identifier (PK) kolon(lar)ı `columns` içinde, tipiyle
+                # birlikte bulunmalı (wizard PK-only gönderebilir: columns ==
+                # [pk kolonu]). Business kolonları burada opsiyonel; runtime'da
+                # evolve olur — Bronze tarafında sink'in
+                # evolve-schema-enabled/auto-create'i, Silver tarafında
+                # silver-merge._apply_reconcile'ın `ALTER TABLE ... ADD
+                # COLUMN`'ı devreye girer. Bu yüzden guard `not spec.columns`
+                # (boş liste/None) kontrolü — PK-only zaten non-empty olduğu
+                # için burada trivially geçer.
                 if not spec.columns:
                     raise RuntimeError(
-                        "spec.columns gerekli (tablo şeması) — Console form/discovery ile "
-                        "doldurun ya da create_iceberg_table.py kullanın"
+                        "spec.columns gerekli (en az identifier/PK kolonu) — Console "
+                        "form/discovery ile doldurun ya da create_iceberg_table.py kullanın"
                     )
                 bronze_fq = self.iceberg.create_table(
                     f"{spec.target_ns}{BRONZE_NAMESPACE_SUFFIX}", spec.target_table, cols, [],

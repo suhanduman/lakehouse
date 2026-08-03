@@ -72,6 +72,7 @@ export interface SourceSpec {
   create_topic?: boolean;
   topic_partitions?: number;
   topic_replication_factor?: number;
+  snapshot_mode?: string;
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
@@ -95,6 +96,14 @@ export interface SourceTypeDescriptor {
 export interface SourceCredentials {
   user: string;
   password: string;
+}
+
+/** Mirrors app.models.TestConnectionResult. */
+export interface TestConnectionResult {
+  applicable: boolean;
+  ok?: boolean;
+  errors?: { field: string | null; message: string }[];
+  reason?: string;
 }
 
 /** Mirrors app.orchestrator.StepResult. */
@@ -407,6 +416,28 @@ export async function deleteSource(
 /** GET /api/sources/{name}/ingest-config -> Kafka log ingestion config for a source. */
 export async function getIngestConfig(name: string): Promise<IngestConfig> {
   return request(`/sources/${encodeURIComponent(name)}/ingest-config`);
+}
+
+/** POST /api/sources/test-connection -> test a source spec with credentials. */
+export async function testConnection(
+  spec: SourceSpec,
+  credentials: { user: string; password: string },
+): Promise<TestConnectionResult> {
+  return request<TestConnectionResult>("/sources/test-connection", {
+    method: "POST",
+    body: JSON.stringify({ spec, credentials }),
+  });
+}
+
+/** POST /api/sources/{name}/credentials -> rotate credentials for a source. */
+export async function rotateCredentials(
+  name: string,
+  body: { user: string; password: string },
+): Promise<{ ok: boolean; name: string; restarted: boolean; note?: string | null }> {
+  return request(`/sources/${encodeURIComponent(name)}/credentials`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // --------------------------------------------------------------------------

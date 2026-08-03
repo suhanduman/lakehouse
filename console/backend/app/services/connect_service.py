@@ -53,6 +53,12 @@ class ConnectService:
         response.raise_for_status()
         return response.json()
 
+    def validate_config(self, connector_class: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        response = self.http.put(
+            f"{self.base_url}/connector-plugins/{connector_class}/config/validate", json=config)
+        response.raise_for_status()
+        return response.json()
+
 
 class ApicurioClient:
     """Read-only wrapper over the Apicurio Registry v2 REST API. `http` is

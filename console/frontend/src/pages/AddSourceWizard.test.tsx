@@ -186,6 +186,9 @@ describe("AddSourceWizard", () => {
       target_ns: "mssql_ogrenci",
       target_table: "students",
       db_host: "mssql1.internal",
+      // CDC lanes always send an explicit snapshot_mode (Task 9) -- "initial"
+      // is the wizard's stated default.
+      snapshot_mode: "initial",
     });
 
     // Advance to the final "submit" step and create the source.
@@ -203,6 +206,7 @@ describe("AddSourceWizard", () => {
         target_ns: "mssql_ogrenci",
         target_table: "students",
         db_host: "mssql1.internal",
+        snapshot_mode: "initial",
       },
       { user: "sa", password: "s3cret" },
     );
@@ -398,7 +402,7 @@ describe("AddSourceWizard", () => {
     expect(await screen.findByLabelText(/http url/i)).toBeInTheDocument();
   });
 
-  it("shows columns/identifier/delete_field for stream/kafka + entity", async () => {
+  it("shows columns/primary key/delete_field for stream/kafka + entity", async () => {
     render(<AddSourceWizard />);
     await screen.findByRole("option", { name: /^stream$/i });
     fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "stream" } });
@@ -411,7 +415,10 @@ describe("AddSourceWizard", () => {
     fireEvent.click(await screen.findByLabelText(/entity/i));
 
     expect(screen.getByLabelText(/columns/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/identifier/i)).toBeInTheDocument();
+    // Task 9: the old "Identifier" input is relabeled "Primary key column(s)"
+    // -- now the PRIMARY, required-for-entity path; columns above is optional/
+    // advanced.
+    expect(screen.getByLabelText(/primary key/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/delete field/i)).toBeInTheDocument();
   });
 
@@ -430,7 +437,7 @@ describe("AddSourceWizard", () => {
     expect(screen.queryByLabelText(/delete field/i)).not.toBeInTheDocument();
   });
 
-  it("wires filled columns/identifier/delete_field into the built spec for stream/kafka + entity", async () => {
+  it("wires filled columns/primary key/delete_field into the built spec for stream/kafka + entity", async () => {
     const previewSpy = vi
       .spyOn(client, "previewSource")
       .mockResolvedValue(PREVIEW_RESPONSE);
@@ -445,7 +452,7 @@ describe("AddSourceWizard", () => {
     fireEvent.change(screen.getByLabelText(/columns/i), {
       target: { value: "id:bigint,name:varchar" },
     });
-    fireEvent.change(screen.getByLabelText(/identifier/i), {
+    fireEvent.change(screen.getByLabelText(/primary key/i), {
       target: { value: "id" },
     });
     fireEvent.change(screen.getByLabelText(/delete field/i), {
@@ -516,7 +523,7 @@ describe("AddSourceWizard", () => {
     fireEvent.change(screen.getByLabelText(/columns/i), {
       target: { value: "id:bigint,name:varchar" },
     });
-    fireEvent.change(screen.getByLabelText(/identifier/i), {
+    fireEvent.change(screen.getByLabelText(/primary key/i), {
       target: { value: "id" },
     });
 
@@ -659,5 +666,98 @@ describe("AddSourceWizard", () => {
 
     expect(await screen.findByText(/source created/i)).toBeInTheDocument();
     await waitFor(() => expect(ingestConfigSpy).toHaveBeenCalledWith("kafka1"));
+  });
+
+  // --- Task 9: Test Connection + snapshot-mode selector + PK-only input ---
+
+  it("tests the connection on step 2 (advisory, connector/DB lane) and shows the result", async () => {
+    const spy = vi
+      .spyOn(client, "testConnection")
+      .mockResolvedValue({ applicable: true, ok: true, errors: [] });
+
+    render(<AddSourceWizard />);
+    fillStep1(); // defaults (cdc/mssql) land on step 2
+    fireEvent.change(screen.getByLabelText(/source name/i), {
+      target: { value: "mssql1" },
+    });
+    const dbHost = await screen.findByLabelText(/database host/i);
+    fireEvent.change(dbHost, { target: { value: "mssql1.internal" } });
+    fireEvent.change(screen.getByLabelText(/^username/i), { target: { value: "sa" } });
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "s3cret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "mssql1", db_host: "mssql1.internal" }),
+      { user: "sa", password: "s3cret" },
+    );
+    expect(await screen.findByText(/connection ok/i)).toBeInTheDocument();
+
+    // Advisory only -- never blocks Next, whatever the result.
+    expect(screen.getByRole("button", { name: /^next$/i })).not.toBeDisabled();
+  });
+
+  it("shows the mapped error list when test-connection reports ok:false", async () => {
+    vi.spyOn(client, "testConnection").mockResolvedValue({
+      applicable: true,
+      ok: false,
+      errors: [{ field: "db_host", message: "could not resolve host" }],
+    });
+
+    render(<AddSourceWizard />);
+    fillStep1();
+    fireEvent.change(screen.getByLabelText(/source name/i), {
+      target: { value: "mssql1" },
+    });
+    await screen.findByLabelText(/database host/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    expect(await screen.findByText(/could not resolve host/i)).toBeInTheDocument();
+    expect(screen.queryByText(/connection ok/i)).not.toBeInTheDocument();
+  });
+
+  it("offers an initial-snapshot-mode selector for CDC lanes, defaulting to initial", async () => {
+    render(<AddSourceWizard />);
+
+    const snapshotSelect = (await screen.findByLabelText(
+      /snapshot|existing data|only new changes/i,
+    )) as HTMLSelectElement;
+    expect(snapshotSelect).toBeInTheDocument();
+    expect(snapshotSelect.value).toBe("initial");
+    expect(screen.getByText(/resumable incremental snapshot/i)).toBeInTheDocument();
+
+    fireEvent.change(snapshotSelect, { target: { value: "no_data" } });
+    expect(snapshotSelect.value).toBe("no_data");
+  });
+
+  it("asks only for the primary key on an entity source (CDC default disposition)", async () => {
+    render(<AddSourceWizard />);
+    expect(await screen.findByLabelText(/primary key/i)).toBeInTheDocument();
+  });
+
+  it("wires the primary-key + snapshot-mode fields into the built spec for CDC", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    fireEvent.change(await screen.findByLabelText(/primary key/i), {
+      target: { value: "id:bigint" },
+    });
+    fireEvent.change(screen.getByLabelText(/snapshot|existing data|only new changes/i), {
+      target: { value: "no_data" },
+    });
+
+    fillStep1(); // advance from step 1 (where the PK/snapshot fields live) to step 2
+    await fillStep2();
+    fillStep3();
+    fillStep4();
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.identifier).toEqual(["id"]);
+    expect(spec.columns).toEqual([{ name: "id", type: "bigint" }]);
+    expect(spec.snapshot_mode).toBe("no_data");
   });
 });

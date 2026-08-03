@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app import source_types
 from app.config import settings
 from app.deps import (
+    get_connect,
     get_k8s,
     get_orchestrator,
     get_s3,
@@ -35,6 +36,7 @@ from app.models import DeleteMode, SourceCredentials, SourceSpec
 from app.orchestrator import AddSourceOrchestrator
 from app.services import render_service
 from app.services.authz import Action
+from app.services.connect_service import ConnectService
 from app.services.k8s_service import K8sService
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
 from app.services.s3_service import S3Service
@@ -60,6 +62,11 @@ class PreviewSourceRequest(BaseModel):
 class PatchSourceRequest(BaseModel):
     config: Optional[Dict[str, Any]] = None
     spec: Optional[SourceSpec] = None
+
+
+class RotateCredentialsRequest(BaseModel):
+    user: str
+    password: str
 
 
 _SPARK_ANN = "lakehouse.solus.dev/"
@@ -107,6 +114,21 @@ def _find_source(k8s: K8sService, name: str) -> Dict[str, Any]:
         if (item.get("metadata") or {}).get("name") == name:
             return item
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"source not found: {name}")
+
+
+def _source_of(cr: Dict[str, Any]) -> Optional[str]:
+    """The logical source id (e.g. "pgdemo") a CR's `{_SPARK_ANN}source`
+    round-trip annotation carries -- render_service stamps this on every
+    rendered connector/sink/spark CR (see `render_service._connector`/
+    `render_spark_job`), so it is available uniformly across CR kinds. This
+    is the SAME recovery `delete_source`'s gitops branch and
+    `_kafka_ingest_producer` already do inline; `rotate_credentials` reuses
+    it (rather than the CR's own `metadata.name`, a composite like
+    "dbz-pgdemo-customers") because the credential Secret is provisioned
+    under the bare source id, not the connector's CR name. Returns `None`
+    when the annotation is missing (e.g. a CR pre-dating this annotation, or
+    applied by hand) -- callers must fail loud (never guess a Secret name)."""
+    return ((cr.get("metadata") or {}).get("annotations") or {}).get(f"{_SPARK_ANN}source")
 
 
 def _resolve_kafka_ingest_cr(k8s: K8sService, name: str) -> Dict[str, Any]:
@@ -373,6 +395,55 @@ def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# Test connection -- render a minimal per-lane config
+# (render_service.render_connection_test) and ask Kafka Connect itself to
+# validate it (ConnectService.validate_config). The Console never opens a DB
+# connection: Connect already has every connector plugin loaded, so handing
+# it the same connection keys the real renderers use and reading back the
+# validation response is enough to prove reachability/credentials before the
+# wizard actually creates the source.
+# --------------------------------------------------------------------------
+
+@router.post("/test-connection", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def test_connection(
+    payload: CreateSourceRequest,
+    connect: ConnectService = Depends(get_connect),
+) -> Dict[str, Any]:
+    """Degrades never-500: a lane with nothing to test (kafka-ingest,
+    spark-batch -- `render_connection_test` returns None) reports
+    `applicable: False` with a `reason`; Connect being unreachable (any
+    exception from `validate_config`) reports `applicable: True, ok: False`
+    with a reachability message in `errors`, still 200 -- never surfaces as a
+    500. Credentials are only ever sent to Connect's validate endpoint, never
+    logged (the reachability message below carries only `str(exc)`, never the
+    rendered config)."""
+    built = render_service.render_connection_test(payload.spec, payload.credentials)
+    if built is None:
+        return {
+            "applicable": False,
+            "reason": "no external connection to test for this source type",
+        }
+    connector_class, config = built
+    try:
+        result = connect.validate_config(connector_class, config)
+    except Exception as exc:  # noqa: BLE001 -- degrade, never 500; never log creds
+        return {
+            "applicable": True,
+            "ok": False,
+            "errors": [{"field": None, "message": f"could not reach Kafka Connect: {exc}"}],
+        }
+    errors = [
+        {
+            "field": (c.get("value") or {}).get("name"),
+            "message": "; ".join((c.get("value") or {}).get("errors") or []),
+        }
+        for c in (result.get("configs") or [])
+        if (c.get("value") or {}).get("errors")
+    ]
+    return {"applicable": True, "ok": result.get("error_count", 0) == 0, "errors": errors}
+
+
+# --------------------------------------------------------------------------
 # List / get
 # --------------------------------------------------------------------------
 
@@ -548,6 +619,64 @@ def ingest_config(
 
 
 # --------------------------------------------------------------------------
+# Credential rotation -- upserts the source's credential Secret and restarts
+# the connector so Kafka Connect (which owns the DirectoryConfigProvider
+# reading this Secret) picks up the new value. The Console itself NEVER
+# opens a DB/broker connection anywhere in this route: `k8s.create_secret`
+# is an upsert (create, replace on 409 -- see its docstring), and
+# `connect.restart_connector` only reloads Connect's own config. Works
+# identically in both deploy modes -- the credential Secret is a
+# Console-managed, non-GitOps object (like the kafka-ingest producer
+# Secret/ACL in `delete_source`), never routed through GitWriter.
+# --------------------------------------------------------------------------
+
+@router.post("/{name}/credentials", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def rotate_credentials(
+    name: str,
+    payload: RotateCredentialsRequest,
+    k8s: K8sService = Depends(get_k8s),
+    connect: ConnectService = Depends(get_connect),
+) -> Dict[str, Any]:
+    """Rotates the DB/broker password backing `name`'s connector.
+
+    The credential Secret is named after the source id (`_source_of`'s
+    `{_SPARK_ANN}source` annotation recovery), NOT the CR's own composite
+    `metadata.name` -- the same identity `delete_source` resolves its
+    GitWriter-facing `source` from. A CR missing that annotation (in-cluster
+    source with no external creds, or a CR pre-dating the annotation) fails
+    loud with 400 rather than guessing/deriving a Secret name that could
+    silently write credentials nothing reads.
+
+    The Secret write and the restart are two separate calls: if the restart
+    fails (Connect unreachable, rebalance in progress, ...) the credentials
+    are still durably rotated in the Secret -- reported as a partial success
+    (`restarted: false` + a `note` telling the operator to restart manually)
+    rather than a 500, since the operator-visible remediation (retry the
+    restart) is the same either way and the rotation itself already
+    succeeded. The password is never logged and never echoed back in the
+    response."""
+    cr = _find_source(k8s, name)
+    source = _source_of(cr)
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="no credential secret for this source (in-cluster / no external creds)",
+        )
+    k8s.create_secret(source, {"user": payload.user, "pass": payload.password})  # upsert
+    restarted = True
+    try:
+        connect.restart_connector(name)  # reload creds via DirectoryConfigProvider
+    except Exception:  # noqa: BLE001 -- secret already updated; report partial success
+        restarted = False
+    return {
+        "ok": True,
+        "name": name,
+        "restarted": restarted,
+        "note": None if restarted else "credentials updated; restart failed — restart the connector manually",
+    }
+
+
+# --------------------------------------------------------------------------
 # Edit / pause / resume
 # --------------------------------------------------------------------------
 
@@ -708,7 +837,7 @@ def delete_source(
     """
     if settings.deploy_mode == "gitops":
         cr = _find_source(k8s, name)  # 404 before any teardown, consistent with GET
-        source = ((cr.get("metadata") or {}).get("annotations") or {}).get(f"{_SPARK_ANN}source")
+        source = _source_of(cr)
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
