@@ -51,7 +51,14 @@ org.apache.hadoop:hadoop-aws:${HADOOP_AWS}"; \
     echo "print('spark-py: baking dependency jars')" > /tmp/bake.py; \
     "$SPARK_HOME/bin/spark-submit" --packages "$PKGS" \
         --conf spark.jars.ivy=/tmp/.ivy /tmp/bake.py; \
-    find /tmp/.ivy -name '*.jar' -exec cp -n {} "$SPARK_HOME/jars/" \; ; \
+    # Copy from Ivy's download CACHE only (canonical bare `<artifact>-<ver>.jar`
+    # names, the complete resolved set). The retrieve dir (/tmp/.ivy/jars,
+    # prefixed `<org>_<artifact>-<ver>.jar`) is a SECOND copy of the same
+    # artifacts; copying both put two copies of every fat-jar
+    # (iceberg-aws-bundle among them) on the classpath, which triggers
+    # AWS SDK v2 class-resolution failures at runtime
+    # (NoSuchMethodError IoUtils.closeQuietly — apache/iceberg#5611/#7737).
+    find /tmp/.ivy/cache -name '*.jar' -exec cp -n {} "$SPARK_HOME/jars/" \; ; \
     test -n "$(find "$SPARK_HOME/jars" -name 'iceberg-spark-runtime*')" \
       || { echo "ERROR: dependency bake resolved no jars" >&2; exit 1; }; \
     test -n "$(find "$SPARK_HOME/jars" -name 'iceberg-aws-bundle*')" \
