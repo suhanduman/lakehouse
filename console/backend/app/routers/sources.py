@@ -239,13 +239,20 @@ def _kind_of(cr: Dict[str, Any]) -> str:
     return cr.get("kind") or "KafkaConnector"
 
 
-def _gitops_remediation(cr: Dict[str, Any], pause: bool) -> Dict[str, Any]:
+def _gitops_remediation(cr: Dict[str, Any], state: str) -> Dict[str, Any]:
     """Concrete 'do this in the pipeline repo / ArgoCD' recipe -- the Console
-    never writes to git itself (see the operational-controls spec)."""
+    never writes to git itself (see the operational-controls spec).
+
+    `state` is the target KafkaConnector lifecycle state
+    ("paused"/"running"/"stopped" -- see `K8sService.set_state`). For a
+    ScheduledSparkApplication there's no analogous 3-way CR field, only
+    `spec.suspend` -- both "paused" and "stopped" map to `suspend: true`
+    (spark has no distinct stopped state of its own), "running" maps to
+    `suspend: false`."""
     if _kind_of(cr) == "ScheduledSparkApplication":
-        field, value = "spec.suspend", (True if pause else False)
+        field, value = "spec.suspend", (state != "running")
     else:  # KafkaConnector
-        field, value = "spec.state", ("paused" if pause else "running")
+        field, value = "spec.state", state
     name = (cr.get("metadata") or {}).get("name")
     return {
         "reason": "pause/resume changes the CR spec and is reconciled from git",
@@ -794,7 +801,7 @@ def pause_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "pause not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=True),
+                "remediation": _gitops_remediation(cr, "paused"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -817,7 +824,7 @@ def resume_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "resume not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=False),
+                "remediation": _gitops_remediation(cr, "running"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -848,7 +855,7 @@ def stop_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "stop not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=True),
+                "remediation": _gitops_remediation(cr, "stopped"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -873,7 +880,7 @@ def start_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "start not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=False),
+                "remediation": _gitops_remediation(cr, "running"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -918,7 +925,7 @@ def enable_snapshots(
                     "enable-snapshots not supported from the Console in gitops mode -- "
                     "add the signal-channel config to the connector in the pipeline repo (git)"
                 ),
-                "remediation": _gitops_remediation(cr, pause=False),
+                "remediation": _gitops_remediation(cr, "running"),
             },
         )
     patch = render_service._signal_and_notification_config()

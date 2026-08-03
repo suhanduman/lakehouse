@@ -185,6 +185,11 @@ def test_stop_in_gitops_returns_409_with_remediation(monkeypatch):
     assert detail["message"] == "stop not supported from the Console in gitops mode"
     rem = detail["remediation"]
     assert rem["where"] == "gitops"
+    # Fix-loop round 1: stop must name spec.state=stopped, NOT paused -- gitops
+    # remediation must produce the SAME runtime state as direct-mode stop
+    # (k8s.set_state("stopped")), not the pause state.
+    assert rem["field"] == "spec.state"
+    assert rem["value"] == "stopped"
     assert isinstance(rem["steps"], list) and rem["steps"]
 
 
@@ -198,7 +203,33 @@ def test_start_in_gitops_returns_409_with_remediation(monkeypatch):
     assert detail["message"] == "start not supported from the Console in gitops mode"
     rem = detail["remediation"]
     assert rem["where"] == "gitops"
+    assert rem["field"] == "spec.state"
+    assert rem["value"] == "running"
     assert isinstance(rem["steps"], list) and rem["steps"]
+
+
+def test_stop_spark_gitops_remediation_uses_suspend_true(monkeypatch):
+    # Spark has no distinct "stopped" CR field -- both paused and stopped map
+    # to spec.suspend=true (see _gitops_remediation's docstring).
+    client = _gitops_client(monkeypatch, kind="ScheduledSparkApplication", name="nightly-batch")
+
+    resp = client.post("/api/sources/nightly-batch/stop")
+
+    assert resp.status_code == 409
+    rem = resp.json()["detail"]["remediation"]
+    assert rem["field"] == "spec.suspend"
+    assert rem["value"] is True
+
+
+def test_start_spark_gitops_remediation_uses_suspend_false(monkeypatch):
+    client = _gitops_client(monkeypatch, kind="ScheduledSparkApplication", name="nightly-batch")
+
+    resp = client.post("/api/sources/nightly-batch/start")
+
+    assert resp.status_code == 409
+    rem = resp.json()["detail"]["remediation"]
+    assert rem["field"] == "spec.suspend"
+    assert rem["value"] is False
 
 
 def test_gitops_mode_never_calls_direct_k8s_write_for_start_stop(monkeypatch):
