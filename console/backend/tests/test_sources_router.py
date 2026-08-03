@@ -89,6 +89,34 @@ SPARK_CR = {
 
 
 # --------------------------------------------------------------------------
+# _target_ns_table -- prefers the round-trip target-ns/target-table
+# annotations (stamped by render_service._connector) over re-parsing
+# transforms.route.static.value, falling back to the route-parse for CRs
+# pre-dating the annotation (or applied by hand).
+# --------------------------------------------------------------------------
+
+def test_target_ns_table_prefers_annotations_over_route_parse():
+    from app.routers.sources import _target_ns_table
+    cr = {
+        "metadata": {"annotations": {
+            "lakehouse.solus.dev/target-ns": "annNs",
+            "lakehouse.solus.dev/target-table": "annTbl",
+        }},
+        "spec": {"config": {"transforms.route.static.value": "wrongNs_raw.wrongTbl"}},
+    }
+    assert _target_ns_table(cr) == ("annNs", "annTbl")
+
+
+def test_target_ns_table_falls_back_to_route_parse_when_no_annotation():
+    from app.routers.sources import _target_ns_table
+    cr = {
+        "metadata": {"annotations": {}},
+        "spec": {"config": {"transforms.route.static.value": "pgd_raw.customers"}},
+    }
+    assert _target_ns_table(cr) == ("pgd", "customers")
+
+
+# --------------------------------------------------------------------------
 # Fakes -- hand-rolled doubles for K8sService / S3Service / TrinoService /
 # AddSourceOrchestrator.
 # --------------------------------------------------------------------------

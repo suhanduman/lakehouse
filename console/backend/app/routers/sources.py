@@ -197,7 +197,17 @@ def _target_ns_table(cr: Dict[str, Any]) -> Tuple[str, str]:
     Callers (`delete_source`'s `with_data` teardown) reconstruct BOTH the
     Bronze changelog table (`rawlake.<ns>_raw.<table>`) and the Silver merge
     target (`lakehouse.<ns>.<table>`) from this same (ns, table) pair -- this
-    helper is not Silver-only despite its historical name."""
+    helper is not Silver-only despite its historical name.
+
+    Prefers the CR's own `{_SPARK_ANN}target-ns`/`target-table` round-trip
+    annotations (stamped by `render_service._connector`, mirroring the spark
+    lane's `_spark_target`) when present, falling back to the route-parse
+    below for CRs applied before this annotation existed (or applied by
+    hand)."""
+    ann = (cr.get("metadata") or {}).get("annotations") or {}
+    a_ns, a_tbl = ann.get(f"{_SPARK_ANN}target-ns"), ann.get(f"{_SPARK_ANN}target-table")
+    if a_ns and a_tbl:
+        return a_ns, a_tbl
     config = (cr.get("spec") or {}).get("config") or {}
     route_value = config.get("transforms.route.static.value")
     if not route_value or "." not in route_value:

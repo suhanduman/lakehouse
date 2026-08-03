@@ -185,13 +185,28 @@ def _connector(name: str, klass: str, config: dict, source: str) -> dict:
     # (`_k8s_name(prefix, source, table)`), never the bare source id, so
     # without this annotation there is no way to recover `spec.source` from
     # the CR alone (needed by e.g. gitops delete routing).
+    annotations = {f"{SPARK_ANNOTATION_PREFIX}source": source}
+    # Best-effort: also stamp the (target_ns, target_table) this connector's
+    # sink writes to, mirroring the spark lane's `_spark_target` round-trip
+    # annotations -- lets `routers.sources._target_ns_table` recover the
+    # target directly from the CR instead of re-parsing
+    # `transforms.route.static.value` (see render_service._route_transform).
+    # Not every connector config carries a route value (e.g. non-CDC
+    # connectors), so this is skipped rather than failing when absent.
+    route_value = config.get("transforms.route.static.value")
+    if route_value and "." in route_value:
+        _ns, _tbl = route_value.split(".", 1)
+        if _ns.endswith(BRONZE_NAMESPACE_SUFFIX):
+            _ns = _ns[: -len(BRONZE_NAMESPACE_SUFFIX)]
+        annotations[f"{SPARK_ANNOTATION_PREFIX}target-ns"] = _ns
+        annotations[f"{SPARK_ANNOTATION_PREFIX}target-table"] = _tbl
     return {
         "apiVersion": "kafka.strimzi.io/v1beta2",
         "kind": "KafkaConnector",
         "metadata": {
             "name": name,
             "labels": {"strimzi.io/cluster": "connect"},
-            "annotations": {f"{SPARK_ANNOTATION_PREFIX}source": source},
+            "annotations": annotations,
         },
         "spec": {
             "class": klass,

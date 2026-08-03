@@ -832,6 +832,17 @@ def test_render_camel_sink_carries_source_annotation():
         assert body["metadata"]["annotations"][f"{r.SPARK_ANNOTATION_PREFIX}source"] == spec.source
 
 
+def test_connector_stamps_target_annotations():
+    # gitops recovery (routers.sources._target_ns_table) prefers these over
+    # re-parsing transforms.route.static.value -- mirrors the spark lane's
+    # _spark_target round-trip annotations.
+    spec = _cdc_pg()
+    body = r.render_connector(spec)
+    ann = body["metadata"]["annotations"]
+    assert ann[f"{r.SPARK_ANNOTATION_PREFIX}target-ns"] == "pg_analytics"
+    assert ann[f"{r.SPARK_ANNOTATION_PREFIX}target-table"] == "orders"
+
+
 # --------------------------------------------------------------------------
 # CDC/JDBC/mongo dedicated Iceberg sinks (per-source sink for every lane)
 # --------------------------------------------------------------------------
