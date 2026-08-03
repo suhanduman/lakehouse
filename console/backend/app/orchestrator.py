@@ -376,6 +376,8 @@ class AddSourceOrchestrator:
         # auto-create; Silver: silver-merge._apply_reconcile'ın ALTER TABLE
         # ADD COLUMN'ı).
         def _precreate_table() -> Optional[str]:
+            from app.config import settings
+
             if self.iceberg is None:
                 raise RuntimeError(
                     "IcebergService enjekte edilmedi — tablo identifier field ile "
@@ -425,6 +427,8 @@ class AddSourceOrchestrator:
                 silver_fq = self.iceberg.create_table(
                     spec.target_ns, spec.target_table, cols, identifier,
                     location=f"s3://{silver_bucket}/warehouse", layer="silver",
+                    bucket_count=spec.silver_bucket_count or settings.silver_default_bucket_count,
+                    write_mode=spec.silver_write_mode or "copy-on-write",
                 )
                 return f"{bronze_fq} + {silver_fq} (identifier={identifier})"
             # event/append-only: Bronze skeleton only (columns may be empty —

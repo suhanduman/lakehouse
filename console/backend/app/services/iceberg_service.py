@@ -55,8 +55,8 @@ _BRONZE_WAREHOUSE = "rawdata"
 
 # Storage defaults applied at CREATE time via pyiceberg `properties=` (kept in
 # lockstep with tools/create_iceberg_table.py — same constant, same CoW trio).
-# 128 MiB bounds small-file growth for maintenance compaction (ALL layers).
-_TARGET_FILE_SIZE_BYTES = "134217728"  # 128 MiB — bounds small-file growth; see spec storage note.
+# 256 MiB bounds small-file growth for maintenance compaction (ALL layers).
+_TARGET_FILE_SIZE_BYTES = "268435456"  # 256 MiB — bounds small-file growth; see spec storage note.
 
 
 # JDBC/SQL (Trino tip adları dahil) → kanonik Iceberg tipi. Kalan her şey → string.
@@ -154,6 +154,40 @@ class IcebergService:
             )
         )
 
+    @staticmethod
+    def _silver_partition_spec(schema, identifier, bucket_count) -> Any:
+        """bucket(N, id) per identifier column — aligns the MERGE join key with
+        the partition transform so MERGE prunes to the increment's buckets."""
+        from pyiceberg.partitioning import PartitionField, PartitionSpec
+        from pyiceberg.transforms import BucketTransform
+
+        fields = []
+        for i, col in enumerate(identifier):
+            src = schema.find_field(col)
+            fields.append(
+                PartitionField(
+                    source_id=src.field_id,
+                    field_id=1000 + i,
+                    transform=BucketTransform(bucket_count),
+                    name=f"{col}_bucket",
+                )
+            )
+        return PartitionSpec(*fields)
+
+    @staticmethod
+    def _silver_sort_order(schema, identifier) -> Any:
+        """Sort by the identifier column(s) — bundles equality-delete/upsert
+        keys together within each data file, cutting file scans on MERGE."""
+        from pyiceberg.table.sorting import SortField, SortOrder
+        from pyiceberg.transforms import IdentityTransform
+
+        return SortOrder(
+            *[
+                SortField(source_id=schema.find_field(c).field_id, transform=IdentityTransform())
+                for c in identifier
+            ]
+        )
+
     def create_table(
         self,
         namespace: str,
@@ -162,14 +196,22 @@ class IcebergService:
         identifier: List[str],
         location: str | None = None,
         layer: str = "silver",
+        bucket_count: int = 16,
+        write_mode: str = "copy-on-write",
     ) -> str:
         """Namespace + tabloyu yaratır (idempotent).
 
         layer="silver" (default): mevcut davranış — identifier field (PK)
-        ZORUNLU (boşsa fail-loud ValueError), default warehouse, unpartitioned.
-        Tablo VARSA identifier'ı doğrular; uyuşmazsa IdentifierMismatch fırlatır
-        (fail-loud). `location` verilirse namespace bu S3 konumuyla yaratılır
-        (kaynak-başına bucket modeli — Model X).
+        ZORUNLU (boşsa fail-loud ValueError), default warehouse, bucket(N, id)
+        per identifier column (`bucket_count`, default 16) + identifier sort
+        order + write.distribution-mode=hash — scale-ready layout so MERGE
+        prunes to the increment's buckets instead of scanning the whole
+        table. `write_mode` (default "copy-on-write") sets the
+        write.merge/update/delete.mode trio ("merge-on-read" also
+        supported). Tablo VARSA identifier'ı doğrular; uyuşmazsa
+        IdentifierMismatch fırlatır (fail-loud). `location` verilirse
+        namespace bu S3 konumuyla yaratılır (kaynak-başına bucket modeli —
+        Model X).
 
         layer="bronze": medallion CDC changelog tablosu — identifier YOK
         (append-only log; MERGE hedefi Silver'dır), sabit CDC metadata
@@ -217,18 +259,27 @@ class IcebergService:
                     f"tabloyu düşürüp yeniden yaratın."
                 )
             return fq
+        sort_order = None
         properties = {"write.target-file-size-bytes": _TARGET_FILE_SIZE_BYTES}
         if layer == "silver":
-            # entity/upsert Silver: read-heavy (Trino) + MERGE-written -> copy-on-write.
+            # entity/upsert Silver: bucket(N, id) partition + identifier sort
+            # order + hash distribution -> MERGE prunes to the increment's
+            # buckets. write_mode (default copy-on-write) drives the
+            # merge/update/delete trio; "merge-on-read" also supported.
+            partition_spec = self._silver_partition_spec(schema, identifier, bucket_count)
+            sort_order = self._silver_sort_order(schema, identifier)
+            properties["write.distribution-mode"] = "hash"
             properties.update({
-                "write.merge.mode": "copy-on-write",
-                "write.update.mode": "copy-on-write",
-                "write.delete.mode": "copy-on-write",
+                "write.merge.mode": write_mode,
+                "write.update.mode": write_mode,
+                "write.delete.mode": write_mode,
             })
+        kwargs: Dict[str, Any] = {"schema": schema, "properties": properties}
         if partition_spec is not None:
-            cat.create_table(fq, schema=schema, partition_spec=partition_spec, properties=properties)
-        else:
-            cat.create_table(fq, schema=schema, properties=properties)
+            kwargs["partition_spec"] = partition_spec
+        if sort_order is not None:
+            kwargs["sort_order"] = sort_order
+        cat.create_table(fq, **kwargs)
         return fq
 
     def table_stats(self, namespace: str, table: str, layer: str = "silver") -> Dict[str, int] | None:

@@ -826,6 +826,87 @@ describe("AddSourceWizard", () => {
     expect(spec.signal_data_collection).toBeUndefined();
   });
 
+  // --- Silver scale-hardening Task 8: write-mode selector + bucket-count ---
+
+  it("shows a Silver write-mode selector (defaulting to COW) and bucket-count field for CDC lanes", async () => {
+    render(<AddSourceWizard />);
+
+    const writeMode = (await screen.findByLabelText(
+      /silver write mode/i,
+    )) as HTMLSelectElement;
+    expect(writeMode.value).toBe("");
+    expect(screen.getByRole("option", { name: /copy-on-write/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /merge-on-read/i })).toBeInTheDocument();
+    expect(
+      screen.getByText(/yalnızca-ekleme \(append-only\) veya seyrek güncellenen/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/yüksek-frekanslı güncellemeler ve yazma-yoğun görevler için mor/i),
+    ).toBeInTheDocument();
+
+    const bucketCount = screen.getByLabelText(/silver bucket count/i) as HTMLInputElement;
+    expect(bucketCount.value).toBe("");
+    expect(bucketCount.placeholder).toBe("16");
+    expect(
+      screen.getByText(/varsayılan 16; çok büyük tablolar \(10m\+ satır\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the Silver write-mode/bucket-count fields for non-CDC lanes", async () => {
+    render(<AddSourceWizard />);
+    // Defaults (cdc/mssql) show the fields first...
+    await screen.findByLabelText(/silver write mode/i);
+
+    await screen.findByRole("option", { name: /^scheduled$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "scheduled" } });
+
+    expect(screen.queryByLabelText(/silver write mode/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/silver bucket count/i)).not.toBeInTheDocument();
+  });
+
+  it("wires the Silver write-mode + bucket-count into the built spec for CDC", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    fireEvent.change(await screen.findByLabelText(/silver write mode/i), {
+      target: { value: "merge-on-read" },
+    });
+    fireEvent.change(screen.getByLabelText(/silver bucket count/i), {
+      target: { value: "64" },
+    });
+
+    fillStep1(); // advance from step 1 (where the new fields live) to step 2
+    await fillStep2();
+    fillStep3();
+    fillStep4();
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.silver_write_mode).toBe("merge-on-read");
+    expect(spec.silver_bucket_count).toBe(64);
+  });
+
+  it("omits silver_write_mode/silver_bucket_count from the built spec when left at their defaults", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    fillStep1();
+    await fillStep2();
+    fillStep3();
+    fillStep4();
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.silver_write_mode).toBeUndefined();
+    expect(spec.silver_bucket_count).toBeUndefined();
+  });
+
   // --- Task 7: JDBC polling-limitation caveat ---
 
   it("shows the JDBC polling caveat for a scheduled-jdbc source", async () => {

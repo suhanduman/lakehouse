@@ -46,7 +46,8 @@ import sys
 from pyiceberg.catalog.rest import RestCatalog
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
-from pyiceberg.transforms import DayTransform
+from pyiceberg.table.sorting import SortField, SortOrder
+from pyiceberg.transforms import BucketTransform, DayTransform, IdentityTransform
 from pyiceberg.types import (
     BinaryType,
     BooleanType,
@@ -64,9 +65,9 @@ from pyiceberg.types import (
 # Kanonik Iceberg tip adları → pyiceberg tip nesnesi.
 # Storage defaults applied at CREATE time via pyiceberg `properties=` (kept in
 # lockstep with console/backend/app/services/iceberg_service.py — same
-# constant, same CoW trio). 128 MiB bounds small-file growth for maintenance
-# compaction (ALL layers).
-_TARGET_FILE_SIZE_BYTES = "134217728"  # 128 MiB — bounds small-file growth; see spec storage note.
+# constant, same write-mode trio). 256 MiB bounds small-file growth for
+# maintenance compaction (ALL layers).
+_TARGET_FILE_SIZE_BYTES = "268435456"  # 256 MiB — bounds small-file growth; see spec storage note.
 
 _ICEBERG_TYPES = {
     "int": IntegerType(),
@@ -166,14 +167,39 @@ def _build_schema(columns: list[dict], identifier: list[str]) -> Schema:
 
 def _build_partition_spec(schema: Schema, column_name: str | None) -> PartitionSpec:
     """day(<column_name>) PartitionSpec for the given schema, or unpartitioned when
-    column_name is None. Used for Bronze (day(__ts_ms)); Silver stays
-    unpartitioned. The source column must be a timestamp/date (day() requires it)."""
+    column_name is None. Used ONLY for Bronze (day(__ts_ms)). Silver now uses
+    _build_silver_partition_spec (bucket(N, id)) — see below."""
     if not column_name:
         return PartitionSpec()  # unpartitioned
     src = schema.find_field(column_name)
     return PartitionSpec(
         PartitionField(source_id=src.field_id, field_id=1000,
                        transform=DayTransform(), name=f"{column_name}_day")
+    )
+
+
+def _build_silver_partition_spec(schema: Schema, identifier: list[str], bucket_count: int) -> PartitionSpec:
+    """bucket(N, id) per identifier column — mirrors console/backend/app/
+    services/iceberg_service.py's _silver_partition_spec. Aligns the MERGE
+    join key with the partition transform so MERGE prunes to the increment's
+    buckets instead of scanning the whole table."""
+    fields = []
+    for i, col in enumerate(identifier):
+        src = schema.find_field(col)
+        fields.append(
+            PartitionField(source_id=src.field_id, field_id=1000 + i,
+                           transform=BucketTransform(bucket_count), name=f"{col}_bucket")
+        )
+    return PartitionSpec(*fields)
+
+
+def _build_silver_sort_order(schema: Schema, identifier: list[str]) -> SortOrder:
+    """Sort by the identifier column(s) — mirrors console/backend/app/services/
+    iceberg_service.py's _silver_sort_order. Bundles equality-delete/upsert
+    keys together within each data file, cutting file scans on MERGE."""
+    return SortOrder(
+        *[SortField(source_id=schema.find_field(c).field_id, transform=IdentityTransform())
+          for c in identifier]
     )
 
 
@@ -261,13 +287,16 @@ def _ns_exists(cat: RestCatalog, namespace: str) -> bool:
 
 
 def _ensure_table(cat: RestCatalog, namespace: str, table: str, schema: Schema,
-                   partition_spec: PartitionSpec, properties: dict) -> int:
+                   partition_spec: PartitionSpec, properties: dict,
+                   sort_order: SortOrder | None = None) -> int:
     """Namespace + tabloyu (identifier field'lı) yaratır. Tablo varsa identifier
     field'ları doğrular; uyuşmazsa 1 döner (fail-loud). Dönüş kodları:
     0=yaratıldı, 2=zaten uyumlu (no-op), 1=FATAL uyumsuzluk.
 
-    `properties`: CREATE anında set edilen Iceberg tablo property'leri (128MB
-    target-file-size ALL layers; Silver'a ek olarak CoW trio) — bkz. main()."""
+    `properties`: CREATE anında set edilen Iceberg tablo property'leri (256MB
+    target-file-size ALL layers; Silver'a ek olarak write-mode trio) — bkz.
+    main(). `sort_order`: Silver'da identifier kolon(lar)ına göre SortOrder
+    (bkz. _build_silver_sort_order); Bronze'da None."""
     fq = f"{namespace}.{table}"
     want = set(schema.identifier_field_names())
     try:
@@ -288,7 +317,10 @@ def _ensure_table(cat: RestCatalog, namespace: str, table: str, schema: Schema,
             return 1
         print(f"OK (no-op): '{fq}' zaten doğru identifier ile mevcut: {sorted(have)}")
         return 2
-    cat.create_table(fq, schema=schema, partition_spec=partition_spec, properties=properties)
+    kwargs: dict = {"schema": schema, "partition_spec": partition_spec, "properties": properties}
+    if sort_order is not None:
+        kwargs["sort_order"] = sort_order
+    cat.create_table(fq, **kwargs)
     got = sorted(cat.load_table(fq).schema().identifier_field_names())
     if set(got) != want:
         print(f"FATAL: '{fq}' yaratıldı ama identifier set edilemedi (got={got})", file=sys.stderr)
@@ -323,6 +355,12 @@ def main() -> int:
                         "silver: curated current-state (default warehouse, identifier).")
     p.add_argument("--warehouse", default=None,
                    help="Nessie warehouse override; default bronze=rawdata, silver=default.")
+    p.add_argument("--bucket-count", type=int, default=16,
+                   help="silver: bucket(N, id) partition field count per identifier column "
+                        "(mirrors console IcebergService.create_table's bucket_count).")
+    p.add_argument("--write-mode", choices=["copy-on-write", "merge-on-read"], default="copy-on-write",
+                   help="silver: write.merge/update/delete.mode trio (mirrors console "
+                        "IcebergService.create_table's write_mode).")
     args = p.parse_args()
 
     if args.descriptor:
@@ -366,26 +404,37 @@ def main() -> int:
             args.warehouse = "rawdata"
 
     schema = _build_schema(columns, identifier)
-    partition_spec = _build_partition_spec(schema, partition_col)
+    sort_order = None
     # Storage defaults (kept in lockstep with console/backend's
-    # IcebergService.create_table — same constant, same CoW trio).
+    # IcebergService.create_table — same constant, same write-mode trio).
     properties = {"write.target-file-size-bytes": _TARGET_FILE_SIZE_BYTES}
     if args.layer == "silver":
-        # entity/upsert Silver: read-heavy (Trino) + MERGE-written -> copy-on-write.
+        # entity/upsert Silver: bucket(N, id) partition + identifier sort order
+        # + hash distribution -> MERGE prunes to the increment's buckets
+        # instead of scanning the whole table. write_mode (default
+        # copy-on-write) drives the merge/update/delete trio; "merge-on-read"
+        # also supported. Mirrors console IcebergService.create_table.
+        partition_spec = _build_silver_partition_spec(schema, identifier, args.bucket_count)
+        sort_order = _build_silver_sort_order(schema, identifier)
+        properties["write.distribution-mode"] = "hash"
         properties.update({
-            "write.merge.mode": "copy-on-write",
-            "write.update.mode": "copy-on-write",
-            "write.delete.mode": "copy-on-write",
+            "write.merge.mode": args.write_mode,
+            "write.update.mode": args.write_mode,
+            "write.delete.mode": args.write_mode,
         })
+    else:
+        partition_spec = _build_partition_spec(schema, partition_col)
     if args.dry_run:
         print(f"layer={args.layer} warehouse={args.warehouse or 'default'} "
               f"namespace={namespace} table={table} identifier={identifier}")
         print(f"partition={[f.name for f in partition_spec.fields] or 'unpartitioned'}")
+        if sort_order is not None:
+            print(f"sort_order={[f.source_id for f in sort_order.fields]}")
         print(f"properties={properties}")
         print(schema)
         return 0
     cat = _load_catalog(args)
-    rc = _ensure_table(cat, namespace, table, schema, partition_spec, properties)
+    rc = _ensure_table(cat, namespace, table, schema, partition_spec, properties, sort_order=sort_order)
     return 0 if rc in (0, 2) else 1
 
 

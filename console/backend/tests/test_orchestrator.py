@@ -221,6 +221,9 @@ class FakeIcebergOrch:
         # many existing `orch.iceberg.created == [...]` exact-equality
         # assertions above/below stay untouched.
         self.created_columns: List[list] = []
+        # Task 4: per-pipeline Silver tuning — record bucket_count/write_mode
+        # kwargs passed to create_table, keyed by layer ("silver"/"bronze")
+        self.create_table_kwargs: Dict[str, Dict[str, Any]] = {}
         self._tables_by_ns: Dict[str, set] = {}
 
     def seed_table(self, namespace: str, table: str) -> None:
@@ -239,11 +242,14 @@ class FakeIcebergOrch:
                 return location
         return None
 
-    def create_table(self, namespace, table, columns, identifier, location=None, layer="silver"):
+    def create_table(self, namespace, table, columns, identifier, location=None, layer="silver", **kwargs):
         if self.fail_on == "table":
             raise RuntimeError("table boom")
         self.created.append((namespace, table, tuple(identifier), layer, location))
         self.created_columns.append(list(columns))
+        # Task 4: record bucket_count/write_mode kwargs per layer
+        if kwargs:
+            self.create_table_kwargs[layer] = kwargs
         self._tables_by_ns.setdefault(namespace, set()).add(table)
         return f"{namespace}.{table}"
 
@@ -332,6 +338,63 @@ def test_add_source_happy_path_calls_services_with_expected_data():
     assert k8s.deleted_secrets == []
     assert k8s.deleted_topics == []
     assert k8s.deleted_connectors == []
+
+
+# --------------------------------------------------------------------------
+# Task 4: Silver per-pipeline tuning — bucket_count + write_mode
+# --------------------------------------------------------------------------
+
+def test_silver_create_table_passes_tuning_params_when_set():
+    """Entity spec with silver_bucket_count=8, silver_write_mode="merge-on-read"
+    → the silver create_table receives bucket_count=8, write_mode="merge-on-read".
+    """
+    orch, k8s, s3, trino = _orch()
+    spec = CDC_MSSQL_SPEC.model_copy(
+        update={"silver_bucket_count": 8, "silver_write_mode": "merge-on-read"}
+    )
+
+    res = orch.add_source(spec, CREDS)
+
+    assert res.ok is True
+    # Verify the silver create_table call received the tuning kwargs
+    assert orch.iceberg.create_table_kwargs.get("silver") == {
+        "bucket_count": 8,
+        "write_mode": "merge-on-read",
+    }
+
+
+def test_silver_create_table_defaults_when_tuning_params_unset():
+    """Entity spec with unset silver_bucket_count/write_mode (None)
+    → the silver create_table receives bucket_count=16 (settings default),
+    write_mode="copy-on-write" (hardcoded default).
+    """
+    orch, k8s, s3, trino = _orch()
+    # CDC_MSSQL_SPEC has silver_bucket_count=None, silver_write_mode=None by default
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is True
+    # Verify the silver create_table call received the defaults
+    from app.config import settings as _settings
+    assert orch.iceberg.create_table_kwargs.get("silver") == {
+        "bucket_count": _settings.silver_default_bucket_count,
+        "write_mode": "copy-on-write",
+    }
+
+
+def test_bronze_create_table_does_not_receive_silver_tuning_params():
+    """Bronze create_table (entity path) must NOT receive bucket_count/write_mode
+    — the tuning is Silver-only.
+    """
+    orch, k8s, s3, trino = _orch()
+    spec = CDC_MSSQL_SPEC.model_copy(
+        update={"silver_bucket_count": 8, "silver_write_mode": "merge-on-read"}
+    )
+
+    res = orch.add_source(spec, CREDS)
+
+    assert res.ok is True
+    # Bronze must not have these tuning kwargs
+    assert "bronze" not in orch.iceberg.create_table_kwargs
 
 
 # --------------------------------------------------------------------------

@@ -48,7 +48,8 @@ class FakeCatalog:
     def __init__(self, existing=None):
         self.existing = existing or {}
         self.created = []          # [(fq, schema)]
-        self.partition_specs = []  # [(fq, partition_spec)] — bronze day(__ts_ms)
+        self.partition_specs = []  # [(fq, partition_spec)] — bronze day(__ts_ms) / silver bucket(N, id)
+        self.sort_orders = []      # [(fq, sort_order)] — silver: SortOrder by identifier col(s)
         self.namespaces = []       # [(ns, properties)]
         self.table_properties = {}  # {fq: properties} — Iceberg CREATE-time table properties
         self.tables_by_ns = {}     # {namespace: {table, ...}} — populated by create_table
@@ -80,9 +81,10 @@ class FakeCatalog:
         tests."""
         self.snapshots[fq] = summary_dict
 
-    def create_table(self, fq, schema=None, partition_spec=None, properties=None):
+    def create_table(self, fq, schema=None, partition_spec=None, sort_order=None, properties=None):
         self.created.append((fq, schema))
         self.partition_specs.append((fq, partition_spec))
+        self.sort_orders.append((fq, sort_order))
         self.table_properties[fq] = properties or {}
         namespace, table = fq.rsplit(".", 1)
         # NOTE: intentionally does NOT also write into `self.existing` --
@@ -248,7 +250,7 @@ def test_create_table_bronze_layer_empty_identifier_does_not_raise():
 
 
 # --------------------------------------------------------------------------
-# Storage defaults: 128MiB target-file-size (all layers) + Silver
+# Storage defaults: 256MiB target-file-size (all layers) + Silver
 # copy-on-write trio (entity/upsert, read-heavy + MERGE-written). Mirrors
 # tools/create_iceberg_table.py's properties dict in lockstep.
 # --------------------------------------------------------------------------
@@ -264,7 +266,7 @@ def test_silver_table_created_with_cow_and_target_file_size():
     assert props["write.merge.mode"] == "copy-on-write"
     assert props["write.update.mode"] == "copy-on-write"
     assert props["write.delete.mode"] == "copy-on-write"
-    assert props["write.target-file-size-bytes"] == "134217728"
+    assert props["write.target-file-size-bytes"] == "268435456"
 
 
 def test_bronze_table_created_with_target_file_size():
@@ -273,8 +275,99 @@ def test_bronze_table_created_with_target_file_size():
         "depo_raw", "orders", [{"name": "id", "type": "int"}], identifier=[], layer="bronze"
     )
     props = cat.table_properties[fq]
-    assert props["write.target-file-size-bytes"] == "134217728"
+    assert props["write.target-file-size-bytes"] == "268435456"
     assert "write.merge.mode" not in props  # Bronze is append-only, no merge mode
+
+
+# --------------------------------------------------------------------------
+# Silver scale-ready layout: bucket(N, id) partition + identifier sort order
+# + write.distribution-mode=hash + configurable write mode (2026-08-03 Task
+# 2). Bucket partitioning aligns the MERGE join key with the partition
+# transform so MERGE prunes to the increment's buckets on large Silver
+# tables. Bronze stays unpartitioned-by-identifier (day(__ts_ms) only,
+# asserted separately above) -- this section is silver-only.
+# --------------------------------------------------------------------------
+
+def test_silver_table_bucket_partitioned_and_sorted_by_identifier():
+    from pyiceberg.transforms import BucketTransform
+
+    cat = FakeCatalog()
+    fq = _svc(cat).create_table(
+        "depo", "orders",
+        [{"name": "id", "type": "int"}, {"name": "n", "type": "string"}],
+        identifier=["id"],
+        bucket_count=8,
+    )
+    assert len(cat.partition_specs) == 1
+    _, pspec = cat.partition_specs[0]
+    assert [f.name for f in pspec.fields] == ["id_bucket"]
+    assert pspec.fields[0].transform == BucketTransform(8)
+
+    assert len(cat.sort_orders) == 1
+    _, sort_order = cat.sort_orders[0]
+    _, schema = cat.created[0]
+    id_field_id = schema.find_field("id").field_id
+    assert [f.source_id for f in sort_order.fields] == [id_field_id]
+
+    props = cat.table_properties[fq]
+    assert props["write.distribution-mode"] == "hash"
+
+
+def test_silver_table_composite_identifier_gets_one_bucket_field_per_column():
+    from pyiceberg.transforms import BucketTransform
+
+    cat = FakeCatalog()
+    _svc(cat).create_table(
+        "depo", "line_items",
+        [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}, {"name": "n", "type": "string"}],
+        identifier=["a", "b"],
+        bucket_count=8,
+    )
+    _, pspec = cat.partition_specs[0]
+    assert [f.name for f in pspec.fields] == ["a_bucket", "b_bucket"]
+    assert all(f.transform == BucketTransform(8) for f in pspec.fields)
+
+    _, sort_order = cat.sort_orders[0]
+    _, schema = cat.created[0]
+    assert [f.source_id for f in sort_order.fields] == [
+        schema.find_field("a").field_id,
+        schema.find_field("b").field_id,
+    ]
+
+
+def test_silver_table_write_mode_defaults_to_copy_on_write():
+    cat = FakeCatalog()
+    fq = _svc(cat).create_table(
+        "depo", "orders", [{"name": "id", "type": "int"}], identifier=["id"],
+    )
+    props = cat.table_properties[fq]
+    assert props["write.merge.mode"] == "copy-on-write"
+    assert props["write.update.mode"] == "copy-on-write"
+    assert props["write.delete.mode"] == "copy-on-write"
+
+
+def test_silver_table_write_mode_merge_on_read():
+    cat = FakeCatalog()
+    fq = _svc(cat).create_table(
+        "depo", "orders", [{"name": "id", "type": "int"}], identifier=["id"],
+        write_mode="merge-on-read",
+    )
+    props = cat.table_properties[fq]
+    assert props["write.merge.mode"] == "merge-on-read"
+    assert props["write.update.mode"] == "merge-on-read"
+    assert props["write.delete.mode"] == "merge-on-read"
+
+
+def test_bronze_table_partition_spec_unchanged_by_silver_bucket_changes():
+    # Regression guard: Bronze must stay day(__ts_ms)-partitioned, never
+    # bucket-partitioned (bucket_count/write_mode are silver-only concerns).
+    cat = FakeCatalog()
+    _svc(cat).create_table(
+        "depo_raw", "orders", [{"name": "id", "type": "int"}], identifier=[], layer="bronze",
+    )
+    _, pspec = cat.partition_specs[0]
+    assert [f.name for f in pspec.fields] == ["__ts_ms_day"]
+    assert cat.sort_orders[0][1] is None or list(cat.sort_orders[0][1].fields) == []
 
 
 # --------------------------------------------------------------------------

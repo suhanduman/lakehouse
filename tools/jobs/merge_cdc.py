@@ -26,6 +26,13 @@ WATERMARK_PROP = "app.bronze-merged-snapshot"
 AUDIT_TABLE = "lakehouse.ops.merge_runs"
 METADATA_COLS = set(ml.METADATA_COLS)
 
+# Spark flags for bucketed-MERGE target pruning (storage-partitioned join):
+# enables MERGE to prune the target table to only the buckets touched by the increment.
+SPJ_CONF = {
+    "spark.sql.sources.v2.bucketing.enabled": "true",
+    "spark.sql.iceberg.planning.preserve-data-grouping": "true",
+}
+
 
 class SkipTable(Exception):
     """Raised for a Bronze table that lacks the CDC metadata contract the MERGE
@@ -331,7 +338,10 @@ def run(spark, args) -> int:
 def main() -> int:
     from pyspark.sql import SparkSession
     args = parse_args()
-    spark = SparkSession.builder.appName("SilverMergeCDC").getOrCreate()
+    b = SparkSession.builder.appName("SilverMergeCDC")
+    for k, v in SPJ_CONF.items():
+        b = b.config(k, v)
+    spark = b.getOrCreate()
     try:
         return run(spark, args)
     finally:

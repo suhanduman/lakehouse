@@ -326,3 +326,19 @@ def test_signal_data_collection_and_create_stopped_overrides():
                    signal_data_collection="public.debezium_signal", create_stopped=True)
     assert s.signal_data_collection == "public.debezium_signal"
     assert s.create_stopped is True
+
+
+# --------------------------------------------------------------------------
+# silver_bucket_count / silver_write_mode (Task 1, Silver-tuning)
+# --------------------------------------------------------------------------
+
+def test_silver_write_mode_validation():
+    base = dict(source="s", kind="cdc", type="pg", db="d", table="t",
+                target_ns="s", target_table="t", db_host="h:5432",
+                identifier=["id"], columns=[{"name":"id","type":"int"}])
+    SourceSpec(**base, silver_write_mode="merge-on-read")   # ok
+    SourceSpec(**base, silver_write_mode="copy-on-write")   # ok
+    with pytest.raises(ValidationError):
+        SourceSpec(**base, silver_write_mode="weird")
+    with pytest.raises(ValidationError):
+        SourceSpec(**base, silver_bucket_count=0)

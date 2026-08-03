@@ -101,6 +101,10 @@ class SourceSpec(BaseModel):
     # snapshot-lifecycle task (connector CR lifecycle / apply-time handling).
     create_stopped: bool = False
 
+    # Silver-tuning (Task 1): per-pipeline Iceberg table tunables.
+    silver_bucket_count: Optional[int] = None     # per-pipeline Silver bucket count (None => settings default)
+    silver_write_mode: Optional[str] = None        # "copy-on-write" (default) | "merge-on-read"
+
     @field_validator("source")
     @classmethod
     def _source_is_rfc1123_label(cls, v: str) -> str:
@@ -168,6 +172,21 @@ class SourceSpec(BaseModel):
         allowed = {"SCRAM-SHA-512", "SCRAM-SHA-256", "PLAIN"}
         if v is not None and v not in allowed:
             raise ValueError(f"kafka_sasl_mechanism must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("silver_bucket_count")
+    @classmethod
+    def _valid_bucket_count(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("silver_bucket_count must be > 0")
+        return v
+
+    @field_validator("silver_write_mode")
+    @classmethod
+    def _valid_write_mode(cls, v):
+        allowed = {"copy-on-write", "merge-on-read"}
+        if v is not None and v not in allowed:
+            raise ValueError(f"silver_write_mode must be one of {sorted(allowed)}")
         return v
 
     @model_validator(mode="after")
