@@ -20,6 +20,7 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from app.config import settings
 from app.models import SourceCredentials, SourceSpec
 from app import source_types
 
@@ -351,6 +352,28 @@ def _schema_history_client_config(role: str) -> dict:
     }
 
 
+def _signal_kafka_client_config() -> dict:
+    """SASL_SSL/SCRAM-SHA-512 config for Debezium's KafkaSignalChannel consumer,
+    mirroring `_schema_history_client_config` exactly (same debezium-src
+    identity + truststore) but under the `signal.consumer.*` prefix Debezium's
+    KafkaSignalChannel reads its consumer security props from. Only a consumer
+    is needed (the signal channel reads, it doesn't write schema history), so
+    unlike `_schema_history_client_config` this takes no `role` arg."""
+    prefix = "signal.consumer"
+    jaas_password = _cred("debezium-src", "password")
+    return {
+        f"{prefix}.security.protocol": "SASL_SSL",
+        f"{prefix}.sasl.mechanism": "SCRAM-SHA-512",
+        f"{prefix}.sasl.jaas.config": (
+            "org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="debezium-src" password="{jaas_password}";'
+        ),
+        f"{prefix}.ssl.truststore.location": "/mnt/external-configuration/kafka-ca/ca.p12",
+        f"{prefix}.ssl.truststore.password": _cred("kafka-ca", "ca.password"),
+        f"{prefix}.ssl.truststore.type": "PKCS12",
+    }
+
+
 def _render_cdc_relational(spec: SourceSpec) -> dict:
     """cdc + mssql/pg -> Debezium source connector. Mirrors
     tools/templates/source-cdc-relational.yaml (mssql branch is a direct
@@ -425,6 +448,17 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
     if spec.snapshot_mode:
         config["snapshot.mode"] = spec.snapshot_mode
 
+    # Kafka signal channel + notification sink (snapshot-lifecycle): every CDC
+    # connector gets these, unlike schema-history above which is mssql-only.
+    config["signal.enabled.channels"] = "source,kafka"
+    config["signal.kafka.topic"] = settings.debezium_signal_topic
+    config["signal.kafka.bootstrap.servers"] = settings.kafka_internal_bootstrap
+    config.update(_signal_kafka_client_config())
+    config["notification.enabled.channels"] = "sink"
+    config["notification.sink.topic.name"] = settings.debezium_notification_topic
+    if spec.signal_data_collection:
+        config["signal.data.collection"] = spec.signal_data_collection
+
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
     return _connector(name, klass, config, spec.source)
@@ -483,6 +517,17 @@ def _render_cdc_mysql(spec: SourceSpec) -> dict:
     if spec.snapshot_mode:
         config["snapshot.mode"] = spec.snapshot_mode
 
+    # Kafka signal channel + notification sink (snapshot-lifecycle): every CDC
+    # connector gets these, unlike schema-history above which is mssql/mysql-only.
+    config["signal.enabled.channels"] = "source,kafka"
+    config["signal.kafka.topic"] = settings.debezium_signal_topic
+    config["signal.kafka.bootstrap.servers"] = settings.kafka_internal_bootstrap
+    config.update(_signal_kafka_client_config())
+    config["notification.enabled.channels"] = "sink"
+    config["notification.sink.topic.name"] = settings.debezium_notification_topic
+    if spec.signal_data_collection:
+        config["signal.data.collection"] = spec.signal_data_collection
+
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
     return _connector(name, "io.debezium.connector.mysql.MySqlConnector", config, spec.source)
@@ -526,6 +571,17 @@ def _render_cdc_mongo(spec: SourceSpec) -> dict:
     })
     if spec.snapshot_mode:
         config["snapshot.mode"] = spec.snapshot_mode
+
+    # Kafka signal channel + notification sink (snapshot-lifecycle): every CDC
+    # connector gets these, unlike schema-history above which mongo doesn't use.
+    config["signal.enabled.channels"] = "source,kafka"
+    config["signal.kafka.topic"] = settings.debezium_signal_topic
+    config["signal.kafka.bootstrap.servers"] = settings.kafka_internal_bootstrap
+    config.update(_signal_kafka_client_config())
+    config["notification.enabled.channels"] = "sink"
+    config["notification.sink.topic.name"] = settings.debezium_notification_topic
+    if spec.signal_data_collection:
+        config["signal.data.collection"] = spec.signal_data_collection
 
     name = _k8s_name("dbz", spec.source, spec.table)
     return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config, spec.source)

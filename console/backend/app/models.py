@@ -87,6 +87,18 @@ class SourceSpec(BaseModel):
     # default). See render_service._render_cdc_relational/_mysql/_mongo.
     snapshot_mode: Optional[str] = None
 
+    # CDC connectors only (snapshot-lifecycle): Debezium signal-table collection
+    # (schema-qualified for pg/mssql, db-qualified for mysql/mongo) used to
+    # trigger ad-hoc/incremental snapshots via the source signal channel.
+    # Unset -> "signal.data.collection" is simply omitted from the rendered
+    # connector config (the Kafka signal channel is still enabled).
+    signal_data_collection: Optional[str] = None
+    # snapshot-lifecycle: whether this CDC connector should be created in a
+    # stopped state so an operator can arm a snapshot signal before first
+    # data flows. Not yet consumed by render_service — reserved for a later
+    # snapshot-lifecycle task (connector CR lifecycle / apply-time handling).
+    create_stopped: bool = False
+
     @field_validator("source")
     @classmethod
     def _source_is_rfc1123_label(cls, v: str) -> str:

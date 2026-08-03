@@ -18,3 +18,9 @@ def test_gitops_fields_env_overridable(monkeypatch):
     assert s.gitops_branch == "main"
     assert s.gitops_path == "pipelines"
     assert s.gitops_credential_secret == "gitops-credential"
+
+
+def test_debezium_signal_and_notification_topics_default():
+    s = Settings()
+    assert s.debezium_signal_topic == "debezium-signals"
+    assert s.debezium_notification_topic == "debezium-notifications"

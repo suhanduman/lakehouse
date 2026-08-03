@@ -1098,3 +1098,31 @@ def test_cdc_render_applies_snapshot_mode():
         identifier=["id"], columns=[{"name": "id", "type": "int"}])
     body = r.render_connector(spec)
     assert body["spec"]["config"]["snapshot.mode"] == "no_data"
+
+
+# --------------------------------------------------------------------------
+# signal channel + notification sink (Task 2, snapshot-lifecycle)
+# --------------------------------------------------------------------------
+
+def test_cdc_render_carries_signal_and_notification_channel():
+    from app.services import render_service
+    from app.models import SourceSpec
+    spec = SourceSpec(source="pgd", kind="cdc", type="pg", db="app", table="customers",
+                      target_ns="pgd", target_table="customers", db_host="h:5432",
+                      identifier=["id"], columns=[{"name":"id","type":"int"}])
+    cfg = render_service.render_connector(spec)["spec"]["config"]
+    assert "kafka" in cfg["signal.enabled.channels"]
+    assert cfg["signal.kafka.topic"] == "debezium-signals"
+    assert cfg["notification.enabled.channels"] == "sink"
+    assert cfg["notification.sink.topic.name"] == "debezium-notifications"
+    assert "signal.data.collection" not in cfg   # unset -> omitted
+
+def test_cdc_render_signal_data_collection_when_set():
+    from app.services import render_service
+    from app.models import SourceSpec
+    spec = SourceSpec(source="pgd", kind="cdc", type="pg", db="app", table="customers",
+                      target_ns="pgd", target_table="customers", db_host="h:5432",
+                      identifier=["id"], columns=[{"name":"id","type":"int"}],
+                      signal_data_collection="public.debezium_signal")
+    cfg = render_service.render_connector(spec)["spec"]["config"]
+    assert cfg["signal.data.collection"] == "public.debezium_signal"

@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     kafka_external_bootstrap: str = ""   # external listener a cluster-outside producer uses (ingest-config)
     kafka_cluster_name: str = "kafka"   # strimzi.io/cluster label on provisioned KafkaUsers
     kafka_internal_bootstrap: str = "kafka-kafka-bootstrap:9093"  # internal TLS+SCRAM listener
+    # Debezium Kafka signal channel + notification sink topics (snapshot-lifecycle
+    # feature: incremental/ad-hoc snapshot signals + connector notifications),
+    # shared by every CDC connector (see render_service._render_cdc_*).
+    debezium_signal_topic: str = "debezium-signals"
+    debezium_notification_topic: str = "debezium-notifications"
     kafka_consumer_user: str = "connect"          # SASL identity the Console reads DLQ topics as
     kafka_cluster_ca_secret: str = "kafka-cluster-ca-cert"  # Strimzi cluster CA (TLS trust), key ca.crt
     # Optional deep-link into an external logging UI (OpenShift logging / Kibana /

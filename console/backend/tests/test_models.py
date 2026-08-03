@@ -307,3 +307,22 @@ def test_snapshot_mode_accepts_allowed_and_rejects_junk():
     with pytest.raises(ValidationError):
         SourceSpec(source="x", kind="cdc", type="pg", db="d", table="t",
                    target_ns="x", target_table="t", db_host="h", snapshot_mode="bogus")
+
+
+# --------------------------------------------------------------------------
+# signal_data_collection / create_stopped (Task 2, snapshot-lifecycle)
+# --------------------------------------------------------------------------
+
+def test_signal_data_collection_and_create_stopped_defaults():
+    s = SourceSpec(source="x", kind="cdc", type="pg", db="d", table="t",
+                   target_ns="x", target_table="t", db_host="h")
+    assert s.signal_data_collection is None
+    assert s.create_stopped is False
+
+
+def test_signal_data_collection_and_create_stopped_overrides():
+    s = SourceSpec(source="x", kind="cdc", type="pg", db="d", table="t",
+                   target_ns="x", target_table="t", db_host="h",
+                   signal_data_collection="public.debezium_signal", create_stopped=True)
+    assert s.signal_data_collection == "public.debezium_signal"
+    assert s.create_stopped is True
