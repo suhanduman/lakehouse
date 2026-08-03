@@ -215,6 +215,12 @@ class FakeIcebergOrch:
     def __init__(self, fail_on: Optional[str] = None):
         self.fail_on = fail_on
         self.created: List[tuple] = []
+        # Task 6 (PK-only entity pre-create): the `columns` payload passed to
+        # each create_table call, in the same order as `created` -- kept as a
+        # SEPARATE list (rather than widening the `created` tuple) so the
+        # many existing `orch.iceberg.created == [...]` exact-equality
+        # assertions above/below stay untouched.
+        self.created_columns: List[list] = []
         self._tables_by_ns: Dict[str, set] = {}
 
     def seed_table(self, namespace: str, table: str) -> None:
@@ -237,6 +243,7 @@ class FakeIcebergOrch:
         if self.fail_on == "table":
             raise RuntimeError("table boom")
         self.created.append((namespace, table, tuple(identifier), layer, location))
+        self.created_columns.append(list(columns))
         self._tables_by_ns.setdefault(namespace, set()).add(table)
         return f"{namespace}.{table}"
 
@@ -1134,6 +1141,37 @@ def test_stream_kafka_entity_precreates_bronze_and_silver():
     # Task 5: "producer" always runs for kafka-ingest.
     assert names == ["uniqueness", "bucket", "namespace", "table", "acl", "producer", "connector", "verify"]
     assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> Bronze + Silver
+
+
+def test_entity_precreate_accepts_pk_only_columns():
+    # Task 6: entity pre-create's guard (`if not spec.columns: raise` in
+    # _precreate_table) only requires `spec.columns` to be non-empty -- it
+    # does NOT require the full table schema. The wizard may send ONLY the
+    # identifier/PK column(s) (columns == [pk column]); the rest of the
+    # schema evolves at runtime via the Iceberg sink's evolve-schema/
+    # auto-create (Bronze) and silver-merge._apply_reconcile's ALTER TABLE
+    # ADD COLUMN (Silver). This mirrors
+    # test_stream_kafka_entity_precreates_bronze_and_silver above but with
+    # ONLY the PK column in `columns` -- no business columns at all -- to
+    # lock in that PK-only already satisfies the guard, with no orchestrator
+    # relaxation needed.
+    orch, fakes = _orch_fakes()
+    spec = _kafka_spec(
+        disposition="entity",
+        columns=[ColumnSpec(name="id", type="int")],   # PK-only: no business columns
+        identifier=["id"],
+    )
+
+    res = orch.add_source(spec, SourceCredentials(user="", password=""))
+
+    assert res.ok is True
+    assert fakes["iceberg"].created_layers == ["bronze", "silver"]   # entity -> both, PK-only is enough
+    # both create_table calls (Bronze then Silver) got ONLY the PK column --
+    # no business columns were required to satisfy the guard.
+    pk_only_cols = [{"name": "id", "type": "int", "required": False}]
+    assert fakes["iceberg"].created_columns == [pk_only_cols, pk_only_cols]
+    # ... and the Silver call's identifier is the PK column.
+    assert fakes["iceberg"].created[-1][2] == ("id",)
 
 
 # --------------------------------------------------------------------------
