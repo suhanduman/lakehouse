@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     trino_host: str = "trino-coordinator"
     trino_port: int = 8080
     trino_user: str = "lakehouse-console"
+    silver_default_bucket_count: int = 16   # Silver bucket(N, id) partition default; large tables override per-pipeline
     connect_url: str = "http://connect-connect-api:8083"
     connect_cluster_name: str = "connect"    # Strimzi KafkaConnect cluster name (pod label selector)
     kafka_external_bootstrap: str = ""   # external listener a cluster-outside producer uses (ingest-config)
