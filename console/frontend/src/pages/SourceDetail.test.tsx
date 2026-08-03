@@ -87,6 +87,12 @@ function mockLoad() {
     expected_json: null,
     snippets: { fluentbit: "f", vector: "v", logstash: "l", generic: "g" },
   });
+  // Dead-letter records section (Task 5) fetches lazily -- only when the
+  // per-connector "Dead-letter records" button is clicked -- so most
+  // existing tests never trigger this call. Still spied here with a safe
+  // default so any test that does open it doesn't hit an unmocked network
+  // call.
+  vi.spyOn(client, "getConnectorDlq").mockResolvedValue({ has_dlq: false, hint: "no DLQ" });
 }
 
 describe("SourceDetail", () => {
@@ -309,6 +315,77 @@ describe("SourceDetail", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^debug$/i }));
     expect(await screen.findByText(/boom-stacktrace/)).toBeInTheDocument();
     expect(screen.getByText(/oc logs -n lakehouse/)).toBeInTheDocument();
+  });
+
+  it("shows dead-letter records for a connector with a DLQ", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({
+      connectors: [{ name: SOURCE_NAME, role: "source", kind: null, state: "RUNNING" }],
+    });
+    vi.spyOn(client, "getConnectorDlq").mockResolvedValue({
+      has_dlq: true,
+      topic: "s.dlq",
+      count: 2,
+      returned: 1,
+      records: [
+        {
+          ts: 1730000000000,
+          error_class: "DataException",
+          error_message: "boom",
+          source_topic: "orders",
+          source_partition: 2,
+          source_offset: 99,
+          value_preview: "{...}",
+        },
+      ],
+    });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /dead-letter|dlq/i }));
+    expect(await screen.findByText(/DataException/)).toBeInTheDocument();
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(screen.getByText(/orders:2@99/)).toBeInTheDocument();
+    expect(screen.getByText(/showing last 1 of 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/sample — may contain data/i)).toBeInTheDocument();
+  });
+
+  it("shows a clean empty state when DLQ count is 0", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({
+      connectors: [{ name: SOURCE_NAME, role: "source", kind: null, state: "RUNNING" }],
+    });
+    vi.spyOn(client, "getConnectorDlq").mockResolvedValue({
+      has_dlq: true,
+      topic: "s.dlq",
+      count: 0,
+      returned: 0,
+      records: [],
+    });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /dead-letter|dlq/i }));
+    expect(await screen.findByText(/no dropped records/i)).toBeInTheDocument();
+  });
+
+  it("shows the sink-DLQ hint on a connector without a DLQ", async () => {
+    vi.spyOn(client, "getSource").mockResolvedValue(SOURCE);
+    vi.spyOn(client, "getStatus").mockResolvedValue(STATUS);
+    vi.spyOn(client, "getSourceConnectors").mockResolvedValue({
+      connectors: [{ name: SOURCE_NAME, role: "source", kind: null, state: "RUNNING" }],
+    });
+    vi.spyOn(client, "getConnectorDlq").mockResolvedValue({
+      has_dlq: false,
+      hint: "dropped records for the pipeline land in the sink's DLQ",
+    });
+
+    renderDetail("ADMIN");
+
+    fireEvent.click(await screen.findByRole("button", { name: /dead-letter|dlq/i }));
+    expect(await screen.findByText(/sink's DLQ/i)).toBeInTheDocument();
   });
 
   it("renders the gitops remediation recipe when pause 409s", async () => {
