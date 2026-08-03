@@ -270,6 +270,45 @@ def _gitops_remediation(cr: Dict[str, Any], state: str) -> Dict[str, Any]:
     }
 
 
+def _gitops_config_add_remediation(cr: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Remediation for a CONFIG-ADD mutation (enable-snapshots) in gitops
+    mode: the operator must merge these keys into the connector's
+    `spec.config` in the pipeline repo (the Console never writes git).
+
+    Distinct from `_gitops_remediation`, which is a lifecycle-state recipe
+    (spec.state/spec.suspend) -- following THAT recipe for enable-snapshots
+    would set the connector running and never add the signal/notification
+    config, so snapshots would stay un-enabled while the recipe claimed to
+    fix it.
+
+    `config` (from `render_service._signal_and_notification_config()`) is
+    redacted before being embedded: any `signal.consumer.*` key is dropped,
+    since that block carries the Kafka signal channel's SASL/truststore
+    credentials (`signal.consumer.sasl.jaas.config` embeds a plaintext
+    password) -- this API must never echo those back to a client. The
+    recipe instead tells the operator those consumer-security properties
+    resolve via the existing config-provider/credential mechanism, same as
+    every other connector's config."""
+    name = (cr.get("metadata") or {}).get("name")
+    safe_config = {k: v for k, v in config.items() if not k.startswith("signal.consumer.")}
+    return {
+        "reason": "enable-snapshots adds config keys and is reconciled from git",
+        "where": "gitops",
+        "repo": f"{settings.gitops_repo_url}@{settings.gitops_branch}",
+        "path": f"{settings.gitops_path}/{name}",
+        "field": "spec.config",
+        "value": safe_config,
+        "steps": [
+            "edit the connector's manifest in the pipeline repo",
+            "merge these keys into spec.config",
+            "the signal.consumer.* Kafka client security properties (SASL/truststore) "
+            "resolve via the existing config-provider mechanism -- do not hardcode credentials",
+            "commit & push",
+            "ArgoCD syncs the change to the cluster",
+        ],
+    }
+
+
 # --------------------------------------------------------------------------
 # Snapshot signal helpers (snapshot-lifecycle) -- the Console never touches
 # the source DB itself; it only PRODUCES a Debezium execute-snapshot/
@@ -917,6 +956,7 @@ def enable_snapshots(
             status_code=400,
             detail="enable-snapshots applies only to CDC connectors",
         )
+    patch = render_service._signal_and_notification_config()
     if settings.deploy_mode == "gitops":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -925,10 +965,9 @@ def enable_snapshots(
                     "enable-snapshots not supported from the Console in gitops mode -- "
                     "add the signal-channel config to the connector in the pipeline repo (git)"
                 ),
-                "remediation": _gitops_remediation(cr, "running"),
+                "remediation": _gitops_config_add_remediation(cr, patch),
             },
         )
-    patch = render_service._signal_and_notification_config()
     k8s.patch_connector(name, patch)
     return {"ok": True, "name": name, "snapshots_enabled": True}
 

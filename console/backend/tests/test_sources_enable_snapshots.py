@@ -134,9 +134,23 @@ def test_enable_snapshots_in_gitops_returns_structured_remediation(monkeypatch):
     assert "enable-snapshots not supported from the Console in gitops mode" in detail["message"]
     rem = detail["remediation"]
     assert rem["where"] == "gitops"
-    assert rem["field"] == "spec.state"
-    assert rem["value"] == "running"
+    # This is a CONFIG-ADD recipe, not a lifecycle-state one: enable-snapshots
+    # merges keys into spec.config, it never touches spec.state/spec.suspend.
+    assert rem["field"] == "spec.config"
+    value = rem["value"]
+    assert "kafka" in value["signal.enabled.channels"]
+    assert value["signal.kafka.topic"] == "debezium-signals"
+    assert value["notification.enabled.channels"] == "sink"
+    assert value["notification.sink.topic.name"] == "debezium-notifications"
     assert isinstance(rem["steps"], list) and rem["steps"]
+    # No plaintext credential leaks into the remediation recipe: the
+    # signal-channel consumer's SASL/truststore secrets (e.g.
+    # signal.consumer.sasl.jaas.config, which embeds a plaintext password)
+    # must never be echoed back through this API.
+    assert not any(key.startswith("signal.consumer.") for key in value)
+    serialized = str(value)
+    assert "sasl.jaas.config" not in serialized
+    assert "password" not in serialized.lower()
 
 
 def test_enable_snapshots_gitops_mode_never_calls_direct_k8s_write(monkeypatch):
