@@ -152,6 +152,9 @@ class FakeConnect:
         # a fake override below is required regardless.
         return {}
 
+    def validate_config(self, connector_class: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        return {"error_count": 0, "configs": []}
+
 
 class FakeApicurio:
     def list_schemas(self) -> List[Dict[str, Any]]:
@@ -206,6 +209,12 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "template": "/api/sources/preview",
         "path": "/api/sources/preview",
         "json": {"spec": VALID_SOURCE_PAYLOAD["spec"]},
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/test-connection",
+        "path": "/api/sources/test-connection",
+        "json": VALID_SOURCE_PAYLOAD,
     },
     {
         "method": "GET",

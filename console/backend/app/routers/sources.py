@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app import source_types
 from app.config import settings
 from app.deps import (
+    get_connect,
     get_k8s,
     get_orchestrator,
     get_s3,
@@ -35,6 +36,7 @@ from app.models import DeleteMode, SourceCredentials, SourceSpec
 from app.orchestrator import AddSourceOrchestrator
 from app.services import render_service
 from app.services.authz import Action
+from app.services.connect_service import ConnectService
 from app.services.k8s_service import K8sService
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
 from app.services.s3_service import S3Service
@@ -370,6 +372,55 @@ def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
         # KafkaTopic CR to render for them -- kafka_topic stays None.
         preview["kafka_topic"] = render_service.render_kafka_topic(render_service.topic_name(spec))
     return preview
+
+
+# --------------------------------------------------------------------------
+# Test connection -- render a minimal per-lane config
+# (render_service.render_connection_test) and ask Kafka Connect itself to
+# validate it (ConnectService.validate_config). The Console never opens a DB
+# connection: Connect already has every connector plugin loaded, so handing
+# it the same connection keys the real renderers use and reading back the
+# validation response is enough to prove reachability/credentials before the
+# wizard actually creates the source.
+# --------------------------------------------------------------------------
+
+@router.post("/test-connection", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def test_connection(
+    payload: CreateSourceRequest,
+    connect: ConnectService = Depends(get_connect),
+) -> Dict[str, Any]:
+    """Degrades never-500: a lane with nothing to test (kafka-ingest,
+    spark-batch -- `render_connection_test` returns None) reports
+    `applicable: False` with a `reason`; Connect being unreachable (any
+    exception from `validate_config`) reports `applicable: True, ok: False`
+    with a reachability message in `errors`, still 200 -- never surfaces as a
+    500. Credentials are only ever sent to Connect's validate endpoint, never
+    logged (the reachability message below carries only `str(exc)`, never the
+    rendered config)."""
+    built = render_service.render_connection_test(payload.spec, payload.credentials)
+    if built is None:
+        return {
+            "applicable": False,
+            "reason": "no external connection to test for this source type",
+        }
+    connector_class, config = built
+    try:
+        result = connect.validate_config(connector_class, config)
+    except Exception as exc:  # noqa: BLE001 -- degrade, never 500; never log creds
+        return {
+            "applicable": True,
+            "ok": False,
+            "errors": [{"field": None, "message": f"could not reach Kafka Connect: {exc}"}],
+        }
+    errors = [
+        {
+            "field": (c.get("value") or {}).get("name"),
+            "message": "; ".join((c.get("value") or {}).get("errors") or []),
+        }
+        for c in (result.get("configs") or [])
+        if (c.get("value") or {}).get("errors")
+    ]
+    return {"applicable": True, "ok": result.get("error_count", 0) == 0, "errors": errors}
 
 
 # --------------------------------------------------------------------------
