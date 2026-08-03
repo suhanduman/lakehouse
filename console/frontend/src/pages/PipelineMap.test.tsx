@@ -31,6 +31,26 @@ const ENTITY_PIPELINE: client.Pipeline = {
   owned_buckets: ["pgdemo-bronze", "pgdemo-silver"],
 };
 
+const BATCH_PIPELINE: client.Pipeline = {
+  name: "s3-batch-invoices",
+  cr_kind: "ScheduledSparkApplication",
+  disposition: "batch",
+  authoritative: { fqn: "rawlake.invoices.invoices", layer: "rawlake" },
+  nodes: [
+    { type: "source", name: "s3-batch-invoices" },
+    {
+      type: "connector",
+      name: "spark-s3-batch-invoices",
+      kind: "ScheduledSparkApplication",
+      state: "Ready",
+    },
+    { type: "bronze", fqn: "rawlake.invoices.invoices" },
+    { type: "buckets", buckets: ["invoices-bronze"] },
+  ],
+  owned_tables: ["rawlake.invoices.invoices"],
+  owned_buckets: ["invoices-bronze"],
+};
+
 const ERROR_PIPELINE: client.Pipeline = {
   name: "broken-source",
   cr_kind: "KafkaConnector",
@@ -144,5 +164,15 @@ describe("PipelineMap", () => {
 
     await screen.findByText(ENTITY_PIPELINE.name);
     expect(screen.queryByText(/⚠/)).toBeNull();
+  });
+
+  it("skips the DLQ fetch and badge entirely for batch (Spark) pipelines", async () => {
+    vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [BATCH_PIPELINE] });
+    const dlqSpy = vi.spyOn(client, "getConnectorDlq").mockResolvedValue({ has_dlq: false });
+    renderMap();
+
+    await screen.findByText(BATCH_PIPELINE.name);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+    expect(dlqSpy).not.toHaveBeenCalled();
   });
 });

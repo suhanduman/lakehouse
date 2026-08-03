@@ -71,10 +71,16 @@ function nodeLabel(node: PipelineNode): string {
 }
 
 /** The connector whose dead-letter queue represents this pipeline's dropped
- * records: the `sink` node (event/entity pipelines with a separate sink
- * connector), or -- for kafka-ingest pipelines that have no separate sink --
- * the `connector` node. `null` when neither is present/named. */
+ * records: the `sink` node (the common case -- entity/event pipelines, incl.
+ * kafka-ingest, all emit a `sink` node per `pipeline_topology._assemble_one`),
+ * or -- for any other pipeline shape that has a `connector` node and no
+ * separate `sink` -- that `connector` node. Batch/Spark pipelines
+ * (`cr_kind: "ScheduledSparkApplication"`, per `_batch_pipeline`) are
+ * excluded entirely: their `connector` node names a Spark job, not a Kafka
+ * Connect connector, so it has no DLQ to fetch. `null` when no DLQ-carrying
+ * connector applies. */
 function dlqCarryingConnectorName(pipeline: Pipeline): string | null {
+  if (pipeline.cr_kind === "ScheduledSparkApplication") return null;
   const sink = pipeline.nodes.find((n): n is Extract<PipelineNode, { type: "sink" }> => n.type === "sink");
   if (sink) return sink.name;
   const connector = pipeline.nodes.find(
