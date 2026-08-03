@@ -56,6 +56,8 @@ class SourceSpec(BaseModel):
     # the __deleted metadata column). Unset => upsert-only (no deletes).
     delete_field: Optional[str] = None
     kafka_bootstrap: Optional[str] = None   # existing-Kafka: external brokers (None => in-cluster)
+    kafka_security_protocol: Optional[str] = None   # existing-Kafka external: default SASL_SSL
+    kafka_sasl_mechanism: Optional[str] = None       # default SCRAM-SHA-512
     create_topic: bool = False
     topic_partitions: int = 6
     topic_replication_factor: int = 3
@@ -150,6 +152,22 @@ class SourceSpec(BaseModel):
             raise ValueError(
                 f"snapshot_mode must be one of {sorted(allowed)} — got {v!r}"
             )
+        return v
+
+    @field_validator("kafka_security_protocol")
+    @classmethod
+    def _valid_kafka_protocol(cls, v):
+        allowed = {"SASL_SSL", "SASL_PLAINTEXT", "SSL", "PLAINTEXT"}
+        if v is not None and v not in allowed:
+            raise ValueError(f"kafka_security_protocol must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("kafka_sasl_mechanism")
+    @classmethod
+    def _valid_kafka_mechanism(cls, v):
+        allowed = {"SCRAM-SHA-512", "SCRAM-SHA-256", "PLAIN"}
+        if v is not None and v not in allowed:
+            raise ValueError(f"kafka_sasl_mechanism must be one of {sorted(allowed)}")
         return v
 
     @model_validator(mode="after")

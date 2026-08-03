@@ -717,22 +717,31 @@ def _kafka_consumer_override(spec: SourceSpec) -> dict:
     (reads the in-cluster Kafka)."""
     if not spec.kafka_bootstrap:
         return {}
-    user = _cred(spec.source, "user")
-    password = _cred(spec.source, "pass")
-    return {
+    proto = spec.kafka_security_protocol or "SASL_SSL"
+    mech = spec.kafka_sasl_mechanism or "SCRAM-SHA-512"
+    cfg = {
         "consumer.override.bootstrap.servers": spec.kafka_bootstrap,
-        "consumer.override.security.protocol": "SASL_SSL",
-        "consumer.override.sasl.mechanism": "SCRAM-SHA-512",
-        "consumer.override.sasl.jaas.config": (
-            "org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{user}" password="{password}";'
-        ),
+        "consumer.override.security.protocol": proto,
+    }
+    if "SASL" in proto:
+        user = _cred(spec.source, "user")
+        password = _cred(spec.source, "pass")
+        cfg["consumer.override.sasl.mechanism"] = mech
+        cfg["consumer.override.sasl.jaas.config"] = _sasl_jaas(mech, user, password)
+    if "SSL" in proto:
         # TLS truststore for the external cluster's CA — mounted like kafka-ca;
         # see Task 5 (external-Kafka TLS is a documented hardening prerequisite).
-        "consumer.override.ssl.truststore.location": "/mnt/external-configuration/ext-kafka-ca/ca.p12",
-        "consumer.override.ssl.truststore.password": _cred("ext-kafka-ca", "ca.password"),
-        "consumer.override.ssl.truststore.type": "PKCS12",
-    }
+        cfg["consumer.override.ssl.truststore.location"] = "/mnt/external-configuration/ext-kafka-ca/ca.p12"
+        cfg["consumer.override.ssl.truststore.password"] = _cred("ext-kafka-ca", "ca.password")
+        cfg["consumer.override.ssl.truststore.type"] = "PKCS12"
+    return cfg
+
+
+def _sasl_jaas(mechanism: str, user: str, password: str) -> str:
+    module = ("org.apache.kafka.common.security.plain.PlainLoginModule"
+              if mechanism == "PLAIN"
+              else "org.apache.kafka.common.security.scram.ScramLoginModule")
+    return f'{module} required username="{user}" password="{password}";'
 
 
 def _iceberg_catalog_io() -> dict:

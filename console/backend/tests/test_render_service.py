@@ -506,6 +506,59 @@ def test_kafka_ingest_external_has_consumer_override_and_creds():
     assert "${directory:/mnt/external-configuration/k1:pass}" in c["consumer.override.sasl.jaas.config"]
 
 
+def _ext(**kw):
+    from app.models import SourceSpec
+    base = dict(source="ev", kind="stream", type="kafka", db="", table="t",
+                target_ns="ev", target_table="t", kafka_bootstrap="ext:9093")
+    base.update(kw); return SourceSpec(**base)
+
+
+def test_ext_kafka_default_is_sasl_ssl_scram_with_creds_and_truststore():
+    from app.services import render_service
+    cfg = render_service._kafka_consumer_override(_ext())
+    assert cfg["consumer.override.security.protocol"] == "SASL_SSL"
+    assert cfg["consumer.override.sasl.mechanism"] == "SCRAM-SHA-512"
+    assert "consumer.override.sasl.jaas.config" in cfg
+    assert "consumer.override.ssl.truststore.location" in cfg
+
+
+def test_ext_kafka_sasl_plaintext_omits_truststore_keeps_creds():
+    from app.services import render_service
+    cfg = render_service._kafka_consumer_override(_ext(kafka_security_protocol="SASL_PLAINTEXT"))
+    assert cfg["consumer.override.security.protocol"] == "SASL_PLAINTEXT"
+    assert "consumer.override.sasl.jaas.config" in cfg
+    assert not any(k.startswith("consumer.override.ssl.truststore") for k in cfg)
+
+
+def test_ext_kafka_ssl_omits_creds_keeps_truststore():
+    from app.services import render_service
+    cfg = render_service._kafka_consumer_override(_ext(kafka_security_protocol="SSL"))
+    assert "consumer.override.sasl.jaas.config" not in cfg
+    assert "consumer.override.sasl.mechanism" not in cfg
+    assert "consumer.override.ssl.truststore.location" in cfg
+
+
+def test_ext_kafka_plaintext_omits_both():
+    from app.services import render_service
+    cfg = render_service._kafka_consumer_override(_ext(kafka_security_protocol="PLAINTEXT"))
+    assert not any("sasl" in k for k in cfg)
+    assert not any("truststore" in k for k in cfg)
+    assert cfg["consumer.override.security.protocol"] == "PLAINTEXT"
+
+
+def test_ext_kafka_mechanism_override():
+    from app.services import render_service
+    cfg = render_service._kafka_consumer_override(_ext(kafka_sasl_mechanism="PLAIN"))
+    assert cfg["consumer.override.sasl.mechanism"] == "PLAIN"
+
+
+def test_invalid_security_protocol_rejected():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        _ext(kafka_security_protocol="WEIRD")
+
+
 def test_kafka_ingest_registered():
     assert "kafka-ingest" in r._RENDERERS
 
