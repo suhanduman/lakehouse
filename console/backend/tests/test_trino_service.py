@@ -120,3 +120,17 @@ def test_drop_table_executes_drop_statement():
     assert conn.cursors[0].executed == [
         "DROP TABLE IF EXISTS lakehouse.mssql1.students"
     ]
+
+
+# --------------------------------------------------------------------------
+# drop_namespace
+# --------------------------------------------------------------------------
+
+def test_drop_namespace_runs_drop_schema():
+    factory, conn = make_factory()
+    svc = TrinoService(factory)
+    svc.drop_namespace("rawlake.ev_raw")
+
+    assert conn.cursors[0].executed == [
+        "DROP SCHEMA IF EXISTS rawlake.ev_raw"
+    ]

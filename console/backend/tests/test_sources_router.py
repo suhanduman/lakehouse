@@ -153,13 +153,32 @@ class FakeS3:
 
 
 class FakeTrino:
-    def __init__(self):
+    """`list_tables` defaults to always-empty so existing delete tests (which
+    don't care about namespace cleanup) don't have to know about it -- the
+    new `_drop_ns_if_empty` call in delete_source's with_data teardown will
+    see an empty namespace and call `drop_namespace` every time by default.
+    Tests exercising the "namespace still has siblings" case pass
+    `tables_by_ns` to override per-namespace.
+    """
+
+    def __init__(self, tables_by_ns: Dict[tuple, List[str]] | None = None):
         self.dropped: List[str] = []
+        self.dropped_namespaces: List[str] = []
         self.calls: List[tuple] = []
+        self._tables_by_ns = tables_by_ns or {}
 
     def drop_table(self, fqn):
         self.dropped.append(fqn)
         self.calls.append(("drop_table", fqn))
+
+    def list_tables(self, catalog, ns):
+        tables = self._tables_by_ns.get((catalog, ns), [])
+        self.calls.append(("list_tables", catalog, ns))
+        return tables
+
+    def drop_namespace(self, fqn):
+        self.dropped_namespaces.append(fqn)
+        self.calls.append(("drop_namespace", fqn))
 
 
 class FakeOrchestrator:
@@ -713,6 +732,61 @@ def test_delete_with_data_ok_for_admin_does_full_teardown():
     assert trino.dropped == [bronze_fqn, silver_fqn]
     assert s3.emptied == []
     assert s3.deleted_buckets == [bronze_bucket, silver_bucket]
+
+
+# --------------------------------------------------------------------------
+# Delete -- best-effort empty-namespace cleanup (13b)
+# --------------------------------------------------------------------------
+
+def test_delete_with_data_drops_empty_bronze_namespace():
+    # list_tables (default FakeTrino) always reports empty post-drop -> both
+    # the Bronze and Silver namespaces get dropped.
+    k8s, s3, trino = FakeK8s(), FakeS3(), FakeTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert "rawlake.mssql_ogrenci_raw" in trino.dropped_namespaces
+    assert "lakehouse.mssql_ogrenci" in trino.dropped_namespaces
+
+
+def test_delete_with_data_keeps_shared_namespace():
+    # A sibling table still lives in the Bronze namespace -> list_tables
+    # reports it non-empty -> drop_namespace must NOT be called for it.
+    k8s, s3 = FakeK8s(), FakeS3()
+    trino = FakeTrino(tables_by_ns={("rawlake", "mssql_ogrenci_raw"): ["other_table"]})
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert "rawlake.mssql_ogrenci_raw" not in trino.dropped_namespaces
+    # Silver namespace is unaffected by the Bronze override -- still empty/dropped.
+    assert "lakehouse.mssql_ogrenci" in trino.dropped_namespaces
+
+
+class _RaisingTrino(FakeTrino):
+    """Simulates a Trino error during the best-effort namespace cleanup --
+    drop_table still succeeds, but list_tables/drop_namespace blow up. The
+    delete must still return ok (degrade, never 500)."""
+
+    def list_tables(self, catalog, ns):
+        raise RuntimeError("trino coordinator unreachable")
+
+    def drop_namespace(self, fqn):
+        raise RuntimeError("should never be reached -- list_tables raised first")
+
+
+def test_delete_namespace_drop_error_does_not_500():
+    k8s, s3, trino = FakeK8s(), FakeS3(), _RaisingTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    # the drop_table calls (the real teardown) still happened despite the
+    # namespace-cleanup helper failing.
+    assert trino.dropped == [
+        "rawlake.mssql_ogrenci_raw.students", "lakehouse.mssql_ogrenci.students"
+    ]
+    assert trino.dropped_namespaces == []
 
 
 def test_delete_entity_drops_both_tables_and_both_buckets():

@@ -1127,6 +1127,16 @@ def snapshot_progress(
         return {"notifications": []}
 
 
+def _drop_ns_if_empty(trino: TrinoService, catalog: str, ns: str) -> None:
+    """Best-effort: drop <catalog>.<ns> only if it now holds no tables.
+    Never raises -- an empty-namespace cleanup must not fail the delete."""
+    try:
+        if not trino.list_tables(catalog, ns):
+            trino.drop_namespace(f"{catalog}.{ns}")
+    except Exception:  # noqa: BLE001 -- cleanup is best-effort
+        pass
+
+
 # --------------------------------------------------------------------------
 # Delete -- per-mode authz gate runs (via require_delete_mode) before any
 # provider is built; with_data performs the full data teardown.
@@ -1223,6 +1233,7 @@ def delete_source(
             fqn = f"rawlake.{ns}.{table}"
             bucket = render_service.bucket_name(ns)
             trino.drop_table(fqn)
+            _drop_ns_if_empty(trino, "rawlake", ns)   # spark batch: rawlake.<ns>, no _raw suffix
             s3.empty_bucket(bucket)
             result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=None)
             return result
@@ -1234,6 +1245,8 @@ def delete_source(
         topic = _topic_from_config((cr.get("spec") or {}).get("config") or {})
         trino.drop_table(bronze_fqn)      # DROP TABLE IF EXISTS
         trino.drop_table(silver_fqn)      # no-op for event
+        _drop_ns_if_empty(trino, "rawlake", f"{ns}{render_service.BRONZE_NAMESPACE_SUFFIX}")
+        _drop_ns_if_empty(trino, "lakehouse", ns)   # no-op for event (empty/absent Silver ns)
         s3.delete_bucket(bronze_bucket)
         s3.delete_bucket(silver_bucket)   # no-op for event
         result.update(dropped_tables=[bronze_fqn, silver_fqn],
@@ -1249,6 +1262,7 @@ def delete_source(
         fqn = f"rawlake.{ns}.{table}"          # batch lane -> rawlake, no Silver
         bucket = render_service.bucket_name(ns)
         trino.drop_table(fqn)
+        _drop_ns_if_empty(trino, "rawlake", ns)   # spark batch: rawlake.<ns>, no _raw suffix
         s3.empty_bucket(bucket)
         return {"ok": True, "name": name, "mode": mode, "dropped_table": fqn,
                 "emptied_bucket": bucket, "deleted_topic": None}   # spark-batch: no topic
@@ -1275,6 +1289,8 @@ def delete_source(
         k8s.delete_topic(_k8s_topic_name(topic))   # delete by CR name (Task 1 sanitized it)
     trino.drop_table(bronze_fqn)      # DROP TABLE IF EXISTS
     trino.drop_table(silver_fqn)      # no-op for event
+    _drop_ns_if_empty(trino, "rawlake", f"{ns}{render_service.BRONZE_NAMESPACE_SUFFIX}")
+    _drop_ns_if_empty(trino, "lakehouse", ns)   # no-op for event (empty/absent Silver ns)
     s3.delete_bucket(bronze_bucket)
     s3.delete_bucket(silver_bucket)   # no-op for event
     return {
