@@ -75,6 +75,8 @@ export interface SourceSpec {
   snapshot_mode?: string;
   signal_data_collection?: string;
   create_stopped?: boolean;
+  silver_bucket_count?: number;
+  silver_write_mode?: "copy-on-write" | "merge-on-read";
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns

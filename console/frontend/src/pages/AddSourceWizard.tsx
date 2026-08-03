@@ -127,6 +127,14 @@ interface FormState {
   // see buildSpec, which only sends them when the user actually set them.
   create_stopped: boolean;
   signal_data_collection: string;
+  // CDC lanes only (Silver scale-hardening Task 8): Iceberg Silver-table
+  // write-mode override (copy-on-write/merge-on-read) + bucket-count hint --
+  // both optional, like snapshot_mode's siblings above. Empty string means
+  // "let the backend default (copy-on-write) stand"; bucket_count is kept as
+  // text (not number) so the input can be edited freely, mirroring
+  // topic_partitions below.
+  silver_write_mode: string;
+  silver_bucket_count: string;
   // stream/kafka only (Kafka log-ingestion helper, Task 8): self-service
   // topic creation, written into buildSpec as create_topic/topic_partitions/
   // topic_replication_factor when the user opts in. partitions/replication
@@ -175,6 +183,8 @@ const INITIAL_STATE: FormState = {
   snapshot_mode: "initial",
   create_stopped: false,
   signal_data_collection: "",
+  silver_write_mode: "",
+  silver_bucket_count: "",
   create_topic: false,
   topic_partitions: "6",
   topic_replication_factor: "3",
@@ -403,6 +413,17 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
     }
     if (form.signal_data_collection) {
       spec.signal_data_collection = form.signal_data_collection;
+    }
+    // Silver write-mode (COW/MOR) + bucket-count (Silver scale-hardening Task
+    // 8): both optional, sent only when the user actually set them so an
+    // unset choice doesn't clobber the backend's own default (copy-on-write,
+    // 16 buckets) -- mirrors create_stopped/signal_data_collection's own
+    // conditional-send pattern just above.
+    if (form.silver_write_mode) {
+      spec.silver_write_mode = form.silver_write_mode as SourceSpec["silver_write_mode"];
+    }
+    if (form.silver_bucket_count) {
+      spec.silver_bucket_count = Number(form.silver_bucket_count);
     }
   }
   // Self-service topic creation (Task 8) -- only meaningful for stream/kafka,
@@ -837,6 +858,39 @@ export default function AddSourceWizard() {
                 <p>
                   Create this table in your source DB for incremental snapshots (the source
                   detail page shows the exact CREATE TABLE recipe).
+                </p>
+              </div>
+              <div>
+                <label htmlFor="silver_write_mode">Silver write mode</label>
+                <select
+                  id="silver_write_mode"
+                  value={form.silver_write_mode}
+                  onChange={(e) => set("silver_write_mode", e.target.value)}
+                >
+                  <option value="">Copy-on-write (COW)</option>
+                  <option value="merge-on-read">Merge-on-read (MOR)</option>
+                </select>
+                <p>
+                  Okuma-yoğun, yalnızca-ekleme (append-only) veya seyrek güncellenen iş
+                  yükleri için COW kullanın.
+                </p>
+                <p>
+                  Akış işleme (stream processing), yüksek-frekanslı güncellemeler ve
+                  yazma-yoğun görevler için MOR kullanın.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="silver_bucket_count">Silver bucket count</label>
+                <input
+                  id="silver_bucket_count"
+                  type="number"
+                  value={form.silver_bucket_count}
+                  onChange={(e) => set("silver_bucket_count", e.target.value)}
+                  placeholder="16"
+                />
+                <p>
+                  Tabloyu ölçekte hızlı güncelleme için nasıl böldüğünü belirler. Varsayılan
+                  16; çok büyük tablolar (10M+ satır) için yükseltin (örn. 64).
                 </p>
               </div>
             </div>
