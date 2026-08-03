@@ -100,6 +100,16 @@ tests:
           path: 'spec.template.sparkConf["spark.sql.catalog.rawlake.warehouse"]'
           value: "rawdata"
 
+  - it: iceberg-maintenance sparkConf enables FAIR scheduler for ThreadPoolExecutor parallelization (matches silver-merge)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.scheduler.mode"]'
+          value: "FAIR"
+
   - it: silver-merge is gated off by sparkOperator.silverMerge.enabled=false
     set:
       sparkOperator:

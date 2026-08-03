@@ -74,6 +74,7 @@ spec:
     sparkVersion: {{ .Values.versions.sparkVersion | quote }}
     sparkConf:
 {{ include "lakehouse.spark.baseConf" . | indent 6 }}
+      "spark.scheduler.mode": "FAIR"
     driver:
       cores: {{ .Values.sparkOperator.maintenance.driver.cores }}
       coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.maintenance.driver.cores 1200) | quote }}
