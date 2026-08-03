@@ -4,12 +4,14 @@ import {
   getIngestConfig,
   getSourceTypes,
   previewSource,
+  testConnection,
   type CreateSourceResult,
   type IngestConfig,
   type PreviewResult,
   type SourceCredentials,
   type SourceSpec,
   type SourceTypeDescriptor,
+  type TestConnectionResult,
 } from "../api/client";
 import IngestConfigPanel from "../components/IngestConfigPanel";
 
@@ -99,11 +101,25 @@ interface FormState {
   password: string;
   disposition: Disposition;
   kafka_bootstrap: string;
-  // stream/kafka + entity only (upsert-from-Kafka, Plan B1 Task 4): raw text
-  // for the entity's columns/PK/soft-delete marker, parsed in buildSpec.
+  // Any entity-disposition source (CDC/scheduled-jdbc/camel/stream-kafka,
+  // Task 9): raw text for the PK/columns/soft-delete marker, parsed in
+  // buildSpec. `identifierText` is the PRIMARY, required-for-entity path --
+  // "name[:type]" pairs for the identifier/PK column(s) (same "name:type"
+  // convention `columnsText` already used) -- the backend only needs the PK
+  // column(s) typed to pre-create the table; the rest of the schema evolves
+  // at runtime (silver-merge ALTER TABLE). `columnsText` is now OPTIONAL/
+  // advanced -- extra non-PK columns a caller wants pre-created up front,
+  // or (for kafka-ingest entity specifically) the full expected-JSON-shape
+  // preview.
   columnsText: string;
   identifierText: string;
   delete_field: string;
+  // CDC lanes only (Task 9): Debezium snapshot.mode override -- "initial"
+  // (existing data + new changes) is the connector's own sane default;
+  // "no_data" (only new changes) is offered for large tables that should
+  // get a resumable incremental snapshot after creation instead of a full
+  // initial snapshot. See app.models.SourceSpec.snapshot_mode.
+  snapshot_mode: string;
   // stream/kafka only (Kafka log-ingestion helper, Task 8): self-service
   // topic creation, written into buildSpec as create_topic/topic_partitions/
   // topic_replication_factor when the user opts in. partitions/replication
@@ -149,6 +165,7 @@ const INITIAL_STATE: FormState = {
   columnsText: "",
   identifierText: "",
   delete_field: "",
+  snapshot_mode: "initial",
   create_topic: false,
   topic_partitions: "6",
   topic_replication_factor: "3",
@@ -205,27 +222,53 @@ function parseColumnsText(columnsText: string): { name: string; type: string }[]
     });
 }
 
-/** Same best-effort split for the identifier/PK textarea. */
-function parseIdentifierText(identifierText: string): string[] {
-  return identifierText
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 /** Live preview of the expected event JSON shape for the entity disposition
  * (Task 8): `{col: "<type>", ...}` derived from the same textareas buildSpec
  * parses, with the identifier/PK field(s) marked so the user can eyeball
  * that the columns + PK line up before submitting. Best-effort only -- an
  * unparseable/blank row is simply skipped rather than erroring. */
 function buildExpectedJsonPreview(form: FormState): Record<string, string> {
-  const ids = new Set(parseIdentifierText(form.identifierText));
+  const ids = new Set(parseColumnsText(form.identifierText).map((c) => c.name));
   const preview: Record<string, string> = {};
   for (const { name, type } of parseColumnsText(form.columnsText)) {
     if (!name) continue;
     preview[name] = ids.has(name) ? `${type ?? ""} (PK)`.trim() : (type ?? "");
   }
   return preview;
+}
+
+/** form's PK-focused `identifierText` (the PRIMARY, required-for-entity
+ * input -- Task 9) + the OPTIONAL/advanced `columnsText` -> the
+ * `spec.identifier`/`spec.columns` pair the backend's table pre-create step
+ * needs (see orchestrator.py: "spec.columns only needs to contain the
+ * identifier/PK column(s) -- it is NOT the full table schema"). Both
+ * textareas share the same "name[:type]" parser (`parseColumnsText`) so a
+ * bare PK name (no type) is still valid -- the backend widens the rest of
+ * the schema at runtime regardless. When a column name appears in both
+ * boxes, `columnsText`'s type wins only if the PK entry left its type
+ * blank -- an explicit type in either box is never silently dropped. */
+function buildEntityColumnsAndIdentifier(
+  form: FormState,
+): { columns: { name: string; type: string }[]; identifier: string[] } {
+  const pkEntries = parseColumnsText(form.identifierText);
+  const extraEntries = parseColumnsText(form.columnsText);
+  const byName = new Map<string, { name: string; type: string }>();
+  for (const c of extraEntries) {
+    if (c.name) {
+      byName.set(c.name, c);
+    }
+  }
+  for (const c of pkEntries) {
+    if (!c.name) continue;
+    const existing = byName.get(c.name);
+    if (!existing || (!existing.type && c.type)) {
+      byName.set(c.name, c);
+    }
+  }
+  return {
+    columns: Array.from(byName.values()),
+    identifier: pkEntries.map((c) => c.name).filter(Boolean),
+  };
 }
 
 const STEP_TITLES = [
@@ -317,18 +360,31 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   if (form.kafka_bootstrap) {
     spec.kafka_bootstrap = form.kafka_bootstrap;
   }
-  if (form.disposition === "entity" && form.type === "kafka") {
-    const cols = parseColumnsText(form.columnsText);
-    if (cols.length) {
-      spec.columns = cols;
+  // PK-focused input (Task 9): any entity-disposition source -- not just
+  // kafka-ingest -- sends spec.identifier + a spec.columns that includes (at
+  // least) those PK column(s) typed, so the backend's table pre-create step
+  // has what it needs (orchestrator.py's `_resolve_identifier`/"table" step).
+  // batch/s3 is excluded: its "entity" disposition is inert (full CTAS
+  // refresh, no CDC/medallion identifier semantics -- see source_types.py).
+  const effectiveDisposition = form.disposition || descriptor?.disposition || "";
+  if (effectiveDisposition === "entity" && form.kind !== "batch") {
+    const { columns, identifier } = buildEntityColumnsAndIdentifier(form);
+    if (columns.length) {
+      spec.columns = columns;
     }
-    const ids = parseIdentifierText(form.identifierText);
-    if (ids.length) {
-      spec.identifier = ids;
+    if (identifier.length) {
+      spec.identifier = identifier;
     }
     if (form.delete_field.trim()) {
       spec.delete_field = form.delete_field.trim();
     }
+  }
+  // Initial snapshot mode (Task 9, CDC lanes only): Debezium snapshot.mode
+  // override -- always sent explicitly (not just on a non-default choice)
+  // so the wizard's stated default ("initial") is exactly what the backend
+  // sees, rather than relying on the connector's own default lining up.
+  if (form.kind === "cdc") {
+    spec.snapshot_mode = form.snapshot_mode;
   }
   // Self-service topic creation (Task 8) -- only meaningful for stream/kafka,
   // and only sent when the user actually opted in (an unchecked box means
@@ -372,6 +428,14 @@ export default function AddSourceWizard() {
   // confused with the source creation itself failing.
   const [ingestConfig, setIngestConfig] = useState<IngestConfig | null>(null);
   const [ingestConfigError, setIngestConfigError] = useState<string | null>(null);
+
+  // Test Connection (Task 9): advisory only -- never blocks Next/submit.
+  // Renders on step 2 once db_host/creds etc. are filled, alongside the
+  // fields it tests. A stale result from a previous kind/type must not
+  // survive a switch (reset in handleKindChange/handleTypeChange below).
+  const [testConnResult, setTestConnResult] = useState<TestConnectionResult | null>(null);
+  const [testConnError, setTestConnError] = useState<string | null>(null);
+  const [testConnLoading, setTestConnLoading] = useState(false);
 
   // Fetch the source-type registry once on mount -- the whole point of
   // this task is that Step 1's options, and steps 2/3's field visibility,
@@ -432,17 +496,40 @@ export default function AddSourceWizard() {
   const unknownRequiredFields = requiredFields.filter((f) => !KNOWN_SPEC_FIELDS.has(f));
   const showDisposition = (selectedDescriptor?.dispositions.length ?? 0) > 1;
   const showKafkaBootstrap = selectedDescriptor?.needs_bootstrap ?? false;
-  // Upsert-from-Kafka (Plan B1 Task 4): only stream/kafka + an explicit
-  // "entity" disposition choice collects columns/identifier/delete_field --
-  // the unset default (effective disposition "event") keeps them hidden.
   const isKafka = selectedDescriptor?.type === "kafka";
-  const showEntityFields = isKafka && form.disposition === "entity";
+  // PK-focused input (Task 9): shown for ANY entity-disposition source (CDC,
+  // scheduled-jdbc, camel-*, stream-kafka's entity fork) -- not just kafka.
+  // batch/s3's "entity" disposition is inert (full CTAS refresh, no
+  // identifier semantics -- source_types.py), so it's excluded. Falls back
+  // to the descriptor's own default disposition when the user hasn't
+  // overridden it (e.g. CDC's single "entity" disposition never shows the
+  // generic <select>, so form.disposition stays "").
+  const effectiveDisposition = form.disposition || selectedDescriptor?.disposition || "";
+  const showPkFields = effectiveDisposition === "entity" && form.kind !== "batch";
+  // Upsert-from-Kafka (Plan B1 Task 4) extras -- delete_field + the expected-
+  // JSON-shape preview -- stay kafka-only: only stream/kafka + an explicit
+  // "entity" disposition choice shows them; the unset default (effective
+  // disposition "event") keeps them hidden.
+  const showKafkaEntityExtras = isKafka && form.disposition === "entity";
   // The event/entity fork reads as an explicit choice for stream-kafka (Task
   // 8) rather than the generic disposition <select> other multi-disposition
   // types (e.g. stream/http) still use -- both write into the same
   // `form.disposition` state via `set`.
   const showKafkaDispositionFork = showDisposition && isKafka;
   const showDispositionSelect = showDisposition && !isKafka;
+  // Initial snapshot mode (Task 9): CDC lanes only -- Debezium's own
+  // snapshot.mode knob. scheduled-jdbc/camel/batch sources have no
+  // equivalent "initial snapshot vs. only new changes" choice.
+  const showSnapshotMode = form.kind === "cdc";
+  // Test Connection (Task 9): connector/DB lanes -- cdc-* (debezium-cdc) and
+  // scheduled-jdbc/camel-* (kafka-connect-source, excluding stream-kafka
+  // itself, which just consumes an existing topic -- render_connection_test
+  // returns None for it, so there's nothing to test). Advisory only.
+  const showTestConnection =
+    !!selectedDescriptor &&
+    (selectedDescriptor.lane === "debezium-cdc" ||
+      selectedDescriptor.lane === "kafka-connect-source") &&
+    !isKafka;
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -472,6 +559,10 @@ export default function AddSourceWizard() {
       topic_partitions: INITIAL_STATE.topic_partitions,
       topic_replication_factor: INITIAL_STATE.topic_replication_factor,
     }));
+    // A test-connection result/error from the previous kind must not survive
+    // the switch (advisory state, not part of `form`).
+    setTestConnResult(null);
+    setTestConnError(null);
   }
 
   function handleTypeChange(newType: string) {
@@ -487,6 +578,8 @@ export default function AddSourceWizard() {
       topic_partitions: INITIAL_STATE.topic_partitions,
       topic_replication_factor: INITIAL_STATE.topic_replication_factor,
     }));
+    setTestConnResult(null);
+    setTestConnError(null);
   }
 
   function goNext() {
@@ -495,6 +588,27 @@ export default function AddSourceWizard() {
 
   function goBack() {
     setStep((s) => Math.max(1, s - 1));
+  }
+
+  // Test Connection (Task 9): advisory only -- renders the raw result
+  // (success/errors/n-a), never blocks Next or submit. Reuses the exact same
+  // buildSpec/buildCredentials the real preview/create calls use, so what's
+  // tested is what would actually be sent.
+  async function handleTestConnection() {
+    setTestConnError(null);
+    setTestConnResult(null);
+    setTestConnLoading(true);
+    try {
+      const result = await testConnection(
+        buildSpec(form, selectedDescriptor),
+        buildCredentials(form),
+      );
+      setTestConnResult(result);
+    } catch (err) {
+      setTestConnError(errorMessage(err));
+    } finally {
+      setTestConnLoading(false);
+    }
   }
 
   async function handlePreview() {
@@ -665,18 +779,27 @@ export default function AddSourceWizard() {
               />
             </div>
           )}
-          {showEntityFields && (
+          {showSnapshotMode && (
+            <div>
+              <label htmlFor="snapshot_mode">Initial snapshot</label>
+              <select
+                id="snapshot_mode"
+                value={form.snapshot_mode}
+                onChange={(e) => set("snapshot_mode", e.target.value)}
+              >
+                <option value="initial">Existing data + new changes (initial)</option>
+                <option value="no_data">Only new changes (no_data)</option>
+              </select>
+              <p>
+                Large table? Choose &quot;only new changes&quot; and run a resumable
+                incremental snapshot after creation (coming next).
+              </p>
+            </div>
+          )}
+          {showPkFields && (
             <>
               <div>
-                <label htmlFor="columns">Columns</label>
-                <input
-                  id="columns"
-                  value={form.columnsText}
-                  onChange={(e) => set("columnsText", e.target.value)}
-                />
-              </div>
-              <div>
-                <label htmlFor="identifier">Identifier</label>
+                <label htmlFor="identifier">Primary key column(s)</label>
                 <input
                   id="identifier"
                   value={form.identifierText}
@@ -684,22 +807,38 @@ export default function AddSourceWizard() {
                 />
               </div>
               <div>
-                <label htmlFor="delete_field">Delete field</label>
+                <label htmlFor="columns">
+                  Columns (optional, advanced -- the PK column(s) above already cover what's
+                  required; the rest of the schema evolves at runtime)
+                </label>
                 <input
-                  id="delete_field"
-                  value={form.delete_field}
-                  onChange={(e) => set("delete_field", e.target.value)}
+                  id="columns"
+                  value={form.columnsText}
+                  onChange={(e) => set("columnsText", e.target.value)}
                 />
               </div>
-              <p>
-                Key your topic by the entity PK for deterministic last-writer-wins. A delete
-                field must be a boolean present on every record and must not be listed in
-                columns.
-              </p>
-              <div>
-                <p>Expected JSON shape (preview):</p>
-                <pre>{JSON.stringify(buildExpectedJsonPreview(form), null, 2)}</pre>
-              </div>
+              {showKafkaEntityExtras && (
+                <>
+                  <div>
+                    <label htmlFor="delete_field">Delete field</label>
+                    <input
+                      id="delete_field"
+                      value={form.delete_field}
+                      onChange={(e) => set("delete_field", e.target.value)}
+                    />
+                  </div>
+                  <p>
+                    Key your topic by the entity PK for deterministic last-writer-wins. A
+                    delete field must be a boolean present on every record and must not be
+                    listed in columns. The columns box above is a suggestion for this
+                    preview, not a required full schema.
+                  </p>
+                  <div>
+                    <p>Expected JSON shape (preview):</p>
+                    <pre>{JSON.stringify(buildExpectedJsonPreview(form), null, 2)}</pre>
+                  </div>
+                </>
+              )}
             </>
           )}
           <button type="button" onClick={goNext}>
@@ -848,6 +987,33 @@ export default function AddSourceWizard() {
               onChange={(e) => set("password", e.target.value)}
             />
           </div>
+          {showTestConnection && (
+            <div>
+              <button type="button" onClick={handleTestConnection} disabled={testConnLoading}>
+                {testConnLoading ? "Testing connection…" : "Test connection"}
+              </button>
+              {testConnError && (
+                <p role="alert">Test connection failed: {testConnError}</p>
+              )}
+              {testConnResult && !testConnResult.applicable && (
+                <p>
+                  n/a for this source type
+                  {testConnResult.reason ? `: ${testConnResult.reason}` : ""}
+                </p>
+              )}
+              {testConnResult?.applicable && testConnResult.ok && <p>✓ Connection OK</p>}
+              {testConnResult?.applicable && !testConnResult.ok && (
+                <ul>
+                  {(testConnResult.errors ?? []).map((e, i) => (
+                    <li key={i}>
+                      {e.field ? `${e.field}: ` : ""}
+                      {e.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <button type="button" onClick={goBack}>
             Back
           </button>
