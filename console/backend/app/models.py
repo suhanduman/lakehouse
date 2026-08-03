@@ -83,6 +83,10 @@ class SourceSpec(BaseModel):
     columns: Optional[List[ColumnSpec]] = None
     identifier: Optional[List[str]] = None
 
+    # CDC connectors only: Debezium snapshot.mode override (unset -> connector
+    # default). See render_service._render_cdc_relational/_mysql/_mongo.
+    snapshot_mode: Optional[str] = None
+
     @field_validator("source")
     @classmethod
     def _source_is_rfc1123_label(cls, v: str) -> str:
@@ -123,6 +127,16 @@ class SourceSpec(BaseModel):
                 "be lowercase alphanumeric segments joined by single underscores "
                 "(no leading/trailing/doubled underscores, e.g. 'mssql1_students') "
                 f"— got {v!r}"
+            )
+        return v
+
+    @field_validator("snapshot_mode")
+    @classmethod
+    def _snapshot_mode_is_allowed(cls, v: Optional[str]) -> Optional[str]:
+        allowed = {"initial", "initial_only", "no_data", "when_needed", "never"}
+        if v is not None and v not in allowed:
+            raise ValueError(
+                f"snapshot_mode must be one of {sorted(allowed)} — got {v!r}"
             )
         return v
 

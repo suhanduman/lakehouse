@@ -295,3 +295,15 @@ def test_source_spec_topic_provisioning_overrides():
                    create_topic=True, topic_partitions=1, topic_replication_factor=1)
     assert s.create_topic is True
     assert (s.topic_partitions, s.topic_replication_factor) == (1, 1)
+
+
+# --------------------------------------------------------------------------
+# snapshot_mode (Task 5)
+# --------------------------------------------------------------------------
+
+def test_snapshot_mode_accepts_allowed_and_rejects_junk():
+    assert SourceSpec(source="x", kind="cdc", type="pg", db="d", table="t",
+                      target_ns="x", target_table="t", db_host="h", snapshot_mode="no_data").snapshot_mode == "no_data"
+    with pytest.raises(ValidationError):
+        SourceSpec(source="x", kind="cdc", type="pg", db="d", table="t",
+                   target_ns="x", target_table="t", db_host="h", snapshot_mode="bogus")

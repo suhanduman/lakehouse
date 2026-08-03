@@ -1085,3 +1085,16 @@ def test_render_connection_test_none_for_spark_batch_lane():
     # KafkaConnector -- no connector to validate.
     from app.models import SourceCredentials
     assert r.render_connection_test(_s3_spec(), SourceCredentials(user="u", password="p")) is None
+
+
+# --------------------------------------------------------------------------
+# snapshot_mode (Task 5)
+# --------------------------------------------------------------------------
+
+def test_cdc_render_applies_snapshot_mode():
+    spec = SourceSpec(source="pg1", kind="cdc", type="pg", db="analytics",
+        table="public.orders", target_ns="pg_analytics", target_table="orders",
+        db_host="10.0.0.9", snapshot_mode="no_data",
+        identifier=["id"], columns=[{"name": "id", "type": "int"}])
+    body = r.render_connector(spec)
+    assert body["spec"]["config"]["snapshot.mode"] == "no_data"

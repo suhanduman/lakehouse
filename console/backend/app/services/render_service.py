@@ -422,6 +422,8 @@ def _render_cdc_relational(spec: SourceSpec) -> dict:
         "errors.deadletterqueue.topic.name": f"{tname}.dlq",
         "errors.deadletterqueue.context.headers.enable": "true",
     })
+    if spec.snapshot_mode:
+        config["snapshot.mode"] = spec.snapshot_mode
 
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
@@ -478,6 +480,8 @@ def _render_cdc_mysql(spec: SourceSpec) -> dict:
         "errors.deadletterqueue.topic.name": f"{tname}.dlq",
         "errors.deadletterqueue.context.headers.enable": "true",
     })
+    if spec.snapshot_mode:
+        config["snapshot.mode"] = spec.snapshot_mode
 
     _, table_name = _split_schema_table(spec.table)
     name = _k8s_name("dbz", spec.source, table_name)
@@ -520,6 +524,8 @@ def _render_cdc_mongo(spec: SourceSpec) -> dict:
         "errors.deadletterqueue.topic.name": f"{tname}.dlq",
         "errors.deadletterqueue.context.headers.enable": "true",
     })
+    if spec.snapshot_mode:
+        config["snapshot.mode"] = spec.snapshot_mode
 
     name = _k8s_name("dbz", spec.source, spec.table)
     return _connector(name, "io.debezium.connector.mongodb.MongoDbConnector", config, spec.source)
