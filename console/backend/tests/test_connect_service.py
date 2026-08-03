@@ -164,3 +164,24 @@ def test_connector_config_gets_config_map():
     c = ConnectService("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
     cfg = c.connector_config("dbz-x")
     assert cfg["errors.deadletterqueue.topic.name"] == "dbz-x.dlq"
+
+
+# --------------------------------------------------------------------------
+# ConnectService.validate_config
+# --------------------------------------------------------------------------
+
+def test_validate_config_puts_to_config_validate():
+    seen = {}
+    def handler(request):
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        import json as _j
+        seen["body"] = _j.loads(request.content)
+        return httpx.Response(200, json={"name": "x", "error_count": 0, "configs": []})
+    c = ConnectService("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
+    out = c.validate_config("io.debezium.connector.postgresql.PostgresConnector",
+                            {"database.hostname": "h"})
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/connector-plugins/io.debezium.connector.postgresql.PostgresConnector/config/validate"
+    assert seen["body"]["database.hostname"] == "h"
+    assert out["error_count"] == 0
