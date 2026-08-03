@@ -15,6 +15,7 @@ import {
   patchSource,
   restartConnector,
   resumeSource,
+  rotateCredentials,
   type ConnectorDebug,
   type ConnectorRef,
   type DeleteSourceResult,
@@ -95,6 +96,18 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [dlq, setDlq] = useState<DlqResponse | null>(null);
   const [dlqConnName, setDlqConnName] = useState<string | null>(null);
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
+
+  // Update-credentials (Task 10): on-demand rotate of the source's DB/broker
+  // password via rotateCredentials. The password field is write-only -- it's
+  // never seeded from any loaded data and is cleared after every submit
+  // attempt (success or failure) so it's never left sitting in the DOM/state
+  // longer than needed. Uses the page's existing actionPending/actionError
+  // pattern rather than its own -- this is just another action alongside
+  // pause/resume/edit/delete/restart.
+  const [credsOpen, setCredsOpen] = useState(false);
+  const [credsUser, setCredsUser] = useState("");
+  const [credsPassword, setCredsPassword] = useState("");
+  const [credsNotice, setCredsNotice] = useState<string | null>(null);
   const [remediation, setRemediation] = useState<GitopsRemediation | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -237,6 +250,38 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       restarted.push(c.name);
     }
     setRestartNotice(`Restart triggered: ${restarted.join(", ")}`);
+  }
+
+  /** Opens/closes the credentials form -- reset on every toggle so a closed
+   * form never leaves a stale password sitting in state, and reopening never
+   * shows a previous submission's confirmation/error. */
+  function handleToggleCreds() {
+    setCredsOpen((v) => !v);
+    setActionError(null);
+    setCredsNotice(null);
+    setCredsUser("");
+    setCredsPassword("");
+  }
+
+  async function handleRotateCredentials() {
+    setActionError(null);
+    setActionPending(true);
+    try {
+      const result = await rotateCredentials(name, { user: credsUser, password: credsPassword });
+      setCredsNotice(
+        result.restarted === false
+          ? `Credentials updated — restart failed${result.note ? `: ${result.note}` : ""}`
+          : "Credentials updated",
+      );
+      setCredsOpen(false);
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      // Write-only field: never left populated after a submit attempt,
+      // whether it succeeded or failed.
+      setCredsPassword("");
+      setActionPending(false);
+    }
   }
 
   async function handleDebug(connName: string) {
@@ -390,6 +435,37 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       <button type="button" onClick={() => setDeleteModalOpen(true)} disabled={actionPending}>
         Delete source
       </button>
+
+      {!credsOpen ? (
+        <button type="button" onClick={handleToggleCreds} disabled={actionPending}>
+          Update credentials
+        </button>
+      ) : (
+        <div>
+          <label htmlFor="creds-user">User</label>
+          <input
+            id="creds-user"
+            value={credsUser}
+            onChange={(e) => setCredsUser(e.target.value)}
+          />
+
+          <label htmlFor="creds-password">Password</label>
+          <input
+            id="creds-password"
+            type="password"
+            value={credsPassword}
+            onChange={(e) => setCredsPassword(e.target.value)}
+          />
+
+          <button type="button" onClick={handleRotateCredentials} disabled={actionPending}>
+            Save credentials
+          </button>
+          <button type="button" onClick={handleToggleCreds} disabled={actionPending}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {credsNotice && <p role="status">{credsNotice}</p>}
 
       {restartNotice && <p role="status">{restartNotice}</p>}
 

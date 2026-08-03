@@ -448,6 +448,22 @@ describe("SourceDetail", () => {
     expect(await screen.findByText(/SECRET123/)).toBeInTheDocument();
   });
 
+  it("updates credentials and confirms", async () => {
+    mockLoad();
+    const spy = vi
+      .spyOn(client, "rotateCredentials")
+      .mockResolvedValue({ ok: true, name: SOURCE_NAME, restarted: true });
+    renderDetail("ADMIN");
+    fireEvent.click(await screen.findByRole("button", { name: /update credentials/i }));
+    fireEvent.change(screen.getByLabelText(/user/i), { target: { value: "u2" } });
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "p2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save|update/i }));
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(SOURCE_NAME, { user: "u2", password: "p2" }),
+    );
+    expect(await screen.findByText(/credentials updated|restarted/i)).toBeInTheDocument();
+  });
+
   it("shows a note instead of the panel when getIngestConfig 400s (not a kafka-ingest source)", async () => {
     mockLoad();
     vi.spyOn(client, "getIngestConfig").mockRejectedValue(
