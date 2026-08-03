@@ -413,6 +413,30 @@ export async function getIngestConfig(name: string): Promise<IngestConfig> {
 // Connectors (restart / debug)
 // --------------------------------------------------------------------------
 
+/** Mirrors a single DLQ record from app.routers.connectors.connector_dlq():
+ * one message from a connector's dead-letter queue with error context. */
+export interface DlqRecord {
+  ts: number | null;
+  error_class: string | null;
+  error_message: string | null;
+  source_topic: string | null;
+  source_partition: number | null;
+  source_offset: number | null;
+  value_preview: string;
+}
+
+/** Mirrors app.routers.connectors.connector_dlq()'s top-level dict:
+ * whether a connector has a DLQ, the topic name, record count, and a batch
+ * of the most recent records. */
+export interface DlqResponse {
+  has_dlq: boolean;
+  hint?: string;
+  topic?: string;
+  count?: number | null;
+  returned?: number;
+  records?: DlqRecord[];
+}
+
 /** Mirrors app.routers.sources.source_connectors()'s per-connector dict
  * (Task 3/4): the KafkaConnector CR(s) a source's pipeline owns -- a CDC/
  * stream source has one `role:"source"` connector, an event-lane pipeline
@@ -491,6 +515,12 @@ export async function restartConnector(
     method: "POST",
     body: JSON.stringify(opts),
   });
+}
+
+/** GET /api/connectors/{name}/dlq -> fetch a connector's dead-letter queue
+ * records (if it has one), optionally limited to the most recent N records. */
+export async function getConnectorDlq(name: string, limit = 50): Promise<DlqResponse> {
+  return request(`/connectors/${encodeURIComponent(name)}/dlq?limit=${limit}`);
 }
 
 // --------------------------------------------------------------------------
