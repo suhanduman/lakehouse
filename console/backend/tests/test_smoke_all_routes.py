@@ -29,6 +29,7 @@ from app.deps import (
     get_apicurio,
     get_connect,
     get_k8s,
+    get_kafka_consumer,
     get_orchestrator,
     get_roles,
     get_s3,
@@ -144,10 +145,25 @@ class FakeConnect:
     ) -> None:
         pass
 
+    def connector_config(self, name: str) -> Dict[str, Any]:
+        # {} -> /dlq's has_dlq:false early-return path, so its handler body
+        # never touches `kafka` -- but FastAPI still resolves the
+        # `get_kafka_consumer` dependency eagerly (before the body runs), so
+        # a fake override below is required regardless.
+        return {}
+
 
 class FakeApicurio:
     def list_schemas(self) -> List[Dict[str, Any]]:
         return [{"id": "cdc.mssql1.dbo.students-value"}]
+
+
+class FakeKafkaConsumer:
+    def topic_record_count(self, topic: str):
+        return None
+
+    def read_last(self, topic: str, limit: int) -> List[Dict[str, Any]]:
+        return []
 
 
 @pytest.fixture
@@ -162,6 +178,7 @@ def admin_client() -> TestClient:
     app.dependency_overrides[get_orchestrator] = lambda: FakeOrchestrator()
     app.dependency_overrides[get_connect] = lambda: FakeConnect()
     app.dependency_overrides[get_apicurio] = lambda: FakeApicurio()
+    app.dependency_overrides[get_kafka_consumer] = lambda: FakeKafkaConsumer()
     try:
         yield TestClient(app)
     finally:
@@ -269,6 +286,11 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "template": "/api/connectors/{name}/restart",
         "path": f"/api/connectors/{SOURCE_NAME}/restart",
         "json": {},
+    },
+    {
+        "method": "GET",
+        "template": "/api/connectors/{name}/dlq",
+        "path": f"/api/connectors/{SOURCE_NAME}/dlq",
     },
 ]
 
