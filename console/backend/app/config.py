@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     connect_cluster_name: str = "connect"    # Strimzi KafkaConnect cluster name (pod label selector)
     kafka_external_bootstrap: str = ""   # external listener a cluster-outside producer uses (ingest-config)
     kafka_cluster_name: str = "kafka"   # strimzi.io/cluster label on provisioned KafkaUsers
+    kafka_internal_bootstrap: str = "kafka-kafka-bootstrap:9093"  # internal TLS+SCRAM listener
+    kafka_consumer_user: str = "connect"          # SASL identity the Console reads DLQ topics as
+    kafka_cluster_ca_secret: str = "kafka-cluster-ca-cert"  # Strimzi cluster CA (TLS trust), key ca.crt
     # Optional deep-link into an external logging UI (OpenShift logging / Kibana /
     # Grafana). Placeholders {namespace} {connector} {connect_cluster} are filled;
     # empty -> no link is produced (the oc-command recipe is always present).

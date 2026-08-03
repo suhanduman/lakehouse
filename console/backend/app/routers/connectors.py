@@ -18,12 +18,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import settings
-from app.deps import get_connect, require_action
+from app.deps import get_connect, get_kafka_consumer, require_action
 from app.services.authz import Action
 from app.services.connect_service import ConnectService
+from app.services.kafka_consumer_service import KafkaConsumerService
 from app.services.logs_hint import build_logs_hint
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
+
+_MAX_DLQ = 500
 
 
 class RestartRequest(BaseModel):
@@ -99,3 +102,32 @@ def connector_restart(
             "only_failed": payload.only_failed,
         },
     }
+
+
+@router.get("/{name}/dlq", dependencies=[Depends(require_action(Action.READ))])
+def connector_dlq(
+    name: str,
+    limit: int = 50,
+    connect: ConnectService = Depends(get_connect),
+    kafka: KafkaConsumerService = Depends(get_kafka_consumer),
+) -> Dict[str, Any]:
+    """Resolve the connector's DLQ topic (`errors.deadletterqueue.topic.name`
+    -- sinks only) and return a count + last-N dead-letter records. Degrades
+    like /debug: Connect/Kafka unreachable never 500s (count:null,
+    records:[]). `limit` is capped at `_MAX_DLQ`; `limit=0` skips the
+    (heavier) `read_last` call entirely -- count-only.
+    """
+    limit = max(0, min(limit, _MAX_DLQ))
+    try:
+        cfg = connect.connector_config(name)
+    except Exception:  # noqa: BLE001 -- connector missing / Connect down -> treat as no dlq info
+        cfg = {}
+    topic = cfg.get("errors.deadletterqueue.topic.name")
+    if not topic:
+        return {"has_dlq": False,
+                "hint": "no DLQ on this connector -- dropped records for the pipeline "
+                        "land in the sink's DLQ"}
+    count = kafka.topic_record_count(topic)
+    records = kafka.read_last(topic, limit) if limit > 0 else []
+    return {"has_dlq": True, "topic": topic, "count": count,
+            "returned": len(records), "records": records}

@@ -48,6 +48,11 @@ class ConnectService:
         )
         response.raise_for_status()
 
+    def connector_config(self, name: str) -> Dict[str, Any]:
+        response = self.http.get(f"{self.base_url}/connectors/{name}/config")
+        response.raise_for_status()
+        return response.json()
+
 
 class ApicurioClient:
     """Read-only wrapper over the Apicurio Registry v2 REST API. `http` is

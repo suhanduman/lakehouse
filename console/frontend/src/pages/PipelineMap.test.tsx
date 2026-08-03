@@ -1,7 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import * as client from "../api/client";
 import PipelineMap from "./PipelineMap";
+
+function renderMap() {
+  return render(
+    <MemoryRouter>
+      <PipelineMap />
+    </MemoryRouter>,
+  );
+}
 
 const ENTITY_PIPELINE: client.Pipeline = {
   name: "pgdemo",
@@ -22,6 +31,26 @@ const ENTITY_PIPELINE: client.Pipeline = {
   owned_buckets: ["pgdemo-bronze", "pgdemo-silver"],
 };
 
+const BATCH_PIPELINE: client.Pipeline = {
+  name: "s3-batch-invoices",
+  cr_kind: "ScheduledSparkApplication",
+  disposition: "batch",
+  authoritative: { fqn: "rawlake.invoices.invoices", layer: "rawlake" },
+  nodes: [
+    { type: "source", name: "s3-batch-invoices" },
+    {
+      type: "connector",
+      name: "spark-s3-batch-invoices",
+      kind: "ScheduledSparkApplication",
+      state: "Ready",
+    },
+    { type: "bronze", fqn: "rawlake.invoices.invoices" },
+    { type: "buckets", buckets: ["invoices-bronze"] },
+  ],
+  owned_tables: ["rawlake.invoices.invoices"],
+  owned_buckets: ["invoices-bronze"],
+};
+
 const ERROR_PIPELINE: client.Pipeline = {
   name: "broken-source",
   cr_kind: "KafkaConnector",
@@ -39,7 +68,7 @@ describe("PipelineMap", () => {
   it("renders an entity pipeline's ordered node labels, a status dot, disposition badge, and the starred authoritative FQN with a working copy button", async () => {
     mockClipboard();
     vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [ENTITY_PIPELINE] });
-    const { container } = render(<PipelineMap />);
+    const { container } = renderMap();
 
     expect(await screen.findByText("pgdemo")).toBeInTheDocument();
     expect(screen.getByText(/entity/i)).toBeInTheDocument();
@@ -68,7 +97,7 @@ describe("PipelineMap", () => {
 
   it("renders a pipeline's error inline instead of a full node chain", async () => {
     vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [ERROR_PIPELINE] });
-    render(<PipelineMap />);
+    renderMap();
 
     expect(await screen.findByText("broken-source")).toBeInTheDocument();
     expect(screen.getByText(/cannot resolve target namespace\/table/)).toBeInTheDocument();
@@ -76,13 +105,13 @@ describe("PipelineMap", () => {
 
   it("shows an empty state when there are no pipelines", async () => {
     vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [] });
-    render(<PipelineMap />);
+    renderMap();
     expect(await screen.findByText(/no pipelines yet/i)).toBeInTheDocument();
   });
 
   it("fetch error renders an alert", async () => {
     vi.spyOn(client, "getPipelines").mockRejectedValue(new Error("boom"));
-    render(<PipelineMap />);
+    renderMap();
     expect(await screen.findByRole("alert")).toHaveTextContent(/Failed to load pipelines/i);
   });
 
@@ -91,7 +120,7 @@ describe("PipelineMap", () => {
       .spyOn(client, "getPipelines")
       .mockResolvedValueOnce({ pipelines: [] })
       .mockResolvedValueOnce({ pipelines: [ENTITY_PIPELINE] });
-    render(<PipelineMap />);
+    renderMap();
 
     expect(await screen.findByText(/no pipelines yet/i)).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -100,5 +129,50 @@ describe("PipelineMap", () => {
 
     expect(await screen.findByText("pgdemo")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a dead-letter warning badge linking to the sink's source when the DLQ has records", async () => {
+    vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [ENTITY_PIPELINE] });
+    const dlqSpy = vi
+      .spyOn(client, "getConnectorDlq")
+      .mockResolvedValue({ has_dlq: true, count: 3 });
+    renderMap();
+
+    expect(await screen.findByText(/3/)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /dropped|dead-letter|3/i });
+    expect(link).toHaveAttribute("href", expect.stringContaining("/sources/"));
+    expect(link).toHaveAttribute(
+      "href",
+      expect.stringContaining(encodeURIComponent("sink-pgdemo-customers")),
+    );
+    expect(dlqSpy).toHaveBeenCalledWith("sink-pgdemo-customers", 0);
+  });
+
+  it("shows no warning badge when the DLQ is empty", async () => {
+    vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [ENTITY_PIPELINE] });
+    vi.spyOn(client, "getConnectorDlq").mockResolvedValue({ has_dlq: true, count: 0 });
+    renderMap();
+
+    await screen.findByText(ENTITY_PIPELINE.name);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+  });
+
+  it("shows no warning badge when the DLQ fetch fails or is unreachable", async () => {
+    vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [ENTITY_PIPELINE] });
+    vi.spyOn(client, "getConnectorDlq").mockRejectedValue(new Error("unreachable"));
+    renderMap();
+
+    await screen.findByText(ENTITY_PIPELINE.name);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+  });
+
+  it("skips the DLQ fetch and badge entirely for batch (Spark) pipelines", async () => {
+    vi.spyOn(client, "getPipelines").mockResolvedValue({ pipelines: [BATCH_PIPELINE] });
+    const dlqSpy = vi.spyOn(client, "getConnectorDlq").mockResolvedValue({ has_dlq: false });
+    renderMap();
+
+    await screen.findByText(BATCH_PIPELINE.name);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+    expect(dlqSpy).not.toHaveBeenCalled();
   });
 });

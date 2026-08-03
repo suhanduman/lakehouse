@@ -6,6 +6,7 @@ import {
   ApiError,
   editSparkSource,
   getConnectorDebug,
+  getConnectorDlq,
   getIngestConfig,
   getSource,
   getSourceConnectors,
@@ -17,6 +18,7 @@ import {
   type ConnectorDebug,
   type ConnectorRef,
   type DeleteSourceResult,
+  type DlqResponse,
   type GitopsRemediation,
   type IngestConfig,
   type Source,
@@ -84,6 +86,14 @@ export default function SourceDetail({ role }: SourceDetailProps) {
 
   const [connectors, setConnectors] = useState<ConnectorRef[]>([]);
   const [debug, setDebug] = useState<ConnectorDebug | null>(null);
+
+  // Dead-letter records section (Task 5): a single active-DLQ state per the
+  // existing `debug`/`handleDebug` pattern above -- only one connector's DLQ
+  // view is shown at a time, lazy-fetched on click, never polled.
+  // `dlqConnName` (unlike ConnectorDebug, DlqResponse carries no `name`
+  // field) labels which connector the currently-shown `dlq` belongs to.
+  const [dlq, setDlq] = useState<DlqResponse | null>(null);
+  const [dlqConnName, setDlqConnName] = useState<string | null>(null);
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
   const [remediation, setRemediation] = useState<GitopsRemediation | null>(null);
   const [copied, setCopied] = useState(false);
@@ -233,6 +243,17 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     setActionError(null);
     try {
       setDebug(await getConnectorDebug(connName));
+    } catch (err) {
+      setActionError(errorMessage(err));
+    }
+  }
+
+  async function handleDlq(connName: string) {
+    setActionError(null);
+    try {
+      const result = await getConnectorDlq(connName);
+      setDlqConnName(connName);
+      setDlq(result);
     } catch (err) {
       setActionError(errorMessage(err));
     }
@@ -407,6 +428,13 @@ export default function SourceDetail({ role }: SourceDetailProps) {
                 >
                   Debug
                 </button>
+                <button
+                  type="button"
+                  onClick={() => handleDlq(c.name)}
+                  disabled={actionPending}
+                >
+                  Dead-letter records
+                </button>
               </li>
             ))}
           </ul>
@@ -463,6 +491,56 @@ export default function SourceDetail({ role }: SourceDetailProps) {
                 Open in logging ↗
               </a>
             </p>
+          )}
+        </section>
+      )}
+
+      {dlq && (
+        <section aria-label="dlq">
+          <h3>Dead-letter records{dlqConnName ? `: ${dlqConnName}` : ""}</h3>
+          {!dlq.has_dlq && <p>{dlq.hint}</p>}
+          {dlq.has_dlq && dlq.count === null && <p>Kafka not reachable — try again</p>}
+          {dlq.has_dlq && dlq.count === 0 && (
+            <p>✓ No dropped records — this pipeline is clean</p>
+          )}
+          {dlq.has_dlq && typeof dlq.count === "number" && dlq.count > 0 && (
+            <>
+              {dlq.returned !== undefined && dlq.returned < dlq.count && (
+                <p>
+                  showing last {dlq.returned} of {dlq.count}
+                </p>
+              )}
+              <table>
+                <thead>
+                  <tr>
+                    <th>time</th>
+                    <th>error</th>
+                    <th>source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(dlq.records ?? []).map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.ts ? new Date(r.ts).toISOString() : "—"}</td>
+                      <td>
+                        <details>
+                          <summary>
+                            {r.error_class}: {r.error_message}
+                          </summary>
+                          <figure>
+                            <pre>{r.value_preview}</pre>
+                            <figcaption>sample — may contain data</figcaption>
+                          </figure>
+                        </details>
+                      </td>
+                      <td>
+                        {r.source_topic}:{r.source_partition}@{r.source_offset}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
         </section>
       )}
