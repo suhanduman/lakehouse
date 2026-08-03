@@ -277,3 +277,12 @@ def test_run_survives_audit_failure_on_failure_path(monkeypatch):
     rc = mc.run(FakeSpark(), Args())  # must NOT raise -- audit failure is swallowed
     assert rc == 1                    # aggregate failure still reported
     assert set(processed) == {"lakehouse.a.t", "lakehouse.b.t", "lakehouse.c.t"}  # no cancellation
+
+
+def test_spj_conf_enables_bucketed_merge_target_pruning():
+    """Test that SPJ_CONF contains the two flags required for bucketed-MERGE
+    target pruning (storage-partitioned join)."""
+    assert hasattr(mc, "SPJ_CONF"), "SPJ_CONF must be defined as a module-level constant"
+    assert isinstance(mc.SPJ_CONF, dict), "SPJ_CONF must be a dictionary"
+    assert mc.SPJ_CONF.get("spark.sql.sources.v2.bucketing.enabled") == "true"
+    assert mc.SPJ_CONF.get("spark.sql.iceberg.planning.preserve-data-grouping") == "true"
