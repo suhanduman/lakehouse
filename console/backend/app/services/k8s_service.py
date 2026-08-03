@@ -178,11 +178,16 @@ class K8sService:
         )
 
     # ----------------------------------------------------------------
-    # set_paused — patch KafkaConnector spec.state (Strimzi pause/resume)
+    # set_state — patch KafkaConnector spec.state (Strimzi pause/resume/stop
+    # lifecycle: "running"/"paused"/"stopped"). `set_paused` (pause/resume
+    # routes) delegates here so its existing callers keep working unchanged.
     # ----------------------------------------------------------------
 
-    def set_paused(self, name: str, paused: bool) -> Dict[str, Any]:
-        state = "paused" if paused else "running"
+    _VALID_STATES = {"running", "paused", "stopped"}
+
+    def set_state(self, name: str, state: str) -> Dict[str, Any]:
+        if state not in self._VALID_STATES:
+            raise ValueError(f"invalid connector state: {state!r} (expected one of {sorted(self._VALID_STATES)})")
         return self.custom_api.patch_namespaced_custom_object(
             group=GROUP,
             version=VERSION,
@@ -191,6 +196,9 @@ class K8sService:
             name=name,
             body={"spec": {"state": state}},
         )
+
+    def set_paused(self, name: str, paused: bool) -> Dict[str, Any]:
+        return self.set_state(name, "paused" if paused else "running")
 
     # ----------------------------------------------------------------
     # list_sources — KafkaConnector CRs + ScheduledSparkApplication CRs in

@@ -101,6 +101,9 @@ class FakeK8s:
     def set_paused(self, name: str, paused: bool) -> None:
         pass
 
+    def set_state(self, name: str, state: str) -> None:
+        pass
+
     def delete_connector(self, name: str) -> None:
         pass
 
@@ -284,6 +287,16 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "method": "POST",
         "template": "/api/sources/{name}/resume",
         "path": f"/api/sources/{SOURCE_NAME}/resume",
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/stop",
+        "path": f"/api/sources/{SOURCE_NAME}/stop",
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/start",
+        "path": f"/api/sources/{SOURCE_NAME}/start",
     },
     {
         "method": "POST",

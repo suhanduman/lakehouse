@@ -335,6 +335,37 @@ def test_add_source_happy_path_calls_services_with_expected_data():
 
 
 # --------------------------------------------------------------------------
+# create_stopped (snapshot-lifecycle Task 8, "define but don't start"): the
+# connector CR is applied with spec.state:"stopped" so an operator can arm a
+# snapshot signal before any data flows. Only the SOURCE connector body is
+# affected, never the dedicated sink -- the sink should still come up running
+# so it's ready to consume once the source is started.
+# --------------------------------------------------------------------------
+
+def test_create_stopped_true_applies_connector_with_stopped_state():
+    orch, k8s, s3, trino = _orch()
+    spec = CDC_MSSQL_SPEC.model_copy(update={"create_stopped": True})
+
+    res = orch.add_source(spec, CREDS)
+
+    assert res.ok is True
+    source_body, sink_body = k8s.applied_connectors
+    assert source_body["spec"]["state"] == "stopped"
+    # the dedicated sink is unaffected -- no state forced on it.
+    assert "state" not in sink_body["spec"]
+
+
+def test_create_stopped_false_does_not_force_connector_state():
+    orch, k8s, s3, trino = _orch()
+
+    orch.add_source(CDC_MSSQL_SPEC, CREDS)   # create_stopped defaults to False
+
+    source_body, sink_body = k8s.applied_connectors
+    assert "state" not in source_body["spec"]
+    assert "state" not in sink_body["spec"]
+
+
+# --------------------------------------------------------------------------
 # Rollback on connector-step failure
 # --------------------------------------------------------------------------
 

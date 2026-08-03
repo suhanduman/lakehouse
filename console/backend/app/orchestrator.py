@@ -510,6 +510,13 @@ class AddSourceOrchestrator:
         # 5. connector
         def _apply_connector() -> Optional[str]:
             ctx["connector_body"] = self.render.render_connector(spec)
+            # snapshot-lifecycle: define but don't start -- an operator can
+            # then arm a snapshot signal (see enable_snapshots/execute-
+            # snapshot) before any data flows. Only the SOURCE connector is
+            # affected; the sink (5b below) still comes up running so it's
+            # ready to consume once the source is started.
+            if spec.create_stopped:
+                ctx["connector_body"].setdefault("spec", {})["state"] = "stopped"
             ctx["connector_name"] = ctx["connector_body"]["metadata"]["name"]
             self.k8s.apply_connector(ctx["connector_body"])
             return None

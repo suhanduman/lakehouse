@@ -827,6 +827,62 @@ def resume_source(
     return {"ok": True, "name": name, "paused": False}
 
 
+@router.post("/{name}/stop", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def stop_source(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """Full stop (distinct from pause -- see `set_state`'s
+    "running"/"paused"/"stopped" lifecycle): the connector task is torn down
+    entirely rather than paused-in-place. Same gitops fail-loud guard as
+    `pause_source`/`resume_source` -- neither CR kind has gitops routing for
+    stop, so a direct `k8s.set_state`/`set_spark_suspended` write in gitops
+    mode would be silently reverted by ArgoCD selfHeal on its next sync (a
+    misleading no-op); the 409's `detail` carries the same structured
+    `remediation` recipe (`_gitops_remediation`) so the frontend can render
+    concrete "do this in the pipeline repo / ArgoCD" steps -- the Console
+    still never writes to git itself here."""
+    cr = _find_source(k8s, name)
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "stop not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, pause=True),
+            },
+        )
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, True)
+    else:
+        k8s.set_state(name, "stopped")
+    return {"ok": True, "name": name, "stopped": True}
+
+
+@router.post("/{name}/start", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def start_source(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """See `stop_source`'s docstring -- same gitops fail-loud guard, same
+    structured `remediation` recipe in the 409 `detail`. Starts a source that
+    was stopped (or created stopped via `create_stopped` -- see
+    `AddSourceOrchestrator.add_source`)."""
+    cr = _find_source(k8s, name)
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "start not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, pause=False),
+            },
+        )
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, False)
+    else:
+        k8s.set_state(name, "running")
+    return {"ok": True, "name": name, "stopped": False}
+
+
 @router.post("/{name}/enable-snapshots", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
 def enable_snapshots(
     name: str,
