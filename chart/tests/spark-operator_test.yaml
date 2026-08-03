@@ -20,6 +20,30 @@ tests:
           path: spec.template.dynamicAllocation.enabled
           value: true
 
+  - it: silver-merge sparkConf enables bucketed-MERGE target pruning (SPJ runtime counterpart of merge_cdc's SPJ_CONF)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.sql.sources.v2.bucketing.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.template.sparkConf["spark.sql.iceberg.planning.preserve-data-grouping"]'
+          value: "true"
+
+  - it: iceberg-maintenance sparkConf does NOT carry the silver-merge bucketed-MERGE pruning flags (SPJ is silver-merge-only)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - notExists:
+          path: 'spec.template.sparkConf["spark.sql.sources.v2.bucketing.enabled"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.sql.iceberg.planning.preserve-data-grouping"]'
+
   - it: silver-merge dynamic allocation is scaled by values (min 0, max from silverMerge.maxExecutors)
     template: templates/05-spark-operator.yaml
     documentSelector:
@@ -136,3 +160,28 @@ tests:
       - equal:
           path: spec.template.executor.env[0].value
           value: "7"
+
+  - it: iceberg-maintenance driver gets MAINTENANCE_MAX_PARALLEL (default 4, jobs/iceberg_maintenance.py ThreadPoolExecutor)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - equal:
+          path: spec.template.driver.env[1]
+          value:
+            name: MAINTENANCE_MAX_PARALLEL
+            value: "4"
+
+  - it: iceberg-maintenance MAINTENANCE_MAX_PARALLEL is scaled by values (spark.maintenanceMaxParallel)
+    template: templates/05-spark-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    set:
+      spark:
+        maintenanceMaxParallel: 8
+    asserts:
+      - equal:
+          path: spec.template.driver.env[1].value
+          value: "8"

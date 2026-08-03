@@ -81,6 +81,9 @@ spec:
       serviceAccount: spark-driver
       env:
       - {name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}
+      # Table-level compaction/expire/orphan-cleanup parallelism (ThreadPoolExecutor,
+      # jobs/iceberg_maintenance.py, default 4) — scales alongside pipeline count.
+      - {name: MAINTENANCE_MAX_PARALLEL, value: {{ .Values.spark.maintenanceMaxParallel | default 4 | quote }}}
 {{ include "lakehouse.spark.awsEnv" . | indent 6 }}
     executor:
       cores: {{ .Values.sparkOperator.maintenance.executor.cores }}
@@ -120,6 +123,11 @@ spec:
       "spark.dynamicAllocation.minExecutors": "0"
       "spark.dynamicAllocation.maxExecutors": {{ .Values.sparkOperator.silverMerge.maxExecutors | quote }}
       "spark.scheduler.mode": "FAIR"
+      # Bucketed-MERGE target pruning (runtime counterpart of merge_cdc's
+      # SPJ_CONF, jobs/merge_cdc.py) — storage-partitioned join support so
+      # Silver MERGE only touches the target buckets a batch actually needs.
+      spark.sql.sources.v2.bucketing.enabled: 'true'
+      spark.sql.iceberg.planning.preserve-data-grouping: 'true'
     dynamicAllocation:
       enabled: true
       initialExecutors: 0

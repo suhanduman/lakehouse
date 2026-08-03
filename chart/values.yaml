@@ -933,6 +933,16 @@ trino:
     # values-microk8s-ingest.yaml).
     g1HeapRegionSize: "32M"
 
+# Cross-cutting Spark job tuning knobs, not scoped to a single
+# ScheduledSparkApplication (see `sparkOperator.*` below for the
+# per-CR schedule/sizing knobs).
+spark:
+  # jobs/iceberg_maintenance.py's ThreadPoolExecutor parallelism (table-level
+  # compaction/expire_snapshots/remove_orphan_files fan-out, env
+  # MAINTENANCE_MAX_PARALLEL) — scale alongside discovered
+  # namespace/table-pair count.
+  maintenanceMaxParallel: 4
+
 # Spark Operator RBAC + SparkApplication templates. Only the
 # `iceberg-maintenance` ScheduledSparkApplication's schedule/concurrency/driver+executor sizing
 # and the shared `spark-defaults` image/package pins (see `versions.*`
@@ -1319,6 +1329,15 @@ console:
   # only. openshift-gitops is the OpenShift OperatorHub ArgoCD's default
   # namespace; "argocd" is the vanilla/community-manifest default.
   argocdNamespace: argocd   # openshift-gitops on OpenShift
+  # Silver bucket-count default (2026-08-03 silver-scale-hardening) —
+  # sourced into the backend ConfigMap's `SILVER_DEFAULT_BUCKET_COUNT`
+  # (chart/templates/console/console.yaml), feeding
+  # `Settings.silver_default_bucket_count` (console/backend/app/config.py):
+  # the orchestrator's fallback bucket count for a pipeline spec that
+  # doesn't set its own `silver_bucket_count`. Same bucket-count knob
+  # merge_cdc.py's SPJ_CONF prunes against at runtime (silver-merge's
+  # sparkConf, chart/templates/05-spark-operator.yaml).
+  silverDefaultBucketCount: 16
   networkPolicy:
     # S3 endpoint CIDR/IP block (egress allow-list) — same plain
     # `{{TOKEN}}` placeholder convention as `postgres.nessie.backup.endpointURL`

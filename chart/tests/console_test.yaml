@@ -56,6 +56,22 @@ tests:
             name: gitops-credential
         documentSelector: {path: "spec.template.spec.containers[0].name", value: console-backend}
 
+  - it: "ConfigMap carries SILVER_DEFAULT_BUCKET_COUNT (2026-08-03 silver-scale-hardening), default 16, feeding Settings.silver_default_bucket_count"
+    asserts:
+      - equal:
+          path: data.SILVER_DEFAULT_BUCKET_COUNT
+          value: "16"
+        documentSelector: {path: kind, value: ConfigMap}
+
+  - it: "SILVER_DEFAULT_BUCKET_COUNT is scaled by values (console.silverDefaultBucketCount)"
+    set:
+      console.silverDefaultBucketCount: 32
+    asserts:
+      - equal:
+          path: data.SILVER_DEFAULT_BUCKET_COUNT
+          value: "32"
+        documentSelector: {path: kind, value: ConfigMap}
+
   - it: "deployMode=gitops + repoUrl set: ConfigMap reflects the override, backend Deployment mounts the gitops-credential Secret at /var/run/gitops (ssh-privatekey + optional known_hosts)"
     set:
       console.deployMode: gitops

@@ -127,6 +127,12 @@ data:
   # falls back to config.py's neutral defaults (a non-existent image/secret).
   SPARK_IMAGE: {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }}
   S3_SECRET_NAME: {{ .Values.storage.s3.secretName | quote }}
+  # Silver bucket-count default (2026-08-03 silver-scale-hardening) — feeds
+  # Settings.silver_default_bucket_count (console/backend/app/config.py),
+  # the orchestrator's fallback bucket count when a pipeline spec doesn't
+  # set its own `silver_bucket_count` (same bucket-count knob merge_cdc.py's
+  # SPJ_CONF prunes against, wired above into silver-merge's sparkConf).
+  SILVER_DEFAULT_BUCKET_COUNT: {{ .Values.console.silverDefaultBucketCount | default 16 | quote }}
   # GitOps write-path (2026-07-30-gitops-core-slice-a-write-path Task 5) —
   # plain (non-secret) config, same convention as OIDC_AUDIENCE/S3_SECRET_NAME
   # above. `.Values.console.gitops.credentialSecret` is only a Secret NAME
