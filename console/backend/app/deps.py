@@ -26,6 +26,7 @@ for production and are each overridable in tests.
 from __future__ import annotations
 
 import os
+import ssl as _ssl
 import time
 from typing import Dict, Optional, Set, Tuple
 
@@ -45,6 +46,7 @@ from app.services.authz import Action, Role, can, roles_from_claims
 from app.services.connect_service import ApicurioClient, ConnectService
 from app.services.iceberg_service import IcebergService
 from app.services.k8s_service import K8sService
+from app.services.kafka_consumer_service import KafkaConsumerService
 from app.services.s3_service import S3Service
 from app.services.trino_service import TrinoService
 
@@ -292,3 +294,25 @@ def get_apicurio() -> ApicurioClient:
     `settings.apicurio_url` (the Apicurio Registry v2 REST API). Overridable
     in tests via `app.dependency_overrides[get_apicurio]`."""
     return ApicurioClient(settings.apicurio_url, httpx.Client())
+
+
+def get_kafka_consumer() -> KafkaConsumerService:
+    """Real `KafkaConsumerService` over the internal TLS+SCRAM listener,
+    authenticating as `settings.kafka_consumer_user` (creds from its Strimzi
+    secret) and trusting the cluster CA. Overridable in tests via
+    `app.dependency_overrides[get_kafka_consumer]`."""
+    k8s = get_k8s()
+    user = settings.kafka_consumer_user
+    user_secret = k8s.read_secret(user) or {}
+    ca_secret = k8s.read_secret(settings.kafka_cluster_ca_secret) or {}
+    ctx = _ssl.create_default_context(cadata=ca_secret.get("ca.crt")) if ca_secret.get("ca.crt") else None
+    conn_kwargs = {
+        "security_protocol": "SASL_SSL",
+        "sasl_mechanism": "SCRAM-SHA-512",
+        "sasl_plain_username": user,
+        "sasl_plain_password": user_secret.get("password"),
+        "ssl_context": ctx,
+        "request_timeout_ms": 5000,
+        "consumer_timeout_ms": 3000,
+    }
+    return KafkaConsumerService(settings.kafka_internal_bootstrap, conn_kwargs)
