@@ -15,6 +15,7 @@ of truth.
 
 from __future__ import annotations
 
+import json
 import types
 from dataclasses import asdict
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -27,6 +28,7 @@ from app.config import settings
 from app.deps import (
     get_connect,
     get_k8s,
+    get_kafka_consumer,
     get_kafka_producer,
     get_orchestrator,
     get_s3,
@@ -40,6 +42,7 @@ from app.services import render_service
 from app.services.authz import Action
 from app.services.connect_service import ConnectService
 from app.services.k8s_service import K8sService
+from app.services.kafka_consumer_service import KafkaConsumerService
 from app.services.kafka_producer_service import KafkaProducerService
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
 from app.services.s3_service import S3Service
@@ -939,6 +942,86 @@ def snapshot_stop(
     value = {"type": "stop-snapshot", "data": {"data-collections": data_collections}}
     ok = producer.send(settings.debezium_signal_topic, topic_prefix, value)
     return {"ok": ok, "name": name, "data_collections": data_collections}
+
+
+_SNAPSHOT_NOTIFICATION_LIMIT = 200
+
+_SNAPSHOT_KIND_MAP = {
+    "started": "started",
+    "in_progress": "in_progress",
+    "table_scan_completed": "in_progress",
+    "completed": "completed",
+    "aborted": "aborted",
+    "skipped": "skipped",
+}
+
+
+def _normalize_snapshot_kind(raw_type: Optional[str]) -> str:
+    lowered = (raw_type or "").strip().lower()
+    return _SNAPSHOT_KIND_MAP.get(lowered, lowered)
+
+
+def _snapshot_progress_str(additional_data: Dict[str, Any]) -> str:
+    scanned = additional_data.get("scanned_rows")
+    total = additional_data.get("total_rows_scanned")
+    if scanned is not None and total is not None:
+        return f"{scanned}/{total}"
+    return ""
+
+
+@router.get("/{name}/snapshot-progress", dependencies=[Depends(require_action(Action.READ))])
+def snapshot_progress(
+    name: str,
+    connect: ConnectService = Depends(get_connect),
+    consumer: KafkaConsumerService = Depends(get_kafka_consumer),
+) -> Dict[str, Any]:
+    """Reads the last N records off `settings.debezium_notification_topic`
+    (Debezium's sink-channel notifications -- see
+    `render_service._signal_and_notification_config`) and returns this
+    connector's Snapshot progress. Uses `KafkaConsumerService.read_last_values`
+    (NOT `read_last`, which is DLQ-specific and truncates the value to
+    ~512 chars -- a notification JSON payload can exceed that). Degrades to
+    `{"notifications": []}` on ANY failure (Connect down, Kafka down,
+    unparseable records) -- never 500."""
+    try:
+        try:
+            config = connect.connector_config(name)
+        except Exception:  # noqa: BLE001 -- connector missing / Connect down -> unknown prefix
+            config = {}
+        topic_prefix = config.get("topic.prefix")
+
+        records = consumer.read_last_values(
+            settings.debezium_notification_topic, _SNAPSHOT_NOTIFICATION_LIMIT
+        )
+
+        notifications: List[Dict[str, Any]] = []
+        for record in records:
+            try:
+                payload = json.loads(record.get("value") or "")
+            except Exception:  # noqa: BLE001 -- unparseable value -> skip
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            aggregate_type = str(payload.get("aggregate_type") or "")
+            if "snapshot" not in aggregate_type.lower():
+                continue
+
+            additional_data = payload.get("additional_data") or {}
+            connector_name = additional_data.get("connector_name")
+            if connector_name is not None and connector_name not in (topic_prefix, name):
+                continue
+
+            notifications.append({
+                "kind": _normalize_snapshot_kind(payload.get("type")),
+                "table": (additional_data.get("data_collections")
+                          or additional_data.get("current_collection_in_progress")),
+                "progress": _snapshot_progress_str(additional_data),
+                "ts": payload.get("timestamp") if payload.get("timestamp") is not None else record.get("ts"),
+            })
+        return {"notifications": notifications}
+    except Exception:  # noqa: BLE001 -- degrade, never 500
+        return {"notifications": []}
 
 
 # --------------------------------------------------------------------------

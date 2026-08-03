@@ -179,6 +179,9 @@ class FakeKafkaConsumer:
     def read_last(self, topic: str, limit: int) -> List[Dict[str, Any]]:
         return []
 
+    def read_last_values(self, topic: str, limit: int) -> List[Dict[str, Any]]:
+        return []
+
 
 class FakeKafkaProducer:
     """Snapshot-lifecycle (Task 5) signal producer. FakeConnect.connector_config
@@ -300,6 +303,11 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "template": "/api/sources/{name}/snapshot/stop",
         "path": f"/api/sources/{SOURCE_NAME}/snapshot/stop",
         "json": {"type": "blocking"},
+    },
+    {
+        "method": "GET",
+        "template": "/api/sources/{name}/snapshot-progress",
+        "path": f"/api/sources/{SOURCE_NAME}/snapshot-progress",
     },
     {
         "method": "DELETE",
