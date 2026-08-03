@@ -149,3 +149,18 @@ def test_restart_connector_raises_on_error():
         assert False, "expected HTTPStatusError"
     except httpx.HTTPStatusError as exc:
         assert exc.response.status_code == 409
+
+
+# --------------------------------------------------------------------------
+# ConnectService.connector_config
+# --------------------------------------------------------------------------
+
+def test_connector_config_gets_config_map():
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == "/connectors/dbz-x/config"
+        return httpx.Response(200, json={"connector.class": "io...",
+                                         "errors.deadletterqueue.topic.name": "dbz-x.dlq"})
+    c = ConnectService("http://c", httpx.Client(transport=httpx.MockTransport(handler)))
+    cfg = c.connector_config("dbz-x")
+    assert cfg["errors.deadletterqueue.topic.name"] == "dbz-x.dlq"
