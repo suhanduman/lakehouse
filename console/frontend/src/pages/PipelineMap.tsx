@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { getPipelines, type Pipeline, type PipelineNode } from "../api/client";
+import { Link } from "react-router-dom";
+import { getConnectorDlq, getPipelines, type Pipeline, type PipelineNode } from "../api/client";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -69,8 +70,38 @@ function nodeLabel(node: PipelineNode): string {
   }
 }
 
-function PipelineRow({ pipeline }: { pipeline: Pipeline }) {
+/** The connector whose dead-letter queue represents this pipeline's dropped
+ * records: the `sink` node (event/entity pipelines with a separate sink
+ * connector), or -- for kafka-ingest pipelines that have no separate sink --
+ * the `connector` node. `null` when neither is present/named. */
+function dlqCarryingConnectorName(pipeline: Pipeline): string | null {
+  const sink = pipeline.nodes.find((n): n is Extract<PipelineNode, { type: "sink" }> => n.type === "sink");
+  if (sink) return sink.name;
+  const connector = pipeline.nodes.find(
+    (n): n is Extract<PipelineNode, { type: "connector" }> => n.type === "connector",
+  );
+  return connector?.name ?? null;
+}
+
+function DlqBadge({ dlqName, count }: { dlqName: string | null; count: number | null | undefined }) {
+  if (count == null || !dlqName) return null;
+  if (count === 0) return <span> ✓ 0</span>;
+  return (
+    <Link to={`/sources/${encodeURIComponent(dlqName)}`}>
+      <strong> ⚠ {count} dropped</strong>
+    </Link>
+  );
+}
+
+function PipelineRow({
+  pipeline,
+  dlqCount,
+}: {
+  pipeline: Pipeline;
+  dlqCount: number | null | undefined;
+}) {
   const [copied, setCopied] = useState(false);
+  const dlqName = dlqCarryingConnectorName(pipeline);
 
   function handleCopy() {
     if (!pipeline.authoritative) return;
@@ -83,6 +114,7 @@ function PipelineRow({ pipeline }: { pipeline: Pipeline }) {
       <div>
         <strong>{pipeline.name}</strong>
         {pipeline.disposition && <span> [{pipeline.disposition}]</span>}
+        <DlqBadge dlqName={dlqName} count={dlqCount} />
       </div>
 
       {pipeline.error ? (
@@ -126,6 +158,7 @@ function PipelineRow({ pipeline }: { pipeline: Pipeline }) {
 export default function PipelineMap() {
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dlqCounts, setDlqCounts] = useState<Record<string, number | null>>({});
 
   function load() {
     let cancelled = false;
@@ -134,6 +167,18 @@ export default function PipelineMap() {
         if (!cancelled) {
           setError(null);
           setPipelines(d.pipelines);
+          setDlqCounts({});
+          for (const p of d.pipelines) {
+            const dlqName = dlqCarryingConnectorName(p);
+            if (!dlqName) continue;
+            getConnectorDlq(dlqName, 0)
+              .then((res) => {
+                if (!cancelled) {
+                  setDlqCounts((prev) => ({ ...prev, [p.name]: res.count ?? null }));
+                }
+              })
+              .catch(() => {});
+          }
         }
       })
       .catch((err: unknown) => {
@@ -164,7 +209,7 @@ export default function PipelineMap() {
       ) : (
         <ul>
           {pipelines.map((p) => (
-            <PipelineRow key={p.name} pipeline={p} />
+            <PipelineRow key={p.name} pipeline={p} dlqCount={dlqCounts[p.name]} />
           ))}
         </ul>
       )}
