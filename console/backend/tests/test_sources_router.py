@@ -407,6 +407,26 @@ def test_preview_kafka_ingest_renders_connector(client):
     assert body["connector"]["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
 
 
+def test_preview_event_disposition_omits_silver(client):
+    # stream-kafka event source (disposition="event" => no Silver table)
+    spec = {"source": "ev", "kind": "stream", "type": "kafka", "db": "",
+            "table": "t", "target_ns": "ev", "target_table": "t", "disposition": "event"}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["silver_bucket"] is None
+    assert body["namespace_ddl"] is None or "lakehouse.ev" not in body["namespace_ddl"]
+    assert body["bronze_bucket"] is not None
+
+
+def test_preview_entity_disposition_keeps_silver(client):
+    # cdc/pg entity source (disposition not set => defaults to entity => Silver table included)
+    spec = {"source": "en", "kind": "cdc", "type": "pg", "db": "app",
+            "table": "c", "target_ns": "en", "target_table": "c", "db_host": "h:5432",
+            "identifier": ["id"], "columns": [{"name": "id", "type": "int"}]}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["silver_bucket"] is not None
+    assert "lakehouse.en" in body["namespace_ddl"]
+
+
 # --------------------------------------------------------------------------
 # Imp3 -- authz runs BEFORE any provider is constructed.
 # --------------------------------------------------------------------------

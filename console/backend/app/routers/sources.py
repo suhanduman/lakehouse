@@ -476,11 +476,12 @@ def create_source(
 def preview_source(payload: PreviewSourceRequest) -> Dict[str, Any]:
     spec = payload.spec
     bronze_bucket = render_service.bronze_bucket_name(spec.target_ns)
-    silver_bucket = render_service.silver_bucket_name(spec.target_ns)
+    is_entity = spec.effective_disposition() == "entity"
+    silver_bucket = render_service.silver_bucket_name(spec.target_ns) if is_entity else None
     preview: Dict[str, Any] = {
         "bronze_bucket": bronze_bucket,
         "silver_bucket": silver_bucket,
-        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns, silver_bucket),
+        "namespace_ddl": render_service.render_namespace_ddl(spec.target_ns, silver_bucket) if is_entity else None,
         "connector": None,
         "kafka_topic": None,
     }
