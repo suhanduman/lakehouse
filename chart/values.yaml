@@ -1041,6 +1041,13 @@ kafkaConnect:
     # NOT connect.
     - {resource: {type: topic, name: debezium-signals, patternType: literal}, operations: [Write, Describe]}
     - {resource: {type: topic, name: debezium-notifications, patternType: literal}, operations: [Read, Write, Describe]}
+  # External-Kafka CA trust for `stream+kafka` sources whose external broker
+  # uses TLS (security.protocol SSL/SASL_SSL). The customer creates the secret
+  # out of band (their broker CA as ca.p12 + ca.password); it mounts at
+  # /mnt/external-configuration/ext-kafka-ca (the path render_service references).
+  externalKafkaCa:
+    enabled: false
+    secretName: ""
 
 # nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
 # values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is
