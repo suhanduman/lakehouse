@@ -68,6 +68,12 @@ If your use case needs deletes to propagate, either supply `delete_field`
 from the existing-Kafka entity path this doc describes — which carries
 delete events natively in its envelope (`__op == "d"`).
 
+**Scheduled-JDBC lane caveat:** the same limitation applies, in a stricter
+form, to the scheduled-JDBC lane the Add Source wizard also offers.
+Polling captures new rows, and updates only via a timestamp column;
+deletes are never captured. If updates or deletes matter, use a CDC
+source.
+
 ### Optional: `delete_field` (boolean delete opt-in)
 
 If the upstream topic already carries a boolean "is this record deleted"

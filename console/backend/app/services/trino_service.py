@@ -58,3 +58,13 @@ class TrinoService:
 
     def drop_table(self, fqn: str) -> None:
         self._execute(f"DROP TABLE IF EXISTS {fqn}")
+
+    # ----------------------------------------------------------------
+    # drop_namespace — fqn is already fully-qualified (catalog.ns)
+    # ----------------------------------------------------------------
+
+    def drop_namespace(self, fqn: str) -> None:
+        """DROP SCHEMA IF EXISTS <catalog.ns>. Only call after the last table in
+        the namespace is gone (caller checks list_tables). IF EXISTS keeps it
+        idempotent/degrade-safe."""
+        self._execute(f"DROP SCHEMA IF EXISTS {fqn}")

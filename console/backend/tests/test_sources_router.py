@@ -89,6 +89,34 @@ SPARK_CR = {
 
 
 # --------------------------------------------------------------------------
+# _target_ns_table -- prefers the round-trip target-ns/target-table
+# annotations (stamped by render_service._connector) over re-parsing
+# transforms.route.static.value, falling back to the route-parse for CRs
+# pre-dating the annotation (or applied by hand).
+# --------------------------------------------------------------------------
+
+def test_target_ns_table_prefers_annotations_over_route_parse():
+    from app.routers.sources import _target_ns_table
+    cr = {
+        "metadata": {"annotations": {
+            "lakehouse.solus.dev/target-ns": "annNs",
+            "lakehouse.solus.dev/target-table": "annTbl",
+        }},
+        "spec": {"config": {"transforms.route.static.value": "wrongNs_raw.wrongTbl"}},
+    }
+    assert _target_ns_table(cr) == ("annNs", "annTbl")
+
+
+def test_target_ns_table_falls_back_to_route_parse_when_no_annotation():
+    from app.routers.sources import _target_ns_table
+    cr = {
+        "metadata": {"annotations": {}},
+        "spec": {"config": {"transforms.route.static.value": "pgd_raw.customers"}},
+    }
+    assert _target_ns_table(cr) == ("pgd", "customers")
+
+
+# --------------------------------------------------------------------------
 # Fakes -- hand-rolled doubles for K8sService / S3Service / TrinoService /
 # AddSourceOrchestrator.
 # --------------------------------------------------------------------------
@@ -153,13 +181,32 @@ class FakeS3:
 
 
 class FakeTrino:
-    def __init__(self):
+    """`list_tables` defaults to always-empty so existing delete tests (which
+    don't care about namespace cleanup) don't have to know about it -- the
+    new `_drop_ns_if_empty` call in delete_source's with_data teardown will
+    see an empty namespace and call `drop_namespace` every time by default.
+    Tests exercising the "namespace still has siblings" case pass
+    `tables_by_ns` to override per-namespace.
+    """
+
+    def __init__(self, tables_by_ns: Dict[tuple, List[str]] | None = None):
         self.dropped: List[str] = []
+        self.dropped_namespaces: List[str] = []
         self.calls: List[tuple] = []
+        self._tables_by_ns = tables_by_ns or {}
 
     def drop_table(self, fqn):
         self.dropped.append(fqn)
         self.calls.append(("drop_table", fqn))
+
+    def list_tables(self, catalog, ns):
+        tables = self._tables_by_ns.get((catalog, ns), [])
+        self.calls.append(("list_tables", catalog, ns))
+        return tables
+
+    def drop_namespace(self, fqn):
+        self.dropped_namespaces.append(fqn)
+        self.calls.append(("drop_namespace", fqn))
 
 
 class FakeOrchestrator:
@@ -405,6 +452,26 @@ def test_preview_kafka_ingest_renders_connector(client):
             "table": "orders-topic", "target_ns": "events", "target_table": "orders"}
     body = client.post("/api/sources/preview", json={"spec": spec}).json()
     assert body["connector"]["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
+
+
+def test_preview_event_disposition_omits_silver(client):
+    # stream-kafka event source (disposition="event" => no Silver table)
+    spec = {"source": "ev", "kind": "stream", "type": "kafka", "db": "",
+            "table": "t", "target_ns": "ev", "target_table": "t", "disposition": "event"}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["silver_bucket"] is None
+    assert body["namespace_ddl"] is None or "lakehouse.ev" not in body["namespace_ddl"]
+    assert body["bronze_bucket"] is not None
+
+
+def test_preview_entity_disposition_keeps_silver(client):
+    # cdc/pg entity source (disposition not set => defaults to entity => Silver table included)
+    spec = {"source": "en", "kind": "cdc", "type": "pg", "db": "app",
+            "table": "c", "target_ns": "en", "target_table": "c", "db_host": "h:5432",
+            "identifier": ["id"], "columns": [{"name": "id", "type": "int"}]}
+    body = client.post("/api/sources/preview", json={"spec": spec}).json()
+    assert body["silver_bucket"] is not None
+    assert "lakehouse.en" in body["namespace_ddl"]
 
 
 # --------------------------------------------------------------------------
@@ -693,6 +760,61 @@ def test_delete_with_data_ok_for_admin_does_full_teardown():
     assert trino.dropped == [bronze_fqn, silver_fqn]
     assert s3.emptied == []
     assert s3.deleted_buckets == [bronze_bucket, silver_bucket]
+
+
+# --------------------------------------------------------------------------
+# Delete -- best-effort empty-namespace cleanup (13b)
+# --------------------------------------------------------------------------
+
+def test_delete_with_data_drops_empty_bronze_namespace():
+    # list_tables (default FakeTrino) always reports empty post-drop -> both
+    # the Bronze and Silver namespaces get dropped.
+    k8s, s3, trino = FakeK8s(), FakeS3(), FakeTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert "rawlake.mssql_ogrenci_raw" in trino.dropped_namespaces
+    assert "lakehouse.mssql_ogrenci" in trino.dropped_namespaces
+
+
+def test_delete_with_data_keeps_shared_namespace():
+    # A sibling table still lives in the Bronze namespace -> list_tables
+    # reports it non-empty -> drop_namespace must NOT be called for it.
+    k8s, s3 = FakeK8s(), FakeS3()
+    trino = FakeTrino(tables_by_ns={("rawlake", "mssql_ogrenci_raw"): ["other_table"]})
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert "rawlake.mssql_ogrenci_raw" not in trino.dropped_namespaces
+    # Silver namespace is unaffected by the Bronze override -- still empty/dropped.
+    assert "lakehouse.mssql_ogrenci" in trino.dropped_namespaces
+
+
+class _RaisingTrino(FakeTrino):
+    """Simulates a Trino error during the best-effort namespace cleanup --
+    drop_table still succeeds, but list_tables/drop_namespace blow up. The
+    delete must still return ok (degrade, never 500)."""
+
+    def list_tables(self, catalog, ns):
+        raise RuntimeError("trino coordinator unreachable")
+
+    def drop_namespace(self, fqn):
+        raise RuntimeError("should never be reached -- list_tables raised first")
+
+
+def test_delete_namespace_drop_error_does_not_500():
+    k8s, s3, trino = FakeK8s(), FakeS3(), _RaisingTrino()
+    client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
+    r = client.delete("/api/sources/dbz-mssql1-students?mode=with_data")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    # the drop_table calls (the real teardown) still happened despite the
+    # namespace-cleanup helper failing.
+    assert trino.dropped == [
+        "rawlake.mssql_ogrenci_raw.students", "lakehouse.mssql_ogrenci.students"
+    ]
+    assert trino.dropped_namespaces == []
 
 
 def test_delete_entity_drops_both_tables_and_both_buckets():

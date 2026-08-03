@@ -825,4 +825,34 @@ describe("AddSourceWizard", () => {
     expect(spec.create_stopped).toBeUndefined();
     expect(spec.signal_data_collection).toBeUndefined();
   });
+
+  // --- Task 7: JDBC polling-limitation caveat ---
+
+  it("shows the JDBC polling caveat for a scheduled-jdbc source", async () => {
+    render(<AddSourceWizard />);
+
+    await screen.findByRole("option", { name: /^scheduled$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "scheduled" } });
+    await screen.findByRole("option", { name: /^pg$/i });
+    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "pg" } });
+
+    // Advance to step 3, where the incrementing_col/timestamp_col/poll_ms
+    // fields (and the caveat rendered alongside them) live.
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    expect(await screen.findByText(/deletes are never captured/i)).toBeInTheDocument();
+  });
+
+  it("does not show the JDBC polling caveat for a cdc source", async () => {
+    render(<AddSourceWizard />);
+
+    // Defaults (cdc/mssql) are already what we want -- advance to step 3.
+    await screen.findByLabelText(/create stopped/i);
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    expect(await screen.findByLabelText(/^database$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/deletes are never captured/i)).not.toBeInTheDocument();
+  });
 });

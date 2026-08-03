@@ -36,6 +36,7 @@ class SourceType:
     topic_key: str                       # key into render_service._TOPICS ("" => no Kafka topic)
     plugin: Tuple[str, ...] = ()         # Strimzi spec.build artifact URLs (Plan B)
     dispositions: Tuple[str, ...] = ()   # allowed set; empty => (disposition,)
+    needs_bootstrap: bool = False        # source needs an external Kafka bootstrap (stream-kafka)
 
 
 REGISTRY: Dict[Tuple[str, str], SourceType] = {}
@@ -98,7 +99,8 @@ register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "ent
 # (append-only) is the default; entity (upsert-from-Kafka) is now allowed too,
 # via SourceSpec.identifier + optional SourceSpec.delete_field.
 register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "event",
-                    (), "kafka-ingest", "", dispositions=("event", "entity")))
+                    (), "kafka-ingest", "", dispositions=("event", "entity"),
+                    needs_bootstrap=True))
 # S3 file-set -> Iceberg table (Spark-batch lane). Files already live in the
 # platform's own object store; a Console-driven Spark job full-refresh CTAS's
 # them into a queryable rawlake table. Not CDC/medallion — disposition is inert.

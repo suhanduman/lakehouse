@@ -151,6 +151,9 @@ spec:
         - {name: s3, secret: {secretName: {{ .Values.storage.s3.secretName }}}}
         - {name: debezium-src, secret: {secretName: debezium-src}}
         - {name: kafka-ca, secret: {secretName: kafka-cluster-ca-cert}}
+        {{- if .Values.kafkaConnect.externalKafkaCa.enabled }}
+        - {name: ext-kafka-ca, secret: {secretName: {{ .Values.kafkaConnect.externalKafkaCa.secretName }}}}
+        {{- end }}
     connectContainer:
       volumeMounts:
         - {name: mssql, mountPath: /mnt/external-configuration/mssql}
@@ -159,6 +162,9 @@ spec:
         - {name: s3, mountPath: /mnt/external-configuration/s3}
         - {name: debezium-src, mountPath: /mnt/external-configuration/debezium-src}
         - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
+        {{- if .Values.kafkaConnect.externalKafkaCa.enabled }}
+        - {name: ext-kafka-ca, mountPath: /mnt/external-configuration/ext-kafka-ca}
+        {{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap

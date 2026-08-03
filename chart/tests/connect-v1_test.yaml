@@ -167,3 +167,26 @@ tests:
           path: spec.build.plugins[6].artifacts[0].url
           pattern: "camel-http-source-kafka-connector"
     documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: ext-kafka-ca volume/mount absent by default (kafkaConnect.externalKafkaCa.enabled defaults to false)
+    asserts:
+      - notContains:
+          path: spec.template.pod.volumes
+          content: {name: ext-kafka-ca, secret: {secretName: my-ext-ca}}
+      - notContains:
+          path: spec.template.connectContainer.volumeMounts
+          content: {name: ext-kafka-ca, mountPath: /mnt/external-configuration/ext-kafka-ca}
+    documentSelector: {path: kind, value: KafkaConnect}
+
+  - it: ext-kafka-ca volume/mount present when kafkaConnect.externalKafkaCa.enabled is true
+    set:
+      kafkaConnect.externalKafkaCa.enabled: true
+      kafkaConnect.externalKafkaCa.secretName: my-ext-ca
+    asserts:
+      - contains:
+          path: spec.template.pod.volumes
+          content: {name: ext-kafka-ca, secret: {secretName: my-ext-ca}}
+      - contains:
+          path: spec.template.connectContainer.volumeMounts
+          content: {name: ext-kafka-ca, mountPath: /mnt/external-configuration/ext-kafka-ca}
+    documentSelector: {path: kind, value: KafkaConnect}
