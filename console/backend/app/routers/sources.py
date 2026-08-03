@@ -1241,11 +1241,13 @@ def delete_source(
         if _kind_of(cr) == "ScheduledSparkApplication":
             ns, table = _spark_target(cr)
             fqn = f"rawlake.{ns}.{table}"
-            bucket = render_service.bucket_name(ns)
+            # batch data lives in the shared `rawdata`/`ham-veri` warehouse
+            # (rawlake.<ns>.<table>), NOT a per-source bucket -- data removal
+            # is drop_table (+ dropping the ns if now empty); there is no
+            # per-source bucket to empty here (unlike the connector lanes).
             trino.drop_table(fqn)
             _drop_ns_if_empty(trino, "rawlake", ns)   # spark batch: rawlake.<ns>, no _raw suffix
-            s3.empty_bucket(bucket)
-            result.update(dropped_table=fqn, emptied_bucket=bucket, deleted_topic=None)
+            result.update(dropped_table=fqn, emptied_bucket=None, deleted_topic=None)
             return result
         ns, table = _target_ns_table(cr)   # ns is the pipeline name
         bronze_fqn = f"rawlake.{ns}{render_service.BRONZE_NAMESPACE_SUFFIX}.{table}"
@@ -1270,12 +1272,14 @@ def delete_source(
             return {"ok": True, "name": name, "mode": mode}
         ns, table = _spark_target(cr)
         fqn = f"rawlake.{ns}.{table}"          # batch lane -> rawlake, no Silver
-        bucket = render_service.bucket_name(ns)
+        # batch data lives in the shared `rawdata`/`ham-veri` warehouse
+        # (rawlake.<ns>.<table>), NOT a per-source bucket -- data removal is
+        # drop_table (+ dropping the ns if now empty); there is no
+        # per-source bucket to empty here (unlike the connector lanes).
         trino.drop_table(fqn)
         _drop_ns_if_empty(trino, "rawlake", ns)   # spark batch: rawlake.<ns>, no _raw suffix
-        s3.empty_bucket(bucket)
         return {"ok": True, "name": name, "mode": mode, "dropped_table": fqn,
-                "emptied_bucket": bucket, "deleted_topic": None}   # spark-batch: no topic
+                "emptied_bucket": None, "deleted_topic": None}   # spark-batch: no topic
 
     kafka_ingest_topic = _kafka_ingest_topic(cr)
     if kafka_ingest_topic:

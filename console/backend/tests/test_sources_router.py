@@ -901,6 +901,12 @@ def test_delete_spark_pipeline_only():
 
 
 def test_delete_spark_with_data_drops_rawlake():
+    # Bugfix regression: batch/s3 data lives in the SHARED rawdata/ham-veri
+    # warehouse (rawlake.<ns>.<table>), NOT a per-source bucket -- there was
+    # never a "src-<ns>" bucket created for batch sources, so with_data
+    # teardown must NOT call empty_bucket at all; drop_table is the real
+    # (and only) data-removal step. `emptied_bucket` is None (was previously,
+    # incorrectly, a bucket name that never held the data).
     k8s, s3, trino = FakeK8s(sources=[SPARK_CR]), FakeS3(), FakeTrino()
     client = _client_as({Role.ADMIN}, k8s=k8s, s3=s3, trino=trino)
 
@@ -909,10 +915,11 @@ def test_delete_spark_with_data_drops_rawlake():
     assert r.status_code == 200
     body = r.json()
     assert body["dropped_table"] == "rawlake.ext.orders"
-    assert body["emptied_bucket"] == render_service.bucket_name("ext")
+    assert body["emptied_bucket"] is None
     assert body["deleted_topic"] is None  # spark-batch: no topic at all
     assert trino.dropped == ["rawlake.ext.orders"]
-    assert s3.emptied == [render_service.bucket_name("ext")]
+    assert s3.emptied == []  # no per-source bucket to empty for batch/s3
+    assert not any(c[0] == "empty_bucket" for c in s3.calls)
     assert k8s.deleted_topics == []  # no delete_topic call for a spark source
     assert k8s.deleted_spark_jobs == ["s3-register-s1-orders"]
 
