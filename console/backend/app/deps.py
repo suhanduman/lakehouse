@@ -47,6 +47,7 @@ from app.services.connect_service import ApicurioClient, ConnectService
 from app.services.iceberg_service import IcebergService
 from app.services.k8s_service import K8sService
 from app.services.kafka_consumer_service import KafkaConsumerService
+from app.services.kafka_producer_service import KafkaProducerService
 from app.services.s3_service import S3Service
 from app.services.trino_service import TrinoService
 
@@ -316,3 +317,24 @@ def get_kafka_consumer() -> KafkaConsumerService:
         "consumer_timeout_ms": 3000,
     }
     return KafkaConsumerService(settings.kafka_internal_bootstrap, conn_kwargs)
+
+
+def get_kafka_producer() -> KafkaProducerService:
+    """Real `KafkaProducerService` over the internal TLS+SCRAM listener,
+    authenticating as `settings.kafka_consumer_user` (creds from its Strimzi
+    secret) and trusting the cluster CA. Overridable in tests via
+    `app.dependency_overrides[get_kafka_producer]`."""
+    k8s = get_k8s()
+    user = settings.kafka_consumer_user
+    user_secret = k8s.read_secret(user) or {}
+    ca_secret = k8s.read_secret(settings.kafka_cluster_ca_secret) or {}
+    ctx = _ssl.create_default_context(cadata=ca_secret.get("ca.crt")) if ca_secret.get("ca.crt") else None
+    conn_kwargs = {
+        "security_protocol": "SASL_SSL",
+        "sasl_mechanism": "SCRAM-SHA-512",
+        "sasl_plain_username": user,
+        "sasl_plain_password": user_secret.get("password"),
+        "ssl_context": ctx,
+        "request_timeout_ms": 5000,
+    }
+    return KafkaProducerService(settings.kafka_internal_bootstrap, conn_kwargs)

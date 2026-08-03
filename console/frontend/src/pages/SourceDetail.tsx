@@ -5,9 +5,11 @@ import IngestConfigPanel from "../components/IngestConfigPanel";
 import {
   ApiError,
   editSparkSource,
+  enableSnapshots,
   getConnectorDebug,
   getConnectorDlq,
   getIngestConfig,
+  getSnapshotProgress,
   getSource,
   getSourceConnectors,
   getStatus,
@@ -16,12 +18,17 @@ import {
   restartConnector,
   resumeSource,
   rotateCredentials,
+  startSource,
+  stopSource,
+  triggerSnapshot,
   type ConnectorDebug,
   type ConnectorRef,
   type DeleteSourceResult,
   type DlqResponse,
   type GitopsRemediation,
   type IngestConfig,
+  type SnapshotProgress,
+  type SnapshotResult,
   type Source,
   type SourceSpec,
   type StatusEntry,
@@ -123,6 +130,20 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [ingestLoading, setIngestLoading] = useState(false);
 
+  // Snapshot lifecycle (Task 10): re-snapshot / progress / enable-snapshots
+  // are Debezium-only concepts, gated to CDC connector sources below (`isCdc`)
+  // -- Start/Stop apply to any connector or spark-batch source and mirror
+  // pause/resume's (ungated) rendering. `snapshotTables` defaults to blank,
+  // meaning "let the backend derive the connector's own configured table(s)"
+  // (Source carries no table field to seed a default from). `snapshotResult`
+  // holds the LAST triggerSnapshot response so both its `needs_signal_table`
+  // recipe and its `ok` confirmation can render from one piece of state.
+  const [snapshotType, setSnapshotType] = useState<"incremental" | "blocking">("incremental");
+  const [snapshotTables, setSnapshotTables] = useState("");
+  const [snapshotResult, setSnapshotResult] = useState<SnapshotResult | null>(null);
+  const [progress, setProgress] = useState<SnapshotProgress | null>(null);
+  const [enableSnapshotsNotice, setEnableSnapshotsNotice] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     getSource(name)
@@ -200,6 +221,90 @@ export default function SourceDetail({ role }: SourceDetailProps) {
       setSource((prev) => (prev ? { ...prev, paused: result.paused } : prev));
     } catch (err) {
       handleGitopsBlockedError(err);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  /** Same gitops-blocked shape as handlePause/handleResume -- start/stop are
+   * a distinct lifecycle axis (full teardown/recreate, not pause-in-place)
+   * but share the exact same 409/remediation contract on the backend. */
+  async function handleStart() {
+    setActionError(null);
+    setRemediation(null);
+    setActionPending(true);
+    try {
+      await startSource(name);
+    } catch (err) {
+      handleGitopsBlockedError(err);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  async function handleStop() {
+    setActionError(null);
+    setRemediation(null);
+    setActionPending(true);
+    try {
+      await stopSource(name);
+    } catch (err) {
+      handleGitopsBlockedError(err);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  /** Best-effort retrofit of the Debezium signal/notification channel onto
+   * an existing connector -- same gitops-blocked shape as pause/resume/
+   * start/stop. */
+  async function handleEnableSnapshots() {
+    setActionError(null);
+    setRemediation(null);
+    setEnableSnapshotsNotice(null);
+    setActionPending(true);
+    try {
+      await enableSnapshots(name);
+      setEnableSnapshotsNotice("snapshot signaling enabled");
+    } catch (err) {
+      handleGitopsBlockedError(err);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  /** Triggers an ad-hoc incremental/blocking snapshot. A `needs_signal_table`
+   * response is NOT an error (the connector just needs a one-time DDL run in
+   * the source DB first) -- it's rendered as a copyable recipe below, same
+   * as an `ok` response is rendered as a confirmation, both from this one
+   * `snapshotResult`. */
+  async function handleTriggerSnapshot() {
+    setActionError(null);
+    setRemediation(null);
+    setSnapshotResult(null);
+    setActionPending(true);
+    try {
+      const result = await triggerSnapshot(name, {
+        type: snapshotType,
+        tables: snapshotTables.trim() ? [snapshotTables.trim()] : undefined,
+      });
+      setSnapshotResult(result);
+    } catch (err) {
+      handleGitopsBlockedError(err);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  /** On-demand only -- no polling (per the snapshot-lifecycle brief): the
+   * Progress button re-fetches exactly once per click. */
+  async function handleRefreshProgress() {
+    setActionError(null);
+    setActionPending(true);
+    try {
+      setProgress(await getSnapshotProgress(name));
+    } catch (err) {
+      setActionError(errorMessage(err));
     } finally {
       setActionPending(false);
     }
@@ -402,6 +507,15 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     return <p>Loading source…</p>;
   }
 
+  // Snapshot lifecycle (re-snapshot/progress/enable-snapshots) applies only
+  // to CDC (Debezium) connector sources -- NOT ScheduledSparkApplication
+  // (spark-batch) and NOT a kafka-ingest KafkaConnector (a dedicated Iceberg
+  // sink reading an existing topic, no Debezium signal channel of its own).
+  // cr_kind alone can't tell those two KafkaConnector cases apart (same
+  // caveat as the ingest-config gating above), but `class` can: only a real
+  // Debezium source connector's class starts with "io.debezium.connector.".
+  const isCdc = source.cr_kind === "KafkaConnector" && source.class.startsWith("io.debezium.connector.");
+
   return (
     <div>
       <h2>{source.name}</h2>
@@ -432,6 +546,12 @@ export default function SourceDetail({ role }: SourceDetailProps) {
           Pause
         </button>
       )}
+      <button type="button" onClick={handleStart} disabled={actionPending}>
+        Start
+      </button>
+      <button type="button" onClick={handleStop} disabled={actionPending}>
+        Stop
+      </button>
       <button type="button" onClick={() => setDeleteModalOpen(true)} disabled={actionPending}>
         Delete source
       </button>
@@ -696,6 +816,104 @@ export default function SourceDetail({ role }: SourceDetailProps) {
             </button>
           </div>
         )
+      )}
+
+      {isCdc && (
+        <section aria-label="snapshot-lifecycle">
+          <h3>Snapshot</h3>
+
+          <button type="button" onClick={handleEnableSnapshots} disabled={actionPending}>
+            Enable snapshots
+          </button>
+          {enableSnapshotsNotice && <p role="status">{enableSnapshotsNotice}</p>}
+
+          <fieldset>
+            <legend>Re-snapshot</legend>
+            <label>
+              <input
+                type="radio"
+                name="snapshot-type"
+                value="incremental"
+                checked={snapshotType === "incremental"}
+                onChange={() => setSnapshotType("incremental")}
+              />
+              Incremental
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="snapshot-type"
+                value="blocking"
+                checked={snapshotType === "blocking"}
+                onChange={() => setSnapshotType("blocking")}
+              />
+              Blocking
+            </label>
+
+            <label htmlFor="snapshot-tables">Tables</label>
+            <input
+              id="snapshot-tables"
+              value={snapshotTables}
+              onChange={(e) => setSnapshotTables(e.target.value)}
+              placeholder="leave blank to use the connector's configured table(s)"
+            />
+
+            <button type="button" onClick={handleTriggerSnapshot} disabled={actionPending}>
+              Trigger snapshot
+            </button>
+          </fieldset>
+
+          {snapshotResult?.needs_signal_table && (
+            <div>
+              <p>Run this in your source DB first, then retry.</p>
+              <pre>{snapshotResult.dml}</pre>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(snapshotResult.dml ?? "");
+                  setCopied(true);
+                }}
+              >
+                Copy
+              </button>
+              {copied && <span> Copied</span>}
+            </div>
+          )}
+          {snapshotResult?.ok && !snapshotResult.needs_signal_table && (
+            <p role="status">Snapshot triggered ({snapshotResult.type})</p>
+          )}
+
+          <div>
+            <button type="button" onClick={handleRefreshProgress} disabled={actionPending}>
+              Refresh snapshot progress
+            </button>
+            {progress && progress.notifications.length === 0 && (
+              <p>No recent snapshot activity</p>
+            )}
+            {progress && progress.notifications.length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>kind</th>
+                    <th>table</th>
+                    <th>progress</th>
+                    <th>ts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {progress.notifications.map((n, i) => (
+                    <tr key={i}>
+                      <td>{n.kind}</td>
+                      <td>{n.table ?? "—"}</td>
+                      <td>{n.progress ?? "—"}</td>
+                      <td>{n.ts ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
       )}
 
       <section aria-label="ingest-config">

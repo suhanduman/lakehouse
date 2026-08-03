@@ -120,6 +120,13 @@ interface FormState {
   // get a resumable incremental snapshot after creation instead of a full
   // initial snapshot. See app.models.SourceSpec.snapshot_mode.
   snapshot_mode: string;
+  // CDC lanes only (Task 11): define the connector paused (not started) so
+  // an operator can review/tune it before it starts consuming, and an
+  // optional signaling table (Debezium's signal.data.collection) for
+  // incremental (ad-hoc) snapshots after creation. Both are optional --
+  // see buildSpec, which only sends them when the user actually set them.
+  create_stopped: boolean;
+  signal_data_collection: string;
   // stream/kafka only (Kafka log-ingestion helper, Task 8): self-service
   // topic creation, written into buildSpec as create_topic/topic_partitions/
   // topic_replication_factor when the user opts in. partitions/replication
@@ -166,6 +173,8 @@ const INITIAL_STATE: FormState = {
   identifierText: "",
   delete_field: "",
   snapshot_mode: "initial",
+  create_stopped: false,
+  signal_data_collection: "",
   create_topic: false,
   topic_partitions: "6",
   topic_replication_factor: "3",
@@ -385,6 +394,16 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   // sees, rather than relying on the connector's own default lining up.
   if (form.kind === "cdc") {
     spec.snapshot_mode = form.snapshot_mode;
+    // Create-stopped + signaling table (Task 11, CDC only): both optional --
+    // only sent when the user actually opted in/filled them, so an unset
+    // value doesn't clobber the backend's own default (mirrors
+    // disposition/kafka_bootstrap's own conditional-send pattern above).
+    if (form.create_stopped) {
+      spec.create_stopped = true;
+    }
+    if (form.signal_data_collection) {
+      spec.signal_data_collection = form.signal_data_collection;
+    }
   }
   // Self-service topic creation (Task 8) -- only meaningful for stream/kafka,
   // and only sent when the user actually opted in (an unchecked box means
@@ -794,6 +813,32 @@ export default function AddSourceWizard() {
                 Large table? Choose &quot;only new changes&quot; and run a resumable
                 incremental snapshot after creation (coming next).
               </p>
+              <div>
+                <label htmlFor="create_stopped">
+                  <input
+                    id="create_stopped"
+                    type="checkbox"
+                    checked={form.create_stopped}
+                    onChange={(e) => set("create_stopped", e.target.checked)}
+                  />
+                  Create stopped (define, don&apos;t start)
+                </label>
+              </div>
+              <div>
+                <label htmlFor="signal_data_collection">
+                  Signaling table (for incremental snapshots)
+                </label>
+                <input
+                  id="signal_data_collection"
+                  value={form.signal_data_collection}
+                  onChange={(e) => set("signal_data_collection", e.target.value)}
+                  placeholder="public.debezium_signal"
+                />
+                <p>
+                  Create this table in your source DB for incremental snapshots (the source
+                  detail page shows the exact CREATE TABLE recipe).
+                </p>
+              </div>
             </div>
           )}
           {showPkFields && (

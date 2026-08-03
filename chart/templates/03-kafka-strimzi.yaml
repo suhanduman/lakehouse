@@ -201,6 +201,46 @@ spec:
     retention.ms: 604800000
     compression.type: zstd
 ---
+# Shared Debezium control topics (snapshot-lifecycle Task 4) — always
+# present, chart-provisioned (not per-source, unlike the ingest-namespace
+# topics the orchestrator creates at runtime). debezium-signals MUST stay
+# single-partition: Debezium signal topics require ordering — every
+# connector reads every signal via the same KafkaSignalChannel. See
+# `connect` KafkaUser's connectBaseAcls (Write+Describe on this topic;
+# Console produces signals) and `debezium-src` KafkaUser's acls below
+# (Read+Describe; the Debezium signal consumer authenticates as
+# debezium-src, mirroring the schema-history internal client).
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: debezium-signals
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: {{ .Values.kafka.topics.debeziumSignals.partitions }}
+  replicas: {{ .Values.kafka.topics.debeziumSignals.replicas }}
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
+# debezium-notifications: the CDC connector's main Kafka producer (=
+# `connect` principal) writes notifications here; the Console reads them
+# (both grants live on connectBaseAcls, see values.yaml).
+apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
+kind: KafkaTopic
+metadata:
+  name: debezium-notifications
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: {{ .Values.kafka.topics.debeziumNotifications.partitions }}
+  replicas: {{ .Values.kafka.topics.debeziumNotifications.replicas }}
+  config:
+    retention.ms: 604800000
+    compression.type: zstd
+---
 # Kafka Connect internal topic'leri (config/offset/status) — RF=3.
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaTopic
@@ -260,6 +300,12 @@ spec:
     type: simple
     acls:
       - {resource: {type: topic, name: schema-history., patternType: prefix}, operations: [Read, Write, Create, Describe]}
+      # Debezium's Kafka signal consumer (KafkaSignalChannel) authenticates
+      # as debezium-src (mirrors the schema-history internal client above).
+      # Topic-only ACL, no consumer-group ACL — KafkaSignalChannel uses
+      # manual partition assignment, same as schema-history, which works
+      # with topic-only. See connectBaseAcls in values.yaml (Write side).
+      - {resource: {type: topic, name: debezium-signals, patternType: literal}, operations: [Read, Describe]}
 ---
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaUser

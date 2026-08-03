@@ -1098,3 +1098,82 @@ def test_cdc_render_applies_snapshot_mode():
         identifier=["id"], columns=[{"name": "id", "type": "int"}])
     body = r.render_connector(spec)
     assert body["spec"]["config"]["snapshot.mode"] == "no_data"
+
+
+# --------------------------------------------------------------------------
+# signal channel + notification sink (Task 2, snapshot-lifecycle)
+# --------------------------------------------------------------------------
+
+def test_cdc_render_carries_signal_and_notification_channel():
+    from app.services import render_service
+    from app.models import SourceSpec
+    spec = SourceSpec(source="pgd", kind="cdc", type="pg", db="app", table="customers",
+                      target_ns="pgd", target_table="customers", db_host="h:5432",
+                      identifier=["id"], columns=[{"name":"id","type":"int"}])
+    cfg = render_service.render_connector(spec)["spec"]["config"]
+    assert "kafka" in cfg["signal.enabled.channels"]
+    assert cfg["signal.kafka.topic"] == "debezium-signals"
+    assert cfg["notification.enabled.channels"] == "sink"
+    assert cfg["notification.sink.topic.name"] == "debezium-notifications"
+    assert "signal.data.collection" not in cfg   # unset -> omitted
+
+def test_cdc_render_signal_data_collection_when_set():
+    from app.services import render_service
+    from app.models import SourceSpec
+    spec = SourceSpec(source="pgd", kind="cdc", type="pg", db="app", table="customers",
+                      target_ns="pgd", target_table="customers", db_host="h:5432",
+                      identifier=["id"], columns=[{"name":"id","type":"int"}],
+                      signal_data_collection="public.debezium_signal")
+    cfg = render_service.render_connector(spec)["spec"]["config"]
+    assert cfg["signal.data.collection"] == "public.debezium_signal"
+
+
+# --------------------------------------------------------------------------
+# render_signal_table_dml (Task 7, snapshot-lifecycle)
+# --------------------------------------------------------------------------
+
+def _spec(dbtype: str, **overrides) -> "SourceSpec":
+    from app.models import SourceSpec
+    base = dict(source="src1", kind="cdc", type=dbtype, db="app", table="dbo.customers",
+                target_ns="ns", target_table="customers", db_host="h:1433",
+                identifier=["id"], columns=[{"name": "id", "type": "int"}])
+    base.update(overrides)
+    return SourceSpec(**base)
+
+
+def test_render_signal_table_dml_pg_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("pg"))
+    assert "CREATE TABLE public.debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.debezium_signal TO <debezium_db_user>;" in ddl
+    assert "<debezium_db_user>" in ddl
+
+
+def test_render_signal_table_dml_mssql_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mssql"))
+    assert "CREATE TABLE dbo.debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.debezium_signal TO <debezium_db_user>;" in ddl
+
+
+def test_render_signal_table_dml_mysql_default_name():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mysql"))
+    assert "CREATE TABLE debezium_signal" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON debezium_signal TO <debezium_db_user>;" in ddl
+
+
+@pytest.mark.parametrize("dbtype", ["pg", "mssql", "mysql"])
+def test_render_signal_table_dml_honors_signal_data_collection(dbtype):
+    from app.services import render_service
+    spec = _spec(dbtype, signal_data_collection="custom.sig_table")
+    ddl = render_service.render_signal_table_dml(spec)
+    assert "CREATE TABLE custom.sig_table" in ddl
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON custom.sig_table TO <debezium_db_user>;" in ddl
+
+
+def test_render_signal_table_dml_mongo_is_not_relational_ddl():
+    from app.services import render_service
+    ddl = render_service.render_signal_table_dml(_spec("mongo", mongo_uri="mongodb://h:27017"))
+    assert "CREATE TABLE" not in ddl
+    assert "signal.data.collection" in ddl

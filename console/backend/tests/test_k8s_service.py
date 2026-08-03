@@ -420,8 +420,47 @@ def test_patch_connector_merges_config():
 
 
 # --------------------------------------------------------------------------
-# set_paused — patch spec.state
+# set_state — patch spec.state (running/paused/stopped lifecycle);
+# set_paused delegates to it (Task 8).
 # --------------------------------------------------------------------------
+
+def test_set_state_running_patches_state():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.set_state("dbz-x", "running")
+
+    assert len(fake.patched) == 1
+    assert fake.patched[0]["body"] == {"spec": {"state": "running"}}
+    assert fake.patched[0]["name"] == "dbz-x"
+    assert fake.patched[0]["plural"] == "kafkaconnectors"
+    assert fake.patched[0]["group"] == "kafka.strimzi.io"
+    assert fake.patched[0]["version"] == "v1beta2"
+    assert fake.patched[0]["namespace"] == "example"
+
+
+def test_set_state_paused_patches_state():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.set_state("dbz-x", "paused")
+
+    assert fake.patched[0]["body"] == {"spec": {"state": "paused"}}
+
+
+def test_set_state_stopped_patches_state():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    svc.set_state("dbz-x", "stopped")
+
+    assert fake.patched[0]["body"] == {"spec": {"state": "stopped"}}
+
+
+def test_set_state_rejects_invalid_state():
+    fake = FakeCustom()
+    svc = K8sService(custom_api=fake, core_api=None, namespace=NAMESPACE)
+    with pytest.raises(ValueError):
+        svc.set_state("dbz-x", "bogus")
+    assert fake.patched == []   # rejected before any API call
+
 
 def test_set_paused_true_patches_state_paused():
     fake = FakeCustom()

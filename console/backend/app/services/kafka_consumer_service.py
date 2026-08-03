@@ -101,3 +101,46 @@ class KafkaConsumerService:
         finally:
             try: c.close()
             except Exception: pass
+
+    def read_last_values(self, topic: str, limit: int) -> List[Dict[str, Any]]:
+        """Last <=limit records' FULL decoded values + ts (untruncated), for
+        JSON control messages (Debezium notifications) -- unlike `read_last`
+        (DLQ-specific: truncates to `value_preview` and parses Connect error
+        headers), this returns the whole value so callers can `json.loads`
+        it themselves. Never raises -> []."""
+        if limit <= 0:
+            return []
+        try:
+            c = self._consumer()
+        except Exception:  # noqa: BLE001
+            return []
+        try:
+            parts = c.partitions_for_topic(topic)
+            if not parts:
+                return []
+            tps = [self._tp(topic, p) for p in parts]
+            c.assign(tps)
+            end = c.end_offsets(tps)
+            begin = c.beginning_offsets(tps)
+            per = max(1, limit // len(tps))
+            for tp in tps:
+                c.seek(tp, max(begin[tp], end[tp] - per))
+            batches = c.poll(timeout_ms=2000, max_records=limit)
+            out: List[Dict[str, Any]] = []
+            for recs in (batches or {}).values():
+                for rec in recs:
+                    key = getattr(rec, "key", None)
+                    val = getattr(rec, "value", None)
+                    out.append({
+                        "ts": getattr(rec, "timestamp", None),
+                        "key": (key.decode("utf-8", "replace") if isinstance(key, (bytes, bytearray))
+                                else (None if key is None else str(key))),
+                        "value": (val.decode("utf-8", "replace") if isinstance(val, (bytes, bytearray))
+                                  else (None if val is None else str(val))),
+                    })
+            return out[-limit:]
+        except Exception:  # noqa: BLE001
+            return []
+        finally:
+            try: c.close()
+            except Exception: pass

@@ -15,8 +15,10 @@ of truth.
 
 from __future__ import annotations
 
+import json
+import types
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
@@ -26,6 +28,8 @@ from app.config import settings
 from app.deps import (
     get_connect,
     get_k8s,
+    get_kafka_consumer,
+    get_kafka_producer,
     get_orchestrator,
     get_s3,
     get_trino,
@@ -38,6 +42,8 @@ from app.services import render_service
 from app.services.authz import Action
 from app.services.connect_service import ConnectService
 from app.services.k8s_service import K8sService
+from app.services.kafka_consumer_service import KafkaConsumerService
+from app.services.kafka_producer_service import KafkaProducerService
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
 from app.services.s3_service import S3Service
 from app.services.trino_service import TrinoService
@@ -67,6 +73,17 @@ class PatchSourceRequest(BaseModel):
 class RotateCredentialsRequest(BaseModel):
     user: str
     password: str
+
+
+class SnapshotRequest(BaseModel):
+    """Body for `POST /{name}/snapshot` and `/{name}/snapshot/stop` -- a
+    Debezium `execute-snapshot`/`stop-snapshot` Kafka signal. `tables`
+    defaults to the connector's own `table.include.list`/
+    `collection.include.list` (the SOURCE table/collection, not the Kafka
+    topic) when omitted."""
+
+    tables: Optional[List[str]] = None
+    type: Literal["incremental", "blocking"]
 
 
 _SPARK_ANN = "lakehouse.solus.dev/"
@@ -222,13 +239,20 @@ def _kind_of(cr: Dict[str, Any]) -> str:
     return cr.get("kind") or "KafkaConnector"
 
 
-def _gitops_remediation(cr: Dict[str, Any], pause: bool) -> Dict[str, Any]:
+def _gitops_remediation(cr: Dict[str, Any], state: str) -> Dict[str, Any]:
     """Concrete 'do this in the pipeline repo / ArgoCD' recipe -- the Console
-    never writes to git itself (see the operational-controls spec)."""
+    never writes to git itself (see the operational-controls spec).
+
+    `state` is the target KafkaConnector lifecycle state
+    ("paused"/"running"/"stopped" -- see `K8sService.set_state`). For a
+    ScheduledSparkApplication there's no analogous 3-way CR field, only
+    `spec.suspend` -- both "paused" and "stopped" map to `suspend: true`
+    (spark has no distinct stopped state of its own), "running" maps to
+    `suspend: false`."""
     if _kind_of(cr) == "ScheduledSparkApplication":
-        field, value = "spec.suspend", (True if pause else False)
+        field, value = "spec.suspend", (state != "running")
     else:  # KafkaConnector
-        field, value = "spec.state", ("paused" if pause else "running")
+        field, value = "spec.state", state
     name = (cr.get("metadata") or {}).get("name")
     return {
         "reason": "pause/resume changes the CR spec and is reconciled from git",
@@ -243,6 +267,89 @@ def _gitops_remediation(cr: Dict[str, Any], pause: bool) -> Dict[str, Any]:
             "commit & push",
             "ArgoCD syncs the change to the cluster",
         ],
+    }
+
+
+def _gitops_config_add_remediation(cr: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Remediation for a CONFIG-ADD mutation (enable-snapshots) in gitops
+    mode: the operator must merge these keys into the connector's
+    `spec.config` in the pipeline repo (the Console never writes git).
+
+    Distinct from `_gitops_remediation`, which is a lifecycle-state recipe
+    (spec.state/spec.suspend) -- following THAT recipe for enable-snapshots
+    would set the connector running and never add the signal/notification
+    config, so snapshots would stay un-enabled while the recipe claimed to
+    fix it.
+
+    `config` (from `render_service._signal_and_notification_config()`) is
+    redacted before being embedded: any `signal.consumer.*` key is dropped,
+    since that block carries the Kafka signal channel's SASL/truststore
+    credentials (`signal.consumer.sasl.jaas.config` embeds a plaintext
+    password) -- this API must never echo those back to a client. The
+    recipe instead tells the operator those consumer-security properties
+    resolve via the existing config-provider/credential mechanism, same as
+    every other connector's config."""
+    name = (cr.get("metadata") or {}).get("name")
+    safe_config = {k: v for k, v in config.items() if not k.startswith("signal.consumer.")}
+    return {
+        "reason": "enable-snapshots adds config keys and is reconciled from git",
+        "where": "gitops",
+        "repo": f"{settings.gitops_repo_url}@{settings.gitops_branch}",
+        "path": f"{settings.gitops_path}/{name}",
+        "field": "spec.config",
+        "value": safe_config,
+        "steps": [
+            "edit the connector's manifest in the pipeline repo",
+            "merge these keys into spec.config",
+            "the signal.consumer.* Kafka client security properties (SASL/truststore) "
+            "resolve via the existing config-provider mechanism -- do not hardcode credentials",
+            "commit & push",
+            "ArgoCD syncs the change to the cluster",
+        ],
+    }
+
+
+# --------------------------------------------------------------------------
+# Snapshot signal helpers (snapshot-lifecycle) -- the Console never touches
+# the source DB itself; it only PRODUCES a Debezium execute-snapshot/
+# stop-snapshot Kafka signal, keyed on the connector's own `topic.prefix`.
+# --------------------------------------------------------------------------
+
+# connector.class -> render_signal_table_dml dialect. Only used to build a
+# minimal spec-like object (types.SimpleNamespace) for the `needs_signal_table`
+# branch below -- render_signal_table_dml reads ONLY `.type`/
+# `.signal_data_collection`, so this deliberately avoids constructing/
+# validating a full SourceSpec from a live connector config.
+_CONNECTOR_CLASS_DIALECT = {
+    "io.debezium.connector.postgresql.PostgresConnector": "pg",
+    "io.debezium.connector.sqlserver.SqlServerConnector": "mssql",
+    "io.debezium.connector.mysql.MySqlConnector": "mysql",
+    "io.debezium.connector.mongodb.MongoDbConnector": "mongo",
+}
+
+
+def _snapshot_data_collections(tables: Optional[List[str]], config: Dict[str, Any]) -> List[str]:
+    """`payload.tables` if the caller supplied any; otherwise the connector's
+    own SOURCE table/collection list (`table.include.list` for relational,
+    `collection.include.list` for mongo), split on comma. This is what
+    Debezium's `execute-snapshot`/`stop-snapshot` signal `data-collections`
+    expects -- the source-side table name, NOT the Kafka topic
+    (`_topic_from_config` is deliberately not used here)."""
+    if tables:
+        return tables
+    derived = config.get("table.include.list") or config.get("collection.include.list") or ""
+    return [t.strip() for t in derived.split(",") if t.strip()]
+
+
+def _needs_signal_table_response(config: Dict[str, Any]) -> Dict[str, Any]:
+    dialect = _CONNECTOR_CLASS_DIALECT.get(config.get("connector.class"), "pg")
+    spec_like = types.SimpleNamespace(
+        type=dialect, signal_data_collection=config.get("signal.data.collection")
+    )
+    return {
+        "ok": False,
+        "needs_signal_table": True,
+        "dml": render_service.render_signal_table_dml(spec_like),
     }
 
 
@@ -733,7 +840,7 @@ def pause_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "pause not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=True),
+                "remediation": _gitops_remediation(cr, "paused"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -756,7 +863,7 @@ def resume_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "resume not supported from the Console in gitops mode",
-                "remediation": _gitops_remediation(cr, pause=False),
+                "remediation": _gitops_remediation(cr, "running"),
             },
         )
     if _kind_of(cr) == "ScheduledSparkApplication":
@@ -764,6 +871,259 @@ def resume_source(
     else:
         k8s.set_paused(name, False)
     return {"ok": True, "name": name, "paused": False}
+
+
+@router.post("/{name}/stop", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def stop_source(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """Full stop (distinct from pause -- see `set_state`'s
+    "running"/"paused"/"stopped" lifecycle): the connector task is torn down
+    entirely rather than paused-in-place. Same gitops fail-loud guard as
+    `pause_source`/`resume_source` -- neither CR kind has gitops routing for
+    stop, so a direct `k8s.set_state`/`set_spark_suspended` write in gitops
+    mode would be silently reverted by ArgoCD selfHeal on its next sync (a
+    misleading no-op); the 409's `detail` carries the same structured
+    `remediation` recipe (`_gitops_remediation`) so the frontend can render
+    concrete "do this in the pipeline repo / ArgoCD" steps -- the Console
+    still never writes to git itself here."""
+    cr = _find_source(k8s, name)
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "stop not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, "stopped"),
+            },
+        )
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, True)
+    else:
+        k8s.set_state(name, "stopped")
+    return {"ok": True, "name": name, "stopped": True}
+
+
+@router.post("/{name}/start", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def start_source(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """See `stop_source`'s docstring -- same gitops fail-loud guard, same
+    structured `remediation` recipe in the 409 `detail`. Starts a source that
+    was stopped (or created stopped via `create_stopped` -- see
+    `AddSourceOrchestrator.add_source`)."""
+    cr = _find_source(k8s, name)
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "start not supported from the Console in gitops mode",
+                "remediation": _gitops_remediation(cr, "running"),
+            },
+        )
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        k8s.set_spark_suspended(name, False)
+    else:
+        k8s.set_state(name, "running")
+    return {"ok": True, "name": name, "stopped": False}
+
+
+@router.post("/{name}/enable-snapshots", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def enable_snapshots(
+    name: str,
+    k8s: K8sService = Depends(get_k8s),
+) -> Dict[str, Any]:
+    """Retrofit an EXISTING CDC connector with the Kafka signal channel +
+    notification sink config (snapshot-lifecycle) -- for a connector that
+    predates Task 2's render-time signal/notification block, or one whose
+    config drifted. Same gitops fail-loud guard as pause_source/resume_source
+    (a direct `patch_connector` write in gitops mode would be silently
+    reverted by ArgoCD selfHeal on its next sync): 409 with a structured
+    `remediation` recipe instead.
+
+    Only applies to CDC connectors (KafkaConnector CRs) -- a
+    ScheduledSparkApplication (spark-batch lane) has no Debezium signal
+    channel to enable, so that's a 400, not a gitops/direct branch.
+
+    Deliberately omits `signal.data.collection` from the patch: the operator
+    configures the signaling table/collection separately (see
+    `render_signal_table_dml`); this route's job is only to turn the channel
+    on, not to assert where signals are read from."""
+    cr = _find_source(k8s, name)
+    if _kind_of(cr) == "ScheduledSparkApplication":
+        raise HTTPException(
+            status_code=400,
+            detail="enable-snapshots applies only to CDC connectors",
+        )
+    patch = render_service._signal_and_notification_config()
+    if settings.deploy_mode == "gitops":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "enable-snapshots not supported from the Console in gitops mode -- "
+                    "add the signal-channel config to the connector in the pipeline repo (git)"
+                ),
+                "remediation": _gitops_config_add_remediation(cr, patch),
+            },
+        )
+    k8s.patch_connector(name, patch)
+    return {"ok": True, "name": name, "snapshots_enabled": True}
+
+
+# --------------------------------------------------------------------------
+# Snapshot signal (snapshot-lifecycle) -- PRODUCES a Debezium
+# execute-snapshot/stop-snapshot Kafka signal; the Console never opens a
+# connection to the source DB itself. Both routes degrade never-500: a
+# missing/unreachable connector, a config missing `topic.prefix`, or a failed
+# produce all come back as HTTP 200 `{"ok": False, ...}`, never a 500.
+# --------------------------------------------------------------------------
+
+@router.post("/{name}/snapshot", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def snapshot_source(
+    name: str,
+    payload: SnapshotRequest,
+    connect: ConnectService = Depends(get_connect),
+    producer: KafkaProducerService = Depends(get_kafka_producer),
+) -> Dict[str, Any]:
+    """Produces an `execute-snapshot` signal for an incremental or blocking
+    (ad-hoc) snapshot of `payload.tables` (or, if omitted, the connector's own
+    configured table(s)/collection(s)). An `incremental` snapshot needs a
+    signaling table/collection configured on the connector
+    (`signal.data.collection`) -- if that's missing, this returns a
+    `needs_signal_table` recipe (via `render_service.render_signal_table_dml`)
+    instead of producing a signal Debezium could never act on."""
+    try:
+        config = connect.connector_config(name)
+    except Exception as exc:  # noqa: BLE001 -- degrade, never 500
+        return {"ok": False, "name": name, "reason": f"could not read connector config: {exc}"}
+
+    topic_prefix = config.get("topic.prefix")
+    if not topic_prefix:
+        return {"ok": False, "name": name, "reason": "connector config missing topic.prefix"}
+
+    if payload.type == "incremental" and "signal.data.collection" not in config:
+        return _needs_signal_table_response(config)
+
+    data_collections = _snapshot_data_collections(payload.tables, config)
+    value = {
+        "type": "execute-snapshot",
+        "data": {
+            "data-collections": data_collections,
+            "type": "INCREMENTAL" if payload.type == "incremental" else "BLOCKING",
+        },
+    }
+    ok = producer.send(settings.debezium_signal_topic, topic_prefix, value)
+    return {"ok": ok, "name": name, "type": payload.type, "data_collections": data_collections}
+
+
+@router.post("/{name}/snapshot/stop", dependencies=[Depends(require_action(Action.SOURCE_EDIT))])
+def snapshot_stop(
+    name: str,
+    payload: SnapshotRequest,
+    connect: ConnectService = Depends(get_connect),
+    producer: KafkaProducerService = Depends(get_kafka_producer),
+) -> Dict[str, Any]:
+    """Produces a `stop-snapshot` signal -- halts an in-progress incremental
+    snapshot for `payload.tables` (or, if omitted, the connector's own
+    configured table(s)/collection(s)). No signaling-table check here: a
+    stop-snapshot signal is only meaningful once an incremental snapshot has
+    already been armed via `/snapshot`, which is what enforces that
+    prerequisite."""
+    try:
+        config = connect.connector_config(name)
+    except Exception as exc:  # noqa: BLE001 -- degrade, never 500
+        return {"ok": False, "name": name, "reason": f"could not read connector config: {exc}"}
+
+    topic_prefix = config.get("topic.prefix")
+    if not topic_prefix:
+        return {"ok": False, "name": name, "reason": "connector config missing topic.prefix"}
+
+    data_collections = _snapshot_data_collections(payload.tables, config)
+    value = {"type": "stop-snapshot", "data": {"data-collections": data_collections}}
+    ok = producer.send(settings.debezium_signal_topic, topic_prefix, value)
+    return {"ok": ok, "name": name, "data_collections": data_collections}
+
+
+_SNAPSHOT_NOTIFICATION_LIMIT = 200
+
+_SNAPSHOT_KIND_MAP = {
+    "started": "started",
+    "in_progress": "in_progress",
+    "table_scan_completed": "in_progress",
+    "completed": "completed",
+    "aborted": "aborted",
+    "skipped": "skipped",
+}
+
+
+def _normalize_snapshot_kind(raw_type: Optional[str]) -> str:
+    lowered = (raw_type or "").strip().lower()
+    return _SNAPSHOT_KIND_MAP.get(lowered, lowered)
+
+
+def _snapshot_progress_str(additional_data: Dict[str, Any]) -> str:
+    scanned = additional_data.get("scanned_rows")
+    total = additional_data.get("total_rows_scanned")
+    if scanned is not None and total is not None:
+        return f"{scanned}/{total}"
+    return ""
+
+
+@router.get("/{name}/snapshot-progress", dependencies=[Depends(require_action(Action.READ))])
+def snapshot_progress(
+    name: str,
+    connect: ConnectService = Depends(get_connect),
+    consumer: KafkaConsumerService = Depends(get_kafka_consumer),
+) -> Dict[str, Any]:
+    """Reads the last N records off `settings.debezium_notification_topic`
+    (Debezium's sink-channel notifications -- see
+    `render_service._signal_and_notification_config`) and returns this
+    connector's Snapshot progress. Uses `KafkaConsumerService.read_last_values`
+    (NOT `read_last`, which is DLQ-specific and truncates the value to
+    ~512 chars -- a notification JSON payload can exceed that). Degrades to
+    `{"notifications": []}` on ANY failure (Connect down, Kafka down,
+    unparseable records) -- never 500."""
+    try:
+        try:
+            config = connect.connector_config(name)
+        except Exception:  # noqa: BLE001 -- connector missing / Connect down -> unknown prefix
+            config = {}
+        topic_prefix = config.get("topic.prefix")
+
+        records = consumer.read_last_values(
+            settings.debezium_notification_topic, _SNAPSHOT_NOTIFICATION_LIMIT
+        )
+
+        notifications: List[Dict[str, Any]] = []
+        for record in records:
+            try:
+                payload = json.loads(record.get("value") or "")
+            except Exception:  # noqa: BLE001 -- unparseable value -> skip
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            aggregate_type = str(payload.get("aggregate_type") or "")
+            if "snapshot" not in aggregate_type.lower():
+                continue
+
+            additional_data = payload.get("additional_data") or {}
+            connector_name = additional_data.get("connector_name")
+            if connector_name is not None and connector_name not in (topic_prefix, name):
+                continue
+
+            notifications.append({
+                "kind": _normalize_snapshot_kind(payload.get("type")),
+                "table": (additional_data.get("data_collections")
+                          or additional_data.get("current_collection_in_progress")),
+                "progress": _snapshot_progress_str(additional_data),
+                "ts": payload.get("timestamp") if payload.get("timestamp") is not None else record.get("ts"),
+            })
+        return {"notifications": notifications}
+    except Exception:  # noqa: BLE001 -- degrade, never 500
+        return {"notifications": []}
 
 
 # --------------------------------------------------------------------------

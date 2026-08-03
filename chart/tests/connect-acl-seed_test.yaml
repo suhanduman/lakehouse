@@ -31,6 +31,18 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "kafka-ingest-"
         documentSelector: {path: kind, value: Job}
+      # Task 4 (snapshot-lifecycle): connect base ACLs must include Write on
+      # the shared debezium-signals topic (Console produces signals) and
+      # Read+Write on debezium-notifications (connector produces
+      # notifications as `connect`, Console reads them).
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "debezium-signals"
+        documentSelector: {path: kind, value: Job}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "debezium-notifications"
+        documentSelector: {path: kind, value: Job}
 
 ---
 # Separate suite document (own `templates:` scope — verified helm-unittest
@@ -76,3 +88,51 @@ tests:
       - notContains:
           path: rules[0].resources
           content: kafkausers
+
+---
+# Separate suite document (own `templates:` scope, same reasoning as
+# above): Task 4 (snapshot-lifecycle) shared Debezium control topics + the
+# debezium-src KafkaUser's signal-read ACL, both in
+# chart/templates/03-kafka-strimzi.yaml. The Write/Read+Write side of these
+# topics lives on the `connect` base ACLs (asserted in the first suite
+# above via matchRegex on the seed Job's args).
+suite: shared Debezium signal/notification topics + debezium-src signal-read ACL
+templates:
+  - templates/03-kafka-strimzi.yaml
+tests:
+  - it: "debezium-signals KafkaTopic is single-partition (Debezium signal ordering requirement) with RF from values"
+    documentSelector: {path: metadata.name, value: debezium-signals}
+    asserts:
+      - equal: {path: kind, value: KafkaTopic}
+      - equal: {path: spec.partitions, value: 1}
+      - equal: {path: spec.replicas, value: 3}
+      - equal: {path: 'spec.config["retention.ms"]', value: 604800000}
+      - equal: {path: 'spec.config["compression.type"]', value: zstd}
+  - it: "debezium-signals replicas is values-driven (override=5), partitions still 1"
+    set: {kafka.topics.debeziumSignals.replicas: 5}
+    documentSelector: {path: metadata.name, value: debezium-signals}
+    asserts:
+      - equal: {path: spec.partitions, value: 1}
+      - equal: {path: spec.replicas, value: 5}
+  - it: "debezium-notifications KafkaTopic has a few partitions, RF from values"
+    documentSelector: {path: metadata.name, value: debezium-notifications}
+    asserts:
+      - equal: {path: kind, value: KafkaTopic}
+      - equal: {path: spec.partitions, value: 3}
+      - equal: {path: spec.replicas, value: 3}
+      - equal: {path: 'spec.config["retention.ms"]', value: 604800000}
+      - equal: {path: 'spec.config["compression.type"]', value: zstd}
+  - it: "debezium-src KafkaUser has Read+Describe on debezium-signals (its Debezium signal consumer), alongside the pre-existing schema-history. prefix grant"
+    documentSelector: {path: metadata.name, value: debezium-src}
+    asserts:
+      - equal: {path: kind, value: KafkaUser}
+      - contains:
+          path: spec.authorization.acls
+          content:
+            resource: {type: topic, name: schema-history., patternType: prefix}
+            operations: [Read, Write, Create, Describe]
+      - contains:
+          path: spec.authorization.acls
+          content:
+            resource: {type: topic, name: debezium-signals, patternType: literal}
+            operations: [Read, Describe]

@@ -719,8 +719,11 @@ describe("AddSourceWizard", () => {
   it("offers an initial-snapshot-mode selector for CDC lanes, defaulting to initial", async () => {
     render(<AddSourceWizard />);
 
+    // Anchored to the select's own label ("Initial snapshot") -- Task 11's
+    // signaling-table field also mentions "snapshots" in its own label, so a
+    // loose /snapshot/i match is now ambiguous between the two fields.
     const snapshotSelect = (await screen.findByLabelText(
-      /snapshot|existing data|only new changes/i,
+      /^initial snapshot$/i,
     )) as HTMLSelectElement;
     expect(snapshotSelect).toBeInTheDocument();
     expect(snapshotSelect.value).toBe("initial");
@@ -744,7 +747,7 @@ describe("AddSourceWizard", () => {
     fireEvent.change(await screen.findByLabelText(/primary key/i), {
       target: { value: "id:bigint" },
     });
-    fireEvent.change(screen.getByLabelText(/snapshot|existing data|only new changes/i), {
+    fireEvent.change(screen.getByLabelText(/^initial snapshot$/i), {
       target: { value: "no_data" },
     });
 
@@ -759,5 +762,67 @@ describe("AddSourceWizard", () => {
     expect(spec.identifier).toEqual(["id"]);
     expect(spec.columns).toEqual([{ name: "id", type: "bigint" }]);
     expect(spec.snapshot_mode).toBe("no_data");
+  });
+
+  // --- Task 11: create-stopped + signaling-table fields ---
+
+  it("shows a create-stopped checkbox and signaling-table field for CDC lanes", async () => {
+    render(<AddSourceWizard />);
+    expect(await screen.findByLabelText(/create stopped/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/signaling table/i)).toBeInTheDocument();
+    expect(screen.getByText(/create this table in your source db/i)).toBeInTheDocument();
+  });
+
+  it("hides the create-stopped/signaling-table fields for non-CDC lanes", async () => {
+    render(<AddSourceWizard />);
+    // Defaults (cdc/mssql) show the fields first...
+    await screen.findByLabelText(/create stopped/i);
+
+    await screen.findByRole("option", { name: /^scheduled$/i });
+    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "scheduled" } });
+
+    expect(screen.queryByLabelText(/create stopped/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/signaling table/i)).not.toBeInTheDocument();
+  });
+
+  it("wires create-stopped + signaling-table into the built spec for CDC", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    fireEvent.click(await screen.findByLabelText(/create stopped/i));
+    fireEvent.change(screen.getByLabelText(/signaling table/i), {
+      target: { value: "public.debezium_signal" },
+    });
+
+    fillStep1(); // advance from step 1 (where the new fields live) to step 2
+    await fillStep2();
+    fillStep3();
+    fillStep4();
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.create_stopped).toBe(true);
+    expect(spec.signal_data_collection).toBe("public.debezium_signal");
+  });
+
+  it("omits create_stopped/signal_data_collection from the built spec when left at their defaults", async () => {
+    const previewSpy = vi
+      .spyOn(client, "previewSource")
+      .mockResolvedValue(PREVIEW_RESPONSE);
+
+    render(<AddSourceWizard />);
+    fillStep1();
+    await fillStep2();
+    fillStep3();
+    fillStep4();
+    fireEvent.click(screen.getByRole("button", { name: /fetch preview/i }));
+
+    await waitFor(() => expect(previewSpy).toHaveBeenCalledTimes(1));
+    const [spec] = previewSpy.mock.calls[0];
+    expect(spec.create_stopped).toBeUndefined();
+    expect(spec.signal_data_collection).toBeUndefined();
   });
 });

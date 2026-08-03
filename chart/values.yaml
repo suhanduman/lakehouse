@@ -780,6 +780,12 @@ kafka:
     connectConfigs: {partitions: 1, replicas: 3}
     connectOffsets: {partitions: 25, replicas: 3}
     connectStatus: {partitions: 5, replicas: 3}
+    # Shared Debezium control topics (snapshot-lifecycle Task 4) — always
+    # present, not per-source. debeziumSignals MUST stay single-partition:
+    # Debezium signal topics require ordering (all connectors read all
+    # signals via the same KafkaSignalChannel).
+    debeziumSignals: {partitions: 1, replicas: 3}
+    debeziumNotifications: {partitions: 3, replicas: 3}
   # Kafka iç-topic replication ayarları. Prod default = 3/3/2/3/2 (3+ broker
   # gerektirir). Tek-broker ortam (microk8s-ingest) hepsini 1'e çeker.
   replication:
@@ -1025,6 +1031,16 @@ kafkaConnect:
     - {resource: {type: topic, name: kafka-ingest-, patternType: prefix}, operations: [Read, Write, Create, Describe]}
     - {resource: {type: transactionalId, name: coordinator-txn-, patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: transactionalId, name: worker-txn-, patternType: prefix}, operations: [Write, Describe]}
+    # Shared Debezium signal/notification control topics (snapshot-lifecycle
+    # Task 4). The Console PRODUCES signals as `connect` (Write on
+    # debezium-signals); the CDC connector's main Kafka producer PRODUCES
+    # notifications as `connect` (Write on debezium-notifications), and the
+    # Console READS notifications as `connect` (Read on
+    # debezium-notifications). Read on debezium-signals belongs to
+    # `debezium-src` (see that KafkaUser's acls in 03-kafka-strimzi.yaml),
+    # NOT connect.
+    - {resource: {type: topic, name: debezium-signals, patternType: literal}, operations: [Write, Describe]}
+    - {resource: {type: topic, name: debezium-notifications, patternType: literal}, operations: [Read, Write, Describe]}
 
 # nginx-access ingest. Gated by `.Values.components.nginxIngest`. Driver/executor sizing is
 # values-driven; the job itself (prod-manifests/jobs/nginx_streaming.py) is

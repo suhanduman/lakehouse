@@ -15,6 +15,21 @@ const SOURCE: client.Source = {
   cr_kind: "KafkaConnector",
 };
 
+// A kafka-ingest source is also a bare KafkaConnector CR (cr_kind alone
+// can't distinguish it from a CDC connector -- see the ingest-config 400
+// gating above), but its `class` is the Iceberg sink connector, never a
+// `io.debezium.connector.*` class. Snapshot-lifecycle gating (Task 10) uses
+// that distinction to hide re-snapshot/progress/enable-snapshots (Debezium-
+// only concepts) while still showing Start/Stop (which apply to any
+// connector CR).
+const KAFKA_INGEST_SOURCE: client.Source = {
+  name: "kafka-ingest-nginx",
+  class: "org.apache.iceberg.connect.IcebergSinkConnector",
+  paused: false,
+  state: "RUNNING",
+  cr_kind: "KafkaConnector",
+};
+
 const SPARK_SOURCE_NAME = "s3-batch-invoices";
 
 const SPARK_SOURCE: client.Source = {
@@ -479,5 +494,209 @@ describe("SourceDetail", () => {
     expect(
       await screen.findByText(/only available for kafka-ingest sources/i),
     ).toBeInTheDocument();
+  });
+
+  // Snapshot lifecycle (Task 10): re-snapshot / progress / start-stop /
+  // enable-snapshots, consuming Task 9's client functions.
+  describe("snapshot lifecycle", () => {
+    it("triggers an incremental snapshot with the entered tables and shows confirmation", async () => {
+      mockLoad();
+      const snapSpy = vi.spyOn(client, "triggerSnapshot").mockResolvedValue({
+        ok: true,
+        name: SOURCE_NAME,
+        type: "incremental",
+        data_collections: ["dbo.students"],
+      });
+
+      renderDetail("ADMIN");
+
+      fireEvent.change(await screen.findByLabelText(/tables/i), {
+        target: { value: "dbo.students" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /trigger snapshot/i }));
+
+      await waitFor(() =>
+        expect(snapSpy).toHaveBeenCalledWith(SOURCE_NAME, {
+          type: "incremental",
+          tables: ["dbo.students"],
+        }),
+      );
+      expect(await screen.findByText(/snapshot triggered/i)).toBeInTheDocument();
+    });
+
+    it("shows the copyable signal-table DDL recipe when triggerSnapshot needs one", async () => {
+      mockLoad();
+      vi.spyOn(client, "triggerSnapshot").mockResolvedValue({
+        needs_signal_table: true,
+        dml: "CREATE TABLE dbo.debezium_signal (id VARCHAR(42) PRIMARY KEY, ...)",
+      });
+      const writeText = vi.fn();
+      Object.assign(navigator, { clipboard: { writeText } });
+
+      renderDetail("ADMIN");
+
+      fireEvent.click(await screen.findByRole("button", { name: /trigger snapshot/i }));
+
+      expect(
+        await screen.findByText(/CREATE TABLE dbo\.debezium_signal/),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/run this in your source db first/i)).toBeInTheDocument();
+      // Not treated as an error.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+      expect(writeText).toHaveBeenCalledWith(
+        "CREATE TABLE dbo.debezium_signal (id VARCHAR(42) PRIMARY KEY, ...)",
+      );
+      expect(await screen.findByText(/copied/i)).toBeInTheDocument();
+    });
+
+    it("triggers a blocking snapshot with no tables when Blocking is selected and the input is left blank", async () => {
+      mockLoad();
+      const snapSpy = vi
+        .spyOn(client, "triggerSnapshot")
+        .mockResolvedValue({ ok: true, name: SOURCE_NAME, type: "blocking" });
+
+      renderDetail("ADMIN");
+
+      fireEvent.click(await screen.findByLabelText(/^blocking$/i));
+      fireEvent.click(screen.getByRole("button", { name: /trigger snapshot/i }));
+
+      await waitFor(() =>
+        expect(snapSpy).toHaveBeenCalledWith(SOURCE_NAME, {
+          type: "blocking",
+          tables: undefined,
+        }),
+      );
+    });
+
+    it("fetches and renders snapshot progress on demand, with no polling", async () => {
+      mockLoad();
+      const progressSpy = vi.spyOn(client, "getSnapshotProgress").mockResolvedValue({
+        notifications: [
+          { kind: "in_progress", table: "dbo.students", progress: "500/1000", ts: 1730000000000 },
+        ],
+      });
+
+      renderDetail("ADMIN");
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /refresh snapshot progress/i }),
+      );
+
+      await waitFor(() => expect(progressSpy).toHaveBeenCalledWith(SOURCE_NAME));
+      expect(progressSpy).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText("dbo.students")).toBeInTheDocument();
+      expect(screen.getByText("500/1000")).toBeInTheDocument();
+    });
+
+    it("shows a no-activity note when snapshot progress returns no notifications", async () => {
+      mockLoad();
+      vi.spyOn(client, "getSnapshotProgress").mockResolvedValue({ notifications: [] });
+
+      renderDetail("ADMIN");
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /refresh snapshot progress/i }),
+      );
+
+      expect(await screen.findByText(/no recent snapshot activity/i)).toBeInTheDocument();
+    });
+
+    it("starts and stops a source", async () => {
+      mockLoad();
+      const startSpy = vi
+        .spyOn(client, "startSource")
+        .mockResolvedValue({ ok: true, name: SOURCE_NAME, stopped: false });
+      const stopSpy = vi
+        .spyOn(client, "stopSource")
+        .mockResolvedValue({ ok: true, name: SOURCE_NAME, stopped: true });
+
+      renderDetail("ADMIN");
+
+      fireEvent.click(await screen.findByRole("button", { name: /^start$/i }));
+      await waitFor(() => expect(startSpy).toHaveBeenCalledWith(SOURCE_NAME));
+
+      fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+      await waitFor(() => expect(stopSpy).toHaveBeenCalledWith(SOURCE_NAME));
+    });
+
+    it("renders the gitops remediation recipe when start 409s (shared remediation renderer)", async () => {
+      mockLoad();
+      vi.spyOn(client, "startSource").mockRejectedValue(
+        new client.ApiError(
+          "409",
+          409,
+          JSON.stringify({
+            detail: {
+              message: "not supported",
+              remediation: {
+                reason: "r",
+                where: "gitops",
+                repo: "x@main",
+                path: "pipelines/src",
+                field: "spec.state",
+                value: "running",
+                steps: ["edit", "commit"],
+              },
+            },
+          }),
+        ),
+      );
+
+      renderDetail("ADMIN");
+      fireEvent.click(await screen.findByRole("button", { name: /^start$/i }));
+      expect(await screen.findByText(/spec\.state/)).toBeInTheDocument();
+    });
+
+    it("enables snapshot signaling on an existing connector", async () => {
+      mockLoad();
+      const spy = vi
+        .spyOn(client, "enableSnapshots")
+        .mockResolvedValue({ ok: true, name: SOURCE_NAME, snapshots_enabled: true });
+
+      renderDetail("ADMIN");
+      fireEvent.click(await screen.findByRole("button", { name: /enable snapshots/i }));
+
+      await waitFor(() => expect(spy).toHaveBeenCalledWith(SOURCE_NAME));
+      expect(await screen.findByText(/snapshot signaling enabled/i)).toBeInTheDocument();
+    });
+
+    it("hides re-snapshot/progress/enable-snapshots for a spark-batch source", async () => {
+      vi.spyOn(client, "getSource").mockResolvedValue(SPARK_SOURCE);
+      vi.spyOn(client, "getStatus").mockResolvedValue({ connectors: [], reachable: true });
+      vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
+
+      renderDetail("ADMIN", SPARK_SOURCE_NAME);
+
+      expect(await screen.findByText(SPARK_SOURCE_NAME)).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /trigger snapshot/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /refresh snapshot progress/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /enable snapshots/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides re-snapshot/progress/enable-snapshots for a kafka-ingest source, but still shows Start/Stop", async () => {
+      vi.spyOn(client, "getSource").mockResolvedValue(KAFKA_INGEST_SOURCE);
+      vi.spyOn(client, "getStatus").mockResolvedValue({ connectors: [], reachable: true });
+      vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
+
+      renderDetail("ADMIN", KAFKA_INGEST_SOURCE.name);
+
+      expect(await screen.findByText(KAFKA_INGEST_SOURCE.name)).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /trigger snapshot/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /enable snapshots/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^start$/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^stop$/i })).toBeInTheDocument();
+    });
   });
 });

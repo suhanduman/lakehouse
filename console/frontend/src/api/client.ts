@@ -73,6 +73,8 @@ export interface SourceSpec {
   topic_partitions?: number;
   topic_replication_factor?: number;
   snapshot_mode?: string;
+  signal_data_collection?: string;
+  create_stopped?: boolean;
 }
 
 /** Mirrors the dict shape `app.routers.sources.list_source_types()` returns
@@ -104,6 +106,21 @@ export interface TestConnectionResult {
   ok?: boolean;
   errors?: { field: string | null; message: string }[];
   reason?: string;
+}
+
+/** Mirrors app.routers.sources.trigger_snapshot()'s dict shape. */
+export interface SnapshotResult {
+  ok?: boolean;
+  needs_signal_table?: boolean;
+  dml?: string;
+  name?: string;
+  type?: string;
+  data_collections?: string[];
+}
+
+/** Mirrors app.routers.sources.snapshot_progress()'s dict shape. */
+export interface SnapshotProgress {
+  notifications: { kind: string; table: string | null; progress: string | null; ts: number | null }[];
 }
 
 /** Mirrors app.orchestrator.StepResult. */
@@ -438,6 +455,43 @@ export async function rotateCredentials(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** POST /api/sources/{name}/snapshot -> trigger a snapshot. */
+export async function triggerSnapshot(
+  name: string,
+  body: { tables?: string[]; type: "incremental" | "blocking" },
+): Promise<SnapshotResult> {
+  return request<SnapshotResult>(`/sources/${encodeURIComponent(name)}/snapshot`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** GET /api/sources/{name}/snapshot-progress -> get snapshot progress. */
+export async function getSnapshotProgress(name: string): Promise<SnapshotProgress> {
+  return request<SnapshotProgress>(`/sources/${encodeURIComponent(name)}/snapshot-progress`);
+}
+
+/** POST /api/sources/{name}/enable-snapshots -> enable snapshots for a source. */
+export async function enableSnapshots(
+  name: string,
+): Promise<{ ok: boolean; name: string; snapshots_enabled?: boolean }> {
+  return request(`/sources/${encodeURIComponent(name)}/enable-snapshots`, { method: "POST" });
+}
+
+/** POST /api/sources/{name}/start -> start a source. */
+export async function startSource(
+  name: string,
+): Promise<{ ok: boolean; name: string; stopped?: boolean }> {
+  return request(`/sources/${encodeURIComponent(name)}/start`, { method: "POST" });
+}
+
+/** POST /api/sources/{name}/stop -> stop a source. */
+export async function stopSource(
+  name: string,
+): Promise<{ ok: boolean; name: string; stopped?: boolean }> {
+  return request(`/sources/${encodeURIComponent(name)}/stop`, { method: "POST" });
 }
 
 // --------------------------------------------------------------------------

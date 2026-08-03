@@ -30,6 +30,7 @@ from app.deps import (
     get_connect,
     get_k8s,
     get_kafka_consumer,
+    get_kafka_producer,
     get_orchestrator,
     get_roles,
     get_s3,
@@ -98,6 +99,9 @@ class FakeK8s:
         pass
 
     def set_paused(self, name: str, paused: bool) -> None:
+        pass
+
+    def set_state(self, name: str, state: str) -> None:
         pass
 
     def delete_connector(self, name: str) -> None:
@@ -178,6 +182,21 @@ class FakeKafkaConsumer:
     def read_last(self, topic: str, limit: int) -> List[Dict[str, Any]]:
         return []
 
+    def read_last_values(self, topic: str, limit: int) -> List[Dict[str, Any]]:
+        return []
+
+
+class FakeKafkaProducer:
+    """Snapshot-lifecycle (Task 5) signal producer. FakeConnect.connector_config
+    above returns `{}` -> `topic.prefix` is missing, so both snapshot routes
+    degrade (`ok: False`, still 200) before ever calling `.send` -- this fake
+    is only here because FastAPI resolves the `get_kafka_producer` Depends
+    eagerly (before the handler body runs), same rationale as
+    FakeConnect.connector_config's own docstring."""
+
+    def send(self, topic: str, key: str, value: Dict[str, Any]) -> bool:
+        return True
+
 
 @pytest.fixture
 def admin_client() -> TestClient:
@@ -192,6 +211,7 @@ def admin_client() -> TestClient:
     app.dependency_overrides[get_connect] = lambda: FakeConnect()
     app.dependency_overrides[get_apicurio] = lambda: FakeApicurio()
     app.dependency_overrides[get_kafka_consumer] = lambda: FakeKafkaConsumer()
+    app.dependency_overrides[get_kafka_producer] = lambda: FakeKafkaProducer()
     try:
         yield TestClient(app)
     finally:
@@ -267,6 +287,40 @@ ENDPOINTS: List[Dict[str, Any]] = [
         "method": "POST",
         "template": "/api/sources/{name}/resume",
         "path": f"/api/sources/{SOURCE_NAME}/resume",
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/stop",
+        "path": f"/api/sources/{SOURCE_NAME}/stop",
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/start",
+        "path": f"/api/sources/{SOURCE_NAME}/start",
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/enable-snapshots",
+        "path": f"/api/sources/{SOURCE_NAME}/enable-snapshots",
+    },
+    {
+        # FakeConnect.connector_config returns {} -> topic.prefix missing ->
+        # degrades to `ok: False`, 200 (never a 500).
+        "method": "POST",
+        "template": "/api/sources/{name}/snapshot",
+        "path": f"/api/sources/{SOURCE_NAME}/snapshot",
+        "json": {"type": "blocking"},
+    },
+    {
+        "method": "POST",
+        "template": "/api/sources/{name}/snapshot/stop",
+        "path": f"/api/sources/{SOURCE_NAME}/snapshot/stop",
+        "json": {"type": "blocking"},
+    },
+    {
+        "method": "GET",
+        "template": "/api/sources/{name}/snapshot-progress",
+        "path": f"/api/sources/{SOURCE_NAME}/snapshot-progress",
     },
     {
         "method": "DELETE",

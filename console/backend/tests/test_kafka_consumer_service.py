@@ -72,3 +72,26 @@ def test_read_last_parses_dlq_headers_and_truncates_value():
 def test_read_last_empty_when_no_records():
     fake = FakeConsumer(partitions=[0], begin={0: 0}, end={0: 0})
     assert _svc(fake).read_last("t", 50) == []
+
+
+def test_read_last_values_returns_full_untruncated_value():
+    big_json = ("{" + '"x":"' + ("y" * 1000) + '"}').encode("utf-8")
+    rec = _Rec(value=big_json, headers=[])
+    fake = FakeConsumer(partitions=[0], begin={0: 0}, end={0: 1}, records=[rec])
+    out = _svc(fake).read_last_values("t", 50)
+    assert len(out) == 1
+    assert out[0]["value"] == big_json.decode("utf-8")
+    assert len(out[0]["value"]) > 512
+    assert out[0]["ts"] == 1730000000000
+    assert out[0]["key"] is None
+
+
+def test_read_last_values_empty_when_no_records():
+    fake = FakeConsumer(partitions=[0], begin={0: 0}, end={0: 0})
+    assert _svc(fake).read_last_values("t", 50) == []
+
+
+def test_read_last_values_empty_on_connection_error():
+    def boom(**kw): raise OSError("unreachable")
+    svc = KafkaConsumerService("b:9093", {}, consumer_factory=boom, tp_cls=_TP)
+    assert svc.read_last_values("t", 50) == []
