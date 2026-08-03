@@ -1108,6 +1108,10 @@ export default function AddSourceWizard() {
                   onChange={(e) => set("poll_ms", e.target.value)}
                 />
               </div>
+              <p className="wizard-caveat" role="note">
+                Polling captures new rows, and updates only via a timestamp column;
+                deletes are never captured. If updates or deletes matter, use a CDC source.
+              </p>
             </>
           )}
           {requiredFields.includes("cron") && (
