@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import re
 import zlib
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from app.models import SourceSpec
+from app.models import SourceCredentials, SourceSpec
 from app import source_types
 
 APICURIO_URL = "http://apicurio-registry:8080/apis/registry/v2"
@@ -1047,6 +1047,139 @@ def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) ->
             f"render_spark_job: no Spark-batch renderer for {descriptor.id} (lane={descriptor.lane})"
         )
     return fn(spec, spark_image, s3_secret_name)
+
+
+# --------------------------------------------------------------------------
+# render_connection_test — minimal per-lane connection-test config, LITERAL
+# creds, for Kafka Connect's `PUT /connectors/{name}/config/validate`. Lets
+# the Console test a source's reachability/credentials WITHOUT its own DB
+# driver: Connect already has every connector plugin loaded, so handing it a
+# minimal config (same connector.class + connection keys the real renderers
+# above use) and reading back the validation response is enough. Every
+# config here carries the caller-supplied LITERAL creds (never a
+# `${directory:...}` DirectoryConfigProvider placeholder — Connect's
+# validate endpoint does not resolve those, and there is no mounted secret
+# for a source that hasn't been created yet).
+# --------------------------------------------------------------------------
+
+def _connection_test_relational(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """cdc + mssql/pg. Same connection keys as _render_cdc_relational
+    (database.hostname/user/password + the per-DB port/name key), plus the
+    fixed topic.prefix Debezium's config def requires to validate at all."""
+    config: Dict[str, Any] = {
+        "database.hostname": spec.db_host,
+        "database.user": creds.user,
+        "database.password": creds.password,
+        "topic.prefix": f"cdc.{spec.source}",
+    }
+    if spec.type == "mssql":
+        klass = "io.debezium.connector.sqlserver.SqlServerConnector"
+        config["database.port"] = "1433"
+        config["database.names"] = spec.db
+    else:  # pg
+        klass = "io.debezium.connector.postgresql.PostgresConnector"
+        config["database.port"] = "5432"
+        config["database.dbname"] = spec.db
+    return klass, config
+
+
+def _connection_test_mysql(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """cdc + mysql. Same keys as _render_cdc_mysql, incl. the required
+    database.server.id (reuses that renderer's deterministic derivation)."""
+    config: Dict[str, Any] = {
+        "database.hostname": spec.db_host,
+        "database.port": "3306",
+        "database.user": creds.user,
+        "database.password": creds.password,
+        "database.server.id": _mysql_server_id(spec.source),
+        "topic.prefix": f"cdc.{spec.source}",
+    }
+    return "io.debezium.connector.mysql.MySqlConnector", config
+
+
+def _connection_test_mongo(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """cdc + mongo. Same keys as _render_cdc_mongo."""
+    config: Dict[str, Any] = {
+        "mongodb.connection.string": spec.mongo_uri,
+        "mongodb.user": creds.user,
+        "mongodb.password": creds.password,
+        "topic.prefix": f"mongo.{spec.db}",
+    }
+    return "io.debezium.connector.mongodb.MongoDbConnector", config
+
+
+def _connection_test_jdbc(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """scheduled + mssql/pg. Same keys as _render_scheduled_jdbc."""
+    config: Dict[str, Any] = {
+        "connection.url": spec.jdbc_url,
+        "connection.user": creds.user,
+        "connection.password": creds.password,
+    }
+    return "io.aiven.connect.jdbc.JdbcSourceConnector", config
+
+
+def _connection_test_camel_http(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """stream + http. _render_camel_http has no creds at all — nothing to
+    put literal creds into; only the endpoint key matters for validate."""
+    config: Dict[str, Any] = {"camel.kamelet.http-source.url": spec.http_url}
+    return "org.apache.camel.kafkaconnector.httpsource.CamelHttpsourceSourceConnector", config
+
+
+def _connection_test_camel_mqtt(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """stream + mqtt. Same keys as _render_camel_mqtt, creds literal."""
+    config: Dict[str, Any] = {
+        "camel.kamelet.mqtt-source.brokerUrl": spec.mqtt_broker,
+        "camel.kamelet.mqtt-source.topic": spec.mqtt_topic,
+        "camel.kamelet.mqtt-source.username": creds.user,
+        "camel.kamelet.mqtt-source.password": creds.password,
+    }
+    return "org.apache.camel.kafkaconnector.mqttsource.CamelMqttsourceSourceConnector", config
+
+
+def _connection_test_camel_rabbitmq(spec: SourceSpec, creds: SourceCredentials) -> Tuple[str, Dict[str, Any]]:
+    """stream + rabbitmq. Same host/port parsing + keys as _render_camel_rabbitmq,
+    creds literal."""
+    parts = urlsplit(spec.rabbitmq_uri)
+    config: Dict[str, Any] = {
+        "camel.kamelet.spring-rabbitmq-source.host": parts.hostname or "",
+        "camel.kamelet.spring-rabbitmq-source.port": str(parts.port) if parts.port else "5672",
+        "camel.kamelet.spring-rabbitmq-source.queues": spec.rabbitmq_queue,
+        "camel.kamelet.spring-rabbitmq-source.exchangeName": spec.rabbitmq_queue,
+        "camel.kamelet.spring-rabbitmq-source.username": creds.user,
+        "camel.kamelet.spring-rabbitmq-source.password": creds.password,
+    }
+    return (
+        "org.apache.camel.kafkaconnector.springrabbitmqsource.CamelSpringrabbitmqsourceSourceConnector",
+        config,
+    )
+
+
+_CONNECTION_TEST_RENDERERS = {
+    "cdc-relational": _connection_test_relational,
+    "cdc-mysql": _connection_test_mysql,
+    "cdc-mongo": _connection_test_mongo,
+    "scheduled-jdbc": _connection_test_jdbc,
+    "camel-http": _connection_test_camel_http,
+    "camel-mqtt": _connection_test_camel_mqtt,
+    "camel-rabbitmq": _connection_test_camel_rabbitmq,
+}
+
+
+def render_connection_test(spec: SourceSpec, creds: SourceCredentials) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(connector_class, minimal_config) for Kafka Connect's config/validate,
+    or None when the lane has no external DB/connector to test:
+    kafka-ingest (`stream`+`kafka`, consumes an already-existing topic — there
+    is nothing new to connect to) and the spark-batch lane (`batch`+`s3` /
+    `scheduled`+`mongo` — no KafkaConnector at all, see render_connector's
+    docstring). Dispatches on the same source_types registry render_key the
+    real renderers use, so a new source type only needs a
+    _CONNECTION_TEST_RENDERERS entry (or is correctly None by omission) — not
+    a second parallel kind/type switch."""
+    descriptor = source_types.get(spec.kind, spec.type)
+    fn = _CONNECTION_TEST_RENDERERS.get(descriptor.render_key)
+    if fn is None:
+        return None
+    return fn(spec, creds)
 
 
 def render_ingest_snippets(*, bootstrap: str, topic: str, user: str, password: str,

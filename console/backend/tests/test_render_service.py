@@ -983,3 +983,105 @@ def test_render_ingest_snippets_placeholder_when_bootstrap_or_password_missing()
         bootstrap="", topic="t", user="u", password="", disposition="event")
     assert "<external bootstrap>" in s["fluentbit"]
     assert "<password" in s["fluentbit"]
+
+
+# --------------------------------------------------------------------------
+# render_connection_test — minimal per-lane connection-test config with
+# LITERAL creds (no ${directory:...} config-provider placeholders), for
+# Kafka Connect's config/validate. See _render_cdc_relational/_render_cdc_mysql/
+# _render_cdc_mongo/_render_scheduled_jdbc/_render_camel_* for the connector
+# classes + connection keys this mirrors.
+# --------------------------------------------------------------------------
+
+def _no_placeholders(cfg):
+    return not any(str(v).startswith("${directory:") for v in cfg.values())
+
+
+def test_render_connection_test_cdc_pg_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_cdc_pg(), SourceCredentials(user="u", password="p"))
+    assert "postgres" in cls.lower()
+    assert cfg["database.user"] == "u" and cfg["database.password"] == "p"
+    assert cfg["database.hostname"] == "10.0.0.9"
+    assert cfg["database.dbname"] == "analytics"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_cdc_mssql_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_cdc_mssql(), SourceCredentials(user="u", password="p"))
+    assert cls == "io.debezium.connector.sqlserver.SqlServerConnector"
+    assert cfg["database.user"] == "u" and cfg["database.password"] == "p"
+    assert cfg["database.hostname"] == "10.0.0.5"
+    assert cfg["database.names"] == "OgrenciDB"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_cdc_mysql_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_mysql(), SourceCredentials(user="u", password="p"))
+    assert cls == "io.debezium.connector.mysql.MySqlConnector"
+    assert cfg["database.user"] == "u" and cfg["database.password"] == "p"
+    assert cfg["database.hostname"] == "mysqlhost"
+    assert "database.server.id" in cfg
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_cdc_mongo_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_cdc_mongo(), SourceCredentials(user="u", password="p"))
+    assert cls == "io.debezium.connector.mongodb.MongoDbConnector"
+    assert cfg["mongodb.user"] == "u" and cfg["mongodb.password"] == "p"
+    assert cfg["mongodb.connection.string"] == "mongodb://h:27017/?replicaSet=rs0"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_scheduled_jdbc_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_scheduled_mssql(), SourceCredentials(user="u", password="p"))
+    assert "JdbcSourceConnector" in cls
+    assert cfg["connection.user"] == "u" and cfg["connection.password"] == "p"
+    assert cfg["connection.url"] == "jdbc:sqlserver://10.0.0.5:1433;databaseName=OgrenciDB"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_camel_http_no_creds_needed():
+    # http-source has no creds in the real renderer either -- nothing to leak.
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_http(), SourceCredentials(user="u", password="p"))
+    assert "httpsource" in cls
+    assert cfg["camel.kamelet.http-source.url"] == "https://api.x/p"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_camel_mqtt_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_mqtt(), SourceCredentials(user="u", password="p"))
+    assert "mqttsource" in cls
+    assert cfg["camel.kamelet.mqtt-source.username"] == "u"
+    assert cfg["camel.kamelet.mqtt-source.password"] == "p"
+    assert cfg["camel.kamelet.mqtt-source.brokerUrl"] == "tcp://mosquitto:1883"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_camel_rabbitmq_literal_creds():
+    from app.models import SourceCredentials
+    cls, cfg = r.render_connection_test(_rabbitmq(), SourceCredentials(user="u", password="p"))
+    assert "springrabbitmqsource" in cls
+    assert cfg["camel.kamelet.spring-rabbitmq-source.username"] == "u"
+    assert cfg["camel.kamelet.spring-rabbitmq-source.password"] == "p"
+    assert _no_placeholders(cfg)
+
+
+def test_render_connection_test_none_for_kafka_ingest_lane():
+    # kafka-ingest consumes an existing topic -- no external DB/connector to
+    # test, so there is nothing for config/validate to check.
+    from app.models import SourceCredentials
+    assert r.render_connection_test(_kafka(), SourceCredentials(user="u", password="p")) is None
+
+
+def test_render_connection_test_none_for_spark_batch_lane():
+    # batch-s3 is a ScheduledSparkApplication (spark-batch lane), not a
+    # KafkaConnector -- no connector to validate.
+    from app.models import SourceCredentials
+    assert r.render_connection_test(_s3_spec(), SourceCredentials(user="u", password="p")) is None
