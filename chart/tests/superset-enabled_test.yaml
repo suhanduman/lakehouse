@@ -45,6 +45,39 @@ tests:
           path: metadata.name
           value: superset-config
 
+  - it: renders DB_CONNECTION_MUTATOR injecting a per-connection Trino JWT (jwt mode)
+    # NOTE: the mutator's python body is always rendered (it gates jwt-mode
+    # injection itself at runtime via TRINO_AUTH_MODE) — this suite does not
+    # set authMode: jwt because the init-Job's fail-guard still only accepts
+    # "none" in v1 until Task 8 relaxes it; that's out of this task's scope.
+    set:
+      components.superset: true
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "def DB_CONNECTION_MUTATOR\\("
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "from trino\\.auth import JWTAuthentication"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "/var/run/trino-token/token"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "params\\[\"connect_args\"\\]|\"connect_args\": _ca"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
   - it: does NOT render the dev-convenience Secrets when their values are empty (default)
     set:
       components.superset: true
@@ -94,11 +127,13 @@ tests:
           pattern: "superset db upgrade"
         documentSelector: {path: metadata.name, value: superset-init}
 
-  # Final-review fix wave (2026-08-04): superset.trino.authMode only wires
-  # `none` in v1 (spike doc, section (c)) — any other value must fail the
-  # render loudly (template-time `fail`) rather than silently shipping an
-  # unauthenticated Trino URI under a name that implies real auth.
-  - it: authMode=none (default) renders clean with the unauthenticated Trino URI
+  # Final-review fix wave (2026-08-04): superset.trino.authMode wires both
+  # `none` (unauthenticated, :8080) and `jwt` (machine-auth via the
+  # sidecar+mutator, tokenless :8443 URI — see Task 8) in v1; any other
+  # value must fail the render loudly (template-time `fail`) rather than
+  # silently shipping an unauthenticated Trino URI under a name that
+  # implies real auth.
+  - it: authMode=none (default) renders clean with the unauthenticated Trino URI on :8080
     set:
       components.superset: true
     asserts:
@@ -106,14 +141,32 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "trino://superset@"
         documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: ":8080/"
+        documentSelector: {path: metadata.name, value: superset-init}
 
-  - it: authMode=jwt (unsupported in v1) fails the render loudly (fail() guard)
+  - it: authMode=jwt registers the tokenless :8443 URI and sets pool_recycle via superset shell
     set:
       components.superset: true
       superset.trino.authMode: jwt
     asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: ":8443/"
+        documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "pool_recycle"
+        documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: authMode=bogus (unsupported value) fails the render loudly (fail() guard)
+    set:
+      components.superset: true
+      superset.trino.authMode: bogus
+    asserts:
       - failedTemplate:
-          errorMessage: "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none"
+          errorMessage: "superset.trino.authMode must be 'none' or 'jwt'"
 
   - it: authMode=none but auth.oidc.enabled=true prints a non-fatal WARN (unauthenticated Trino under OIDC)
     set:
@@ -124,3 +177,115 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "WARN: superset\\.trino\\.authMode=none but auth\\.oidc\\.enabled=true"
         documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: renders the superset-trino-oidc-credentials Secret only when the svc-superset-trino clientSecret is supplied
+    set:
+      components.superset: true
+      superset.trino.oidc.clientSecret: "dev-svc-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-trino-oidc-credentials, any: true}
+  - it: does NOT render superset-trino-oidc-credentials when clientSecret is empty (default)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-trino-oidc-credentials, any: true}
+        not: true
+
+  # Task 7: refresher sidecar + shared emptyDir (jwt mode only)
+  - it: authMode=jwt adds the trino-token-refresher sidecar + trino-token emptyDir to the Deployment
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+            emptyDir: {}
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=none does NOT add the trino-token-refresher sidecar or trino-token volume
+    set:
+      components.superset: true
+      superset.trino.authMode: none
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+        documentSelector: {path: kind, value: Deployment}
+
+  # Final-review fix wave (2026-08-04): Superset must trust the Trino :8443
+  # internal CA (trino-internal-tls Secret's ca.crt) or the TLS handshake
+  # fails before JWT auth is ever attempted. Mounted on the `superset`
+  # container ONLY — the refresher sidecar talks to Keycloak, not Trino.
+  - it: authMode=jwt mounts the trino-internal-tls ca.crt on the superset container only (not the sidecar)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-ca
+            secret:
+              secretName: trino-internal-tls
+              items:
+              - {key: ca.crt, path: ca.crt}
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: trino-ca
+            mountPath: /etc/trino-ca/ca.crt
+            subPath: ca.crt
+            readOnly: true
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: trino-ca
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=none does NOT mount the trino-ca volume
+    set:
+      components.superset: true
+      superset.trino.authMode: none
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-ca
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=jwt but tls.enabled=false fails the render loudly (guard - jwt requires oidc+tls)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      superset.trino.tls.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)"
+
+  - it: authMode=jwt but auth.oidc.enabled=false fails the render loudly (guard - jwt requires oidc+tls)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)"

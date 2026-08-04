@@ -42,6 +42,40 @@ stringData:
   shared-secret: {{ .Values.trino.internalSharedSecret | quote }}
 ---
 {{- end }}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+---
+# PKCS12 keystore passphrase (dev-convenience inline; out-of-band per
+# secrets.mode otherwise). NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-internal-tls-pass
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  password: {{ .Values.superset.trino.tls.keystorePassword | default "changeit" | quote }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: trino-internal-tls
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  secretName: trino-internal-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ .Values.routes.certIssuer | quote }}
+  dnsNames:
+  - {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}
+  - {{ include "lakehouse.svc.trino" . }}
+  keystores:
+    pkcs12:
+      create: true
+      passwordSecretRef:
+        name: trino-internal-tls-pass
+        key: password
+---
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -99,13 +133,20 @@ data:
     # discovery at startup, so with no reachable issuer this config MUST be
     # omitted entirely rather than pointed at a dummy URL, or the coordinator
     # crash-loops forever.
-    http-server.authentication.type=oauth2
+    http-server.authentication.type=oauth2,jwt
     web-ui.authentication.type=oauth2
     http-server.authentication.oauth2.issuer=${ENV:OIDC_ISSUER}
     http-server.authentication.oauth2.client-id=${ENV:OIDC_CLIENT_ID}
     http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
     http-server.authentication.oauth2.principal-field=preferred_username
     http-server.authentication.oauth2.scopes=openid,email,profile
+    # Machine clients (Superset, later dbt) present a Keycloak client-credentials
+    # JWT; validated against the realm JWKS. aud=trino mandatory (Keycloak
+    # audience mapper, 10-keycloak.yaml) or Trino 401s.
+    http-server.authentication.jwt.key-file=${ENV:OIDC_ISSUER}/protocol/openid-connect/certs
+    http-server.authentication.jwt.required-issuer=${ENV:OIDC_ISSUER}
+    http-server.authentication.jwt.required-audience=trino
+    http-server.authentication.jwt.principal-field=preferred_username
 {{- else }}
     # auth.oidc.enabled=false — DEV/SMOKE-TEST ONLY (see values.yaml's
     # `auth:` comment). No http-server.authentication.type set at all =
@@ -127,6 +168,14 @@ data:
     # http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
     # Alternatif: OpenShift Service Mesh (Istio) PeerAuthentication CR ile
     # namespace-seviye mTLS; uygulama konfigürasyonu değişmez.
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+    # Client-facing HTTPS (:8443) for JWT machine-auth (b1). Coordinator keeps
+    # :8080 for worker discovery + the edge-TLS Route. cert-manager PKCS12.
+    http-server.https.enabled=true
+    http-server.https.port=8443
+    http-server.https.keystore.path=/etc/trino/certs/keystore.p12
+    http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
+{{- end }}
   worker.config.properties: |
     coordinator=false
     http-server.http.port=8080
@@ -205,7 +254,13 @@ spec:
         securityContext:
           {{- $csc | nindent 10 }}
         {{- end }}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+        ports:
+        - {containerPort: 8080}
+        - {containerPort: 8443}
+{{- else }}
         ports: [{containerPort: 8080}]
+{{- end }}
         env:
         - {name: S3_ENDPOINT,        valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
         - {name: S3_REGION,          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
@@ -223,6 +278,9 @@ spec:
         # side crash-loops on 'unset environment variable
         # TRINO_INTERNAL_SECRET'.
         - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+        - {name: KEYSTORE_PASS, valueFrom: {secretKeyRef: {name: trino-internal-tls-pass, key: password}}}
+{{- end }}
         resources:
           requests:
             memory: {{ .Values.trino.coordinator.resources.requests.memory | quote }}
@@ -239,10 +297,20 @@ spec:
         - {name: config, mountPath: /etc/trino/rules.json,                subPath: rules.json}
         - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+        - {name: trino-certs, mountPath: /etc/trino/certs}
+{{- end }}
       volumes:
       {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
       - name: config
         configMap: {name: trino-config}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+      - name: trino-certs
+        secret:
+          secretName: trino-internal-tls
+          items:
+          - {key: keystore.p12, path: keystore.p12}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -327,7 +395,13 @@ metadata:
 {{- end }}
 spec:
   selector: {app: trino, role: coordinator}
+{{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
+  ports:
+  - {name: http, port: 8080, targetPort: 8080}
+  - {name: https, port: 8443, targetPort: 8443}
+{{- else }}
   ports: [{name: http, port: 8080, targetPort: 8080}]
+{{- end }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

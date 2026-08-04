@@ -208,11 +208,58 @@ Girişte confidential Keycloak `superset` OIDC client'ı kullanılır — secret
 diğer client'lardaki desenle aynı şekilde `secrets.mode` üzerinden tek
 kaynaktan gelir.
 
-**Bilinen sınırlama (v1):** "v1 registers the Trino connection with
-`superset.trino.authMode: none` (works when `auth.oidc.enabled: false`).
-Under OIDC-enabled Trino the connection renders but queries require the
-JWT-authenticator follow-up (next Consumption slice) — see
-docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md."
+### Trino machine-auth (b1) — Superset prod-serving
+
+`auth.oidc.enabled: true` iken (medium/large tier'larda varsayılan) Trino
+`OAUTH2,JWT` zincirli bir authenticator ile çalışır: **insanlar** tarayıcı SSO
+(`oauth2`) ile, **makine client'ları** (Superset, ve b2'deki dbt) Keycloak'ın
+verdiği Bearer JWT (`jwt`) ile kimlik doğrular. `jwt` girişi Keycloak JWKS'e
+karşı doğrulanır; `oauth2` insan yolu değişmeden kalır (byte-for-byte).
+
+- **Keycloak service-account client — `svc-superset-trino`:** `client_credentials`
+  grant'lı, confidential bir client; access token'ına zorunlu bir **`aud: trino`**
+  audience mapper'ı eklenir (mapper olmadan Trino her isteği 401'ler). Secret'ı
+  `superset.trino.oidc.clientSecret` üzerinden diğer OIDC client secret'larıyla
+  aynı konvansiyonla (`secrets.mode`) tek kaynaktan sağlanır.
+- **Token akışı — sidecar + `DB_CONNECTION_MUTATOR` (token Postgres'te asla
+  saklanmaz):** Superset pod'una eklenen bir refresher sidecar, her
+  `superset.trino.tokenRefreshSeconds` (varsayılan 600s) saniyede Keycloak'tan
+  yeni bir `client_credentials` token'ı çekip paylaşılan bir `emptyDir`
+  (`trino-token`) dosyasına **atomik** yazar (`token.tmp` yaz → `mv` ile
+  rename — yarım/boş token'a karşı). `superset_config.py`'deki
+  `DB_CONNECTION_MUTATOR`, her Trino engine kurulumunda bu dosyayı okuyup
+  `connect_args["auth"]`'a enjekte eder. Superset'in kayıtlı Trino bağlantısı
+  **token içermeyen** (tokenless) bir temel URI'dır — dönen token yalnızca pod
+  belleğinde/emptyDir'de yaşar, init-Job'ın yazdığı metadata veritabanına asla
+  yazılmaz.
+- **`pool_recycle` < token ömrü ilişkisi:** mutator token'ı engine kurulumunda
+  enjekte eder, ama Superset DBAPI bağlantılarını pool'lar — token'ından daha
+  uzun yaşayan eski bir pool'lu bağlantı Trino'da 401 alır. Bu yüzden init-Job,
+  Trino bağlantısını `extra.engine_params.pool_recycle`
+  (`.Values.superset.trino.poolRecycleSeconds`, varsayılan 800s) ile Keycloak
+  token ömrünün (900s, `10-keycloak.yaml`) **altında** kaydeder — bağlantılar
+  token'ları expire olmadan recycle edilir.
+- **Trino coordinator internal TLS (`:8443`, cert-manager, hedefli — blanket
+  mTLS değil):** JWT/OAuth2 auth güvenli bir transport gerektirdiği için
+  coordinator'a cert-manager `Certificate`'ı ile internal TLS eklendi
+  (`trino-coordinator.<ns>.svc`, PKCS12 keystore, `http-server.https.enabled=true`
+  `:8443`'te) — Keycloak'ın kendi internal TLS'ini sonlandırma hassasına aynı
+  hedefli yaklaşım; `allow-insecure-over-http` bilinçli olarak reddedilir.
+  Platformun mevcut internal güvenlik duruşu NetworkPolicy segmentasyonu +
+  edge TLS'tir; cluster-genelinde internal mTLS (service mesh) ayrı bir Day-2
+  kalemidir.
+- **Özel Superset image'ı (Trino driver):** Superset'in Trino'ya bağlanabilmesi
+  için `trino[sqlalchemy]` driver'ı gömülü özel bir image kullanılır
+  (`.Values.superset.supersetImageTag`) — upstream `apache/superset` image'ı
+  bu driver'ı içermez.
+
+**Bilinen sınırlama:** B1 machine-auth (Superset↔Trino JWT + internal TLS) is
+helm-unittest + docker-spike verified (superset 4.1.1 mutator signature, trino
+439 HTTPS:8443 boot, trino[sqlalchemy]==0.338.0 driver); the full
+Keycloak→Trino-over-TLS→Superset end-to-end + token-rotation-across-pool_recycle
+is an OpenShift UAT deliverable (Keycloak is not deployed and Trino is
+scaled-0 in the microk8s dev cluster). The custom Superset image must be
+built+pushed (arm64 for microk8s) before deploy.
 
 Medium/large tier'larda (`components.superset: true`) üç Superset secret'ı —
 `superset.secretKey`, `superset.adminPassword`, `superset.oidc.clientSecret` —

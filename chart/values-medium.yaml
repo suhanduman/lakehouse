@@ -38,6 +38,17 @@
 components:
   superset: true
 
+# b1 (Trino machine-auth): with `components.superset: true` above and the
+# chart default `auth.oidc.enabled: true` (Keycloak present in this tier),
+# turn on Superset->Trino JWT machine-auth — Superset presents a Keycloak
+# service-account JWT to Trino instead of the dev-only `none` (unauthenticated)
+# default. `clientSecret`/`tls.keystorePassword` stay empty here (out-of-band
+# per `.Values.secrets.mode`, same contract as every other OIDC credential in
+# this chart) — never put real secrets in a sizing overlay.
+superset:
+  trino:
+    authMode: jwt
+
 postgres:
   nessie:
     instances: 3   # chart default — CNPG 3-instance HA cluster

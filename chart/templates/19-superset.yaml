@@ -14,6 +14,9 @@
 # Service wiring: Trino via `lakehouse.svc.trino`, metadata DB via
 # `lakehouse.svc.pgSupersetRw` (both helpers, never hardcoded).
 {{- if .Values.components.superset }}
+{{- if and (eq .Values.superset.trino.authMode "jwt") (not (and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled)) }}
+{{- fail "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)" }}
+{{- end }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -118,6 +121,40 @@ data:
     FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
     SQLLAB_TIMEOUT = 60
     SUPERSET_WEBSERVER_TIMEOUT = 120
+
+    # --- Trino machine-auth (b1): inject a fresh JWT per connection ---
+    # Signature VERIFIED against the 4.1.1 image (superset/models/core.py:531):
+    #   sqlalchemy_url, params = DB_CONNECTION_MUTATOR(url, params, user, sm, source)
+    #   create_engine(sqlalchemy_url, **params)  -> connect_args is params["connect_args"] (NESTED)
+    TRINO_AUTH_MODE = {{ .Values.superset.trino.authMode | quote }}
+    _TRINO_TOKEN_FILE = "/var/run/trino-token/token"
+    # Internal CA for the Trino :8443 listener (trino-internal-tls Secret's
+    # ca.crt, mounted read-only on THIS container only — see the Deployment
+    # volume/mount below). Without this, trino-python-client (requests-based)
+    # verifies against the public certifi bundle and rejects the
+    # cert-manager-issued internal cert before auth is even attempted.
+    # ASSUMES .Values.routes.certIssuer can issue for the internal
+    # *.svc.cluster.local name — same assumption the existing keycloak-tls
+    # Certificate (10-keycloak.yaml) already makes; issuer-suitability is a
+    # deployment/UAT concern, not this template's.
+    _TRINO_CA_FILE = "/etc/trino-ca/ca.crt"
+    def DB_CONNECTION_MUTATOR(sqlalchemy_url, params, username, security_manager, source):
+        # Only touch the Trino connection, and only in jwt mode.
+        if TRINO_AUTH_MODE == "jwt" and str(sqlalchemy_url).startswith("trino://"):
+            try:
+                with open(_TRINO_TOKEN_FILE) as _f:
+                    _tok = _f.read().strip()
+            except (OSError, IOError):
+                _tok = ""
+            if _tok:
+                from trino.auth import JWTAuthentication
+                _ca = dict((params or {}).get("connect_args") or {})
+                _ca["auth"] = JWTAuthentication(_tok)
+                _ca["http_scheme"] = "https"
+                if os.path.exists(_TRINO_CA_FILE):
+                    _ca["verify"] = _TRINO_CA_FILE
+                params = {**(params or {}), "connect_args": _ca}
+        return sqlalchemy_url, params
 {{- if or .Values.superset.secretKey .Values.superset.adminPassword }}
 ---
 # Dev-convenience inline Secret — rendered ONLY when secretKey/adminPassword
@@ -148,6 +185,20 @@ type: Opaque
 stringData:
   client-secret: {{ .Values.superset.oidc.clientSecret | quote }}
 {{- end }}
+{{- if .Values.superset.trino.oidc.clientSecret }}
+---
+# Single source with the Keycloak `svc-superset-trino` service-account client
+# secret (10-keycloak.yaml) via `.Values.superset.trino.oidc.clientSecret`.
+# Consumed by the Superset refresher sidecar. Same dev-convenience contract.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-trino-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.superset.trino.oidc.clientSecret | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -171,7 +222,7 @@ spec:
       {{- end }}
       containers:
       - name: superset
-        image: {{ .Values.versions.supersetImage | quote }}
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
         {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
         {{- if $csc }}
         securityContext:
@@ -188,6 +239,13 @@ spec:
         - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         volumeMounts:
         - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
+        {{- if eq .Values.superset.trino.authMode "jwt" }}
+        - {name: trino-token, mountPath: /var/run/trino-token}
+        # Trino :8443 internal CA — mounted on the `superset` container ONLY
+        # (NOT the refresher sidecar below, which talks to Keycloak, not
+        # Trino). Consumed by DB_CONNECTION_MUTATOR's `verify` (superset_config.py above).
+        - {name: trino-ca, mountPath: /etc/trino-ca/ca.crt, subPath: ca.crt, readOnly: true}
+        {{- end }}
         resources:
           requests: {memory: {{ .Values.superset.resources.requests.memory | quote }}, cpu: {{ .Values.superset.resources.requests.cpu | quote }}}
           limits:   {memory: {{ .Values.superset.resources.limits.memory | quote }},   cpu: {{ .Values.superset.resources.limits.cpu | quote }}}
@@ -199,9 +257,69 @@ spec:
           httpGet: {path: /health, port: 8088}
           initialDelaySeconds: 120
           periodSeconds: 30
+      {{- if eq .Values.superset.trino.authMode "jwt" }}
+      # Trino machine-auth (b1): refreshes a Keycloak service-account JWT for
+      # the `svc-superset-trino` client and writes it atomically to the shared
+      # emptyDir; DB_CONNECTION_MUTATOR (superset_config.py above) reads it
+      # per-connection. Exponential backoff on failure, keeps last-good token
+      # (a transient Keycloak blip must never break existing SQL Lab sessions).
+      - name: trino-token-refresher
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          set -uo pipefail
+          DEST=/var/run/trino-token/token
+          BACKOFF=5
+          while true; do
+            TOK=$(python3 - <<'PY'
+          import os,sys,json,urllib.parse,urllib.request
+          data=urllib.parse.urlencode({"grant_type":"client_credentials",
+            "client_id":"svc-superset-trino",
+            "client_secret":os.environ["SVC_CLIENT_SECRET"]}).encode()
+          url=os.environ["OIDC_ISSUER"].rstrip("/")+"/protocol/openid-connect/token"
+          try:
+            r=urllib.request.urlopen(url,data=data,timeout=10)
+            print(json.load(r)["access_token"])
+          except Exception as e:
+            sys.stderr.write("token fetch failed: %s\n" % type(e).__name__); sys.exit(1)
+          PY
+          )
+            if [ -n "$TOK" ]; then
+              printf '%s' "$TOK" > /var/run/trino-token/token.tmp && mv /var/run/trino-token/token.tmp "$DEST"
+              BACKOFF=5
+              sleep {{ .Values.superset.trino.tokenRefreshSeconds }}
+            else
+              echo "WARN: keeping last-good token; retry in ${BACKOFF}s"
+              sleep "$BACKOFF"; BACKOFF=$(( BACKOFF*2 > 60 ? 60 : BACKOFF*2 ))
+            fi
+          done
+        env:
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: SVC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: superset-trino-oidc-credentials, key: client-secret}}}
+        volumeMounts:
+        - {name: trino-token, mountPath: /var/run/trino-token}
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:   {cpu: "200m", memory: "128Mi"}
+      {{- end }}
       volumes:
       - name: superset-config
         configMap: {name: superset-config}
+      {{- if eq .Values.superset.trino.authMode "jwt" }}
+      - name: trino-token
+        emptyDir: {}
+      - name: trino-ca
+        secret:
+          secretName: trino-internal-tls
+          items:
+          - {key: ca.crt, path: ca.crt}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -245,26 +363,47 @@ spec:
       {{- end }}
       containers:
       - name: superset-init
-        image: {{ .Values.versions.supersetImage | quote }}
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
         command: ["/bin/bash", "-c"]
         args:
         - |
-          {{- if ne .Values.superset.trino.authMode "none" }}{{ fail "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none" }}{{- end }}
+          {{- if not (has .Values.superset.trino.authMode (list "none" "jwt")) }}{{ fail "superset.trino.authMode must be 'none' or 'jwt'" }}{{- end }}
           set -euo pipefail
           superset db upgrade
           superset init
           superset fab create-admin \
             --username "$ADMIN_USER" --firstname Admin --lastname Admin \
             --email admin@lakehouse.local --password "$ADMIN_PASSWORD" || true
-          {{- if .Values.auth.oidc.enabled }}
+          {{- if and (eq .Values.superset.trino.authMode "none") .Values.auth.oidc.enabled }}
           echo "WARN: superset.trino.authMode=none but auth.oidc.enabled=true — the Trino connection is unauthenticated and queries will fail until the JWT slice lands (see spike doc)."
           {{- end }}
           # Register the Trino connection (idempotent — updates if present).
           # authMode={{ .Values.superset.trino.authMode }}: `none` => unauthenticated Trino
-          # (works when auth.oidc.enabled=false). See the spike doc for the OIDC path.
+          # (works when auth.oidc.enabled=false); `jwt` => tokenless https URI, the
+          # DB_CONNECTION_MUTATOR injects the rotating JWT per connection.
+          {{- if eq .Values.superset.trino.authMode "jwt" }}
+          # JWT machine-auth: tokenless https URI (mutator injects the rotating
+          # JWT per connection). `set_database_uri` has NO -e/--extra flag in
+          # 4.1.1 (spike-verified) → set pool_recycle via `superset shell`,
+          # BELOW the token lifespan so no pooled connection outlives its JWT.
+          superset set_database_uri \
+            -d "Trino Lakehouse" \
+            -u "trino://svc-superset-trino@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8443/{{ .Values.superset.trino.catalog }}"
+          superset shell <<'PY'
+          import json
+          from superset import db
+          from superset.models.core import Database
+          d = db.session.query(Database).filter_by(database_name="Trino Lakehouse").one()
+          extra = json.loads(d.extra or "{}")
+          extra.setdefault("engine_params", {})["pool_recycle"] = {{ .Values.superset.trino.poolRecycleSeconds }}
+          d.extra = json.dumps(extra)
+          db.session.commit()
+          PY
+          {{- else }}
           superset set_database_uri \
             -d "Trino Lakehouse" \
             -u "trino://superset@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8080/{{ .Values.superset.trino.catalog }}"
+          {{- end }}
           {{- if .Values.superset.exampleDashboard.enabled }}
           # Best-effort example dashboard import — NEVER fatal (a committed
           # Superset export is version-brittle; authored during UAT).
