@@ -63,3 +63,19 @@ tests:
     asserts:
       - containsDocument: {kind: Secret, apiVersion: v1, name: superset, any: true}
       - containsDocument: {kind: Secret, apiVersion: v1, name: superset-oidc-credentials, any: true}
+
+  - it: renders Deployment + Service (name superset, port http) + PDB when enabled
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: superset, any: true}
+      - containsDocument: {kind: Service, apiVersion: v1, name: superset, any: true}
+      - containsDocument: {kind: PodDisruptionBudget, apiVersion: policy/v1, name: superset-pdb, any: true}
+      - equal:
+          path: spec.ports[0].name
+          value: http
+        documentSelector: {path: kind, value: Service}
+      - equal:
+          path: spec.ports[0].port
+          value: 8088
+        documentSelector: {path: kind, value: Service}
