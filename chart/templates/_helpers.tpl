@@ -104,6 +104,7 @@ anywhere else.
 {{- define "lakehouse.svc.pgNessieRw" -}}pg-nessie-rw{{- end -}}
 {{- define "lakehouse.svc.pgApicurioRw" -}}pg-apicurio-rw{{- end -}}
 {{- define "lakehouse.svc.pgKeycloakRw" -}}pg-keycloak-rw{{- end -}}
+{{- define "lakehouse.svc.pgSupersetRw" -}}pg-superset-rw{{- end -}}
 {{- define "lakehouse.svc.keycloak" -}}keycloak-service{{- end -}}
 {{- define "lakehouse.svc.minio" -}}minio{{- end -}}
 
