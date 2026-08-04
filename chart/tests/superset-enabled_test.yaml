@@ -131,7 +131,7 @@ tests:
   # `none` in v1 (spike doc, section (c)) — any other value must fail the
   # render loudly (template-time `fail`) rather than silently shipping an
   # unauthenticated Trino URI under a name that implies real auth.
-  - it: authMode=none (default) renders clean with the unauthenticated Trino URI
+  - it: authMode=none (default) renders clean with the unauthenticated Trino URI on :8080
     set:
       components.superset: true
     asserts:
@@ -139,14 +139,32 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "trino://superset@"
         documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: ":8080/"
+        documentSelector: {path: metadata.name, value: superset-init}
 
-  - it: authMode=jwt (unsupported in v1) fails the render loudly (fail() guard)
+  - it: authMode=jwt registers the tokenless :8443 URI and sets pool_recycle via superset shell
     set:
       components.superset: true
       superset.trino.authMode: jwt
     asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: ":8443/"
+        documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "pool_recycle"
+        documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: authMode=bogus (unsupported value) fails the render loudly (fail() guard)
+    set:
+      components.superset: true
+      superset.trino.authMode: bogus
+    asserts:
       - failedTemplate:
-          errorMessage: "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none"
+          errorMessage: "superset.trino.authMode must be 'none' or 'jwt'"
 
   - it: authMode=none but auth.oidc.enabled=true prints a non-fatal WARN (unauthenticated Trino under OIDC)
     set:

@@ -285,22 +285,43 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
-          {{- if ne .Values.superset.trino.authMode "none" }}{{ fail "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none" }}{{- end }}
+          {{- if not (has .Values.superset.trino.authMode (list "none" "jwt")) }}{{ fail "superset.trino.authMode must be 'none' or 'jwt'" }}{{- end }}
           set -euo pipefail
           superset db upgrade
           superset init
           superset fab create-admin \
             --username "$ADMIN_USER" --firstname Admin --lastname Admin \
             --email admin@lakehouse.local --password "$ADMIN_PASSWORD" || true
-          {{- if .Values.auth.oidc.enabled }}
+          {{- if and (eq .Values.superset.trino.authMode "none") .Values.auth.oidc.enabled }}
           echo "WARN: superset.trino.authMode=none but auth.oidc.enabled=true — the Trino connection is unauthenticated and queries will fail until the JWT slice lands (see spike doc)."
           {{- end }}
           # Register the Trino connection (idempotent — updates if present).
           # authMode={{ .Values.superset.trino.authMode }}: `none` => unauthenticated Trino
-          # (works when auth.oidc.enabled=false). See the spike doc for the OIDC path.
+          # (works when auth.oidc.enabled=false); `jwt` => tokenless https URI, the
+          # DB_CONNECTION_MUTATOR injects the rotating JWT per connection.
+          {{- if eq .Values.superset.trino.authMode "jwt" }}
+          # JWT machine-auth: tokenless https URI (mutator injects the rotating
+          # JWT per connection). `set_database_uri` has NO -e/--extra flag in
+          # 4.1.1 (spike-verified) → set pool_recycle via `superset shell`,
+          # BELOW the token lifespan so no pooled connection outlives its JWT.
+          superset set_database_uri \
+            -d "Trino Lakehouse" \
+            -u "trino://svc-superset-trino@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8443/{{ .Values.superset.trino.catalog }}"
+          superset shell <<'PY'
+          import json
+          from superset import db
+          from superset.models.core import Database
+          d = db.session.query(Database).filter_by(database_name="Trino Lakehouse").one()
+          extra = json.loads(d.extra or "{}")
+          extra.setdefault("engine_params", {})["pool_recycle"] = {{ .Values.superset.trino.poolRecycleSeconds }}
+          d.extra = json.dumps(extra)
+          db.session.commit()
+          PY
+          {{- else }}
           superset set_database_uri \
             -d "Trino Lakehouse" \
             -u "trino://superset@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8080/{{ .Values.superset.trino.catalog }}"
+          {{- end }}
           {{- if .Values.superset.exampleDashboard.enabled }}
           # Best-effort example dashboard import — NEVER fatal (a committed
           # Superset export is version-brittle; authored during UAT).
