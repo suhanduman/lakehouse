@@ -226,3 +226,66 @@ tests:
           content:
             name: trino-token
         documentSelector: {path: kind, value: Deployment}
+
+  # Final-review fix wave (2026-08-04): Superset must trust the Trino :8443
+  # internal CA (trino-internal-tls Secret's ca.crt) or the TLS handshake
+  # fails before JWT auth is ever attempted. Mounted on the `superset`
+  # container ONLY — the refresher sidecar talks to Keycloak, not Trino.
+  - it: authMode=jwt mounts the trino-internal-tls ca.crt on the superset container only (not the sidecar)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-ca
+            secret:
+              secretName: trino-internal-tls
+              items:
+              - {key: ca.crt, path: ca.crt}
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: trino-ca
+            mountPath: /etc/trino-ca/ca.crt
+            subPath: ca.crt
+            readOnly: true
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: trino-ca
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=none does NOT mount the trino-ca volume
+    set:
+      components.superset: true
+      superset.trino.authMode: none
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-ca
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=jwt but tls.enabled=false fails the render loudly (guard - jwt requires oidc+tls)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      superset.trino.tls.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)"
+
+  - it: authMode=jwt but auth.oidc.enabled=false fails the render loudly (guard - jwt requires oidc+tls)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)"
