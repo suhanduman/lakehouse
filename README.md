@@ -4,8 +4,8 @@ Bu depo, açık kaynak bir lakehouse platformunun **tek versiyonlu,
 Helm ile paketlenmiş** kurulumunu barındırır: Kafka/Strimzi, Nessie, Trino,
 Iceberg, CNPG Postgres, Apicurio Registry, Keycloak (OIDC + AD federation),
 Kafka Connect + CDC/scheduled connector'lar, nginx-access ingest (Spark
-Structured Streaming), Zeppelin ve self-servis **Lakehouse Console** +
-**Kafka UI**.
+Structured Streaming), Zeppelin, self-servis **Lakehouse Console** +
+**Kafka UI** ve BI/dashboard katmanı olarak **Apache Superset**.
 
 **Tek doğruluk kaynağı `chart/`'tır.** Kurulum, upgrade ve rollback tek
 komutla yapılır; air-gapped/manuel/Helm'siz senaryolar için `manual-install/`
@@ -193,6 +193,32 @@ Secret'ındaki admin kullanıcı/parola ile girilir.
 
 Metrik seri adları/PromQL'ler sürüm-bağımlı olabilir; doğrulama runbook'u için
 `docs/POC-DOGRULA-cluster-checklist.md`'ye bakın.
+
+---
+
+## Superset (BI)
+
+`components.superset: true` iken (medium/large tier'larda açık —
+`values-medium.yaml`/`values-large.yaml`; dev tier'da kapalı) chart, self-servis
+BI/dashboard katmanı olarak **Apache Superset**'i ekler: Deployment + Service +
+PDB + init-Job + ConfigMap, ayrıca metadata veritabanı için kendi CNPG
+cluster'ı — **`pg-superset`**.
+
+Girişte confidential Keycloak `superset` OIDC client'ı kullanılır — secret'ı
+diğer client'lardaki desenle aynı şekilde `secrets.mode` üzerinden tek
+kaynaktan gelir.
+
+**Bilinen sınırlama (v1):** "v1 registers the Trino connection with
+`superset.trino.authMode: none` (works when `auth.oidc.enabled: false`).
+Under OIDC-enabled Trino the connection renders but queries require the
+JWT-authenticator follow-up (next Consumption slice) — see
+docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md."
+
+Medium/large tier'larda (`components.superset: true`) üç Superset secret'ı —
+`superset.secretKey`, `superset.adminPassword`, `superset.oidc.clientSecret` —
+ilk boot'tan ÖNCE `secrets.mode`'a göre out-of-band provision edilmelidir
+(keycloak-admin-credentials ile AYNI konvansiyon); aksi halde superset ve
+superset-init pod'ları `CreateContainerConfigError`'da kalır.
 
 ---
 

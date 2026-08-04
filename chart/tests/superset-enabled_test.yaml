@@ -1,0 +1,126 @@
+# chart/tests/superset-enabled_test.yaml — proves the Superset component
+# (chart/templates/19-superset.yaml, gated by components.superset) renders its
+# full manifest set when enabled and nothing when disabled. Mirrors
+# component-enabled_test.yaml (Zeppelin) conventions.
+suite: superset component render
+templates:
+  - 19-superset.yaml
+tests:
+  - it: renders nothing when components.superset is false
+    set:
+      components.superset: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the pg-superset CNPG Cluster when components.superset is true
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument:
+          kind: Cluster
+          apiVersion: postgresql.cnpg.io/v1
+          name: pg-superset
+          any: true
+
+  - it: renders the superset-config ConfigMap with AUTH_OAUTH and env-sourced secrets (no literals)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: superset-config
+          any: true
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "AUTH_TYPE = AUTH_OAUTH"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "os\\.environ"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
+  - it: does NOT render the dev-convenience Secrets when their values are empty (default)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset, any: true}
+        not: true
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-oidc-credentials, any: true}
+        not: true
+
+  - it: renders the dev-convenience Secrets when values are supplied
+    set:
+      components.superset: true
+      superset.secretKey: "dev-secret-key"
+      superset.adminPassword: "dev-admin-pw"
+      superset.oidc.clientSecret: "dev-oidc-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset, any: true}
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-oidc-credentials, any: true}
+
+  - it: renders Deployment + Service (name superset, port http) + PDB when enabled
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: superset, any: true}
+      - containsDocument: {kind: Service, apiVersion: v1, name: superset, any: true}
+      - containsDocument: {kind: PodDisruptionBudget, apiVersion: policy/v1, name: superset-pdb, any: true}
+      - equal:
+          path: spec.ports[0].name
+          value: http
+        documentSelector: {path: kind, value: Service}
+      - equal:
+          path: spec.ports[0].port
+          value: 8088
+        documentSelector: {path: kind, value: Service}
+
+  - it: renders the init-Job with Helm post-install hook and db-upgrade command
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Job, apiVersion: batch/v1, name: superset-init, any: true}
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook"]
+          pattern: "post-(install|upgrade)"
+        documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "superset db upgrade"
+        documentSelector: {path: metadata.name, value: superset-init}
+
+  # Final-review fix wave (2026-08-04): superset.trino.authMode only wires
+  # `none` in v1 (spike doc, section (c)) — any other value must fail the
+  # render loudly (template-time `fail`) rather than silently shipping an
+  # unauthenticated Trino URI under a name that implies real auth.
+  - it: authMode=none (default) renders clean with the unauthenticated Trino URI
+    set:
+      components.superset: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "trino://superset@"
+        documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: authMode=jwt (unsupported in v1) fails the render loudly (fail() guard)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none"
+
+  - it: authMode=none but auth.oidc.enabled=true prints a non-fatal WARN (unauthenticated Trino under OIDC)
+    set:
+      components.superset: true
+      auth.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "WARN: superset\\.trino\\.authMode=none but auth\\.oidc\\.enabled=true"
+        documentSelector: {path: metadata.name, value: superset-init}

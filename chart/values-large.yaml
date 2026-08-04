@@ -11,6 +11,9 @@
 #
 #   helm install lakehouse chart/ -f chart/values-large.yaml -n <namespace>
 
+components:
+  superset: true
+
 postgres:
   nessie:
     storage:
@@ -30,6 +33,11 @@ postgres:
     walStorage:
       size: 20Gi
   keycloak:
+    storage:
+      size: 50Gi
+    walStorage:
+      size: 20Gi
+  superset:
     storage:
       size: 50Gi
     walStorage:

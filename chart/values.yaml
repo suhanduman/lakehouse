@@ -599,6 +599,11 @@ versions:
   # full-string-pin convention as `zeppelinImage` above (not built via
   # `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
   kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
+  # Apache Superset (BI). External image, full-ref pin (like kafkaUiImage/
+  # zeppelinImage). POC-DOĞRULA: exact tag + arm64 availability — apache/superset
+  # historically ships amd64; UAT runs on OpenShift (amd64). Local arm64 smoke
+  # may need a community arm64 tag (same caveat as zeppelin's amd64-only note).
+  supersetImage: apache/superset:4.1.1
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
@@ -683,6 +688,31 @@ postgres:
       enablePodMonitor: true
     backup:
       destinationPath: s3://backups/pg-apicurio
+      endpointURL: "{{S3_ENDPOINT}}"
+      retentionPolicy: 30d
+      walMaxParallel: 4
+      dataJobs: 2
+  superset:
+    instances: 3
+    database: superset
+    owner: superset
+    storage:
+      storageClass: ""
+      size: 10Gi
+    walStorage:
+      storageClass: ""
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    monitoring:
+      enablePodMonitor: true
+    backup:
+      destinationPath: s3://backups/pg-superset
       endpointURL: "{{S3_ENDPOINT}}"
       retentionPolicy: 30d
       walMaxParallel: 4
@@ -1141,6 +1171,51 @@ zeppelin:
       analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
       student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
     sessionTimeoutMs: 28800000   # 8 saat
+
+# Apache Superset (BI) — Consumption slice (a). Hand-rolled Deployment/Service/
+# ConfigMap (chart/templates/19-superset.yaml), gated by `components.superset`
+# (default false; on in medium/large tiers). Metadata store: pg-superset CNPG
+# (postgres.superset). Login: native AUTH_OAUTH against the Keycloak `superset`
+# client (10-keycloak.yaml). Trino connection auth-mode is spike-driven (see
+# docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md).
+superset:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  # Bootstrap admin — a fallback identity even though OIDC is primary. SAME
+  # dev-convenience inline-Secret contract as keycloak.adminPassword: empty
+  # default => the `superset` Secret is NOT rendered; provision out-of-band.
+  adminUser: admin
+  adminPassword: ""
+  # Flask SECRET_KEY (session signing). Empty default => not rendered inline;
+  # provision the `superset` Secret out-of-band. NEVER logged.
+  secretKey: ""
+  oidc:
+    # Confidential client secret for the `superset` OIDC client
+    # (chart/templates/10-keycloak.yaml `clients[].secret`, single source — the
+    # two can never drift). Empty default => the `superset-oidc-credentials`
+    # Secret is NOT rendered (same contract as kafkaUi.oidc.clientSecret);
+    # provision out-of-band per `.Values.secrets.mode`.
+    clientSecret: ""
+  trino:
+    # Superset->Trino connection auth. `none` = unauthenticated Trino (works
+    # only when `auth.oidc.enabled: false`, the dev/smoke path) — v1 default
+    # per the spike. `jwt` = present a Keycloak JWT (requires a Trino jwt
+    # authenticator, the documented NEXT slice). See the spike doc.
+    authMode: none
+    # Trino catalog Superset connects to by default (Silver medallion).
+    catalog: lakehouse
+  exampleDashboard:
+    # Best-effort import of a committed example dashboard bundle by the
+    # init-Job. Default false: the connection + one dataset are the v1 "it
+    # works" proof; the dashboard bundle is authored/imported during UAT
+    # (a committed Superset export is version-brittle — kept opt-in).
+    enabled: false
 
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport

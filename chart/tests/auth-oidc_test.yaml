@@ -21,6 +21,7 @@ suite: auth.oidc.enabled gates OIDC wiring on Trino + Nessie
 templates:
   - 06-trino-ha.yaml
   - 04-nessie-ha.yaml
+  - 10-keycloak.yaml
 tests:
   - it: default (auth.oidc.enabled unset/true) keeps Trino's oauth2 config + OIDC env vars (control case)
     templates:
@@ -108,3 +109,33 @@ tests:
           content:
             name: QUARKUS_OIDC_AUTH_SERVER_URL
         documentIndex: 1
+
+  # Single-source check for the `superset` Keycloak client's confidential
+  # secret (chart/templates/10-keycloak.yaml). Superset's AUTH_OAUTH login
+  # can only complete the confidential authorization_code flow if this
+  # client's `secret` matches what the superset-oidc-credentials Secret
+  # (chart/templates/19-superset.yaml, from Values.superset.oidc.clientSecret)
+  # mounts into the Deployment — both sides read the same value, so they can
+  # never drift. clients[1] pins to `superset` (2nd entry after `trino`,
+  # `components.ai` default false so `ai-ui` is absent) — the clientId equal
+  # guards that index assumption so an array-order change fails loudly
+  # instead of silently asserting against the wrong client.
+  - it: superset.oidc.clientSecret single-sources the Keycloak superset client's secret
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      superset.oidc.clientSecret: "dev-oidc-secret"
+    asserts:
+      - equal:
+          path: spec.realm.clients[1].clientId
+          value: superset
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[1].secret
+          value: "dev-oidc-secret"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport

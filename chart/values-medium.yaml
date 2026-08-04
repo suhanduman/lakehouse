@@ -35,6 +35,9 @@
 # because the value would otherwise be different) so this file is a
 # testable assertion of the medium contract, not just a comment. ------------
 
+components:
+  superset: true
+
 postgres:
   nessie:
     instances: 3   # chart default — CNPG 3-instance HA cluster
@@ -42,6 +45,8 @@ postgres:
     instances: 3   # chart default
   keycloak:
     instances: 3   # chart default
+  superset:
+    instances: 3   # chart default — CNPG 3-instance HA
 
 kafka:
   nodePools:

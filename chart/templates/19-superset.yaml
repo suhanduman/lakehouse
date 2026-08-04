@@ -1,0 +1,289 @@
+# Apache Superset (BI) — Consumption slice (a). Hand-rolled deployment
+# (Deployment + Service + ConfigMap + Secret + PDB + init-Job) plus its own
+# pg-superset CNPG metadata store, ALL under one `components.superset` gate
+# (default false; on in medium/large). Follows the Zeppelin/Kafka-UI
+# hand-templated convention. Login: native AUTH_OAUTH against the Keycloak
+# `superset` client (10-keycloak.yaml). Trino connection auth is spike-driven
+# (docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md).
+#
+# pg-superset is gated by `components.superset` (NOT `components.postgres`) —
+# same "no orphan DB" rationale as pg-keycloak's $keycloakDbEnabled: a disabled
+# Superset must not leave a metadata cluster with no consumer, and dev (superset
+# off) must not pay for it in the sizing-tiers dev budget.
+#
+# Service wiring: Trino via `lakehouse.svc.trino`, metadata DB via
+# `lakehouse.svc.pgSupersetRw` (both helpers, never hardcoded).
+{{- if .Values.components.superset }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-superset
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  instances: {{ .Values.postgres.superset.instances }}
+  imageName: {{ .Values.versions.cnpgPostgresImage | quote }}
+  storage:
+    size: {{ .Values.postgres.superset.storage.size | quote }}
+{{- with .Values.postgres.superset.storage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  walStorage:
+    size: {{ .Values.postgres.superset.walStorage.size | quote }}
+{{- with .Values.postgres.superset.walStorage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.superset.database }}
+      owner: {{ .Values.postgres.superset.owner }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgres.superset.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.postgres.superset.backup.endpointURL | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.storage.s3.secretName }}
+          key: access-key-id
+        secretAccessKey:
+          name: {{ .Values.storage.s3.secretName }}
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: {{ .Values.postgres.superset.backup.walMaxParallel }}
+      data:
+        compression: gzip
+        jobs: {{ .Values.postgres.superset.backup.dataJobs }}
+    retentionPolicy: {{ .Values.postgres.superset.backup.retentionPolicy | quote }}
+  monitoring:
+    enablePodMonitor: {{ and .Values.components.monitoring .Values.monitoring.targets.postgres.enabled .Values.postgres.superset.monitoring.enablePodMonitor }}
+  resources:
+    requests:
+      cpu: {{ .Values.postgres.superset.resources.requests.cpu | quote }}
+      memory: {{ .Values.postgres.superset.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.postgres.superset.resources.limits.cpu | quote }}
+      memory: {{ .Values.postgres.superset.resources.limits.memory | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-superset-daily
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: "0 0 4 * * *"
+  cluster:
+    name: pg-superset
+  backupOwnerReference: self
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-config
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  superset_config.py: |
+    import os
+    # --- Metadata DB (pg-superset via lakehouse.svc.pgSupersetRw helper) ---
+    SQLALCHEMY_DATABASE_URI = (
+        "postgresql+psycopg2://%s:%s@%s:5432/%s" % (
+            os.environ["DB_USER"], os.environ["DB_PASSWORD"],
+            os.environ["DB_HOST"], os.environ["DB_NAME"],
+        )
+    )
+    # --- Session signing key (from Secret, never inlined) ---
+    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
+
+    # --- OIDC via the existing Keycloak `superset` client ---
+    from flask_appbuilder.security.manager import AUTH_OAUTH
+    AUTH_TYPE = AUTH_OAUTH
+    AUTH_USER_REGISTRATION = True
+    AUTH_USER_REGISTRATION_ROLE = "Gamma"   # least-privilege default; admins mapped below
+    OAUTH_PROVIDERS = [{
+        "name": "keycloak",
+        "icon": "fa-key",
+        "token_key": "access_token",
+        "remote_app": {
+            "client_id": "superset",
+            "client_secret": os.environ["OIDC_CLIENT_SECRET"],
+            "server_metadata_url": os.environ["OIDC_ISSUER"] + "/.well-known/openid-configuration",
+            "api_base_url": os.environ["OIDC_ISSUER"] + "/protocol/openid-connect/",
+            "client_kwargs": {"scope": "openid email profile"},
+        },
+    }]
+    # AD group (Keycloak `groups` claim) -> Superset role. lakehouse-admins -> Admin.
+    AUTH_ROLES_MAPPING = {"lakehouse-admins": ["Admin"], "lakehouse-analysts": ["Alpha"], "lakehouse-students": ["Gamma"]}
+    AUTH_ROLES_SYNC_AT_LOGIN = True
+
+    # --- Minimal v1: synchronous SQL Lab, no Celery/Redis, thumbnails off ---
+    FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
+    SQLLAB_TIMEOUT = 60
+    SUPERSET_WEBSERVER_TIMEOUT = 120
+{{- if or .Values.superset.secretKey .Values.superset.adminPassword }}
+---
+# Dev-convenience inline Secret — rendered ONLY when secretKey/adminPassword
+# are explicitly supplied. Empty default => NOT rendered; provision out-of-band
+# (ExternalSecret/Vault or `oc create secret generic superset ...`) under the
+# SAME name/keys per `.Values.secrets.mode`. NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  secret-key: {{ .Values.superset.secretKey | quote }}
+  admin-password: {{ .Values.superset.adminPassword | quote }}
+{{- end }}
+{{- if .Values.superset.oidc.clientSecret }}
+---
+# Single source with the Keycloak `superset` client secret (10-keycloak.yaml
+# `clients[].secret`, Task 8) via `.Values.superset.oidc.clientSecret` — the two
+# can never drift. SAME dev-convenience contract as kafka-ui-oidc-credentials.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.superset.oidc.clientSecret | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: superset}
+spec:
+  replicas: {{ .Values.superset.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: superset}
+  template:
+    metadata:
+      labels: {app: superset}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: superset
+        image: {{ .Values.versions.supersetImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        ports: [{containerPort: 8088, name: http}]
+        env:
+        - {name: DB_HOST,  value: {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.pgSupersetRw" .) "context" .) | quote }}}
+        - {name: DB_NAME,  value: {{ .Values.postgres.superset.database | quote }}}
+        - {name: DB_USER,     valueFrom: {secretKeyRef: {name: pg-superset-app, key: username}}}
+        - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superset-app, key: password}}}
+        - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
+        - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
+        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
+        volumeMounts:
+        - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
+        resources:
+          requests: {memory: {{ .Values.superset.resources.requests.memory | quote }}, cpu: {{ .Values.superset.resources.requests.cpu | quote }}}
+          limits:   {memory: {{ .Values.superset.resources.limits.memory | quote }},   cpu: {{ .Values.superset.resources.limits.cpu | quote }}}
+        readinessProbe:
+          httpGet: {path: /health, port: 8088}
+          initialDelaySeconds: 60
+          periodSeconds: 15
+        livenessProbe:
+          httpGet: {path: /health, port: 8088}
+          initialDelaySeconds: 120
+          periodSeconds: 30
+      volumes:
+      - name: superset-config
+        configMap: {name: superset-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  selector: {app: superset}
+  ports: [{name: http, port: 8088, targetPort: 8088}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: superset-pdb
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  minAvailable: 0
+  selector:
+    matchLabels: {app: superset}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: superset-init
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels: {app: superset-init}
+    spec:
+      restartPolicy: Never
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: superset-init
+        image: {{ .Values.versions.supersetImage | quote }}
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          {{- if ne .Values.superset.trino.authMode "none" }}{{ fail "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none" }}{{- end }}
+          set -euo pipefail
+          superset db upgrade
+          superset init
+          superset fab create-admin \
+            --username "$ADMIN_USER" --firstname Admin --lastname Admin \
+            --email admin@lakehouse.local --password "$ADMIN_PASSWORD" || true
+          {{- if .Values.auth.oidc.enabled }}
+          echo "WARN: superset.trino.authMode=none but auth.oidc.enabled=true — the Trino connection is unauthenticated and queries will fail until the JWT slice lands (see spike doc)."
+          {{- end }}
+          # Register the Trino connection (idempotent — updates if present).
+          # authMode={{ .Values.superset.trino.authMode }}: `none` => unauthenticated Trino
+          # (works when auth.oidc.enabled=false). See the spike doc for the OIDC path.
+          superset set_database_uri \
+            -d "Trino Lakehouse" \
+            -u "trino://superset@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8080/{{ .Values.superset.trino.catalog }}"
+          {{- if .Values.superset.exampleDashboard.enabled }}
+          # Best-effort example dashboard import — NEVER fatal (a committed
+          # Superset export is version-brittle; authored during UAT).
+          superset import-dashboards -p /example/example-dashboard.zip || \
+            echo "WARN: example dashboard import skipped (non-fatal)"
+          {{- end }}
+        env:
+        - {name: DB_HOST,  value: {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.pgSupersetRw" .) "context" .) | quote }}}
+        - {name: DB_NAME,  value: {{ .Values.postgres.superset.database | quote }}}
+        - {name: DB_USER,     valueFrom: {secretKeyRef: {name: pg-superset-app, key: username}}}
+        - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superset-app, key: password}}}
+        - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
+        - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
+        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: ADMIN_USER,     value: {{ .Values.superset.adminUser | quote }}}
+        - {name: ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: superset, key: admin-password}}}
+        volumeMounts:
+        - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
+      volumes:
+      - name: superset-config
+        configMap: {name: superset-config}
+{{- end }}
