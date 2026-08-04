@@ -118,4 +118,34 @@ data:
     FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
     SQLLAB_TIMEOUT = 60
     SUPERSET_WEBSERVER_TIMEOUT = 120
+{{- if or .Values.superset.secretKey .Values.superset.adminPassword }}
+---
+# Dev-convenience inline Secret — rendered ONLY when secretKey/adminPassword
+# are explicitly supplied. Empty default => NOT rendered; provision out-of-band
+# (ExternalSecret/Vault or `oc create secret generic superset ...`) under the
+# SAME name/keys per `.Values.secrets.mode`. NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  secret-key: {{ .Values.superset.secretKey | quote }}
+  admin-password: {{ .Values.superset.adminPassword | quote }}
+{{- end }}
+{{- if .Values.superset.oidc.clientSecret }}
+---
+# Single source with the Keycloak `superset` client secret (10-keycloak.yaml
+# `clients[].secret`, Task 8) via `.Values.superset.oidc.clientSecret` — the two
+# can never drift. SAME dev-convenience contract as kafka-ui-oidc-credentials.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.superset.oidc.clientSecret | quote }}
+{{- end }}
 {{- end }}

@@ -44,3 +44,22 @@ tests:
         documentSelector:
           path: metadata.name
           value: superset-config
+
+  - it: does NOT render the dev-convenience Secrets when their values are empty (default)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset, any: true}
+        not: true
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-oidc-credentials, any: true}
+        not: true
+
+  - it: renders the dev-convenience Secrets when values are supplied
+    set:
+      components.superset: true
+      superset.secretKey: "dev-secret-key"
+      superset.adminPassword: "dev-admin-pw"
+      superset.oidc.clientSecret: "dev-oidc-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset, any: true}
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-oidc-credentials, any: true}
