@@ -292,6 +292,12 @@ spec:
       standardFlowEnabled: true
       redirectUris: [{{ printf "https://%s/*" (include "lakehouse.routeHost" (dict "name" "bi" "context" .)) | quote }}]
       webOrigins: [{{ printf "https://%s" (include "lakehouse.routeHost" (dict "name" "bi" "context" .)) | quote }}]
+      # Single source with the `superset-oidc-credentials` Secret
+      # (chart/templates/19-superset.yaml) — both sides read
+      # `.Values.superset.oidc.clientSecret`, so this confidential client's
+      # secret and the Secret the Superset Deployment mounts can never drift.
+      # Empty default => client kept, secret provisioned out-of-band.
+      secret: {{ .Values.superset.oidc.clientSecret | quote }}
     - clientId: jupyter
       enabled: true
       protocol: "openid-connect"
