@@ -79,3 +79,17 @@ tests:
           path: spec.ports[0].port
           value: 8088
         documentSelector: {path: kind, value: Service}
+
+  - it: renders the init-Job with Helm post-install hook and db-upgrade command
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Job, apiVersion: batch/v1, name: superset-init, any: true}
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook"]
+          pattern: "post-(install|upgrade)"
+        documentSelector: {path: metadata.name, value: superset-init}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "superset db upgrade"
+        documentSelector: {path: metadata.name, value: superset-init}

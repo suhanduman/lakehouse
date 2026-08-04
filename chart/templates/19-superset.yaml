@@ -221,4 +221,65 @@ spec:
   minAvailable: 0
   selector:
     matchLabels: {app: superset}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: superset-init
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels: {app: superset-init}
+    spec:
+      restartPolicy: Never
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: superset-init
+        image: {{ .Values.versions.supersetImage | quote }}
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+          superset db upgrade
+          superset init
+          superset fab create-admin \
+            --username "$ADMIN_USER" --firstname Admin --lastname Admin \
+            --email admin@lakehouse.local --password "$ADMIN_PASSWORD" || true
+          # Register the Trino connection (idempotent — updates if present).
+          # authMode={{ .Values.superset.trino.authMode }}: `none` => unauthenticated Trino
+          # (works when auth.oidc.enabled=false). See the spike doc for the OIDC path.
+          superset set_database_uri \
+            -d "Trino Lakehouse" \
+            -u "trino://superset@{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}:8080/{{ .Values.superset.trino.catalog }}"
+          {{- if .Values.superset.exampleDashboard.enabled }}
+          # Best-effort example dashboard import — NEVER fatal (a committed
+          # Superset export is version-brittle; authored during UAT).
+          superset import-dashboards -p /example/example-dashboard.zip || \
+            echo "WARN: example dashboard import skipped (non-fatal)"
+          {{- end }}
+        env:
+        - {name: DB_HOST,  value: {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.pgSupersetRw" .) "context" .) | quote }}}
+        - {name: DB_NAME,  value: {{ .Values.postgres.superset.database | quote }}}
+        - {name: DB_USER,     valueFrom: {secretKeyRef: {name: pg-superset-app, key: username}}}
+        - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superset-app, key: password}}}
+        - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
+        - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
+        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: ADMIN_USER,     value: {{ .Values.superset.adminUser | quote }}}
+        - {name: ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: superset, key: admin-password}}}
+        volumeMounts:
+        - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
+      volumes:
+      - name: superset-config
+        configMap: {name: superset-config}
 {{- end }}
