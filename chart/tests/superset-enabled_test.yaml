@@ -22,3 +22,25 @@ tests:
           apiVersion: postgresql.cnpg.io/v1
           name: pg-superset
           any: true
+
+  - it: renders the superset-config ConfigMap with AUTH_OAUTH and env-sourced secrets (no literals)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: superset-config
+          any: true
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "AUTH_TYPE = AUTH_OAUTH"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "os\\.environ"
+        documentSelector:
+          path: metadata.name
+          value: superset-config

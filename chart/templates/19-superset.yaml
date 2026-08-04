@@ -74,4 +74,48 @@ spec:
   cluster:
     name: pg-superset
   backupOwnerReference: self
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-config
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  superset_config.py: |
+    import os
+    # --- Metadata DB (pg-superset via lakehouse.svc.pgSupersetRw helper) ---
+    SQLALCHEMY_DATABASE_URI = (
+        "postgresql+psycopg2://%s:%s@%s:5432/%s" % (
+            os.environ["DB_USER"], os.environ["DB_PASSWORD"],
+            os.environ["DB_HOST"], os.environ["DB_NAME"],
+        )
+    )
+    # --- Session signing key (from Secret, never inlined) ---
+    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
+
+    # --- OIDC via the existing Keycloak `superset` client ---
+    from flask_appbuilder.security.manager import AUTH_OAUTH
+    AUTH_TYPE = AUTH_OAUTH
+    AUTH_USER_REGISTRATION = True
+    AUTH_USER_REGISTRATION_ROLE = "Gamma"   # least-privilege default; admins mapped below
+    OAUTH_PROVIDERS = [{
+        "name": "keycloak",
+        "icon": "fa-key",
+        "token_key": "access_token",
+        "remote_app": {
+            "client_id": "superset",
+            "client_secret": os.environ["OIDC_CLIENT_SECRET"],
+            "server_metadata_url": os.environ["OIDC_ISSUER"] + "/.well-known/openid-configuration",
+            "api_base_url": os.environ["OIDC_ISSUER"] + "/protocol/openid-connect/",
+            "client_kwargs": {"scope": "openid email profile"},
+        },
+    }]
+    # AD group (Keycloak `groups` claim) -> Superset role. lakehouse-admins -> Admin.
+    AUTH_ROLES_MAPPING = {"lakehouse-admins": ["Admin"], "lakehouse-analysts": ["Alpha"], "lakehouse-students": ["Gamma"]}
+    AUTH_ROLES_SYNC_AT_LOGIN = True
+
+    # --- Minimal v1: synchronous SQL Lab, no Celery/Redis, thumbnails off ---
+    FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
+    SQLLAB_TIMEOUT = 60
+    SUPERSET_WEBSERVER_TIMEOUT = 120
 {{- end }}
