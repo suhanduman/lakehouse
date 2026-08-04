@@ -246,6 +246,11 @@ spec:
       # (a transient Keycloak blip must never break existing SQL Lab sessions).
       - name: trino-token-refresher
         image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
         command: ["/bin/bash","-c"]
         args:
         - |
@@ -280,6 +285,9 @@ spec:
         - {name: SVC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: superset-trino-oidc-credentials, key: client-secret}}}
         volumeMounts:
         - {name: trino-token, mountPath: /var/run/trino-token}
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:   {cpu: "200m", memory: "128Mi"}
       {{- end }}
       volumes:
       - name: superset-config
