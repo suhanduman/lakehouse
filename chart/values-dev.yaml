@@ -57,6 +57,19 @@
 # `platform: vanilla` and `platform: openshift` via `--set`, so no OpenShift-
 # specific values are needed here either way.
 
+# b1 (Trino machine-auth): dev has no Keycloak reachable at e2e install time
+# in practice, and `components.superset` stays off (chart default) in this
+# tier — so there is no Superset->Trino JWT chain to gate anyway. Explicitly
+# turning OIDC off keeps Trino/Nessie unauthenticated instead of defaulting
+# to chart default `auth.oidc.enabled: true` (which would otherwise require
+# Keycloak's OIDC discovery endpoint reachable before Trino's coordinator can
+# even start — see values.yaml's own `auth.oidc.enabled` comment) and keeps
+# this tier's CI e2e compute budget (see header above) unchanged — no
+# TLS/JWT/sidecar objects render from this file.
+auth:
+  oidc:
+    enabled: false
+
 components:
   # In-cluster S3 for a throwaway dev/PoC/e2e cluster with no real S3
   # endpoint available (see values.yaml's own `components.minio` comment for
