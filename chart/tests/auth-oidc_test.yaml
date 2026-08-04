@@ -30,14 +30,16 @@ tests:
       - matchRegex:
           path: data["coordinator.config.properties"]
           pattern: "http-server\\.authentication\\.type=oauth2"
-        documentIndex: 0
+        documentSelector:
+          path: '$[?(@.kind=="ConfigMap" && @.metadata.name=="trino-config")]'
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: OIDC_ISSUER
             valueFrom:
               secretKeyRef: {name: oidc-credentials, key: issuer-url}
-        documentIndex: 1
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
 
   - it: auth.oidc.enabled=false removes Trino's oauth2 config entirely (no-auth mode)
     templates:
