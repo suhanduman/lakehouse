@@ -175,7 +175,7 @@ dokümanı (`docs/egitim/ingest-omurgasi-egitim.md`).
       (mssql/mongo/s3/debezium-src) için sabit tek bir volume/secret adı var;
       birden fazla aynı-tip kaynak eklendiğinde (örn. iki mssql instance)
       mount adı çakışır. Kaynak-adına göre per-source adlandırma gerekiyor.
-- [ ] **Scheduled-JDBC + mongo-batch delete semantiği** — HWM (yüksek-su-
-      işareti) tabanlı batch okuma fiziksel silmeleri hiç yakalamaz; delete
-      fidelity gerekiyorsa Mongo CDC (Debezium) kullanılmalı (README'de not
-      edildi). OpenShift'te gerçek batch job'larıyla teyit gerekir.
+- [ ] **Scheduled-JDBC delete semantiği** — HWM (yüksek-su-işareti) tabanlı
+      batch okuma fiziksel silmeleri hiç yakalamaz; delete fidelity
+      gerekiyorsa CDC (Debezium) kullanılmalı (README'de not edildi).
+      OpenShift'te gerçek batch job'larıyla teyit gerekir.

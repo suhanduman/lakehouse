@@ -647,34 +647,6 @@ def test_verify_still_pending_after_all_attempts_is_ok_with_detail_no_rollback()
 
 
 # --------------------------------------------------------------------------
-# scheduled+mongo — out of scope for this orchestrator, must not crash
-# --------------------------------------------------------------------------
-
-def test_scheduled_mongo_returns_clear_failure_without_crashing():
-    orch, k8s, s3, trino = _orch()
-    spec = SourceSpec(
-        source="lms1",
-        kind="scheduled",
-        type="mongo",
-        db="lms",
-        table="enrollments",
-        target_ns="lms_ogrenci",
-        target_table="enrollments",
-        cron="0 * * * *",
-    )
-
-    res = orch.add_source(spec, CREDS)
-
-    assert res.ok is False
-    assert len(res.steps) == 1
-    assert res.steps[0].ok is False
-    assert "Spark batch path" in res.steps[0].detail
-    # no side effects attempted at all
-    assert k8s.created_secrets == []
-    assert s3.created_buckets == []
-
-
-# --------------------------------------------------------------------------
 # Idempotent create — full stack (real service wrappers) over low-level
 # fakes that raise 409 / BucketAlreadyOwnedByYou on a second create.
 # --------------------------------------------------------------------------
@@ -866,7 +838,7 @@ def test_rollback_on_table_failure_undoes_only_secret():
 
 # --------------------------------------------------------------------------
 # Lane/disposition-aware orchestrator (Plan B1 Task 3): registry-driven
-# spark-batch reject + secret/topic skip + entity-only Silver.
+# secret/topic skip + entity-only Silver.
 # --------------------------------------------------------------------------
 
 def _kafka_spec(**over) -> SourceSpec:
@@ -937,75 +909,6 @@ def test_cdc_source_does_not_grant_connect_topic_acl():
     assert k8s.ensured_acls == []
 
 
-def test_spark_batch_rejected_via_registry_not_hardcoded_detail():
-    orch, _fakes = _orch_fakes()
-    spec = SourceSpec(
-        source="m1", kind="scheduled", type="mongo", db="lms",
-        table="enrollments", target_ns="depo", target_table="enr",
-        cron="0 * * * *",
-    )
-
-    res = orch.add_source(spec, SourceCredentials(user="u", password="p"))
-
-    assert res.ok is False
-    assert res.steps[0].name == "validate"
-    # registry-driven detail names the descriptor id, not a hard-coded string.
-    assert "scheduled-mongo requires the Spark batch path" in res.steps[0].detail
-
-
-def _s3_spec() -> SourceSpec:
-    return SourceSpec(
-        source="ds1", kind="batch", type="s3", db="-", table="-",
-        target_ns="nyc", target_table="trips",
-        s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
-        cron="0 * * * *",
-    )
-
-
-def test_batch_s3_onboards_via_spark_job():
-    # batch+s3 (registry-driven: spark-batch lane WITH a spark renderer,
-    # render_key="s3-register") -> minimal spark-job-only pipeline, no
-    # secret/bucket/namespace/table/topic/connector/verify at all.
-    orch, fakes = _orch_fakes()
-
-    res = orch.add_source(_s3_spec(), SourceCredentials(user="", password=""))
-
-    assert res.ok is True
-    assert [s.name for s in res.steps] == ["spark-job"]
-    assert fakes["iceberg"].created_layers == []
-    assert fakes["k8s"].applied_spark_jobs
-
-
-def test_batch_s3_spark_job_failure_reports_failed_step_without_crashing():
-    # spark-job step raises (e.g. apply_spark_job k8s call blows up) -> the
-    # orchestrator's try/except must convert it to an ok=False StepResult
-    # named "spark-job", not propagate the exception.
-    orch, fakes = _orch_fakes(fail_on="spark-job")
-
-    res = orch.add_source(_s3_spec(), SourceCredentials(user="", password=""))
-
-    assert res.ok is False
-    assert [s.name for s in res.steps] == ["spark-job"]
-    assert res.steps[-1].ok is False
-    assert "spark-job boom" in res.steps[-1].detail
-    assert fakes["k8s"].applied_spark_jobs == []
-
-
-def test_scheduled_mongo_still_rejected():
-    # spark-batch lane WITHOUT a spark renderer (render_key == "") is still
-    # rejected up front, exactly as before Plan B2.
-    orch, _fakes = _orch_fakes()
-    spec = SourceSpec(
-        source="m1", kind="scheduled", type="mongo", db="lms",
-        table="enr", target_ns="depo", target_table="enr", cron="0 * * * *",
-    )
-
-    res = orch.add_source(spec, SourceCredentials(user="u", password="p"))
-
-    assert res.ok is False
-    assert res.steps[0].name == "validate"
-
-
 def test_cdc_mssql_still_creates_secret_topic_and_silver_unchanged():
     # Guard against regressing the entity/CDC/JDBC path while adding the
     # kafka-ingest skips above: secret+topic+Bronze+Silver must all still run.
@@ -1053,17 +956,6 @@ def _http_spec(**over) -> SourceSpec:
     )
     d.update(over)
     return SourceSpec(**d)
-
-
-def test_edit_spark_source_rerenders_and_applies():
-    orch, fakes = _orch_fakes()
-    spec = SourceSpec(source="s1", kind="batch", type="s3", db="-", table="-",
-        target_ns="ext", target_table="orders", s3_bucket="b2", s3_prefix="p2/",
-        file_format="parquet", cron="5 * * * *")
-    orch.edit_spark_source(spec)
-    applied = fakes["k8s"].applied_spark_jobs[-1]
-    assert applied["metadata"]["name"] == "s3-register-s1-orders"
-    assert "--bucket" in applied["spec"]["template"]["arguments"]
 
 
 def test_camel_http_applies_source_and_dedicated_sink():

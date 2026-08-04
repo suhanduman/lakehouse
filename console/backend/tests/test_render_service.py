@@ -342,18 +342,6 @@ def test_scheduled_pg_connector_mode_without_timestamp_col():
 
 
 # --------------------------------------------------------------------------
-# Unsupported combo (scheduled+mongo -> Spark batch, not a KafkaConnector)
-# --------------------------------------------------------------------------
-
-def test_scheduled_mongo_not_a_kafka_connector():
-    s = SourceSpec(source="lms", kind="scheduled", type="mongo", db="lms",
-        table="enrollments", target_ns="mongo_lms", target_table="enrollments",
-        cron="0 * * * *")
-    with pytest.raises(NotImplementedError):
-        r.render_connector(s)
-
-
-# --------------------------------------------------------------------------
 # Bronze routing + CDC metadata (medallion CDC: Bronze changelog -> Spark
 # MERGE -> Silver)
 # --------------------------------------------------------------------------
@@ -460,8 +448,10 @@ def test_renderers_cover_every_connector_source_type():
     from app import source_types as st
     # Every registered render_key must be wired into EITHER the KafkaConnector
     # dispatch table (_RENDERERS) or the Spark-batch dispatch table
-    # (_SPARK_RENDERERS) -- e.g. batch-s3's "s3-register" is a Spark renderer
-    # (ScheduledSparkApplication, render_spark_job), not a KafkaConnector.
+    # (_SPARK_RENDERERS) -- a spark-batch source's render_key would be a Spark
+    # renderer (ScheduledSparkApplication, render_spark_job), not a
+    # KafkaConnector. _SPARK_RENDERERS is currently empty (no registered
+    # source type uses the spark-batch lane).
     for d in st.all_types():
         if d.render_key:
             assert d.render_key in r._RENDERERS or d.render_key in r._SPARK_RENDERERS
@@ -649,55 +639,6 @@ def test_kafka_ingest_entity_without_delete_field_stays_upsert_only():
     ))["spec"]["config"]
     assert c["transforms.setdel.static.value"] == "false"   # no delete_field => static false
     assert "transforms.setdel.renames" not in c
-
-
-# --------------------------------------------------------------------------
-# render_spark_job / _render_s3_register (Plan B2 Task 2: spark-batch lane,
-# separate ScheduledSparkApplication dispatch from the KafkaConnector one)
-# --------------------------------------------------------------------------
-
-def _s3_spec():
-    return SourceSpec(source="ds1", kind="batch", type="s3", db="-", table="-",
-                      target_ns="nyc", target_table="trips",
-                      s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
-                      cron="0 * * * *")
-
-
-def test_render_spark_job_s3_register():
-    body = r.render_spark_job(_s3_spec(), spark_image="reg/spark-py:9", s3_secret_name="s3-credentials")
-    assert body["apiVersion"] == "sparkoperator.k8s.io/v1beta2"
-    assert body["kind"] == "ScheduledSparkApplication"
-    assert body["metadata"]["name"] == "s3-register-ds1-trips"
-    assert body["spec"]["schedule"] == "0 * * * *"
-    tmpl = body["spec"]["template"]
-    assert tmpl["mainApplicationFile"] == "local:///opt/spark/jobs/s3_register_table.py"
-    assert tmpl["image"] == "reg/spark-py:9"
-    assert tmpl["arguments"] == ["--bucket", "ham-veri", "--prefix", "raw/",
-                                 "--format", "parquet", "--target", "rawlake.nyc.trips"]
-    # F1: no mounted spark-defaults; config is inline sparkConf
-    assert "volumes" not in tmpl and "volumeMounts" not in tmpl.get("driver", {})
-    sc = tmpl["sparkConf"]
-    assert sc["spark.sql.catalog.rawlake.warehouse"] == "rawdata"
-    assert sc["spark.sql.catalog.rawlake.uri"] == r.NESSIE_URI
-    assert sc["spark.jars.ivy"] == "/tmp/.ivy2"
-    assert "spark.hadoop.fs.s3a.endpoint" not in sc  # job self-configures (F4)
-    for cont in ("driver", "executor"):
-        c = tmpl[cont]
-        assert "envFrom" not in c  # F3
-        assert "coreLimit" in c    # F2
-        names = {e["name"]: e for e in c["env"]}
-        assert names["AWS_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"] == {
-            "name": "s3-credentials", "key": "access-key-id"}
-        assert names["AWS_ENDPOINT_URL_S3"]["valueFrom"]["secretKeyRef"] == {
-            "name": "s3-credentials", "key": "endpoint"}
-        assert names["HOME"]["value"] == "/tmp"  # F5
-
-
-def test_render_spark_job_rejects_non_spark_renderer():
-    spec = SourceSpec(source="m1", kind="scheduled", type="mongo", db="lms",
-                      table="enr", target_ns="depo", target_table="enr", cron="0 * * * *")
-    with pytest.raises(NotImplementedError):
-        r.render_spark_job(spec, spark_image="x", s3_secret_name="y")
 
 
 # --------------------------------------------------------------------------
@@ -1005,17 +946,6 @@ def test_has_dedicated_sink_and_dispatch():
     assert r.render_sink(http)["spec"]["class"] == "org.apache.iceberg.connect.IcebergSinkConnector"
 
 
-def test_s3_register_stamps_roundtrip_annotations():
-    from app.models import SourceSpec
-    spec = SourceSpec(source="s1", kind="batch", type="s3", db="-", table="-",
-        target_ns="ext", target_table="orders", s3_bucket="b", s3_prefix="p/",
-        file_format="parquet", cron="0 * * * *")
-    ann = r.render_spark_job(spec, "img:1", "s3-credentials")["metadata"]["annotations"]
-    assert ann["lakehouse.solus.dev/source"] == "s1"
-    assert ann["lakehouse.solus.dev/s3-bucket"] == "b"
-    assert ann["lakehouse.solus.dev/cron"] == "0 * * * *"
-
-
 # --------------------------------------------------------------------------
 # render_ingest_snippets (log shipper producer configs)
 # --------------------------------------------------------------------------
@@ -1142,13 +1072,6 @@ def test_render_connection_test_none_for_kafka_ingest_lane():
     # test, so there is nothing for config/validate to check.
     from app.models import SourceCredentials
     assert r.render_connection_test(_kafka(), SourceCredentials(user="u", password="p")) is None
-
-
-def test_render_connection_test_none_for_spark_batch_lane():
-    # batch-s3 is a ScheduledSparkApplication (spark-batch lane), not a
-    # KafkaConnector -- no connector to validate.
-    from app.models import SourceCredentials
-    assert r.render_connection_test(_s3_spec(), SourceCredentials(user="u", password="p")) is None
 
 
 # --------------------------------------------------------------------------

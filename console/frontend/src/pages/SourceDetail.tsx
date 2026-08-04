@@ -4,7 +4,6 @@ import DeleteModal, { type Role } from "../components/DeleteModal";
 import IngestConfigPanel from "../components/IngestConfigPanel";
 import {
   ApiError,
-  editSparkSource,
   enableSnapshots,
   getConnectorDebug,
   getConnectorDlq,
@@ -30,7 +29,6 @@ import {
   type SnapshotProgress,
   type SnapshotResult,
   type Source,
-  type SourceSpec,
   type StatusEntry,
 } from "../api/client";
 
@@ -56,12 +54,6 @@ function connectorStatusDot(state: string | null): string {
   return "\u{1F534}"; // 🔴 (FAILED / unknown)
 }
 
-/** Options for the spark edit form's `file_format` select -- mirrors
- * AddSourceWizard's FILE_FORMAT_OPTIONS / app.models.SourceSpec.file_format's
- * literal union, so the field can only ever hold one of these three values
- * (no free-text "csv"/"orc" reaching the PATCH body). */
-const FILE_FORMAT_OPTIONS = ["parquet", "json", "avro"] as const;
-
 /**
  * Source detail view, per docs/superpowers/sdd/task-13-brief.md: shows the
  * connector's config/status/lag/dlq (Source <- getSource, lag/dlq <-
@@ -81,13 +73,6 @@ export default function SourceDetail({ role }: SourceDetailProps) {
   const [editing, setEditing] = useState(false);
   const [configText, setConfigText] = useState("{}");
   const [editError, setEditError] = useState<string | null>(null);
-
-  // Spark-batch edit form fields (source.cr_kind === "ScheduledSparkApplication"),
-  // seeded from source.spark when the Edit button is clicked.
-  const [cron, setCron] = useState("");
-  const [s3Bucket, setS3Bucket] = useState("");
-  const [s3Prefix, setS3Prefix] = useState("");
-  const [fileFormat, setFileFormat] = useState<SourceSpec["file_format"]>("parquet");
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleted, setDeleted] = useState<DeleteSourceResult | null>(null);
@@ -429,45 +414,7 @@ export default function SourceDetail({ role }: SourceDetailProps) {
     }
   }
 
-  async function handleSaveSparkEdit() {
-    if (!source?.spark) return;
-    setEditError(null);
-    setActionPending(true);
-    try {
-      const spec: SourceSpec = {
-        source: source.spark.source,
-        kind: "batch",
-        type: "s3",
-        db: "-",
-        table: "-",
-        target_ns: source.spark.target_ns,
-        target_table: source.spark.target_table,
-        s3_bucket: s3Bucket,
-        s3_prefix: s3Prefix,
-        file_format: fileFormat,
-        cron,
-      };
-      await editSparkSource(name, spec);
-      setEditing(false);
-    } catch (err) {
-      setEditError(errorMessage(err));
-    } finally {
-      setActionPending(false);
-    }
-  }
-
   function handleToggleEdit() {
-    if (!editing && source?.cr_kind === "ScheduledSparkApplication" && source.spark) {
-      setCron(source.spark.cron);
-      setS3Bucket(source.spark.s3_bucket);
-      setS3Prefix(source.spark.s3_prefix);
-      // source.spark.file_format is the round-tripped backend annotation
-      // value (typed as plain `string` on Source since it mirrors the raw
-      // CR annotation) -- narrowing here is safe because it was only ever
-      // written by a prior spec that already passed through this same
-      // constrained select.
-      setFileFormat(source.spark.file_format as SourceSpec["file_format"]);
-    }
     setEditing((v) => !v);
   }
 
@@ -534,9 +481,11 @@ export default function SourceDetail({ role }: SourceDetailProps) {
 
       {actionError && <p role="alert">{actionError}</p>}
 
-      <button type="button" onClick={handleToggleEdit} disabled={actionPending}>
-        Edit
-      </button>
+      {source.cr_kind !== "ScheduledSparkApplication" && (
+        <button type="button" onClick={handleToggleEdit} disabled={actionPending}>
+          Edit
+        </button>
+      )}
       {source.paused ? (
         <button type="button" onClick={handleResume} disabled={actionPending}>
           Resume
@@ -758,64 +707,22 @@ export default function SourceDetail({ role }: SourceDetailProps) {
         </section>
       )}
 
-      {editing && source.cr_kind === "ScheduledSparkApplication" ? (
+      {editing && (
         <div>
-          <label htmlFor="spark-cron">Cron</label>
-          <input id="spark-cron" value={cron} onChange={(e) => setCron(e.target.value)} />
-
-          <label htmlFor="spark-s3-bucket">S3 Bucket</label>
-          <input
-            id="spark-s3-bucket"
-            value={s3Bucket}
-            onChange={(e) => setS3Bucket(e.target.value)}
+          <label htmlFor="config-json">Config (JSON)</label>
+          <textarea
+            id="config-json"
+            value={configText}
+            onChange={(e) => setConfigText(e.target.value)}
           />
-
-          <label htmlFor="spark-s3-prefix">S3 Prefix</label>
-          <input
-            id="spark-s3-prefix"
-            value={s3Prefix}
-            onChange={(e) => setS3Prefix(e.target.value)}
-          />
-
-          <label htmlFor="spark-file-format">File Format</label>
-          <select
-            id="spark-file-format"
-            value={fileFormat}
-            onChange={(e) => setFileFormat(e.target.value as SourceSpec["file_format"])}
-          >
-            {FILE_FORMAT_OPTIONS.map((fmt) => (
-              <option key={fmt} value={fmt}>
-                {fmt}
-              </option>
-            ))}
-          </select>
-
           {editError && <p role="alert">{editError}</p>}
-          <button type="button" onClick={handleSaveSparkEdit} disabled={actionPending}>
+          <button type="button" onClick={handleSaveEdit} disabled={actionPending}>
             Save
           </button>
           <button type="button" onClick={() => setEditing(false)} disabled={actionPending}>
             Cancel
           </button>
         </div>
-      ) : (
-        editing && (
-          <div>
-            <label htmlFor="config-json">Config (JSON)</label>
-            <textarea
-              id="config-json"
-              value={configText}
-              onChange={(e) => setConfigText(e.target.value)}
-            />
-            {editError && <p role="alert">{editError}</p>}
-            <button type="button" onClick={handleSaveEdit} disabled={actionPending}>
-              Save
-            </button>
-            <button type="button" onClick={() => setEditing(false)} disabled={actionPending}>
-              Cancel
-            </button>
-          </div>
-        )
       )}
 
       {isCdc && (

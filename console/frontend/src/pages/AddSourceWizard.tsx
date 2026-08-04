@@ -55,19 +55,12 @@ const FIELD_META: Record<string, { step: 2 | 3; label: string }> = {
   mongo_uri: { step: 2, label: "Mongo URI" },
   jdbc_url: { step: 2, label: "JDBC URL" },
   incrementing_col: { step: 3, label: "Incrementing column" },
-  cron: { step: 3, label: "Cron schedule" },
-  s3_bucket: { step: 2, label: "S3 bucket" },
-  s3_prefix: { step: 2, label: "S3 prefix" },
   http_url: { step: 2, label: "HTTP URL" },
   mqtt_broker: { step: 2, label: "MQTT broker URL" },
   mqtt_topic: { step: 2, label: "MQTT topic" },
   rabbitmq_uri: { step: 2, label: "RabbitMQ URI" },
   rabbitmq_queue: { step: 2, label: "RabbitMQ queue" },
 };
-
-/** Options for the `file_format` select (batch/s3's fourth required
- * field) -- mirrors app.models.SourceSpec.file_format's literal union. */
-const FILE_FORMAT_OPTIONS = ["parquet", "json", "avro"] as const;
 
 interface FormState {
   source: string;
@@ -81,10 +74,6 @@ interface FormState {
   incrementing_col: string;
   timestamp_col: string;
   poll_ms: string;
-  cron: string;
-  s3_bucket: string;
-  s3_prefix: string;
-  file_format: string;
   http_url: string;
   mqtt_broker: string;
   mqtt_topic: string;
@@ -161,10 +150,6 @@ const INITIAL_STATE: FormState = {
   incrementing_col: "",
   timestamp_col: "",
   poll_ms: "",
-  cron: "",
-  s3_bucket: "",
-  s3_prefix: "",
-  file_format: "",
   http_url: "",
   mqtt_broker: "",
   mqtt_topic: "",
@@ -200,10 +185,6 @@ const KNOWN_SPEC_FIELDS = new Set([
   "mongo_uri",
   "jdbc_url",
   "incrementing_col",
-  "cron",
-  "s3_bucket",
-  "s3_prefix",
-  "file_format",
   "http_url",
   "mqtt_broker",
   "mqtt_topic",
@@ -338,18 +319,6 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
       spec.poll_ms = Number(form.poll_ms);
     }
   }
-  if (required.includes("cron")) {
-    spec.cron = form.cron;
-  }
-  if (required.includes("s3_bucket")) {
-    spec.s3_bucket = form.s3_bucket;
-  }
-  if (required.includes("s3_prefix")) {
-    spec.s3_prefix = form.s3_prefix;
-  }
-  if (required.includes("file_format")) {
-    spec.file_format = form.file_format as SourceSpec["file_format"];
-  }
   if (required.includes("http_url")) {
     spec.http_url = form.http_url;
     if (form.poll_ms) {
@@ -383,10 +352,8 @@ function buildSpec(form: FormState, descriptor: SourceTypeDescriptor | undefined
   // kafka-ingest -- sends spec.identifier + a spec.columns that includes (at
   // least) those PK column(s) typed, so the backend's table pre-create step
   // has what it needs (orchestrator.py's `_resolve_identifier`/"table" step).
-  // batch/s3 is excluded: its "entity" disposition is inert (full CTAS
-  // refresh, no CDC/medallion identifier semantics -- see source_types.py).
   const effectiveDisposition = form.disposition || descriptor?.disposition || "";
-  if (effectiveDisposition === "entity" && form.kind !== "batch") {
+  if (effectiveDisposition === "entity") {
     const { columns, identifier } = buildEntityColumnsAndIdentifier(form);
     if (columns.length) {
       spec.columns = columns;
@@ -539,13 +506,11 @@ export default function AddSourceWizard() {
   const isKafka = selectedDescriptor?.type === "kafka";
   // PK-focused input (Task 9): shown for ANY entity-disposition source (CDC,
   // scheduled-jdbc, camel-*, stream-kafka's entity fork) -- not just kafka.
-  // batch/s3's "entity" disposition is inert (full CTAS refresh, no
-  // identifier semantics -- source_types.py), so it's excluded. Falls back
-  // to the descriptor's own default disposition when the user hasn't
-  // overridden it (e.g. CDC's single "entity" disposition never shows the
-  // generic <select>, so form.disposition stays "").
+  // Falls back to the descriptor's own default disposition when the user
+  // hasn't overridden it (e.g. CDC's single "entity" disposition never shows
+  // the generic <select>, so form.disposition stays "").
   const effectiveDisposition = form.disposition || selectedDescriptor?.disposition || "";
-  const showPkFields = effectiveDisposition === "entity" && form.kind !== "batch";
+  const showPkFields = effectiveDisposition === "entity";
   // Upsert-from-Kafka (Plan B1 Task 4) extras -- delete_field + the expected-
   // JSON-shape preview -- stay kafka-only: only stream/kafka + an explicit
   // "entity" disposition choice shows them; the unset default (effective
@@ -986,26 +951,6 @@ export default function AddSourceWizard() {
               />
             </div>
           )}
-          {requiredFields.includes("s3_bucket") && (
-            <div>
-              <label htmlFor="s3_bucket">{FIELD_META.s3_bucket.label}</label>
-              <input
-                id="s3_bucket"
-                value={form.s3_bucket}
-                onChange={(e) => set("s3_bucket", e.target.value)}
-              />
-            </div>
-          )}
-          {requiredFields.includes("s3_prefix") && (
-            <div>
-              <label htmlFor="s3_prefix">{FIELD_META.s3_prefix.label}</label>
-              <input
-                id="s3_prefix"
-                value={form.s3_prefix}
-                onChange={(e) => set("s3_prefix", e.target.value)}
-              />
-            </div>
-          )}
           {requiredFields.includes("http_url") && (
             <>
               <div>
@@ -1040,23 +985,6 @@ export default function AddSourceWizard() {
             <div>
               <label htmlFor="rabbitmq_queue">{FIELD_META.rabbitmq_queue.label}</label>
               <input id="rabbitmq_queue" value={form.rabbitmq_queue} onChange={(e) => set("rabbitmq_queue", e.target.value)} />
-            </div>
-          )}
-          {requiredFields.includes("file_format") && (
-            <div>
-              <label htmlFor="file_format">File format</label>
-              <select
-                id="file_format"
-                value={form.file_format}
-                onChange={(e) => set("file_format", e.target.value)}
-              >
-                <option value="">(select a format)</option>
-                {FILE_FORMAT_OPTIONS.map((fmt) => (
-                  <option key={fmt} value={fmt}>
-                    {fmt}
-                  </option>
-                ))}
-              </select>
             </div>
           )}
           {unknownRequiredFields.map((field) => (
@@ -1167,16 +1095,6 @@ export default function AddSourceWizard() {
                 deletes are never captured. If updates or deletes matter, use a CDC source.
               </p>
             </>
-          )}
-          {requiredFields.includes("cron") && (
-            <div>
-              <label htmlFor="cron">{FIELD_META.cron.label}</label>
-              <input
-                id="cron"
-                value={form.cron}
-                onChange={(e) => set("cron", e.target.value)}
-              />
-            </div>
           )}
           <button type="button" onClick={goBack}>
             Back

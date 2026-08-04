@@ -805,18 +805,25 @@ def edit_source(
     k8s: K8sService = Depends(get_k8s),
     orchestrator: AddSourceOrchestrator = Depends(get_orchestrator),
 ) -> Dict[str, Any]:
-    """Connector-edit note (gitops): the SPARK branch below already routes
-    through `orchestrator.edit_spark_source`, which itself commits via
-    GitWriter when `settings.deploy_mode == "gitops"` (Task 4). The
-    non-spark (KafkaConnector) branch has no such routing yet -- a direct
-    `k8s.patch_connector` in gitops mode would be silently reverted by
-    ArgoCD selfHeal on its next sync (a misleading no-op), so it fails loud
-    (409) instead until connector-edit gitops routing exists (follow-up)."""
+    """Spark-batch note: `orchestrator.edit_spark_source` (GitWriter-aware,
+    Task 4) is retained for a possible future spark-batch source type, but no
+    source type is currently registered on that lane (see source_types.py),
+    so a ScheduledSparkApplication CR (e.g. the chart-fixed `silver-merge`
+    job) can never have a valid `spec` to re-render it from -- this route
+    rejects that case up front (400) rather than calling edit_spark_source
+    and letting its NotImplementedError escape as an unhandled 500.
+
+    Connector-edit note (gitops): the non-spark (KafkaConnector) branch below
+    has no gitops routing yet -- a direct `k8s.patch_connector` in gitops
+    mode would be silently reverted by ArgoCD selfHeal on its next sync (a
+    misleading no-op), so it fails loud (409) instead until connector-edit
+    gitops routing exists (follow-up)."""
     cr = _find_source(k8s, name)
     if _kind_of(cr) == "ScheduledSparkApplication":
-        if payload.spec is None:
-            raise HTTPException(status_code=400, detail="spark source edit requires `spec`")
-        orchestrator.edit_spark_source(payload.spec)
+        raise HTTPException(
+            status_code=400,
+            detail="editing spark-batch sources is not supported (no spark-batch source type is registered)",
+        )
     else:
         if settings.deploy_mode == "gitops":
             raise HTTPException(

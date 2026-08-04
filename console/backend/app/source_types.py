@@ -89,11 +89,6 @@ register(SourceType("scheduled-jdbc-mssql", "scheduled", "mssql", "kafka-connect
                     "entity", ("jdbc_url", "incrementing_col"), "scheduled-jdbc", "scheduled-jdbc"))
 register(SourceType("scheduled-jdbc-pg", "scheduled", "pg", "kafka-connect-source",
                     "entity", ("jdbc_url", "incrementing_col"), "scheduled-jdbc", "scheduled-jdbc"))
-# scheduled+mongo is a Spark batch CronJob (design doc 5.2b), NOT a KafkaConnector:
-# render_key/topic_key are "" so render_service raises a clear NotImplementedError,
-# exactly as today, and the orchestrator rejects it up front.
-register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "entity",
-                    ("cron",), "", ""))
 # existing-Kafka: consume a topic (in-cluster or external) into its own Bronze
 # via a DEDICATED Iceberg sink (see render_service._render_kafka_ingest). event
 # (append-only) is the default; entity (upsert-from-Kafka) is now allowed too,
@@ -101,11 +96,6 @@ register(SourceType("scheduled-mongo", "scheduled", "mongo", "spark-batch", "ent
 register(SourceType("stream-kafka", "stream", "kafka", "kafka-connect-source", "event",
                     (), "kafka-ingest", "", dispositions=("event", "entity"),
                     needs_bootstrap=True))
-# S3 file-set -> Iceberg table (Spark-batch lane). Files already live in the
-# platform's own object store; a Console-driven Spark job full-refresh CTAS's
-# them into a queryable rawlake table. Not CDC/medallion — disposition is inert.
-register(SourceType("batch-s3", "batch", "s3", "spark-batch", "entity",
-                    ("s3_bucket", "s3_prefix", "file_format", "cron"), "s3-register", ""))
 # stream/http, stream/mqtt, stream/rabbitmq (Plan B3): Apache Camel Kafka
 # SOURCE connectors on the kafka-connect-source lane. Unlike stream-kafka
 # (which consumes an existing topic and creates none), these lanes DO create

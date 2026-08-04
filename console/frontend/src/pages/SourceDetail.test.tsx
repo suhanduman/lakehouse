@@ -226,58 +226,15 @@ describe("SourceDetail", () => {
     await waitFor(() => expect(patchSpy).toHaveBeenCalledWith(SOURCE_NAME, { foo: "bar" }));
   });
 
-  it("shows a prefilled field form for a spark-batch source and saves via editSparkSource", async () => {
+  it("hides the Edit button for a spark-batch source (no valid edit path left)", async () => {
     vi.spyOn(client, "getSource").mockResolvedValue(SPARK_SOURCE);
     vi.spyOn(client, "getStatus").mockResolvedValue({ connectors: [], reachable: true });
     vi.spyOn(client, "getSourceConnectors").mockResolvedValue({ connectors: [] });
-    const editSparkSpy = vi
-      .spyOn(client, "editSparkSource")
-      .mockResolvedValue({ ok: true, name: SPARK_SOURCE_NAME });
 
     renderDetail("ADMIN", SPARK_SOURCE_NAME);
 
-    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
-
-    expect(screen.queryByLabelText(/config \(json\)/i)).not.toBeInTheDocument();
-
-    const cronInput = (await screen.findByLabelText(/cron/i)) as HTMLInputElement;
-    const bucketInput = screen.getByLabelText(/s3 bucket/i) as HTMLInputElement;
-    const prefixInput = screen.getByLabelText(/s3 prefix/i) as HTMLInputElement;
-    const formatSelect = screen.getByLabelText(/file format/i) as HTMLSelectElement;
-
-    expect(cronInput.value).toBe("0 * * * *");
-    expect(bucketInput.value).toBe("raw-bucket");
-    expect(prefixInput.value).toBe("invoices/");
-    expect(formatSelect.value).toBe("parquet");
-
-    // The file_format field is a constrained <select>, not free text -- assert
-    // exactly the three valid formats are offered (no room for an invalid
-    // "csv"/"orc" value to reach the PATCH body).
-    const formatOptions = Array.from(formatSelect.options).map((o) => o.value);
-    expect(formatOptions).toEqual(["parquet", "json", "avro"]);
-
-    fireEvent.change(cronInput, { target: { value: "*/15 * * * *" } });
-    fireEvent.change(bucketInput, { target: { value: "new-bucket" } });
-    fireEvent.change(prefixInput, { target: { value: "new-invoices/" } });
-    fireEvent.change(formatSelect, { target: { value: "json" } });
-
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-
-    await waitFor(() =>
-      expect(editSparkSpy).toHaveBeenCalledWith(SPARK_SOURCE_NAME, {
-        source: SPARK_SOURCE_NAME,
-        kind: "batch",
-        type: "s3",
-        db: "-",
-        table: "-",
-        target_ns: "rawlake",
-        target_table: "invoices",
-        s3_bucket: "new-bucket",
-        s3_prefix: "new-invoices/",
-        file_format: "json",
-        cron: "*/15 * * * *",
-      }),
-    );
+    expect(await screen.findByText(SPARK_SOURCE_NAME)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
   });
 
   it("shows an error message when the source fails to load", async () => {

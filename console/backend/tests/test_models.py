@@ -43,19 +43,6 @@ def test_valid_cdc_mongo_with_mongo_uri_passes():
     assert s.mongo_uri == "mongodb://h:27017"
 
 
-def test_scheduled_mongo_requires_cron():
-    with pytest.raises(ValidationError):
-        SourceSpec(source="mongo1", kind="scheduled", type="mongo", db="ogrenciDb",
-                   table="students", target_ns="mongo_ogrenci", target_table="students")
-
-
-def test_valid_scheduled_mongo_with_cron_passes():
-    s = SourceSpec(source="mongo1", kind="scheduled", type="mongo", db="ogrenciDb",
-                   table="students", target_ns="mongo_ogrenci",
-                   target_table="students", cron="0 * * * *")
-    assert s.cron == "0 * * * *"
-
-
 def test_cdc_mssql_requires_db_host():
     with pytest.raises(ValidationError):
         SourceSpec(source="mssql1", kind="cdc", type="mssql", db="OgrenciDB",
@@ -160,33 +147,6 @@ def test_stream_kafka_entity_with_columns_identifier_and_delete_field():
     assert s.effective_disposition() == "entity"
     assert s.delete_field == "_deleted"
     assert s.identifier == ["id"]
-
-
-def _s3(**over):
-    d = dict(source="ds1", kind="batch", type="s3", db="-", table="-",
-             target_ns="nyc", target_table="trips",
-             s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet",
-             cron="0 * * * *")
-    d.update(over)
-    return d
-
-
-def test_batch_s3_valid():
-    s = SourceSpec(**_s3())
-    assert s.file_format == "parquet"
-    assert s.cron == "0 * * * *"
-
-
-def test_batch_s3_requires_bucket_prefix_format_cron():
-    with pytest.raises(ValidationError, match="s3_bucket"):
-        SourceSpec(**_s3(s3_bucket=None))
-    with pytest.raises(ValidationError, match="cron"):
-        SourceSpec(**_s3(cron=None))
-
-
-def test_batch_s3_bad_format_rejected():
-    with pytest.raises(ValidationError):
-        SourceSpec(**_s3(file_format="csv"))   # not in the Literal
 
 
 def _http(**o):

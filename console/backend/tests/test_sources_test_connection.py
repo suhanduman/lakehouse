@@ -30,20 +30,18 @@ PG_SPEC = {
 }
 PG_CREDENTIALS = {"user": "u", "password": "s3cret-p455word"}
 
-# batch+s3: spark-batch lane, no KafkaConnector at all -- render_connection_test
-# returns None for it (see render_service.render_connection_test's docstring).
-S3_SPEC = {
-    "source": "s1",
-    "kind": "batch",
-    "type": "s3",
-    "db": "-",
-    "table": "-",
-    "target_ns": "ext",
+# stream+kafka (kafka-ingest): consumes an already-existing topic -- no
+# external DB/connector to test, so render_connection_test returns None (see
+# its docstring). The only other None-returning lane, spark-batch, no longer
+# has a registered source type.
+KAFKA_SPEC = {
+    "source": "k1",
+    "kind": "stream",
+    "type": "kafka",
+    "db": "ext",
+    "table": "orders-topic",
+    "target_ns": "events",
     "target_table": "orders",
-    "s3_bucket": "b",
-    "s3_prefix": "p/",
-    "file_format": "parquet",
-    "cron": "0 * * * *",
 }
 
 
@@ -113,12 +111,12 @@ def test_test_connection_maps_errors():
     assert "cannot connect" in body["errors"][0]["message"]
 
 
-def test_test_connection_not_applicable_for_s3():
+def test_test_connection_not_applicable_for_kafka_ingest():
     client = _client_as({Role.ADMIN})
 
     r = client.post(
         "/api/sources/test-connection",
-        json={"spec": S3_SPEC, "credentials": {"user": "", "password": ""}},
+        json={"spec": KAFKA_SPEC, "credentials": {"user": "", "password": ""}},
     )
 
     assert r.status_code == 200

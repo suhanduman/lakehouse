@@ -1102,76 +1102,16 @@ SPARK_VERSION = "3.5.1"   # matches chart versions.sparkVersion (spark-py image)
 # docstring.
 
 
-def _render_s3_register(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
-    """batch+s3 -> a ScheduledSparkApplication that, on spec.cron, full-refresh
-    CTAS's the files under s3a://<bucket>/<prefix> into rawlake.<ns>.<table>
-    (Iceberg). Register once; each tick re-derives the table (CREATE OR
-    REPLACE) so newly-arrived files stay query-visible. Mirrors the chart's
-    ScheduledSparkApplication shape (05-spark-operator.yaml)."""
-    name = _k8s_name("s3-register", spec.source, spec.target_table)
-    target = f"rawlake.{spec.target_ns}.{spec.target_table}"
-    aws_keys = [("AWS_ACCESS_KEY_ID", "access-key-id"),
-                ("AWS_SECRET_ACCESS_KEY", "secret-access-key"),
-                ("AWS_ENDPOINT_URL_S3", "endpoint"),
-                ("AWS_REGION", "region")]
-    env = [{"name": n, "valueFrom": {"secretKeyRef": {"name": s3_secret_name, "key": k}}}
-           for n, k in aws_keys] + [{"name": "HOME", "value": "/tmp"}]
-    spark_conf = {
-        "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-        "spark.sql.catalog.rawlake": "org.apache.iceberg.spark.SparkCatalog",
-        "spark.sql.catalog.rawlake.catalog-impl": "org.apache.iceberg.rest.RESTCatalog",
-        "spark.sql.catalog.rawlake.uri": NESSIE_URI,
-        "spark.sql.catalog.rawlake.warehouse": "rawdata",
-        "spark.sql.catalog.rawlake.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
-        "spark.hadoop.fs.s3a.path.style.access": "true",
-        "spark.hadoop.fs.s3a.aws.credentials.provider":
-            "com.amazonaws.auth.EnvironmentVariableCredentialsProvider",
-        "spark.jars.ivy": "/tmp/.ivy2",
-    }
-    return {
-        "apiVersion": "sparkoperator.k8s.io/v1beta2",
-        "kind": "ScheduledSparkApplication",
-        "metadata": {
-            "name": name,
-            "annotations": {
-                f"{SPARK_ANNOTATION_PREFIX}source": spec.source,
-                f"{SPARK_ANNOTATION_PREFIX}target-ns": spec.target_ns,
-                f"{SPARK_ANNOTATION_PREFIX}target-table": spec.target_table,
-                f"{SPARK_ANNOTATION_PREFIX}s3-bucket": spec.s3_bucket,
-                f"{SPARK_ANNOTATION_PREFIX}s3-prefix": spec.s3_prefix,
-                f"{SPARK_ANNOTATION_PREFIX}file-format": spec.file_format,
-                f"{SPARK_ANNOTATION_PREFIX}cron": spec.cron,
-            },
-        },   # namespace supplied by the API layer (see _connector)
-        "spec": {
-            "schedule": spec.cron,
-            "concurrencyPolicy": "Forbid",
-            "template": {
-                "type": "Python",
-                "mode": "cluster",
-                "image": spark_image,
-                "sparkVersion": SPARK_VERSION,
-                "mainApplicationFile": "local:///opt/spark/jobs/s3_register_table.py",
-                "arguments": ["--bucket", spec.s3_bucket, "--prefix", spec.s3_prefix,
-                              "--format", spec.file_format, "--target", target],
-                "restartPolicy": {"type": "Never"},
-                "sparkConf": spark_conf,
-                "driver": {"cores": 1, "coreLimit": "1200m", "memory": "1g",
-                           "serviceAccount": "spark-driver", "env": env},
-                "executor": {"cores": 1, "coreLimit": "1200m", "instances": 1,
-                             "memory": "1g", "env": env},
-            },
-        },
-    }
-
-
-_SPARK_RENDERERS = {"s3-register": _render_s3_register}
+_SPARK_RENDERERS = {}
 
 
 def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
     """Dispatch on the source-type registry -> ScheduledSparkApplication dict
     (spark-batch lane). A spark-batch source with no spark renderer wired yet
-    (e.g. scheduled-mongo, render_key="") raises NotImplementedError."""
+    (render_key="") raises NotImplementedError. Retained for a possible
+    future spark-batch source type -- no source type is currently registered
+    on this lane (see source_types.py), so this function is unreachable via
+    the registry today; it is still exercised directly by tests."""
     descriptor = source_types.get(spec.kind, spec.type)
     fn = _SPARK_RENDERERS.get(descriptor.render_key)
     if fn is None:
@@ -1301,10 +1241,11 @@ def render_connection_test(spec: SourceSpec, creds: SourceCredentials) -> Option
     """(connector_class, minimal_config) for Kafka Connect's config/validate,
     or None when the lane has no external DB/connector to test:
     kafka-ingest (`stream`+`kafka`, consumes an already-existing topic — there
-    is nothing new to connect to) and the spark-batch lane (`batch`+`s3` /
-    `scheduled`+`mongo` — no KafkaConnector at all, see render_connector's
-    docstring). Dispatches on the same source_types registry render_key the
-    real renderers use, so a new source type only needs a
+    is nothing new to connect to) and the spark-batch lane (no KafkaConnector
+    at all, see render_connector's docstring) -- though no spark-batch source
+    type is currently registered (see source_types.py), so that second case
+    is unreachable today. Dispatches on the same source_types registry
+    render_key the real renderers use, so a new source type only needs a
     _CONNECTION_TEST_RENDERERS entry (or is correctly None by omission) — not
     a second parallel kind/type switch."""
     descriptor = source_types.get(spec.kind, spec.type)

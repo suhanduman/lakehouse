@@ -79,8 +79,8 @@ tools/
 │   └── source-cdc-*.yaml, source-scheduled-*.yaml, kafkatopic.yaml
 └── jobs/                      Spark job script'leri — HÂLÂ CANLI (spark-py
     ├── nginx_streaming.py      image'ına gömülür, chart `local://` path ile
-    ├── mongo_scheduled_batch.py  referans verir; bunlar chart template'i
-    └── iceberg_maintenance.py    DEĞİL, image build girdisidir)
+    └── iceberg_maintenance.py  referans verir; bunlar chart template'i
+                                DEĞİL, image build girdisidir)
 ```
 
 `00-namespace.yaml` … `17-console-routes-oidc.yaml` + `optional/07-ai-gpu.yaml`

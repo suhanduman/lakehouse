@@ -396,17 +396,6 @@ export async function patchSource(
   });
 }
 
-/** PATCH /api/sources/{name} with a full spec -> re-render a spark-batch source. */
-export async function editSparkSource(
-  name: string,
-  spec: SourceSpec,
-): Promise<{ ok: boolean; name: string }> {
-  return request<{ ok: boolean; name: string }>(`/sources/${encodeURIComponent(name)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ spec }),
-  });
-}
-
 /** POST /api/sources/{name}/pause */
 export async function pauseSource(
   name: string,

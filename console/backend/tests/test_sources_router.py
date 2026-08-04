@@ -392,37 +392,6 @@ def test_preview_source_renders_crs_without_touching_any_provider():
     assert "CREATE NAMESPACE IF NOT EXISTS lakehouse.mssql_ogrenci" in body["namespace_ddl"]
 
 
-def test_preview_source_scheduled_mongo_has_no_connector_but_still_200():
-    # scheduled+mongo is a Spark batch CronJob, not a KafkaConnector (see
-    # render_service.render_connector's NotImplementedError) -- preview must
-    # degrade gracefully (connector/kafka_topic null), never 500.
-    spec = {
-        "source": "mongo1",
-        "kind": "scheduled",
-        "type": "mongo",
-        "db": "lms",
-        "table": "enrollments",
-        "target_ns": "lms_kayit",
-        "target_table": "enrollments",
-        "cron": "0 * * * *",
-    }
-    app.dependency_overrides[get_roles] = lambda: {Role.ANALYST}
-    app.dependency_overrides[get_k8s] = ExplodingProvider()
-    app.dependency_overrides[get_s3] = ExplodingProvider()
-    app.dependency_overrides[get_trino] = ExplodingProvider()
-    app.dependency_overrides[get_orchestrator] = ExplodingProvider()
-    client = TestClient(app, raise_server_exceptions=False)
-
-    r = client.post("/api/sources/preview", json={"spec": spec})
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body["connector"] is None
-    assert body["kafka_topic"] is None
-    assert body["bronze_bucket"] == render_service.bronze_bucket_name("lms_kayit")
-    assert body["silver_bucket"] == render_service.silver_bucket_name("lms_kayit")
-
-
 # --------------------------------------------------------------------------
 # Registry API (GET /api/sources/types) + preview registry-routing --
 # Plan B1 Task 4: the wizard renders itself from the registry, and preview's
@@ -438,13 +407,6 @@ def test_get_source_types_lists_registry(client):
     assert kafka["lane"] == "kafka-connect-source"
     assert kafka["dispositions"] == ["event", "entity"]
     assert kafka["needs_bootstrap"] is True
-
-
-def test_preview_spark_batch_returns_no_connector(client):
-    spec = {"source": "m1", "kind": "scheduled", "type": "mongo", "db": "lms",
-            "table": "enr", "target_ns": "depo", "target_table": "enr", "cron": "0 * * * *"}
-    body = client.post("/api/sources/preview", json={"spec": spec}).json()
-    assert body["connector"] is None
 
 
 def test_preview_kafka_ingest_renders_connector(client):
@@ -695,23 +657,25 @@ def test_pause_spark_uses_suspend():
     assert k8s.paused_calls == []  # connector-specific call NOT fired
 
 
-def test_edit_spark_rerenders():
+def test_edit_spark_source_is_400_not_500():
+    # No spark-batch source type is registered anymore (_SPARK_RENDERERS is
+    # empty), so orchestrator.edit_spark_source would raise NotImplementedError
+    # for ANY spec -- PATCHing a ScheduledSparkApplication CR (e.g. the
+    # chart-fixed silver-merge job) must be rejected up front with a clean 400,
+    # never let that escape as an unhandled 500.
     orch = FakeOrchestrator()
     k8s = FakeK8s(sources=[SPARK_CR])
     client = _client_as({Role.ANALYST}, k8s=k8s, orchestrator=orch)
     spec_payload = {
-        "source": "s1", "kind": "batch", "type": "s3", "db": "-", "table": "-",
-        "target_ns": "ext", "target_table": "orders", "s3_bucket": "b2",
-        "s3_prefix": "p2/", "file_format": "parquet", "cron": "5 * * * *",
+        "source": "s1", "kind": "cdc", "type": "pg", "db": "-", "table": "-",
+        "target_ns": "ext", "target_table": "orders", "db_host": "h",
     }
 
     r = client.patch("/api/sources/s3-register-s1-orders", json={"spec": spec_payload})
 
-    assert r.status_code == 200
-    assert r.json() == {"ok": True, "name": "s3-register-s1-orders"}
-    assert len(orch.edit_spark_calls) == 1
-    assert orch.edit_spark_calls[0].source == "s1"
-    assert k8s.patched == []  # connector-specific call NOT fired
+    assert r.status_code == 400
+    assert "spark-batch" in r.json()["detail"]
+    assert orch.edit_spark_calls == []  # never called -- rejected before dispatch
 
 
 # --------------------------------------------------------------------------
