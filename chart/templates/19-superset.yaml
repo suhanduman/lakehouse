@@ -185,7 +185,7 @@ spec:
         - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superset-app, key: password}}}
         - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
         - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
-        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         volumeMounts:
         - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
         resources:
@@ -249,12 +249,16 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
+          {{- if ne .Values.superset.trino.authMode "none" }}{{ fail "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none" }}{{- end }}
           set -euo pipefail
           superset db upgrade
           superset init
           superset fab create-admin \
             --username "$ADMIN_USER" --firstname Admin --lastname Admin \
             --email admin@lakehouse.local --password "$ADMIN_PASSWORD" || true
+          {{- if .Values.auth.oidc.enabled }}
+          echo "WARN: superset.trino.authMode=none but auth.oidc.enabled=true — the Trino connection is unauthenticated and queries will fail until the JWT slice lands (see spike doc)."
+          {{- end }}
           # Register the Trino connection (idempotent — updates if present).
           # authMode={{ .Values.superset.trino.authMode }}: `none` => unauthenticated Trino
           # (works when auth.oidc.enabled=false). See the spike doc for the OIDC path.
@@ -274,7 +278,7 @@ spec:
         - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-superset-app, key: password}}}
         - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
         - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
-        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         - {name: ADMIN_USER,     value: {{ .Values.superset.adminUser | quote }}}
         - {name: ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: superset, key: admin-password}}}
         volumeMounts:

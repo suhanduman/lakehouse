@@ -93,3 +93,34 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "superset db upgrade"
         documentSelector: {path: metadata.name, value: superset-init}
+
+  # Final-review fix wave (2026-08-04): superset.trino.authMode only wires
+  # `none` in v1 (spike doc, section (c)) — any other value must fail the
+  # render loudly (template-time `fail`) rather than silently shipping an
+  # unauthenticated Trino URI under a name that implies real auth.
+  - it: authMode=none (default) renders clean with the unauthenticated Trino URI
+    set:
+      components.superset: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "trino://superset@"
+        documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: authMode=jwt (unsupported in v1) fails the render loudly (fail() guard)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.trino.authMode only supports \"none\" in v1 (JWT auth is the next Consumption slice — see docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md); set it to none"
+
+  - it: authMode=none but auth.oidc.enabled=true prints a non-fatal WARN (unauthenticated Trino under OIDC)
+    set:
+      components.superset: true
+      auth.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "WARN: superset\\.trino\\.authMode=none but auth\\.oidc\\.enabled=true"
+        documentSelector: {path: metadata.name, value: superset-init}

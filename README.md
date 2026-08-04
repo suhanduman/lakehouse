@@ -214,6 +214,12 @@ Under OIDC-enabled Trino the connection renders but queries require the
 JWT-authenticator follow-up (next Consumption slice) — see
 docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md."
 
+Medium/large tier'larda (`components.superset: true`) üç Superset secret'ı —
+`superset.secretKey`, `superset.adminPassword`, `superset.oidc.clientSecret` —
+ilk boot'tan ÖNCE `secrets.mode`'a göre out-of-band provision edilmelidir
+(keycloak-admin-credentials ile AYNI konvansiyon); aksi halde superset ve
+superset-init pod'ları `CreateContainerConfigError`'da kalır.
+
 ---
 
 ## İngest — bilinen tradeoff'lar ve gerekçeler
