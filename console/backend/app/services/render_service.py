@@ -1108,7 +1108,10 @@ _SPARK_RENDERERS = {}
 def render_spark_job(spec: SourceSpec, spark_image: str, s3_secret_name: str) -> dict:
     """Dispatch on the source-type registry -> ScheduledSparkApplication dict
     (spark-batch lane). A spark-batch source with no spark renderer wired yet
-    (e.g. scheduled-mongo, render_key="") raises NotImplementedError."""
+    (render_key="") raises NotImplementedError. Retained for a possible
+    future spark-batch source type -- no source type is currently registered
+    on this lane (see source_types.py), so this function is unreachable via
+    the registry today; it is still exercised directly by tests."""
     descriptor = source_types.get(spec.kind, spec.type)
     fn = _SPARK_RENDERERS.get(descriptor.render_key)
     if fn is None:
@@ -1238,10 +1241,11 @@ def render_connection_test(spec: SourceSpec, creds: SourceCredentials) -> Option
     """(connector_class, minimal_config) for Kafka Connect's config/validate,
     or None when the lane has no external DB/connector to test:
     kafka-ingest (`stream`+`kafka`, consumes an already-existing topic — there
-    is nothing new to connect to) and the spark-batch lane (`batch`+`s3` /
-    `scheduled`+`mongo` — no KafkaConnector at all, see render_connector's
-    docstring). Dispatches on the same source_types registry render_key the
-    real renderers use, so a new source type only needs a
+    is nothing new to connect to) and the spark-batch lane (no KafkaConnector
+    at all, see render_connector's docstring) -- though no spark-batch source
+    type is currently registered (see source_types.py), so that second case
+    is unreachable today. Dispatches on the same source_types registry
+    render_key the real renderers use, so a new source type only needs a
     _CONNECTION_TEST_RENDERERS entry (or is correctly None by omission) — not
     a second parallel kind/type switch."""
     descriptor = source_types.get(spec.kind, spec.type)

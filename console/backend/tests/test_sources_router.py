@@ -657,6 +657,27 @@ def test_pause_spark_uses_suspend():
     assert k8s.paused_calls == []  # connector-specific call NOT fired
 
 
+def test_edit_spark_source_is_400_not_500():
+    # No spark-batch source type is registered anymore (_SPARK_RENDERERS is
+    # empty), so orchestrator.edit_spark_source would raise NotImplementedError
+    # for ANY spec -- PATCHing a ScheduledSparkApplication CR (e.g. the
+    # chart-fixed silver-merge job) must be rejected up front with a clean 400,
+    # never let that escape as an unhandled 500.
+    orch = FakeOrchestrator()
+    k8s = FakeK8s(sources=[SPARK_CR])
+    client = _client_as({Role.ANALYST}, k8s=k8s, orchestrator=orch)
+    spec_payload = {
+        "source": "s1", "kind": "cdc", "type": "pg", "db": "-", "table": "-",
+        "target_ns": "ext", "target_table": "orders", "db_host": "h",
+    }
+
+    r = client.patch("/api/sources/s3-register-s1-orders", json={"spec": spec_payload})
+
+    assert r.status_code == 400
+    assert "spark-batch" in r.json()["detail"]
+    assert orch.edit_spark_calls == []  # never called -- rejected before dispatch
+
+
 # --------------------------------------------------------------------------
 # Delete -- per-mode authz gate + with_data teardown (Imp4) + 404 (Minor7)
 # --------------------------------------------------------------------------

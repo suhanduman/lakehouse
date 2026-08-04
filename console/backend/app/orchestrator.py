@@ -68,16 +68,18 @@ Scope note (Plan B2): any source on the registry's spark-batch lane does not
 go through Kafka/medallion pre-create at all. This orchestrator checks
 `source_types.get(spec.kind, spec.type).lane` up front and branches on
 `descriptor.render_key`:
-  - render_key == "" (today: scheduled+mongo — design doc 5.2b, not yet
-    wired to a Spark renderer) -> a single clear "validate" StepResult
+  - render_key == "" (a spark-batch source type with no spark renderer wired
+    yet, per design doc 5.2b) -> a single clear "validate" StepResult
     failure, before touching any resource. render_service.render_spark_job
     would raise NotImplementedError for this descriptor; this check avoids
     letting that escape as an unhandled crash.
-  - render_key set (today: batch-s3) -> a minimal ONE-step pipeline: render
-    the Spark CR (`render.render_spark_job`) and apply it
-    (`k8s.apply_spark_job`) — no secret/bucket/namespace/table(Bronze/
-    Silver)/topic/connector/verify; the Spark job itself owns writing its
-    output table.
+  - render_key set -> a minimal ONE-step pipeline: render the Spark CR
+    (`render.render_spark_job`) and apply it (`k8s.apply_spark_job`) — no
+    secret/bucket/namespace/table(Bronze/Silver)/topic/connector/verify; the
+    Spark job itself owns writing its output table.
+  NOTE: this machinery is retained for a possible future spark-batch source
+  type, but no source type currently registers on the spark-batch lane (see
+  source_types.py) -- both branches above are unreachable today.
 This is registry-driven (not a hard-coded (kind, type) check), so it
 generalizes to any future spark-batch source without an orchestrator change;
 kafka-connect-source sources (including stream+kafka) are NOT touched by
@@ -242,8 +244,8 @@ class AddSourceOrchestrator:
         descriptor = source_types.get(spec.kind, spec.type)
         if descriptor.lane == "spark-batch":
             if not descriptor.render_key:
-                # No spark renderer wired for this source type yet (e.g.
-                # scheduled-mongo) -- reject up front, exactly as Plan B1.
+                # No spark renderer wired for this source type yet -- reject
+                # up front, exactly as Plan B1.
                 return AddSourceResult(
                     steps=[
                         StepResult(
@@ -257,12 +259,13 @@ class AddSourceOrchestrator:
                     ],
                     ok=False,
                 )
-            # Spark-batch source WITH a spark renderer (e.g. batch-s3): a
-            # minimal, single-step pipeline -- render the Spark CR and apply
-            # it. Deliberately NO secret/bucket/namespace/table(Bronze/Silver)
+            # Spark-batch source WITH a spark renderer: a minimal,
+            # single-step pipeline -- render the Spark CR and apply it.
+            # Deliberately NO secret/bucket/namespace/table(Bronze/Silver)
             # /topic/connector/verify: this lane doesn't touch Kafka or
             # medallion pre-create at all, the Spark job itself owns writing
-            # its output table.
+            # its output table. (No source type currently registers on this
+            # lane with a render_key set -- see source_types.py.)
             sb_steps: List[StepResult] = []
             try:
                 body = self.render.render_spark_job(spec, self.spark_image, self.s3_secret_name)

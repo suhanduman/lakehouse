@@ -24,7 +24,6 @@ class SourceSpec(BaseModel):
     """Domain model for a data source registered with the lakehouse console.
 
     Validation (enforced in `_validate_kind_type_requirements`):
-      - kind="scheduled", type="mongo"            -> requires `cron`
       - kind="scheduled", type in ("mssql", "pg") -> requires `jdbc_url` and `incrementing_col`
       - kind="cdc",       type="mongo"            -> requires `mongo_uri`
       - kind="cdc",       type in ("mssql", "pg", "mysql") -> requires `db_host`
