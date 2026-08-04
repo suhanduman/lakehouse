@@ -118,6 +118,28 @@ data:
     FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
     SQLLAB_TIMEOUT = 60
     SUPERSET_WEBSERVER_TIMEOUT = 120
+
+    # --- Trino machine-auth (b1): inject a fresh JWT per connection ---
+    # Signature VERIFIED against the 4.1.1 image (superset/models/core.py:531):
+    #   sqlalchemy_url, params = DB_CONNECTION_MUTATOR(url, params, user, sm, source)
+    #   create_engine(sqlalchemy_url, **params)  -> connect_args is params["connect_args"] (NESTED)
+    TRINO_AUTH_MODE = {{ .Values.superset.trino.authMode | quote }}
+    _TRINO_TOKEN_FILE = "/var/run/trino-token/token"
+    def DB_CONNECTION_MUTATOR(sqlalchemy_url, params, username, security_manager, source):
+        # Only touch the Trino connection, and only in jwt mode.
+        if TRINO_AUTH_MODE == "jwt" and str(sqlalchemy_url).startswith("trino://"):
+            try:
+                with open(_TRINO_TOKEN_FILE) as _f:
+                    _tok = _f.read().strip()
+            except (OSError, IOError):
+                _tok = ""
+            if _tok:
+                from trino.auth import JWTAuthentication
+                _ca = dict((params or {}).get("connect_args") or {})
+                _ca["auth"] = JWTAuthentication(_tok)
+                _ca["http_scheme"] = "https"
+                params = {**(params or {}), "connect_args": _ca}
+        return sqlalchemy_url, params
 {{- if or .Values.superset.secretKey .Values.superset.adminPassword }}
 ---
 # Dev-convenience inline Secret — rendered ONLY when secretKey/adminPassword

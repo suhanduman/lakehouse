@@ -45,6 +45,39 @@ tests:
           path: metadata.name
           value: superset-config
 
+  - it: renders DB_CONNECTION_MUTATOR injecting a per-connection Trino JWT (jwt mode)
+    # NOTE: the mutator's python body is always rendered (it gates jwt-mode
+    # injection itself at runtime via TRINO_AUTH_MODE) — this suite does not
+    # set authMode: jwt because the init-Job's fail-guard still only accepts
+    # "none" in v1 until Task 8 relaxes it; that's out of this task's scope.
+    set:
+      components.superset: true
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "def DB_CONNECTION_MUTATOR\\("
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "from trino\\.auth import JWTAuthentication"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "/var/run/trino-token/token"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "params\\[\"connect_args\"\\]|\"connect_args\": _ca"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
   - it: does NOT render the dev-convenience Secrets when their values are empty (default)
     set:
       components.superset: true
