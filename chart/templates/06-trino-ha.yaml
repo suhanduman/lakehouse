@@ -155,6 +155,10 @@ data:
     # internal-communication.https.keystore.path=/etc/trino/certs/keystore.p12
     # internal-communication.https.keystore.key=${ENV:KEYSTORE_PASS}
     # discovery.uri=https://trino-coordinator:8443
+    # http-server.https.enabled=true
+    # http-server.https.port=8443
+    # http-server.https.keystore.path=/etc/trino/certs/keystore.p12
+    # http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
     # Alternatif: OpenShift Service Mesh (Istio) PeerAuthentication CR ile
     # namespace-seviye mTLS; uygulama konfigürasyonu değişmez.
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
