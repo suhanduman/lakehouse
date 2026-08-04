@@ -599,11 +599,14 @@ versions:
   # full-string-pin convention as `zeppelinImage` above (not built via
   # `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
   kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
-  # Apache Superset (BI). External image, full-ref pin (like kafkaUiImage/
-  # zeppelinImage). POC-DOĞRULA: exact tag + arm64 availability — apache/superset
-  # historically ships amd64; UAT runs on OpenShift (amd64). Local arm64 smoke
-  # may need a community arm64 tag (same caveat as zeppelin's amd64-only note).
-  supersetImage: apache/superset:4.1.1
+  # chart/templates/19-superset.yaml: internally-built Superset image (same
+  # `.Values.global.imageRegistry` + tag convention as `consoleBackendImageTag`
+  # above). Custom-built (images/superset/Dockerfile) because the stock
+  # `apache/superset:4.1.1` ships with NO trino driver — the Superset<->Trino
+  # connection/mutator would crash without `trino[sqlalchemy]` installed
+  # (docker-verified spike finding, 2026-08-04 consumption-b1 plan). Task 7's
+  # OIDC-refresher sidecar reuses this same built ref.
+  supersetImageTag: "1.0"
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
@@ -1210,6 +1213,24 @@ superset:
     authMode: none
     # Trino catalog Superset connects to by default (Silver medallion).
     catalog: lakehouse
+    # Machine-auth (b1): service-account client secret for `svc-superset-trino`
+    # (10-keycloak.yaml `clients[].secret`, single source — the two can never
+    # drift). Empty default => the `superset-trino-oidc-credentials` Secret is
+    # NOT rendered; provision out-of-band per `.Values.secrets.mode`.
+    oidc:
+      clientSecret: ""
+    # Sidecar re-fetch cadence (seconds) — MUST be well under the Keycloak
+    # svc-superset-trino access-token lifespan (900s, 10-keycloak.yaml).
+    tokenRefreshSeconds: 600
+    # SQLAlchemy pool_recycle (seconds) on the registered Trino connection —
+    # MUST be below the token lifespan (900s) so no pooled connection outlives
+    # its JWT.
+    poolRecycleSeconds: 800
+    # Coordinator client-facing internal TLS (:8443) for JWT machine-auth.
+    tls:
+      enabled: true
+      # PKCS12 keystore passphrase (dev-convenience; out-of-band otherwise).
+      keystorePassword: ""
   exampleDashboard:
     # Best-effort import of a committed example dashboard bundle by the
     # init-Job. Default false: the connection + one dataset are the v1 "it

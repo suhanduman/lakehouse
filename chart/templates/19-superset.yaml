@@ -148,6 +148,20 @@ type: Opaque
 stringData:
   client-secret: {{ .Values.superset.oidc.clientSecret | quote }}
 {{- end }}
+{{- if .Values.superset.trino.oidc.clientSecret }}
+---
+# Single source with the Keycloak `svc-superset-trino` service-account client
+# secret (10-keycloak.yaml) via `.Values.superset.trino.oidc.clientSecret`.
+# Consumed by the Superset refresher sidecar. Same dev-convenience contract.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-trino-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.superset.trino.oidc.clientSecret | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -171,7 +185,7 @@ spec:
       {{- end }}
       containers:
       - name: superset
-        image: {{ .Values.versions.supersetImage | quote }}
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
         {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
         {{- if $csc }}
         securityContext:
@@ -245,7 +259,7 @@ spec:
       {{- end }}
       containers:
       - name: superset-init
-        image: {{ .Values.versions.supersetImage | quote }}
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
         command: ["/bin/bash", "-c"]
         args:
         - |

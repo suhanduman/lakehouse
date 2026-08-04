@@ -124,3 +124,16 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "WARN: superset\\.trino\\.authMode=none but auth\\.oidc\\.enabled=true"
         documentSelector: {path: metadata.name, value: superset-init}
+
+  - it: renders the superset-trino-oidc-credentials Secret only when the svc-superset-trino clientSecret is supplied
+    set:
+      components.superset: true
+      superset.trino.oidc.clientSecret: "dev-svc-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-trino-oidc-credentials, any: true}
+  - it: does NOT render superset-trino-oidc-credentials when clientSecret is empty (default)
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: superset-trino-oidc-credentials, any: true}
+        not: true
