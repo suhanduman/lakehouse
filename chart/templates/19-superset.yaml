@@ -1,0 +1,77 @@
+# Apache Superset (BI) — Consumption slice (a). Hand-rolled deployment
+# (Deployment + Service + ConfigMap + Secret + PDB + init-Job) plus its own
+# pg-superset CNPG metadata store, ALL under one `components.superset` gate
+# (default false; on in medium/large). Follows the Zeppelin/Kafka-UI
+# hand-templated convention. Login: native AUTH_OAUTH against the Keycloak
+# `superset` client (10-keycloak.yaml). Trino connection auth is spike-driven
+# (docs/superpowers/spikes/2026-08-04-superset-trino-oidc.md).
+#
+# pg-superset is gated by `components.superset` (NOT `components.postgres`) —
+# same "no orphan DB" rationale as pg-keycloak's $keycloakDbEnabled: a disabled
+# Superset must not leave a metadata cluster with no consumer, and dev (superset
+# off) must not pay for it in the sizing-tiers dev budget.
+#
+# Service wiring: Trino via `lakehouse.svc.trino`, metadata DB via
+# `lakehouse.svc.pgSupersetRw` (both helpers, never hardcoded).
+{{- if .Values.components.superset }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-superset
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  instances: {{ .Values.postgres.superset.instances }}
+  imageName: {{ .Values.versions.cnpgPostgresImage | quote }}
+  storage:
+    size: {{ .Values.postgres.superset.storage.size | quote }}
+{{- with .Values.postgres.superset.storage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  walStorage:
+    size: {{ .Values.postgres.superset.walStorage.size | quote }}
+{{- with .Values.postgres.superset.walStorage.storageClass }}
+    storageClass: {{ . }}
+{{- end }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.superset.database }}
+      owner: {{ .Values.postgres.superset.owner }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgres.superset.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.postgres.superset.backup.endpointURL | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.storage.s3.secretName }}
+          key: access-key-id
+        secretAccessKey:
+          name: {{ .Values.storage.s3.secretName }}
+          key: secret-access-key
+      wal:
+        compression: gzip
+        maxParallel: {{ .Values.postgres.superset.backup.walMaxParallel }}
+      data:
+        compression: gzip
+        jobs: {{ .Values.postgres.superset.backup.dataJobs }}
+    retentionPolicy: {{ .Values.postgres.superset.backup.retentionPolicy | quote }}
+  monitoring:
+    enablePodMonitor: {{ and .Values.components.monitoring .Values.monitoring.targets.postgres.enabled .Values.postgres.superset.monitoring.enablePodMonitor }}
+  resources:
+    requests:
+      cpu: {{ .Values.postgres.superset.resources.requests.cpu | quote }}
+      memory: {{ .Values.postgres.superset.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.postgres.superset.resources.limits.cpu | quote }}
+      memory: {{ .Values.postgres.superset.resources.limits.memory | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-superset-daily
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  schedule: "0 0 4 * * *"
+  cluster:
+    name: pg-superset
+  backupOwnerReference: self
+{{- end }}

@@ -1,0 +1,24 @@
+# chart/tests/superset-enabled_test.yaml — proves the Superset component
+# (chart/templates/19-superset.yaml, gated by components.superset) renders its
+# full manifest set when enabled and nothing when disabled. Mirrors
+# component-enabled_test.yaml (Zeppelin) conventions.
+suite: superset component render
+templates:
+  - 19-superset.yaml
+tests:
+  - it: renders nothing when components.superset is false
+    set:
+      components.superset: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the pg-superset CNPG Cluster when components.superset is true
+    set:
+      components.superset: true
+    asserts:
+      - containsDocument:
+          kind: Cluster
+          apiVersion: postgresql.cnpg.io/v1
+          name: pg-superset
+          any: true
