@@ -188,3 +188,39 @@ tests:
     asserts:
       - containsDocument: {kind: Secret, apiVersion: v1, name: superset-trino-oidc-credentials, any: true}
         not: true
+
+  # Task 7: refresher sidecar + shared emptyDir (jwt mode only)
+  - it: authMode=jwt adds the trino-token-refresher sidecar + trino-token emptyDir to the Deployment
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+            emptyDir: {}
+          any: true
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: authMode=none does NOT add the trino-token-refresher sidecar or trino-token volume
+    set:
+      components.superset: true
+      superset.trino.authMode: none
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+        documentSelector: {path: kind, value: Deployment}

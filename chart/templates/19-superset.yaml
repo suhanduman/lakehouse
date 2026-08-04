@@ -224,6 +224,9 @@ spec:
         - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         volumeMounts:
         - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
+        {{- if eq .Values.superset.trino.authMode "jwt" }}
+        - {name: trino-token, mountPath: /var/run/trino-token}
+        {{- end }}
         resources:
           requests: {memory: {{ .Values.superset.resources.requests.memory | quote }}, cpu: {{ .Values.superset.resources.requests.cpu | quote }}}
           limits:   {memory: {{ .Values.superset.resources.limits.memory | quote }},   cpu: {{ .Values.superset.resources.limits.cpu | quote }}}
@@ -235,9 +238,56 @@ spec:
           httpGet: {path: /health, port: 8088}
           initialDelaySeconds: 120
           periodSeconds: 30
+      {{- if eq .Values.superset.trino.authMode "jwt" }}
+      # Trino machine-auth (b1): refreshes a Keycloak service-account JWT for
+      # the `svc-superset-trino` client and writes it atomically to the shared
+      # emptyDir; DB_CONNECTION_MUTATOR (superset_config.py above) reads it
+      # per-connection. Exponential backoff on failure, keeps last-good token
+      # (a transient Keycloak blip must never break existing SQL Lab sessions).
+      - name: trino-token-refresher
+        image: {{ printf "%s/superset:%s" .Values.global.imageRegistry .Values.versions.supersetImageTag | quote }}
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          set -uo pipefail
+          DEST=/var/run/trino-token/token
+          BACKOFF=5
+          while true; do
+            TOK=$(python3 - <<'PY'
+          import os,sys,json,urllib.parse,urllib.request
+          data=urllib.parse.urlencode({"grant_type":"client_credentials",
+            "client_id":"svc-superset-trino",
+            "client_secret":os.environ["SVC_CLIENT_SECRET"]}).encode()
+          url=os.environ["OIDC_ISSUER"].rstrip("/")+"/protocol/openid-connect/token"
+          try:
+            r=urllib.request.urlopen(url,data=data,timeout=10)
+            print(json.load(r)["access_token"])
+          except Exception as e:
+            sys.stderr.write("token fetch failed: %s\n" % type(e).__name__); sys.exit(1)
+          PY
+          )
+            if [ -n "$TOK" ]; then
+              printf '%s' "$TOK" > /var/run/trino-token/token.tmp && mv /var/run/trino-token/token.tmp "$DEST"
+              BACKOFF=5
+              sleep {{ .Values.superset.trino.tokenRefreshSeconds }}
+            else
+              echo "WARN: keeping last-good token; retry in ${BACKOFF}s"
+              sleep "$BACKOFF"; BACKOFF=$(( BACKOFF*2 > 60 ? 60 : BACKOFF*2 ))
+            fi
+          done
+        env:
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: SVC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: superset-trino-oidc-credentials, key: client-secret}}}
+        volumeMounts:
+        - {name: trino-token, mountPath: /var/run/trino-token}
+      {{- end }}
       volumes:
       - name: superset-config
         configMap: {name: superset-config}
+      {{- if eq .Values.superset.trino.authMode "jwt" }}
+      - name: trino-token
+        emptyDir: {}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
