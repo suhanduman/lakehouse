@@ -39,11 +39,6 @@ const DEFAULT_SOURCE_TYPES: SourceTypeDescriptor[] = [
     required_fields: ["jdbc_url", "incrementing_col"], needs_bootstrap: false,
   },
   {
-    id: "scheduled-mongo", kind: "scheduled", type: "mongo", lane: "spark-batch",
-    disposition: "entity", dispositions: ["entity"],
-    required_fields: ["cron"], needs_bootstrap: false,
-  },
-  {
     id: "stream-kafka", kind: "stream", type: "kafka", lane: "kafka-connect-source",
     disposition: "event", dispositions: ["event", "entity"],
     required_fields: [], needs_bootstrap: true,
@@ -254,9 +249,9 @@ describe("AddSourceWizard", () => {
 
   it("shows a failure state (not success) when createSource resolves with ok:false", async () => {
     // The backend can return a 2xx-range response (201 or 207) whose body
-    // still says `ok: false` -- an in-band pipeline failure (rollback ran,
-    // or unsupported scheduled+mongo). The wizard must not report success
-    // just because the promise resolved; it has to inspect `result.ok`.
+    // still says `ok: false` -- an in-band pipeline failure (e.g. rollback
+    // ran). The wizard must not report success just because the promise
+    // resolved; it has to inspect `result.ok`.
     vi.spyOn(client, "previewSource").mockResolvedValue(PREVIEW_RESPONSE);
     vi.spyOn(client, "createSource").mockResolvedValue({
       ok: false,
@@ -324,40 +319,6 @@ describe("AddSourceWizard", () => {
     expect(
       await screen.findByLabelText(/kafka bootstrap \(external, optional\)/i),
     ).toBeInTheDocument();
-  });
-
-  it("shows s3 bucket/prefix/format fields for batch/s3", async () => {
-    vi.spyOn(client, "getSourceTypes").mockResolvedValue([
-      {
-        id: "batch-s3", kind: "batch", type: "s3", lane: "spark-batch", disposition: "entity",
-        dispositions: ["entity"], required_fields: ["s3_bucket", "s3_prefix", "file_format", "cron"],
-        needs_bootstrap: false,
-      },
-    ]);
-
-    render(<AddSourceWizard />);
-
-    // Registry has only batch/s3 -- kind/type default to it once loaded.
-    await screen.findByRole("option", { name: /^batch$/i });
-    fireEvent.change(screen.getByLabelText(/^kind$/i), { target: { value: "batch" } });
-    await screen.findByRole("option", { name: /^s3$/i });
-    fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: "s3" } });
-
-    // Advance to step 2 -- s3_bucket/s3_prefix/file_format render there.
-    fireEvent.click(screen.getByRole("button", { name: /next/i }));
-
-    expect(await screen.findByLabelText(/s3 bucket/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/s3 prefix/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/file format/i)).toBeInTheDocument();
-    // parquet/json/avro options on the format select.
-    expect(screen.getByRole("option", { name: /^parquet$/i })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /^json$/i })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /^avro$/i })).toBeInTheDocument();
-
-    // Advance to step 3 -- cron renders there (required_fields-driven, not
-    // hard-coded off kind === "scheduled").
-    fireEvent.click(screen.getByRole("button", { name: /next/i }));
-    expect(screen.getByLabelText(/cron schedule/i)).toBeInTheDocument();
   });
 
   it("shows an error alert (and doesn't crash) when getSourceTypes fails on mount", async () => {

@@ -48,7 +48,6 @@ pick_template() {
     cdc:pg) echo "source-cdc-pg.yaml";;
     scheduled:mssql|scheduled:pg) echo "source-scheduled-jdbc.yaml";;
     cdc:mongo) echo "source-cdc-mongo.yaml";;
-    scheduled:mongo) echo "source-scheduled-mongo-spark.yaml";;
     *) echo "desteklenmeyen kind/type: ${KIND}/${TYPE}" >&2; exit 2;;
   esac
 }

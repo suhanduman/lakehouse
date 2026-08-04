@@ -53,17 +53,6 @@ def camel_http_spec():
     )
 
 
-@pytest.fixture
-def batch_s3_spec():
-    # batch/s3: spark-batch lane -- ScheduledSparkApplication CR only, no
-    # topic/connector/precreate (the Spark job owns writing its own table).
-    return SourceSpec(
-        source="ds1", kind="batch", type="s3", db="-", table="-",
-        target_ns="nyc", target_table="trips",
-        s3_bucket="ham-veri", s3_prefix="raw/", file_format="parquet", cron="0 * * * *",
-    )
-
-
 def _files(spec):
     return gitops_render.render_pipeline_fileset(
         spec, spark_image="reg/spark-py:9", s3_secret_name="s3-credentials", namespace="lakehouse")
@@ -95,12 +84,6 @@ def test_camel_fileset_includes_dedicated_sink(camel_http_spec):
     files = _files(camel_http_spec)
     connectors = [m for m in files.values() if m["kind"] == "KafkaConnector"]
     assert len(connectors) == 2   # source + dedicated sink
-
-
-def test_spark_batch_fileset_is_spark_cr_only(batch_s3_spec):
-    files = _files(batch_s3_spec)
-    kinds = [m["kind"] for m in files.values()]
-    assert kinds == ["ScheduledSparkApplication"]   # no topic/connector/precreate
 
 
 def test_entity_fileset_fail_loud_without_identifier(cdc_entity_spec_no_id):
