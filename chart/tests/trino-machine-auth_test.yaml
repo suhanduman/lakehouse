@@ -1,0 +1,19 @@
+suite: trino machine-auth (b1)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: renders the trino-internal-tls Certificate + https:8443 when auth.oidc.enabled
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument: {kind: Certificate, apiVersion: cert-manager.io/v1, name: trino-internal-tls, any: true}
+      - matchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "http-server.https.enabled=true"
+        documentSelector: {path: metadata.name, value: trino-config}
+  - it: no https listener / cert when auth.oidc.enabled is false (dev)
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - containsDocument: {kind: Certificate, apiVersion: cert-manager.io/v1, name: trino-internal-tls, any: true}
+        not: true
