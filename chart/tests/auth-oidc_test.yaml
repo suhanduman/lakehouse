@@ -128,14 +128,70 @@ tests:
       superset.oidc.clientSecret: "dev-oidc-secret"
     asserts:
       - equal:
-          path: spec.realm.clients[1].clientId
+          path: spec.realm.clients[2].clientId
           value: superset
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[1].secret
+          path: spec.realm.clients[2].secret
           value: "dev-oidc-secret"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  # b1 machine-auth: `svc-superset-trino` service-account client mints
+  # client_credentials JWTs carrying `aud: trino` (oidc-audience-mapper) so
+  # Trino's `http-server.authentication.jwt.required-audience=trino`
+  # (06-trino-ha.yaml, Task 4) accepts them. Single-sources its confidential
+  # `secret` with `.Values.superset.trino.oidc.clientSecret` — the same value
+  # the `superset-trino-oidc-credentials` Secret (19-superset.yaml, Task 2)
+  # mounts, so they can never drift. Inserted right after the `trino` client
+  # (clients[0]), so it lands at clients[1] — the clientId equal guards that
+  # index assumption so an array-order change fails loudly instead of
+  # silently asserting against the wrong client (and shifts `superset` above
+  # from clients[1] to clients[2], updated accordingly).
+  - it: superset.trino.oidc.clientSecret provisions the svc-superset-trino service-account client with an aud:trino mapper
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      superset.trino.oidc.clientSecret: "dev-svc"
+    asserts:
+      - equal:
+          path: spec.realm.clients[1].clientId
+          value: svc-superset-trino
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[1].serviceAccountsEnabled
+          value: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[1].standardFlowEnabled
+          value: false
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[1].secret
+          value: "dev-svc"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients[1].protocolMappers
+          content:
+            name: aud-trino
+            protocol: "openid-connect"
+            protocolMapper: "oidc-audience-mapper"
+            config:
+              "included.client.audience": "trino"
+              "id.token.claim": "false"
+              "access.token.claim": "true"
         documentSelector:
           path: kind
           value: KeycloakRealmImport

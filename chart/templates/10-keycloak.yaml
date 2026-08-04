@@ -285,6 +285,26 @@ spec:
       webOrigins: [{{ printf "https://%s" (include "lakehouse.routeHost" (dict "name" "trino" "context" .)) | quote }}]
       attributes:
         access.token.lifespan: "3600"
+    - clientId: svc-superset-trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      # Confidential service account for Superset->Trino machine-auth (b1).
+      # Single source with the `superset-trino-oidc-credentials` Secret
+      # (19-superset.yaml) via `.Values.superset.trino.oidc.clientSecret`.
+      secret: {{ .Values.superset.trino.oidc.clientSecret | quote }}
+      attributes:
+        access.token.lifespan: "900"
+      protocolMappers:
+      - name: aud-trino
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config:
+          "included.client.audience": "trino"
+          "id.token.claim": "false"
+          "access.token.claim": "true"
     - clientId: superset
       enabled: true
       protocol: "openid-connect"
