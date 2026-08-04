@@ -17,3 +17,15 @@ tests:
     asserts:
       - containsDocument: {kind: Certificate, apiVersion: cert-manager.io/v1, name: trino-internal-tls, any: true}
         not: true
+  - it: chains oauth2,jwt with the jwt authenticator keys when auth.oidc.enabled
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "http-server.authentication.type=oauth2,jwt"
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "http-server.authentication.jwt.required-audience=trino"
+        documentSelector: {path: metadata.name, value: trino-config}

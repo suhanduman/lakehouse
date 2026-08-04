@@ -133,13 +133,20 @@ data:
     # discovery at startup, so with no reachable issuer this config MUST be
     # omitted entirely rather than pointed at a dummy URL, or the coordinator
     # crash-loops forever.
-    http-server.authentication.type=oauth2
+    http-server.authentication.type=oauth2,jwt
     web-ui.authentication.type=oauth2
     http-server.authentication.oauth2.issuer=${ENV:OIDC_ISSUER}
     http-server.authentication.oauth2.client-id=${ENV:OIDC_CLIENT_ID}
     http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
     http-server.authentication.oauth2.principal-field=preferred_username
     http-server.authentication.oauth2.scopes=openid,email,profile
+    # Machine clients (Superset, later dbt) present a Keycloak client-credentials
+    # JWT; validated against the realm JWKS. aud=trino mandatory (Keycloak
+    # audience mapper, 10-keycloak.yaml) or Trino 401s.
+    http-server.authentication.jwt.key-file=${ENV:OIDC_ISSUER}/protocol/openid-connect/certs
+    http-server.authentication.jwt.required-issuer=${ENV:OIDC_ISSUER}
+    http-server.authentication.jwt.required-audience=trino
+    http-server.authentication.jwt.principal-field=preferred_username
 {{- else }}
     # auth.oidc.enabled=false — DEV/SMOKE-TEST ONLY (see values.yaml's
     # `auth:` comment). No http-server.authentication.type set at all =
