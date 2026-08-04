@@ -127,10 +127,12 @@ tests:
           pattern: "superset db upgrade"
         documentSelector: {path: metadata.name, value: superset-init}
 
-  # Final-review fix wave (2026-08-04): superset.trino.authMode only wires
-  # `none` in v1 (spike doc, section (c)) — any other value must fail the
-  # render loudly (template-time `fail`) rather than silently shipping an
-  # unauthenticated Trino URI under a name that implies real auth.
+  # Final-review fix wave (2026-08-04): superset.trino.authMode wires both
+  # `none` (unauthenticated, :8080) and `jwt` (machine-auth via the
+  # sidecar+mutator, tokenless :8443 URI — see Task 8) in v1; any other
+  # value must fail the render loudly (template-time `fail`) rather than
+  # silently shipping an unauthenticated Trino URI under a name that
+  # implies real auth.
   - it: authMode=none (default) renders clean with the unauthenticated Trino URI on :8080
     set:
       components.superset: true
