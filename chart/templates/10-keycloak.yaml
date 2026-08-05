@@ -305,6 +305,26 @@ spec:
           "included.client.audience": "trino"
           "id.token.claim": "false"
           "access.token.claim": "true"
+    - clientId: svc-dbt-trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      # Confidential service account for dbt->Trino machine-auth (b2), sole
+      # writer of lakehouse.gold. Single source with dbt-trino-oidc-credentials
+      # via .Values.dbt.oidc.clientSecret.
+      secret: {{ .Values.dbt.oidc.clientSecret | quote }}
+      attributes:
+        access.token.lifespan: "1800"
+      protocolMappers:
+      - name: aud-trino
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config:
+          "included.client.audience": "trino"
+          "id.token.claim": "false"
+          "access.token.claim": "true"
     - clientId: superset
       enabled: true
       protocol: "openid-connect"
