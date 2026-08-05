@@ -20,6 +20,7 @@ templates:
   - 09c-zeppelin-sandbox.yaml
   - 18-bucket-init.yaml
   - 18b-sandbox-minio-policy.yaml
+  - 09-zeppelin.yaml
 tests:
   - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
     templates:
@@ -496,12 +497,15 @@ tests:
             name: AWS_REGION
             valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: region}}
       # the c1 %trino read interpreter (chart/templates/_zeppelin.tpl) is
-      # carried by the sandbox instance too — same seed ConfigMap + TLS mount.
+      # carried by the sandbox instance too — same seed ConfigMap + TLS
+      # mount, but its OWN per-instance ConfigMap name (Task 5 duplicate-
+      # name fix — NOT the shared literal `zeppelin-trino-interpreter`,
+      # which would collide with the shared c1 instance's own copy).
       - contains:
           path: spec.template.spec.volumes
           content:
             name: trino-interp
-            configMap: {name: zeppelin-trino-interpreter}
+            configMap: {name: zeppelin-sandbox-veri-trino-interpreter}
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
@@ -509,13 +513,14 @@ tests:
             mountPath: /seed
             readOnly: true
 
-  - it: sandbox instance Shiro ConfigMap (dept veri) — groupRolesMap maps ONLY the dept adGroup -> sandbox, [urls] /** gated roles[sandbox]
+  - it: sandbox instance Shiro ConfigMap (dept veri) — groupRolesMap maps the dept adGroup -> sandbox AND the shared admin AD group -> sandbox,admin (so the c1 refresher sidecar keeps roles[admin]); [urls] /** gated roles[sandbox]
     templates:
       - 09c-zeppelin-sandbox.yaml
     documentSelector:
       path: metadata.name
       value: zeppelin-sandbox-veri-shiro
     set:
+      zeppelin.ad.groups.admin: "CN=test-admins"
       sandbox.enabled: true
       sandbox.departments:
         - name: veri
@@ -524,12 +529,18 @@ tests:
     asserts:
       - matchRegex:
           path: data["shiro.ini"]
-          pattern: 'CN=veri-grp:sandbox"'
-      # ONLY the dept group is mapped — no shared admin/analyst/student AD
-      # groups leak into a sandbox instance's groupRolesMap.
-      - notMatchRegex:
+          pattern: 'CN=veri-grp:sandbox,'
+      # Task 5 fix: the shared `zeppelin.ad.groups.admin` AD group is ALSO
+      # mapped, to BOTH `sandbox` and `admin` roles — without this the c1
+      # %trino refresher sidecar's admin REST-login account has no role in
+      # a sandbox instance and its PUT /api/interpreter/setting/trino 403s
+      # forever, so the seeded %trino interpreter's placeholder access
+      # token is never replaced (Finding 2).
+      - matchRegex:
           path: data["shiro.ini"]
-          pattern: ':admin,'
+          pattern: 'CN=test-admins:sandbox,admin"'
+      # no OTHER shared AD group (analyst/student) leaks into a sandbox
+      # instance's groupRolesMap — only the dept group + the admin group.
       - notMatchRegex:
           path: data["shiro.ini"]
           pattern: ':analyst,'
@@ -541,7 +552,13 @@ tests:
           pattern: '/\*\* = authc, roles\[sandbox\]'
       - matchRegex:
           path: data["shiro.ini"]
+          pattern: '/api/interpreter/\*\* = authc, roles\[admin\]'
+      - matchRegex:
+          path: data["shiro.ini"]
           pattern: 'sandbox = \*'
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: 'admin = \*'
 
   - it: sandbox instance Service (dept veri) — zeppelin-sandbox-veri, http:8080
     templates:
@@ -688,7 +705,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["shiro.ini"]
-          pattern: 'CN=veri-grp:sandbox"'
+          pattern: 'CN=veri-grp:sandbox,'
       - notMatchRegex:
           path: data["shiro.ini"]
           pattern: 'finans'
@@ -711,7 +728,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["shiro.ini"]
-          pattern: 'CN=finans-grp:sandbox"'
+          pattern: 'CN=finans-grp:sandbox,'
       - notMatchRegex:
           path: data["shiro.ini"]
           pattern: 'veri'
@@ -751,3 +768,131 @@ tests:
       - hasDocuments:
           count: 0
           filterAware: true
+
+  # --- Task 5 review fix (Finding 1, install-breaking duplicate resource
+  # names): the trino-interpreter ConfigMap and trino-oidc-credentials
+  # Secret were hardcoded (not `{{ $name }}`-prefixed) inside
+  # `lakehouse.zeppelin.instance`, so the shared c1 instance + N sandbox
+  # departments rendered N+1 documents with the SAME kind/name — `helm
+  # install` fails on duplicate resources. Both are now per-instance-named;
+  # `ad-bind-credentials` instead stays a fixed shared name but is
+  # shared-gated (`sandbox: false`-only emission) since it's ONE shared
+  # corporate AD bind credential, not per-instance. These tests render the
+  # shared instance (09-zeppelin.yaml) TOGETHER WITH two sandbox departments
+  # (09c-zeppelin-sandbox.yaml) and assert each of the three resources
+  # renders with a UNIQUE per-instance name (or shared-only, for
+  # ad-bind-credentials) — a regression guard for the exact collision the
+  # review found. ------------------------------------------------------
+
+  - it: shared instance + TWO sandbox departments — the c1 %trino interpreter ConfigMap renders with THREE distinct per-instance names (no collision)
+    # NOTE: `containsDocument`/`hasDocuments` without an explicit per-assert
+    # `template:` apply to EVERY template listed at suite/test level and
+    # must pass in ALL of them (AND semantics, not "exists in at least
+    # one") — per helm-unittest's own doc: "the first assertion... asserts
+    # for BOTH deployment.yaml and service.yaml by default". Since the
+    # shared instance's copy lives ONLY in 09-zeppelin.yaml's render and
+    # each dept's ONLY in 09c-zeppelin-sandbox.yaml's, each assert below
+    # pins its own `template:` explicitly.
+    templates:
+      - 09-zeppelin.yaml
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: zeppelin-trino-interpreter
+          any: true
+        template: 09-zeppelin.yaml
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: zeppelin-sandbox-veri-trino-interpreter
+          any: true
+        template: 09c-zeppelin-sandbox.yaml
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: zeppelin-sandbox-finans-trino-interpreter
+          any: true
+        template: 09c-zeppelin-sandbox.yaml
+
+  - it: shared instance + TWO sandbox departments — the c1 %trino svc-zeppelin-trino oidc-credentials Secret renders with THREE distinct per-instance names (no collision)
+    templates:
+      - 09-zeppelin.yaml
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      zeppelin.trino.oidc.clientSecret: devsecret
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: zeppelin-trino-oidc-credentials
+          any: true
+        template: 09-zeppelin.yaml
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: zeppelin-sandbox-veri-trino-oidc-credentials
+          any: true
+        template: 09c-zeppelin-sandbox.yaml
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: zeppelin-sandbox-finans-trino-oidc-credentials
+          any: true
+        template: 09c-zeppelin-sandbox.yaml
+
+  - it: shared instance + TWO sandbox departments — ad-bind-credentials renders EXACTLY ONCE from the shared instance and ZERO times from either sandbox department (shared-gated, NOT per-instance/renamed — one shared corporate AD bind credential)
+    templates:
+      - 09-zeppelin.yaml
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: ad-bind-credentials
+      matchMany: true
+      skipEmptyTemplates: true
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      zeppelin.ad.bindPassword: devpw
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - hasDocuments:
+          count: 1
+          filterAware: true
+        template: 09-zeppelin.yaml
+      - hasDocuments:
+          count: 0
+          filterAware: true
+        template: 09c-zeppelin-sandbox.yaml

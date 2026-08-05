@@ -14,16 +14,42 @@ from the dict's `ctx` key, which callers set to `.` / `$` at the call site).
 Dict keys:
   ctx          - chart root context (`.` at the call site)
   name         - instance name; becomes the PVC/Deployment/Service/PDB/
-                 spark-defaults/Shiro ConfigMap name prefix (the shared c1
-                 instance passes "zeppelin", preserving today's literal names)
+                 spark-defaults/Shiro/trino-interpreter ConfigMap name prefix
+                 AND the trino-oidc-credentials Secret name prefix (the
+                 shared c1 instance passes "zeppelin", preserving today's
+                 literal names). Every resource this template renders on
+                 EVERY call (i.e. not gated on `sandbox`) MUST be prefixed by
+                 `name` — otherwise N sandbox departments + the shared
+                 instance render N+1 documents with the SAME kind/name,
+                 which fails `helm install` (Task 5 fix; the trino-
+                 interpreter ConfigMap and trino-oidc-credentials Secret were
+                 the two hardcoded-name offenders found in review). The ONE
+                 exception is `ad-bind-credentials` (see `sandbox` below) —
+                 it's a single shared corporate AD bind credential, not
+                 per-instance, so it's shared-gated instead of renamed.
   s3SecretName - name of the Secret holding S3 access-key-id/secret-access-
                  key/endpoint/region (today: .Values.storage.s3.secretName)
   sandbox      - bool; false for the shared c1 instance. When true (per-dept
-                 sandbox, Consumption slice c2), the Shiro groupRolesMap/
-                 [roles]/[urls] branches map a single `adGroup` -> role
-                 `sandbox` (URL-gated `roles[sandbox]`) instead of the shared
-                 admin/analyst/student AD groups from ctx, and the pod runs
-                 as `saName` (see below) instead of the namespace default.
+                 sandbox, Consumption slice c2):
+                 - Shiro groupRolesMap maps BOTH the dept `adGroup` -> role
+                   `sandbox` AND the shared `zeppelin.ad.groups.admin` group
+                   -> roles `sandbox,admin` (Task 5 fix — without this the
+                   c1 %trino refresher sidecar's admin REST-login account
+                   has no role in a sandbox instance and its interpreter-
+                   settings PUT 403s forever, so the seeded %trino
+                   interpreter's placeholder access token is never
+                   replaced). `[roles]` adds `admin = *` alongside
+                   `sandbox = *` to match. `[urls]` gates `/**` on
+                   `roles[sandbox]` (dept members + the now-also-sandboxed
+                   admin group) while `/api/interpreter/**` stays
+                   `roles[admin]`-only (refresher/admins, never dept
+                   members) — same for both branches.
+                 - the pod runs as `saName` (see below) instead of the
+                   namespace default.
+                 - the `ad-bind-credentials` dev-convenience Secret is NOT
+                   rendered (see `name` above) — sandbox instances only ever
+                   REFERENCE that fixed name via `secretKeyRef`, provisioned
+                   out-of-band or by the shared instance's own render.
   saName       - K8s ServiceAccount name for the pod (`sandbox: true` only;
                  e.g. sa-sandbox-<dept>, chart/templates/09c-zeppelin-
                  sandbox.yaml). The shared c1 instance passes none — its
@@ -41,7 +67,7 @@ Dict keys:
 {{- $sandbox := .sandbox -}}
 {{- $groupRolesMap := "" -}}
 {{- if $sandbox -}}
-{{- $groupRolesMap = printf "%s:sandbox\"" .adGroup -}}
+{{- $groupRolesMap = printf "%s:sandbox,\\\n      %s:sandbox,admin\"" .adGroup $ctx.Values.zeppelin.ad.groups.admin -}}
 {{- else -}}
 {{- $groupRolesMap = printf "%s:admin,\\\n      %s:analyst,\\\n      %s:student\"" $ctx.Values.zeppelin.ad.groups.admin $ctx.Values.zeppelin.ad.groups.analyst $ctx.Values.zeppelin.ad.groups.student -}}
 {{- end -}}
@@ -64,7 +90,20 @@ spec:
   storageClassName: {{ . }}
 {{- end }}
 ---
-{{- if $ctx.Values.zeppelin.ad.bindPassword }}
+{{- /*
+Task 5 fix: `ad-bind-credentials` is deliberately NOT renamed per-instance
+like the trino-interpreter/trino-oidc-credentials resources below — it's
+ONE shared corporate AD bind credential (not sandbox-specific), so every
+instance (shared AND every per-dept sandbox) keeps REFERENCING the SAME
+fixed name via `secretKeyRef` below; only the shared instance (`sandbox:
+false`) ever emits the dev-convenience inline copy (`and (not $sandbox)
+...` below, was just `...bindPassword` before this fix), avoiding
+duplicate-name collisions if this chart renders N sandbox instances + the
+shared one in one install. This comment is a Go-template comment (stripped
+before render) so it can document the fix without touching the shared
+instance's rendered bytes.
+*/}}
+{{- if and (not $sandbox) $ctx.Values.zeppelin.ad.bindPassword }}
 # AD bind (service account) secret şablonu -- rendered ONLY when a real
 # `zeppelin.ad.bindPassword` is explicitly supplied (dev/test convenience).
 # Default is empty: in that case this Secret is NOT rendered at all, and the
@@ -88,6 +127,17 @@ stringData:
   ad-url: {{ $ctx.Values.zeppelin.ad.url | quote }}
 {{- end }}
 ---
+{{- /*
+Task 5 fix: this Secret's name is per-instance (`<name>-trino-oidc-
+credentials`) — NOT the bare literal `zeppelin-trino-oidc-credentials` it
+had before — because it renders once per `lakehouse.zeppelin.instance` call
+regardless of `sandbox` (unlike `ad-bind-credentials` above, which is
+shared-gated instead). A literal name would collide (duplicate kind/name)
+once any sandbox department is added alongside the shared c1 instance. For
+the shared instance (`name: "zeppelin"`) this is byte-identical to the old
+literal name. Go-template comment (stripped before render) so it documents
+the fix without touching the shared instance's rendered bytes.
+*/}}
 {{- if and $ctx.Values.components.zeppelin $ctx.Values.zeppelin.trino.oidc.clientSecret }}
 # svc-zeppelin-trino confidential client secret — single source with the
 # Keycloak client (10-keycloak.yaml) via `.Values.zeppelin.trino.oidc.
@@ -106,7 +156,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: zeppelin-trino-oidc-credentials
+  name: {{ $name }}-trino-oidc-credentials
   namespace: {{ include "lakehouse.namespace" $ctx }}
 type: Opaque
 stringData:
@@ -130,10 +180,19 @@ stringData:
 # sidecar PUTs the real svc-zeppelin-trino JWT via the Zeppelin REST API
 # (the JDBC interpreter connects lazily on first paragraph, so the
 # placeholder itself never reaches Trino).
+{{- /*
+Task 5 fix: this ConfigMap's name is per-instance (`<name>-trino-
+interpreter`) — NOT the bare literal `zeppelin-trino-interpreter` it had
+before — same duplicate-name rationale as the trino-oidc-credentials
+Secret above (renders once per instance call regardless of `sandbox`).
+Byte-identical for the shared instance. Go-template comment (stripped
+before render) so it documents the fix without touching the shared
+instance's rendered bytes.
+*/}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: zeppelin-trino-interpreter
+  name: {{ $name }}-trino-interpreter
   namespace: {{ include "lakehouse.namespace" $ctx }}
 data:
   interpreter.json: |
@@ -195,6 +254,12 @@ data:
     [roles]
 {{- if $sandbox }}
     sandbox = *
+    # admin also granted here — the AD `zeppelin.ad.groups.admin` group is
+    # ALSO mapped to `sandbox,admin` above (Task 5 fix), so the c1 %trino
+    # refresher sidecar's REST-login account (a member of that admin group)
+    # can still PUT /api/interpreter/setting/trino in a sandbox instance,
+    # which only ever maps the dept `adGroup` otherwise.
+    admin = *
 {{- else }}
     admin = *
     analyst = *
@@ -512,9 +577,9 @@ spec:
             done
         env:
         - {name: OIDC_ISSUER,           valueFrom: {secretKeyRef: {name: {{ $ctx.Values.oidc.secretName }}, key: issuer-url}}}
-        - {name: SVC_CLIENT_SECRET,     valueFrom: {secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: client-secret}}}
+        - {name: SVC_CLIENT_SECRET,     valueFrom: {secretKeyRef: {name: {{ $name }}-trino-oidc-credentials, key: client-secret}}}
         - {name: ZEPPELIN_REST_USER,    value: {{ $ctx.Values.zeppelin.trino.refresher.restUsername | quote }}}
-        - {name: ZEPPELIN_REST_PASSWORD, valueFrom: {secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: rest-password}}}
+        - {name: ZEPPELIN_REST_PASSWORD, valueFrom: {secretKeyRef: {name: {{ $name }}-trino-oidc-credentials, key: rest-password}}}
         resources:
           requests: {cpu: "50m", memory: "64Mi"}
           limits:   {cpu: "200m", memory: "128Mi"}
@@ -532,7 +597,7 @@ spec:
       {{- end }}
       {{- if and $ctx.Values.components.zeppelin $ctx.Values.auth.oidc.enabled }}
       - name: trino-interp
-        configMap: {name: zeppelin-trino-interpreter}
+        configMap: {name: {{ $name }}-trino-interpreter}
       - name: trino-tls
         secret: {secretName: trino-internal-tls}
       {{- end }}
