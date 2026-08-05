@@ -1,0 +1,83 @@
+# chart/tests/spark-history_test.yaml — helm-unittest suite for Consumption
+# slice d (Spark History Server). Covers the `lakehouse.spark.baseConf`
+# helper's gated eventLog block (chart/templates/_helpers.tpl), consumed by
+# BOTH ScheduledSparkApplications in chart/templates/05-spark-operator.yaml,
+# and the `spark-events` bucket entry in chart/templates/18-bucket-init.yaml.
+# `components.sparkHistory` defaults to false — these assertions confirm the
+# gate is fully additive (nothing renders when off; both jobs + the bucket
+# list pick up the new conf/bucket when on).
+suite: spark history (d)
+templates:
+  - 05-spark-operator.yaml
+  - 18-bucket-init.yaml
+tests:
+  - it: silver-merge sparkConf gets eventLog conf when components.sparkHistory is true
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.dir"]'
+          value: "s3a://spark-events/"
+      - equal:
+          path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
+          value: "http://minio.test.svc:9000"
+
+  - it: iceberg-maintenance sparkConf ALSO gets eventLog conf when components.sparkHistory is true (shared baseConf helper)
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+
+  - it: no eventLog conf on either job when components.sparkHistory is false (default)
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.dir"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
+
+  - it: bucket-init includes spark-events when components.sparkHistory is true
+    template: templates/18-bucket-init.yaml
+    set:
+      components.sparkHistory: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/spark-events"
+
+  - it: bucket-init does NOT include spark-events when components.sparkHistory is false (default)
+    template: templates/18-bucket-init.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "s3/spark-events"

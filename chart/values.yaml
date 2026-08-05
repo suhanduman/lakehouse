@@ -150,6 +150,9 @@ components:
   # Flip to true (and add the backing Service) once each lands in the chart.
   superset: false
   jupyter: false
+  # Spark History Server (Consumption slice d). Gated OFF by default (on in
+  # medium/large tiers). See the top-level `sparkHistory:` block below.
+  sparkHistory: false
   # dbt-trino Certified Gold (Consumption slice b2). CronJob-driven; gated
   # OFF by default (on in medium/large tiers). See the top-level `dbt:`
   # block for the git-source-of-truth + machine-auth contract.
@@ -1182,6 +1185,27 @@ zeppelin:
       analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
       student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
     sessionTimeoutMs: 28800000   # 8 saat
+
+# Spark History Server (Consumption slice d). Gated by components.sparkHistory
+# (default false; on in medium/large). Reuses the spark-py image; reads event
+# logs the Spark jobs write to s3a://spark-events/. Edge-only auth (no OIDC).
+sparkHistory:
+  # S3 endpoint URL (NON-secret) for the s3a filesystem — MUST match the
+  # s3-credentials Secret's `endpoint`. hadoop-aws needs it explicitly for
+  # MinIO/non-AWS. Set in medium/large; empty in dev (sparkHistory off there).
+  s3Endpoint: ""
+  # Spike-confirmed (docker, Task 1) working default. Two gotchas if UAT
+  # hits them: (1) hadoop-aws has a known bucket-root eventLogDir bug on some
+  # versions — if writes/reads against the bare bucket root fail, switch to
+  # "s3a://spark-events/logs/" and pre-create that prefix; (2) the eventLog
+  # dir itself must pre-exist before Spark writes to it — the bucket root
+  # already exists once bucket-init has run, so that part is covered.
+  eventLogDir: "s3a://spark-events/"
+  eventsBucket: "spark-events"
+  routeHost: "spark-history"
+  resources:
+    requests: {cpu: "100m", memory: "512Mi"}
+    limits:   {cpu: "500m", memory: "1Gi"}
 
 # Apache Superset (BI) — Consumption slice (a). Hand-rolled Deployment/Service/
 # ConfigMap (chart/templates/19-superset.yaml), gated by `components.superset`

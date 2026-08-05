@@ -303,6 +303,11 @@ spark.sql.catalog.rawlake.catalog-impl: "org.apache.iceberg.rest.RESTCatalog"
 spark.sql.catalog.rawlake.uri: "http://{{ include "lakehouse.svc.nessie" . }}:19120/iceberg/"
 spark.sql.catalog.rawlake.warehouse: "rawdata"
 spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
+{{- if .Values.components.sparkHistory }}
+spark.eventLog.enabled: "true"
+spark.eventLog.dir: {{ .Values.sparkHistory.eventLogDir | quote }}
+spark.hadoop.fs.s3a.endpoint: {{ .Values.sparkHistory.s3Endpoint | quote }}
+{{- end }}
 {{- end -}}
 {{- /* AWS creds env: map the S3 secret's dash-keys to AWS SDK env names +HOME. */ -}}
 {{- define "lakehouse.spark.awsEnv" -}}

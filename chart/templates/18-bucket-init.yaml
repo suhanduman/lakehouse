@@ -35,6 +35,9 @@
       (include "lakehouse.s3BucketFromUri" .Values.postgres.nessie.backup.destinationPath)
     | uniq }}
 {{- end }}
+{{- if .Values.components.sparkHistory }}
+{{- $buckets = append $buckets .Values.sparkHistory.eventsBucket }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
