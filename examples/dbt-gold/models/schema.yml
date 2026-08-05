@@ -1,0 +1,6 @@
+version: 2
+models:
+  - name: gold_customers_summary
+    columns:
+      - name: customer_count
+        tests: [not_null]

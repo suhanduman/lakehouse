@@ -1,0 +1,14 @@
+lakehouse:
+  target: prod
+  outputs:
+    prod:
+      type: trino
+      method: jwt
+      jwt_token: "{{ env_var('DBT_TRINO_JWT') }}"
+      host: "{{ env_var('DBT_TRINO_HOST') }}"
+      port: 8443
+      http_scheme: https
+      cert: /etc/trino-ca/ca.crt
+      database: lakehouse
+      schema: gold
+      threads: 4
