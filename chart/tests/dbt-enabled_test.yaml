@@ -1,0 +1,21 @@
+suite: dbt component (b2)
+templates:
+  - 20-dbt.yaml
+tests:
+  - it: renders nothing when components.dbt is false
+    set: {components.dbt: false}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: renders the dbt-trino-oidc-credentials Secret when enabled + clientSecret supplied
+    set: {components.dbt: true, dbt.oidc.clientSecret: "dev-svc", auth.oidc.enabled: true, superset.trino.tls.enabled: true}
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: dbt-trino-oidc-credentials, any: true}
+  - it: renders the dbt-build CronJob + dbt-profiles ConfigMap when enabled + coherent auth/tls
+    set: {components.dbt: true, auth.oidc.enabled: true, superset.trino.tls.enabled: true}
+    asserts:
+      - containsDocument: {kind: CronJob, apiVersion: batch/v1, name: dbt-build, any: true}
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: dbt-profiles, any: true}
+  - it: renders neither the dbt-build CronJob nor the dbt-profiles ConfigMap when components.dbt is false
+    set: {components.dbt: false, auth.oidc.enabled: true, superset.trino.tls.enabled: true}
+    asserts:
+      - hasDocuments: {count: 0}

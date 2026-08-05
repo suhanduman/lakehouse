@@ -1,0 +1,111 @@
+# dbt-trino Certified Gold (b2). All gated by components.dbt.
+{{- if .Values.components.dbt }}
+{{- if not (and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled) }}
+{{- fail "components.dbt=true requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (dbt uses the Trino https:8443 listener + jwt authenticator)" }}
+{{- end }}
+{{- if .Values.dbt.oidc.clientSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: dbt-trino-oidc-credentials, namespace: {{ include "lakehouse.namespace" . }}}
+type: Opaque
+stringData: {client-secret: {{ .Values.dbt.oidc.clientSecret | quote }}}
+{{- end }}
+{{- if .Values.dbt.repo.deployKey }}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: dbt-repo-deploy-key, namespace: {{ include "lakehouse.namespace" . }}}
+type: Opaque
+stringData: {ssh-privatekey: {{ .Values.dbt.repo.deployKey | quote }}}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: dbt-profiles, namespace: {{ include "lakehouse.namespace" . }}}
+data:
+  profiles.yml: |
+    lakehouse:
+      target: prod
+      outputs:
+        prod:
+          type: trino
+          method: jwt
+          jwt_token: "{{ `{{ env_var('DBT_TRINO_JWT') }}` }}"
+          host: {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) | quote }}
+          port: 8443
+          http_scheme: https
+          cert: /etc/trino-ca/ca.crt
+          database: {{ .Values.dbt.catalog | quote }}
+          schema: {{ .Values.dbt.goldSchema | quote }}
+          threads: 4
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: dbt-build, namespace: {{ include "lakehouse.namespace" . }}}
+spec:
+  schedule: {{ .Values.dbt.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+          securityContext:
+            # fsGroup 1001 matches the dbt image's non-root `dbt` user (images/
+            # dbt/Dockerfile `useradd -m -u 1001 dbt`) so the deploy-key volume
+            # (mounted 0440 below) is group-readable regardless of
+            # restrictedSecurityContext. The script also copies the key to a
+            # uid1001-owned 0400 path before use — see the git clone step.
+            fsGroup: 1001
+            {{- if $psc }}
+            {{- $psc | nindent 12 }}
+            {{- end }}
+          containers:
+          - name: dbt-build
+            image: {{ printf "%s/dbt:%s" .Values.global.imageRegistry .Values.versions.dbtImageTag | quote }}
+            {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+            {{- if $csc }}
+            securityContext:
+              {{- $csc | nindent 14 }}
+            {{- end }}
+            command: ["/bin/bash","-c"]
+            args:
+            - |
+              set -euo pipefail
+              mkdir -p ~/.ssh && cp /keys/ssh-privatekey ~/.ssh/id_deploy && chmod 400 ~/.ssh/id_deploy
+              export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new"
+              git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" /work/proj
+              export DBT_TRINO_JWT="$(python3 - <<'PY'
+              import os,json,urllib.parse,urllib.request
+              d=urllib.parse.urlencode({"grant_type":"client_credentials","client_id":"svc-dbt-trino","client_secret":os.environ["SVC_CLIENT_SECRET"]}).encode()
+              u=os.environ["OIDC_ISSUER"].rstrip("/")+"/protocol/openid-connect/token"
+              print(json.load(urllib.request.urlopen(u,data=d,timeout=15))["access_token"])
+              PY
+              )"
+              cp /profiles/profiles.yml /work/proj/profiles.yml
+              cd /work/proj
+              dbt build --project-dir . --profiles-dir .
+            env:
+            - {name: REPO_URL,    value: {{ .Values.dbt.repo.url | quote }}}
+            - {name: REPO_BRANCH, value: {{ .Values.dbt.repo.branch | quote }}}
+            - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+            - {name: SVC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: dbt-trino-oidc-credentials, key: client-secret}}}
+            volumeMounts:
+            - {name: profiles, mountPath: /profiles, readOnly: true}
+            - {name: trino-ca, mountPath: /etc/trino-ca, readOnly: true}
+            - {name: deploy-key, mountPath: /keys, readOnly: true}
+            - {name: work, mountPath: /work}
+            resources:
+              requests: {cpu: {{ .Values.dbt.resources.requests.cpu | quote }}, memory: {{ .Values.dbt.resources.requests.memory | quote }}}
+              limits:   {cpu: {{ .Values.dbt.resources.limits.cpu | quote }},   memory: {{ .Values.dbt.resources.limits.memory | quote }}}
+          volumes:
+          - {name: profiles, configMap: {name: dbt-profiles}}
+          - {name: trino-ca, secret: {secretName: trino-internal-tls, items: [{key: ca.crt, path: ca.crt}]}}
+          - {name: deploy-key, secret: {secretName: dbt-repo-deploy-key, defaultMode: 0440}}
+          - {name: work, emptyDir: {}}
+{{- end }}

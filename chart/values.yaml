@@ -150,6 +150,10 @@ components:
   # Flip to true (and add the backing Service) once each lands in the chart.
   superset: false
   jupyter: false
+  # dbt-trino Certified Gold (Consumption slice b2). CronJob-driven; gated
+  # OFF by default (on in medium/large tiers). See the top-level `dbt:`
+  # block for the git-source-of-truth + machine-auth contract.
+  dbt: false
   # İzleme (D1): ServiceMonitor/PodMonitor/PrometheusRule CR'ları + Grafana.
   # OpenShift user-workload-monitoring (UWM) HEDEFLİ — bu chart UWM'i KURMAZ,
   # yalnızca CR'ları ve Grafana'yı ekler (spec 2026-07-19-monitoring-design §2).
@@ -607,6 +611,10 @@ versions:
   # (docker-verified spike finding, 2026-08-04 consumption-b1 plan). Task 7's
   # OIDC-refresher sidecar reuses this same built ref.
   supersetImageTag: "1.0"
+  # chart/templates/20-dbt.yaml: dbt-trino Certified Gold CronJob image
+  # (Consumption slice b2). Same `.Values.global.imageRegistry` + tag
+  # convention as `supersetImageTag` above.
+  dbtImageTag: "1.0"
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
@@ -1237,6 +1245,31 @@ superset:
     # works" proof; the dashboard bundle is authored/imported during UAT
     # (a committed Superset export is version-brittle — kept opt-in).
     enabled: false
+
+# dbt-trino Certified Gold (Consumption slice b2). CronJob-driven; gated by
+# components.dbt (default false; on in medium/large). Sole writer of
+# lakehouse.gold via the svc-dbt-trino service account (10-keycloak.yaml +
+# 06-trino-ha.yaml rules.json). Git source-of-truth.
+dbt:
+  # Confidential service-account client secret for svc-dbt-trino
+  # (10-keycloak.yaml clients[].secret, single source). Empty default =>
+  # dbt-trino-oidc-credentials Secret NOT rendered; provision out-of-band.
+  oidc:
+    clientSecret: ""
+  # Customer's dbt project git repo (SSH). Empty => CronJob has nothing to
+  # clone (UAT/customer provides it). deployKey read-only.
+  repo:
+    url: ""
+    branch: "main"
+    # Read-only SSH deploy key (dev-convenience inline when supplied, else
+    # out-of-band under the same name/key). NEVER logged.
+    deployKey: ""
+  schedule: "0 3 * * *"
+  catalog: "lakehouse"
+  goldSchema: "gold"
+  resources:
+    requests: {cpu: "250m", memory: "512Mi"}
+    limits:   {cpu: "1",    memory: "1Gi"}
 
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport

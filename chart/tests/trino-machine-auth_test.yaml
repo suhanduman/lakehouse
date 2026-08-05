@@ -29,3 +29,39 @@ tests:
           path: data["coordinator.config.properties"]
           pattern: "http-server.authentication.jwt.required-audience=trino"
         documentSelector: {path: metadata.name, value: trino-config}
+  - it: rules.json confines svc-dbt-trino to gold-write/lakehouse-read-only when components.dbt is true
+    set:
+      components.dbt: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "\"schema\": \"gold\""
+        documentSelector: {path: metadata.name, value: trino-config}
+  - it: rules.json keeps non-dbt principals reading tables when components.dbt is true (catch-all after dbt rules)
+    set:
+      components.dbt: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "\.\*", "privileges": \["SELECT"\]\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "alice\|admin-group", "privileges": \["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"\]\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+  - it: rules.json unchanged (no svc-dbt-trino rules) when components.dbt is false
+    set:
+      components.dbt: false
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: "svc-dbt-trino"
+        documentSelector: {path: metadata.name, value: trino-config}

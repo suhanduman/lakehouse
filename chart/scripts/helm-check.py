@@ -19,7 +19,13 @@ constraints (see docs/superpowers/specs/2026-07-18-helm-packaging-design.md
                              `{{ $externalLabels.x }}`) into the final manifest,
                              for Prometheus — not Helm — to expand at alert-fire
                              time. These are recognized (see
-                             `_PROMETHEUS_TEMPLATE_RE`) and skipped; any other
+                             `_PROMETHEUS_TEMPLATE_RE`) and skipped. Likewise,
+                             the `dbt-profiles` ConfigMap
+                             (chart/templates/20-dbt.yaml) carries a literal
+                             `{{ env_var('DBT_TRINO_JWT') }}` — dbt's OWN
+                             Jinja, not Helm's — into `profiles.yml`, for dbt
+                             to expand at `dbt build` time; recognized via
+                             `_DBT_ENV_VAR_TEMPLATE_RE` and skipped. Any other
                              leftover Helm directive is still flagged.
   (c) --no-stray <word>   — the literal <word> does not appear anywhere in
                              the render, unless --release-namespace itself
@@ -169,6 +175,18 @@ _PROMETHEUS_TEMPLATE_RE = re.compile(
     r"|\{\{(?![^{}]*:=)[^{}]*?\$value\b[^{}]*?\}\}"
 )
 
+# Legitimate DOWNSTREAM template token for dbt's own Jinja, not Helm's —
+# `chart/templates/20-dbt.yaml`'s `dbt-profiles` ConfigMap deliberately
+# escapes `jwt_token: "{{ env_var('DBT_TRINO_JWT') }}"` through Helm (via the
+# `{{ `{{ env_var(...) }}` }}` raw-string trick) so the literal dbt Jinja call
+# survives into `profiles.yml`, for dbt itself — not Helm — to expand at
+# `dbt build` time (reading the per-run JWT the dbt-build CronJob exports). A
+# genuine unresolved Helm directive never calls `env_var(...)` — that's
+# dbt-specific Jinja — so this predicate matches only that signature. Same
+# idea as `_PROMETHEUS_TEMPLATE_RE` above: teach the checker to recognize
+# legitimate non-Helm content rather than blanket-flagging it.
+_DBT_ENV_VAR_TEMPLATE_RE = re.compile(r"\{\{[^{}]*?\benv_var\([^{}]*?\}\}")
+
 
 def _read_input(path: str) -> str:
     if path == "-":
@@ -217,12 +235,15 @@ def check_no_template_syntax(content: str) -> List[str]:
     failures = []
     for lineno, line in enumerate(content.splitlines(), start=1):
         # Strip recognized downstream Prometheus/Alertmanager template tokens
-        # (`{{ $labels.x }}`, `{{ $value }}`, `{{ $externalLabels.x }}`) first —
-        # these are legitimate literal content in the FINAL render (see
-        # `_PROMETHEUS_TEMPLATE_RE`), NOT unresolved Helm. Scanning the scrubbed
-        # remainder means any OTHER genuine leftover Helm directive on the same
-        # line is still detected (we never blanket-skip the whole line).
+        # (`{{ $labels.x }}`, `{{ $value }}`, `{{ $externalLabels.x }}`) and
+        # dbt's own `{{ env_var(...) }}` Jinja token first — these are
+        # legitimate literal content in the FINAL render (see
+        # `_PROMETHEUS_TEMPLATE_RE` / `_DBT_ENV_VAR_TEMPLATE_RE`), NOT
+        # unresolved Helm. Scanning the scrubbed remainder means any OTHER
+        # genuine leftover Helm directive on the same line is still detected
+        # (we never blanket-skip the whole line).
         scrubbed = _PROMETHEUS_TEMPLATE_RE.sub("", line)
+        scrubbed = _DBT_ENV_VAR_TEMPLATE_RE.sub("", scrubbed)
         if _STRAY_TEMPLATE_OPEN_RE.search(scrubbed) or _STRAY_TEMPLATE_CLOSE_RE.search(scrubbed):
             failures.append(f"stray template syntax at line {lineno}: {line.strip()}")
     return failures

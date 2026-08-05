@@ -1,0 +1,14 @@
+lakehouse:
+  target: prod
+  outputs:
+    prod:
+      type: trino
+      method: jwt
+      jwt_token: "{{ env_var('DBT_TRINO_JWT') }}"
+      host: "trino-coordinator.YOUR-NAMESPACE.svc.cluster.local"  # set to your Trino coordinator; the chart CronJob overrides this
+      port: 8443
+      http_scheme: https
+      cert: /etc/trino-ca/ca.crt
+      database: lakehouse
+      schema: gold
+      threads: 4

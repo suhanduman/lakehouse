@@ -217,9 +217,22 @@ data:
     {
       "catalogs": [
         {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
+{{- if .Values.components.dbt }}
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "allow": "all"},
+{{- end }}
         {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
         {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
-      ]
+      ]{{- if .Values.components.dbt }},
+      "schemas": [
+        {"user": "alice|admin-group", "schema": ".*", "owner": true},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}
+      ],
+      "tables": [
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]},
+        {"user": "alice|admin-group", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+        {"user": ".*", "privileges": ["SELECT"]}
+      ]{{- end }}
     }
 ---
 apiVersion: apps/v1

@@ -118,10 +118,13 @@ tests:
   # client's `secret` matches what the superset-oidc-credentials Secret
   # (chart/templates/19-superset.yaml, from Values.superset.oidc.clientSecret)
   # mounts into the Deployment — both sides read the same value, so they can
-  # never drift. clients[1] pins to `superset` (2nd entry after `trino`,
-  # `components.ai` default false so `ai-ui` is absent) — the clientId equal
-  # guards that index assumption so an array-order change fails loudly
-  # instead of silently asserting against the wrong client.
+  # never drift. clients[3] pins to `superset` (4th entry, after `trino`,
+  # `svc-superset-trino`, `svc-dbt-trino`; `components.ai` default false so
+  # `ai-ui` is absent) — the clientId equal guards that index assumption so
+  # an array-order change fails loudly instead of silently asserting against
+  # the wrong client. (Shifted from clients[2] to clients[3] when
+  # `svc-dbt-trino` was inserted right after `svc-superset-trino`, Task 3 of
+  # the b2 dbt-Gold plan.)
   - it: superset.oidc.clientSecret single-sources the Keycloak superset client's secret
     templates:
       - 10-keycloak.yaml
@@ -130,13 +133,13 @@ tests:
       superset.oidc.clientSecret: "dev-oidc-secret"
     asserts:
       - equal:
-          path: spec.realm.clients[2].clientId
+          path: spec.realm.clients[3].clientId
           value: superset
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[2].secret
+          path: spec.realm.clients[3].secret
           value: "dev-oidc-secret"
         documentSelector:
           path: kind
@@ -186,6 +189,61 @@ tests:
           value: KeycloakRealmImport
       - contains:
           path: spec.realm.clients[1].protocolMappers
+          content:
+            name: aud-trino
+            protocol: "openid-connect"
+            protocolMapper: "oidc-audience-mapper"
+            config:
+              "included.client.audience": "trino"
+              "id.token.claim": "false"
+              "access.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  # b2 machine-auth: `svc-dbt-trino` service-account client mints
+  # client_credentials JWTs carrying `aud: trino` (oidc-audience-mapper) so
+  # Trino's `http-server.authentication.jwt.required-audience=trino`
+  # accepts them as the sole writer of lakehouse.gold. Single-sources its
+  # confidential `secret` with `.Values.dbt.oidc.clientSecret` — the same
+  # value the `dbt-trino-oidc-credentials` Secret (Task 2) mounts, so they
+  # can never drift. Inserted right after `svc-superset-trino` (clients[1]),
+  # so it lands at clients[2] — the clientId equal guards that index
+  # assumption so an array-order change fails loudly instead of silently
+  # asserting against the wrong client.
+  - it: dbt.oidc.clientSecret provisions the svc-dbt-trino service-account client with an aud:trino mapper
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      dbt.oidc.clientSecret: "dev-dbt"
+    asserts:
+      - equal:
+          path: spec.realm.clients[2].clientId
+          value: svc-dbt-trino
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[2].serviceAccountsEnabled
+          value: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[2].standardFlowEnabled
+          value: false
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[2].secret
+          value: "dev-dbt"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients[2].protocolMappers
           content:
             name: aud-trino
             protocol: "openid-connect"
