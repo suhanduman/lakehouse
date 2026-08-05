@@ -8,8 +8,9 @@
 # Arm64 sorunu: apache/zeppelin yalnızca linux/amd64 destekler. OpenShift
 # prod node'ları genelde amd64 olduğundan sorun yok.
 #
-# Spark binary'si: kurumsal custom imajda /opt/spark'a build-time'da kurulu
-# (prod-manifests/README.md'deki Dockerfile — bkz. `versions.zeppelinImage`).
+# Spark binary'si: apache/zeppelin taban imajı Spark interpreter'ını zaten
+# içerir; internally-built imaj (images/zeppelin/Dockerfile) ayrıca %trino
+# interpreter'ı için trino-jdbc sürücüsünü de gömer — bkz. `versions.zeppelinImageTag`.
 #
 # Kimlik doğrulama: Apache Shiro native ActiveDirectoryGroupRealm ile
 # kurumsal Active Directory. Bind service account DN + password Secret'tan
@@ -186,7 +187,7 @@ spec:
       # Spark image'a gömülü olduğu için initContainers yok.
       containers:
       - name: zeppelin
-        image: {{ .Values.versions.zeppelinImage | quote }}
+        image: {{ printf "%s/zeppelin:%s" .Values.global.imageRegistry .Values.versions.zeppelinImageTag | quote }}
         {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
         {{- if $csc }}
         securityContext:
