@@ -1,0 +1,103 @@
+# Per-department analyst sandbox — Zeppelin instances (Consumption slice
+# c2). Started in this task with ONLY the per-dept OIDC credentials Secret;
+# later tasks in this slice add the actual sandbox Zeppelin instance(s)
+# (reusing `lakehouse.zeppelin.instance`, chart/templates/_zeppelin.tpl,
+# `sandbox: true` arm) plus the sandbox K8s ServiceAccount/S3 Secret wiring to
+# this same file.
+#
+# Gating: the WHOLE file is a no-op unless BOTH `.Values.sandbox.enabled` is
+# true AND `.Values.sandbox.departments` is non-empty (dev/default = neither,
+# so nothing renders) — see chart/values.yaml's `sandbox:` block comment.
+#
+# --- Coherence guard (Task 7, review-routed from Task 4): every sandbox
+# Zeppelin instance's Spark interpreter carries an OAuth2 block whose
+# `spark-conf-render` initContainer (chart/templates/_zeppelin.tpl,
+# `$sandbox` arm) unconditionally reads the OIDC issuer-url from
+# `.Values.oidc.secretName` (the `oidc-credentials` Secret) — but per that
+# Secret's own comment in chart/values.yaml, it is only guaranteed to exist
+# when `auth.oidc.enabled` is true. `sandbox.enabled` is gated completely
+# independently of `auth.oidc.enabled`, so without this guard a
+# `sandbox.enabled=true` + `auth.oidc.enabled=false` install renders a
+# sandbox Zeppelin that crash-loops at runtime on a Secret the chart
+# otherwise says isn't needed. Fail loudly at render time instead — same
+# fail-loud coherence-guard pattern as `superset.trino.authMode=jwt`
+# (chart/templates/19-superset.yaml) and `components.dbt`
+# (chart/templates/20-dbt.yaml). Placed here, OUTSIDE the per-department
+# `range` below (unlike those two, this file has no single top-level `if`
+# wrapping its whole body), so it always evaluates regardless of how many
+# departments are configured — as long as sandbox is meaningfully enabled at
+# all (both `sandbox.enabled` AND a non-empty `sandbox.departments`, the same
+# two-gate contract as everything else in this file).
+{{- if and .Values.sandbox.enabled (gt (len .Values.sandbox.departments) 0) (not .Values.auth.oidc.enabled) }}
+{{- fail "sandbox requires auth.oidc.enabled — the sandbox Zeppelin authenticates to Nessie via OAuth2" }}
+{{- end }}
+#
+# svc-sandbox-<name> OIDC credentials Secret — single source with the
+# Keycloak `svc-sandbox-<name>` service-account client
+# (chart/templates/10-keycloak.yaml `clients[].secret`, same
+# `.oidcClientSecret` value) so the two can never drift. Same dev-convenience
+# "inline stringData else out-of-band" contract as `ad-bind-credentials` /
+# `zeppelin-trino-oidc-credentials` (chart/templates/_zeppelin.tpl) /
+# `s3-credentials` (chart/templates/01-storage.yaml): rendered ONLY when a
+# real `oidcClientSecret` is explicitly supplied per department; otherwise
+# this Secret's name/keys must be provisioned out-of-band (ExternalSecret/
+# Vault or `oc create secret generic sandbox-<name>-oidc-credentials
+# --from-literal=client-secret=...`) per `.Values.secrets.mode`, BEFORE
+# install. NEVER logged.
+{{- range .Values.sandbox.departments }}
+{{- if and $.Values.sandbox.enabled .oidcClientSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-{{ .name }}-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" $ }}
+type: Opaque
+stringData:
+  client-secret: {{ .oidcClientSecret | quote }}
+{{- end }}
+{{- end }}
+
+# Per-dept `sa-sandbox-<name>` ServiceAccount — the K8s identity the
+# dept's sandbox Zeppelin Pod runs as. One per department, independent of
+# whether `oidcClientSecret` is supplied (the SA itself carries no secret
+# material), gated only by the file-wide `sandbox.enabled` + non-empty
+# `sandbox.departments` contract above.
+{{- range .Values.sandbox.departments }}
+{{- if $.Values.sandbox.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-sandbox-{{ .name }}
+  namespace: {{ include "lakehouse.namespace" $ }}
+  labels:
+    {{- include "lakehouse.labels" $ | nindent 4 }}
+{{- end }}
+{{- end }}
+
+# Per-dept sandbox Zeppelin instance (Consumption slice c2, Task 4) — reuses
+# `lakehouse.zeppelin.instance` (chart/templates/_zeppelin.tpl) with
+# `sandbox: true`, same as the shared c1 instance (09-zeppelin.yaml) reuses
+# it with `sandbox: false`. Rendered unconditionally per dept (gated only on
+# the file-wide `sandbox.enabled` contract, like the ServiceAccount above,
+# NOT on `oidcClientSecret`) — the dev-convenience-inline-else-out-of-band
+# contract only governs whether THIS chart also renders the
+# `sandbox-<name>-oidc-credentials` Secret inline; the Pod always references
+# that Secret's name/keys via `secretKeyRef`, same pattern as
+# `ad-bind-credentials`/`s3-credentials` elsewhere in this chart.
+{{- range .Values.sandbox.departments }}
+{{- if $.Values.sandbox.enabled }}
+---
+{{ include "lakehouse.zeppelin.instance" (dict
+     "ctx" $
+     "name" (printf "zeppelin-sandbox-%s" .name)
+     "s3SecretName" .s3SecretName
+     "sandbox" true
+     "sandboxCatalog" (printf "sandbox_%s" .name)
+     "oauth2ClientId" (printf "svc-sandbox-%s" .name)
+     "oidcSecretName" (printf "sandbox-%s-oidc-credentials" .name)
+     "saName" (printf "sa-sandbox-%s" .name)
+     "adGroup" .adGroup) }}
+{{- end }}
+{{- end }}

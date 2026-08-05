@@ -40,6 +40,19 @@ components:
   dbt: true
   sparkHistory: true
 
+# c2 (per-dept analyst sandbox): OFF by default even at this tier, restating
+# the chart default — an empty `departments` list means nothing renders
+# regardless of `enabled` (see chart/values.yaml's `sandbox:` block comment
+# and the coherence guard in chart/templates/09c-zeppelin-sandbox.yaml). The
+# operator turns this on PER INSTALL by flipping `enabled: true` and filling
+# in `departments` (each needs a scoped S3 credential provisioned
+# out-of-band, a dept AD group, and — per the coherence guard — `auth.oidc.
+# enabled: true`, already the default at this tier). See the README's "c2"
+# section for the full operator checklist before enabling.
+sandbox:
+  enabled: false
+  departments: []
+
 # Consumption slice d (Spark History Server): non-empty S3 endpoint keeps the
 # jobs' eventLog conf valid AND is what the History Server itself reads from.
 # MUST match the s3-credentials Secret's endpoint; override per environment.
