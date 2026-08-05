@@ -260,7 +260,12 @@ spec:
         # and a stock /opt/zeppelin stand-in.
         command: ["/bin/sh", "-c"]
         args:
+          # set -e: if the seed copy fails (e.g. an unexpected base layout
+          # leaves the conf path unwritable), crash loudly instead of exec'ing
+          # Zeppelin UNSEEDED — an unseeded start silently drops the %trino
+          # interpreter and users hit "interpreter not found" only at first use.
           - |
+            set -e
             cp /seed/interpreter.json "${ZEPPELIN_CONF_DIR:-$ZEPPELIN_HOME/conf}/interpreter.json"
             exec /usr/bin/tini -- bin/zeppelin.sh
         {{- end }}
