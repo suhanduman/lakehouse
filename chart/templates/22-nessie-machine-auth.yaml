@@ -39,3 +39,42 @@ stringData:
   zeppelin: {{ .Values.nessie.machineAuth.zeppelinClientSecret | quote }}
 {{- end }}
 {{- end }}
+{{- if .Values.auth.oidc.enabled }}
+---
+# spark-nessie-oauth-defaults (Task 5) — the `SPARK_CONF_DIR/spark-defaults.
+# conf` TEMPLATE consumed by every platform SparkApplication's driver-only
+# sed->tmpfs initContainer (chart/templates/_helpers.tpl
+# `lakehouse.spark.nessieOAuthInitContainer`, called from 05-spark-operator
+# .yaml's iceberg-maintenance/silver-merge and 14-nginx-ingest.yaml's
+# nginx-streaming). Holds ONLY the OAuth2 auth keys for the `lakehouse`/
+# `rawlake` Iceberg REST catalogs (the rest of the catalog config — uri/
+# warehouse/io-impl — stays in the UNCHANGED inline `sparkConf`
+# `lakehouse.spark.baseConf` helper; both apply, disjoint keys, no
+# conflict). `${OAUTH_CLIENT_SECRET}`/`${OIDC_ISSUER}` are LITERAL
+# placeholders — NEVER a resolved value — resolved only inside each
+# SparkApplication driver's tmpfs at pod start, never written back to any
+# ConfigMap/CR. Same property-name shape as the shared Zeppelin %spark
+# interpreter's OAuth2 block (chart/templates/_zeppelin.tpl, Task 6,
+# c2-confirmed) — one Nessie REST-catalog OAuth2 property surface, reused
+# verbatim, only the identity (`svc-spark-nessie`) differs.
+#
+# Gated `.Values.auth.oidc.enabled` ONLY (not `components.sparkOperator`/
+# `components.nginxIngest`) — same convention as `nessie-machine-auth-
+# credentials` above — so it renders exactly once regardless of which Spark
+# components are on, and stays absent (byte-identity) when auth is off.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-nessie-oauth-defaults
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  spark-defaults.conf: |
+    spark.sql.catalog.lakehouse.authentication.type=OAUTH2
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-id=svc-spark-nessie
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.lakehouse.authentication.oauth2.issuer-url=${OIDC_ISSUER}
+    spark.sql.catalog.rawlake.authentication.type=OAUTH2
+    spark.sql.catalog.rawlake.authentication.oauth2.client-id=svc-spark-nessie
+    spark.sql.catalog.rawlake.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.rawlake.authentication.oauth2.issuer-url=${OIDC_ISSUER}
+{{- end }}

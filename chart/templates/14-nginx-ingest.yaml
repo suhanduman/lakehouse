@@ -56,11 +56,21 @@ spec:
     coreLimit: {{ printf "%dm" (mul .Values.nginx.streaming.driver.cores 1200) | quote }}
     memory: {{ .Values.nginx.streaming.driver.memory | quote }}
     serviceAccount: spark-driver
+{{- if .Values.auth.oidc.enabled }}
+    initContainers:
+{{ include "lakehouse.spark.nessieOAuthInitContainer" (dict "context" . "image" (printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag)) | indent 4 }}
+{{- end }}
     env:
 {{ include "lakehouse.spark.awsEnv" . | indent 4 }}
+{{- if .Values.auth.oidc.enabled }}
+    - {name: SPARK_CONF_DIR, value: /spark-conf-rendered}
+{{- end }}
     volumeMounts:
     - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
     - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
+{{- if .Values.auth.oidc.enabled }}
+{{ include "lakehouse.spark.nessieOAuthDriverVolumeMount" . | indent 4 }}
+{{- end }}
   executor:
     cores: {{ .Values.nginx.streaming.executor.cores }}
     coreLimit: {{ printf "%dm" (mul .Values.nginx.streaming.executor.cores 1200) | quote }}
@@ -76,6 +86,9 @@ spec:
     secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
   - name: spark-nginx-scram
     secret: {secretName: spark-nginx}                                      # POC-DOĞRULA: Strimzi User Operator üretir (password)
+{{- if .Values.auth.oidc.enabled }}
+{{ include "lakehouse.spark.nessieOAuthVolumes" . | indent 2 }}
+{{- end }}
   monitoring:
     exposeDriverMetrics: true
     exposeExecutorMetrics: true

@@ -75,17 +75,30 @@ spec:
     sparkConf:
 {{ include "lakehouse.spark.baseConf" . | indent 6 }}
       "spark.scheduler.mode": "FAIR"
+{{- if .Values.auth.oidc.enabled }}
+    volumes:
+{{ include "lakehouse.spark.nessieOAuthVolumes" . | indent 4 }}
+{{- end }}
     driver:
       cores: {{ .Values.sparkOperator.maintenance.driver.cores }}
       coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.maintenance.driver.cores 1200) | quote }}
       memory: {{ .Values.sparkOperator.maintenance.driver.memory | quote }}
       serviceAccount: spark-driver
+{{- if .Values.auth.oidc.enabled }}
+      initContainers:
+{{ include "lakehouse.spark.nessieOAuthInitContainer" (dict "context" . "image" (printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag)) | indent 6 }}
+{{- end }}
       env:
       - {name: BRONZE_RETENTION_DAYS, value: {{ .Values.sparkOperator.maintenance.bronzeRetentionDays | quote }}}
       # Table-level compaction/expire/orphan-cleanup parallelism (ThreadPoolExecutor,
       # jobs/iceberg_maintenance.py, default 4) — scales alongside pipeline count.
       - {name: MAINTENANCE_MAX_PARALLEL, value: {{ .Values.spark.maintenanceMaxParallel | default 4 | quote }}}
 {{ include "lakehouse.spark.awsEnv" . | indent 6 }}
+{{- if .Values.auth.oidc.enabled }}
+      - {name: SPARK_CONF_DIR, value: /spark-conf-rendered}
+      volumeMounts:
+{{ include "lakehouse.spark.nessieOAuthDriverVolumeMount" . | indent 6 }}
+{{- end }}
     executor:
       cores: {{ .Values.sparkOperator.maintenance.executor.cores }}
       coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.maintenance.executor.cores 1200) | quote }}
@@ -134,13 +147,26 @@ spec:
       initialExecutors: 0
       minExecutors: 0
       maxExecutors: {{ .Values.sparkOperator.silverMerge.maxExecutors }}
+{{- if .Values.auth.oidc.enabled }}
+    volumes:
+{{ include "lakehouse.spark.nessieOAuthVolumes" . | indent 4 }}
+{{- end }}
     driver:
       cores: {{ .Values.sparkOperator.silverMerge.driver.cores }}
       coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.silverMerge.driver.cores 1200) | quote }}
       memory: {{ .Values.sparkOperator.silverMerge.driver.memory | quote }}
       serviceAccount: spark-driver
+{{- if .Values.auth.oidc.enabled }}
+      initContainers:
+{{ include "lakehouse.spark.nessieOAuthInitContainer" (dict "context" . "image" (printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag)) | indent 6 }}
+{{- end }}
       env:
 {{ include "lakehouse.spark.awsEnv" . | indent 6 }}
+{{- if .Values.auth.oidc.enabled }}
+      - {name: SPARK_CONF_DIR, value: /spark-conf-rendered}
+      volumeMounts:
+{{ include "lakehouse.spark.nessieOAuthDriverVolumeMount" . | indent 6 }}
+{{- end }}
     executor:
       cores: {{ .Values.sparkOperator.silverMerge.executor.cores }}
       coreLimit: {{ printf "%dm" (mul .Values.sparkOperator.silverMerge.executor.cores 1200) | quote }}
