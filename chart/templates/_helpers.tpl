@@ -307,6 +307,8 @@ spark.sql.catalog.rawlake.io-impl: "org.apache.iceberg.aws.s3.S3FileIO"
 spark.eventLog.enabled: "true"
 spark.eventLog.dir: {{ .Values.sparkHistory.eventLogDir | quote }}
 spark.hadoop.fs.s3a.endpoint: {{ .Values.sparkHistory.s3Endpoint | quote }}
+spark.eventLog.rolling.enabled: "true"
+spark.eventLog.rolling.maxFileSize: "128m"
 {{- end }}
 {{- end -}}
 {{- /* AWS creds env: map the S3 secret's dash-keys to AWS SDK env names +HOME. */ -}}

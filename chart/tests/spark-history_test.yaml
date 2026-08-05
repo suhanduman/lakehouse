@@ -1,14 +1,25 @@
 # chart/tests/spark-history_test.yaml — helm-unittest suite for Consumption
 # slice d (Spark History Server). Covers the `lakehouse.spark.baseConf`
 # helper's gated eventLog block (chart/templates/_helpers.tpl), consumed by
-# BOTH ScheduledSparkApplications in chart/templates/05-spark-operator.yaml,
-# and the `spark-events` bucket entry in chart/templates/18-bucket-init.yaml.
-# `components.sparkHistory` defaults to false — these assertions confirm the
-# gate is fully additive (nothing renders when off; both jobs + the bucket
-# list pick up the new conf/bucket when on).
+# BOTH ScheduledSparkApplications in chart/templates/05-spark-operator.yaml
+# AND the long-running nginx-streaming SparkApplication in
+# chart/templates/14-nginx-ingest.yaml, plus the `spark-events` bucket entry
+# in chart/templates/18-bucket-init.yaml. `components.sparkHistory` defaults
+# to false — these assertions confirm the gate is fully additive (nothing
+# renders when off; all three Spark-job consumers + the bucket list pick up
+# the new conf/bucket when on).
+#
+# Fix round 1: nginx-streaming is `restartPolicy.type: Always` (indefinite
+# lifetime) — without rolling event logs it would write ONE ever-growing
+# event log file for the life of the stream (S3 bloat + a giant
+# in-progress file the History Server strains to replay). `spark.eventLog.
+# rolling.enabled`/`rolling.maxFileSize` are added to the SAME gated block
+# so the streaming job's log is safely capped (and the batch jobs' logs are
+# capped too, as a bonus).
 suite: spark history (d)
 templates:
   - 05-spark-operator.yaml
+  - 14-nginx-ingest.yaml
   - 18-bucket-init.yaml
 tests:
   - it: silver-merge sparkConf gets eventLog conf when components.sparkHistory is true
@@ -29,6 +40,12 @@ tests:
       - equal:
           path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
           value: "http://minio.test.svc:9000"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+          value: "128m"
 
   - it: iceberg-maintenance sparkConf ALSO gets eventLog conf when components.sparkHistory is true (shared baseConf helper)
     template: templates/05-spark-operator.yaml
@@ -57,6 +74,42 @@ tests:
           path: 'spec.template.sparkConf["spark.eventLog.dir"]'
       - notExists:
           path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.enabled"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+
+  - it: nginx-streaming (long-running, restartPolicy.type=Always) sparkConf gets ROLLING eventLog conf when components.sparkHistory is true
+    template: templates/14-nginx-ingest.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: nginx-streaming
+    asserts:
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.rolling.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+          value: "128m"
+
+  - it: nginx-streaming sparkConf has NO eventLog/rolling conf when components.sparkHistory is false (default)
+    template: templates/14-nginx-ingest.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: metadata.name
+      value: nginx-streaming
+    asserts:
+      - notExists:
+          path: 'spec.sparkConf["spark.eventLog.enabled"]'
+      - notExists:
+          path: 'spec.sparkConf["spark.eventLog.rolling.enabled"]'
 
   - it: bucket-init includes spark-events when components.sparkHistory is true
     template: templates/18-bucket-init.yaml
