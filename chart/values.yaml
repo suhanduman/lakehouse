@@ -1319,6 +1319,24 @@ dbt:
     requests: {cpu: "250m", memory: "512Mi"}
     limits:   {cpu: "1",    memory: "1Gi"}
 
+# Per-department analyst sandboxes (Consumption slice c2). Gated by
+# `sandbox.enabled` AND a non-empty `sandbox.departments` list — empty
+# (default) renders nothing at all. Each department entry gets its own
+# bucket, catalog, scoped S3 Secret, Keycloak service-account client, K8s SA,
+# and AD-group-gated Zeppelin instance (later tasks in this slice wire the
+# rest of that list into chart/templates/09c-zeppelin-sandbox.yaml; this task
+# only lands the values block, the Keycloak `svc-sandbox-<name>` client, and
+# the per-dept OIDC Secret).
+sandbox:
+  enabled: false
+  # Each dept => its own bucket, catalog, scoped S3 Secret, Keycloak service
+  # account, K8s SA, and AD-group-gated Zeppelin. Empty => nothing renders.
+  departments: []
+  # - name: veri-bilimi                        # DNS-safe; used in resource names + sandbox_<name> catalog
+  #   adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"  # Shiro group -> role `sandbox`
+  #   s3SecretName: s3-sandbox-veri-bilimi      # scoped cred (RW sandbox-<name>, RO prod); out-of-band else MinIO Job
+  #   oidcClientSecret: ""                      # dev-convenience single-source for svc-sandbox-<name>; else out-of-band
+
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport
 # `components["org.keycloak.storage.UserStorageProvider"]` + its

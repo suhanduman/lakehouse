@@ -1,0 +1,36 @@
+# Per-department analyst sandbox — Zeppelin instances (Consumption slice
+# c2). Started in this task with ONLY the per-dept OIDC credentials Secret;
+# later tasks in this slice add the actual sandbox Zeppelin instance(s)
+# (reusing `lakehouse.zeppelin.instance`, chart/templates/_zeppelin.tpl,
+# `sandbox: true` arm) plus the sandbox K8s ServiceAccount/S3 Secret wiring to
+# this same file.
+#
+# Gating: the WHOLE file is a no-op unless BOTH `.Values.sandbox.enabled` is
+# true AND `.Values.sandbox.departments` is non-empty (dev/default = neither,
+# so nothing renders) — see chart/values.yaml's `sandbox:` block comment.
+#
+# svc-sandbox-<name> OIDC credentials Secret — single source with the
+# Keycloak `svc-sandbox-<name>` service-account client
+# (chart/templates/10-keycloak.yaml `clients[].secret`, same
+# `.oidcClientSecret` value) so the two can never drift. Same dev-convenience
+# "inline stringData else out-of-band" contract as `ad-bind-credentials` /
+# `zeppelin-trino-oidc-credentials` (chart/templates/_zeppelin.tpl) /
+# `s3-credentials` (chart/templates/01-storage.yaml): rendered ONLY when a
+# real `oidcClientSecret` is explicitly supplied per department; otherwise
+# this Secret's name/keys must be provisioned out-of-band (ExternalSecret/
+# Vault or `oc create secret generic sandbox-<name>-oidc-credentials
+# --from-literal=client-secret=...`) per `.Values.secrets.mode`, BEFORE
+# install. NEVER logged.
+{{- range .Values.sandbox.departments }}
+{{- if and $.Values.sandbox.enabled .oidcClientSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-{{ .name }}-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" $ }}
+type: Opaque
+stringData:
+  client-secret: {{ .oidcClientSecret | quote }}
+{{- end }}
+{{- end }}

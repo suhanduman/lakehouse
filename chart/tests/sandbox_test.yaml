@@ -1,0 +1,153 @@
+# chart/tests/sandbox_test.yaml — helm-unittest suite for per-department
+# analyst sandboxes (Consumption slice c2, Task 2): `sandbox.*` values, the
+# Keycloak `svc-sandbox-<dept>` service-account clients
+# (chart/templates/10-keycloak.yaml), and the per-dept OIDC credentials
+# Secret (chart/templates/09c-zeppelin-sandbox.yaml).
+#
+# Everything here is gated `.Values.sandbox.enabled` AND a non-empty
+# `.Values.sandbox.departments` — dev default (both empty/false) renders
+# nothing, asserted below as the control case.
+#
+# IMPORTANT: the sandbox client is asserted by `clientId`-equality (find the
+# client whose clientId == `svc-sandbox-veri`), NOT by a positional index —
+# unlike the trino/dbt/zeppelin service-account clients in
+# auth-oidc_test.yaml, this client only exists when `sandbox.enabled` is
+# true, so a "control case" render (sandbox off) has no such client at all to
+# pin a stable index against.
+suite: sandbox.* values + Keycloak svc-sandbox-<dept> clients + per-dept OIDC secret
+templates:
+  - 10-keycloak.yaml
+  - 09c-zeppelin-sandbox.yaml
+tests:
+  - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          oidcClientSecret: devz
+    asserts:
+      - equal:
+          path: spec.realm.clients[4].clientId
+          value: svc-sandbox-veri
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[4].enabled
+          value: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[4].serviceAccountsEnabled
+          value: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[4].standardFlowEnabled
+          value: false
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[4].publicClient
+          value: false
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - equal:
+          path: spec.realm.clients[4].secret
+          value: "devz"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notExists:
+          path: spec.realm.clients[4].protocolMappers
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: sandbox.enabled=false (default) renders NO svc-sandbox-* client at all
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox-veri
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: sandbox.enabled=true but departments empty (default) renders NO svc-sandbox-* client either (both gates required)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      sandbox.enabled: true
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox-veri
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: sandbox.departments[].oidcClientSecret renders the sandbox-veri-oidc-credentials Secret with the client-secret key
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          oidcClientSecret: devz
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: sandbox-veri-oidc-credentials
+      - equal:
+          path: stringData.client-secret
+          value: "devz"
+
+  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          oidcClientSecret: ""
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when sandbox.enabled is false, even if oidcClientSecret is supplied
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          oidcClientSecret: devz
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: no departments (default) renders nothing from 09c-zeppelin-sandbox.yaml at all
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
