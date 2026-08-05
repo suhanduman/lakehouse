@@ -55,10 +55,16 @@ spec:
         spec:
           restartPolicy: Never
           {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
-          {{- if $psc }}
           securityContext:
+            # fsGroup 1001 matches the dbt image's non-root `dbt` user (images/
+            # dbt/Dockerfile `useradd -m -u 1001 dbt`) so the deploy-key volume
+            # (mounted 0440 below) is group-readable regardless of
+            # restrictedSecurityContext. The script also copies the key to a
+            # uid1001-owned 0400 path before use — see the git clone step.
+            fsGroup: 1001
+            {{- if $psc }}
             {{- $psc | nindent 12 }}
-          {{- end }}
+            {{- end }}
           containers:
           - name: dbt-build
             image: {{ printf "%s/dbt:%s" .Values.global.imageRegistry .Values.versions.dbtImageTag | quote }}
@@ -71,7 +77,8 @@ spec:
             args:
             - |
               set -euo pipefail
-              export GIT_SSH_COMMAND="ssh -i /keys/ssh-privatekey -o StrictHostKeyChecking=accept-new"
+              mkdir -p ~/.ssh && cp /keys/ssh-privatekey ~/.ssh/id_deploy && chmod 400 ~/.ssh/id_deploy
+              export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new"
               git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" /work/proj
               export DBT_TRINO_JWT="$(python3 - <<'PY'
               import os,json,urllib.parse,urllib.request
@@ -99,6 +106,6 @@ spec:
           volumes:
           - {name: profiles, configMap: {name: dbt-profiles}}
           - {name: trino-ca, secret: {secretName: trino-internal-tls, items: [{key: ca.crt, path: ca.crt}]}}
-          - {name: deploy-key, secret: {secretName: dbt-repo-deploy-key, defaultMode: 0400}}
+          - {name: deploy-key, secret: {secretName: dbt-repo-deploy-key, defaultMode: 0440}}
           - {name: work, emptyDir: {}}
 {{- end }}

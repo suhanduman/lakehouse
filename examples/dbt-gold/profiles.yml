@@ -5,7 +5,7 @@ lakehouse:
       type: trino
       method: jwt
       jwt_token: "{{ env_var('DBT_TRINO_JWT') }}"
-      host: "{{ env_var('DBT_TRINO_HOST') }}"
+      host: "trino-coordinator.YOUR-NAMESPACE.svc.cluster.local"  # set to your Trino coordinator; the chart CronJob overrides this
       port: 8443
       http_scheme: https
       cert: /etc/trino-ca/ca.crt
