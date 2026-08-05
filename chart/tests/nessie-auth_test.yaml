@@ -1,0 +1,152 @@
+# chart/tests/nessie-auth_test.yaml — helm-unittest suite for Nessie
+# machine-auth (Nessie machine-auth plan, Task 2): the 4 `svc-<x>-nessie`
+# Keycloak service-account clients (chart/templates/10-keycloak.yaml) +
+# `.Values.nessie.machineAuth.*` client-secret values.
+#
+# This is the slice's test file — later tasks (Trino/Spark/Connect/Zeppelin
+# wiring to authenticate against Nessie with these identities) extend it
+# rather than adding a parallel file.
+#
+# Gated `.Values.auth.oidc.enabled` (default true, UNLIKE the c2
+# `svc-sandbox-<dept>` clients which gate on `sandbox.enabled`): when
+# auth.oidc.enabled is false, Nessie (04-nessie-ha.yaml) runs fully
+# unauthenticated, so these service accounts must not render at all — that
+# is the "auth off" control case below.
+#
+# Each of the 4 clients is asserted by `contains`/`notContains` against the
+# FULL rendered client object (clientId-equality via full-content array
+# membership), NOT a positional index — the 4 svc-*-nessie clients render
+# right after `svc-zeppelin-trino` (auth-oidc_test.yaml's control-case
+# clients[0..3]), so they're stably clients[4..7] today, but pinning to that
+# would break silently if another auth.oidc.enabled-gated client is ever
+# inserted between them. The full-content `contains` naturally also proves
+# NO `protocolMappers` key is present (an aud mapper would show up as an
+# extra key and break the exact-content match) — Nessie validates the token
+# by ISSUER only, same as the c2 `svc-sandbox-<dept>` clients.
+suite: nessie.machineAuth values + Keycloak svc-<x>-nessie clients
+templates:
+  - 10-keycloak.yaml
+tests:
+  - it: auth on + keycloak on renders all 4 svc-*-nessie clients with the right fields + secrets + NO aud mapper
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      nessie.machineAuth.trinoClientSecret: "dev-trino-nessie"
+      nessie.machineAuth.sparkClientSecret: "dev-spark-nessie"
+      nessie.machineAuth.connectClientSecret: "dev-connect-nessie"
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-trino-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-spark-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-spark-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-connect-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-connect-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-zeppelin-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-zeppelin-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: auth.oidc.enabled=false (dev/smoke path) renders NONE of the 4 svc-*-nessie clients
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: false
+      nessie.machineAuth.trinoClientSecret: "dev-trino-nessie"
+      nessie.machineAuth.sparkClientSecret: "dev-spark-nessie"
+      nessie.machineAuth.connectClientSecret: "dev-connect-nessie"
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-spark-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-connect-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-zeppelin-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: default (nessie.machineAuth.* unset) still renders the 4 svc-*-nessie clients with empty-string secrets (dev-convenience default)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: ""
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport

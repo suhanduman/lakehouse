@@ -118,13 +118,14 @@ tests:
   # client's `secret` matches what the superset-oidc-credentials Secret
   # (chart/templates/19-superset.yaml, from Values.superset.oidc.clientSecret)
   # mounts into the Deployment — both sides read the same value, so they can
-  # never drift. clients[4] pins to `superset` (5th entry, after `trino`,
-  # `svc-superset-trino`, `svc-dbt-trino`, `svc-zeppelin-trino`; `components.
-  # ai` default false so `ai-ui` is absent) — the clientId equal guards that
-  # index assumption so an array-order change fails loudly instead of
-  # silently asserting against the wrong client. (Shifted from clients[3] to
-  # clients[4] when `svc-zeppelin-trino` was inserted right after
-  # `svc-dbt-trino`, Task 2 of the c1 Zeppelin-Trino plan.)
+  # never drift. clients[8] pins to `superset` (9th entry, after `trino`,
+  # `svc-superset-trino`, `svc-dbt-trino`, `svc-zeppelin-trino`, and the 4
+  # `svc-*-nessie` machine-auth clients (auth.oidc.enabled default true);
+  # `components.ai` default false so `ai-ui` is absent) — the clientId equal
+  # guards that index assumption so an array-order change fails loudly
+  # instead of silently asserting against the wrong client. (Shifted from
+  # clients[4] to clients[8] when the 4 `svc-*-nessie` clients were inserted
+  # right after `svc-zeppelin-trino`, Nessie machine-auth plan Task 2.)
   - it: superset.oidc.clientSecret single-sources the Keycloak superset client's secret
     templates:
       - 10-keycloak.yaml
@@ -133,13 +134,13 @@ tests:
       superset.oidc.clientSecret: "dev-oidc-secret"
     asserts:
       - equal:
-          path: spec.realm.clients[4].clientId
+          path: spec.realm.clients[8].clientId
           value: superset
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[4].secret
+          path: spec.realm.clients[8].secret
           value: "dev-oidc-secret"
         documentSelector:
           path: kind
