@@ -21,6 +21,8 @@ templates:
   - 18-bucket-init.yaml
   - 18b-sandbox-minio-policy.yaml
   - 09-zeppelin.yaml
+  - 08-routes-tls.yaml
+  - 08b-ingress-tls.yaml
 tests:
   - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
     templates:
@@ -896,3 +898,236 @@ tests:
           count: 0
           filterAware: true
         template: 09c-zeppelin-sandbox.yaml
+
+  # --- Task 6: per-dept sandbox Zeppelin Route (OpenShift, 08-routes-tls.
+  # yaml) + mirrored Ingress (vanilla, 08b-ingress-tls.yaml) — one per
+  # department, gated `sandbox.enabled` + non-empty `sandbox.departments`
+  # ONLY (independent of `components.zeppelin`, matching
+  # 09c-zeppelin-sandbox.yaml's own gate), host via `lakehouse.routeHost`
+  # (same helper the existing `zeppelin` Route/Ingress entries use), backend
+  # the `zeppelin-sandbox-<dept>` Service (Task 5) port `http`. -----------
+
+  - it: "platform: openshift + sandbox.enabled + dept veri — zeppelin-sandbox-veri Route, host via lakehouse.routeHost, targets Service zeppelin-sandbox-veri port http, edge TLS"
+    templates:
+      - 08-routes-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri
+    set:
+      platform: openshift
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - equal:
+          path: kind
+          value: Route
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      - equal:
+          path: spec.host
+          value: zeppelin-sandbox-veri.apps.example.com
+      - equal:
+          path: spec.to.kind
+          value: Service
+      - equal:
+          path: spec.to.name
+          value: zeppelin-sandbox-veri
+      - equal:
+          path: spec.port.targetPort
+          value: http
+      - equal:
+          path: spec.tls.termination
+          value: edge
+      - equal:
+          path: spec.tls.insecureEdgeTerminationPolicy
+          value: Redirect
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  - it: "platform: vanilla (default) + sandbox.enabled + dept veri — zeppelin-sandbox-veri Ingress, SAME host as the Route above, targets Service zeppelin-sandbox-veri port http, edge TLS via cert-manager"
+    templates:
+      - 08b-ingress-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: zeppelin-sandbox-veri.apps.example.com
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: zeppelin-sandbox-veri.apps.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: zeppelin-sandbox-veri-tls
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: zeppelin-sandbox-veri
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+          value: http
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  - it: "platform: openshift + sandbox.enabled=false (dev default) — NO zeppelin-sandbox-* Route renders (the shared zeppelin Route still does, Route count stays at 3)"
+    templates:
+      - 08-routes-tls.yaml
+    set:
+      platform: openshift
+    asserts:
+      - hasDocuments:
+          count: 3
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Route
+          matchMany: true
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: zeppelin
+          any: true
+
+  - it: "platform: vanilla (dev default, sandbox.enabled=false) — NO zeppelin-sandbox-* Ingress renders (the shared zeppelin Ingress still does, Ingress count stays at 7)"
+    templates:
+      - 08b-ingress-tls.yaml
+    asserts:
+      - hasDocuments:
+          count: 7
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Ingress
+          matchMany: true
+      - containsDocument:
+          kind: Ingress
+          apiVersion: networking.k8s.io/v1
+          name: zeppelin
+          any: true
+
+  - it: "platform: openshift + sandbox.enabled but departments empty (both gates required) — NO zeppelin-sandbox-* Route renders (Route count stays at 3)"
+    templates:
+      - 08-routes-tls.yaml
+    set:
+      platform: openshift
+      sandbox.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Route
+          matchMany: true
+
+  - it: "TWO departments (veri + finans) — TWO independent zeppelin-sandbox-* Routes render (OpenShift, total Route count 5), each targeting its own Service"
+    templates:
+      - 08-routes-tls.yaml
+    set:
+      platform: openshift
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - hasDocuments:
+          count: 5
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Route
+          matchMany: true
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: zeppelin-sandbox-veri
+          any: true
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: zeppelin-sandbox-finans
+          any: true
+      # veri's Route targets ONLY its own Service (never finans')
+      - equal:
+          path: spec.to.name
+          value: zeppelin-sandbox-veri
+        documentSelector:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      # finans' Route targets ONLY its own Service (never veri's)
+      - equal:
+          path: spec.to.name
+          value: zeppelin-sandbox-finans
+        documentSelector:
+          path: metadata.name
+          value: zeppelin-sandbox-finans
+
+  - it: "TWO departments (veri + finans) — TWO independent zeppelin-sandbox-* Ingresses render (vanilla, total Ingress count 9), each targeting its own Service"
+    templates:
+      - 08b-ingress-tls.yaml
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - hasDocuments:
+          count: 9
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Ingress
+          matchMany: true
+      - containsDocument:
+          kind: Ingress
+          apiVersion: networking.k8s.io/v1
+          name: zeppelin-sandbox-veri
+          any: true
+      - containsDocument:
+          kind: Ingress
+          apiVersion: networking.k8s.io/v1
+          name: zeppelin-sandbox-finans
+          any: true
+      # veri's Ingress targets ONLY its own Service (never finans')
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: zeppelin-sandbox-veri
+        documentSelector:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      # finans' Ingress targets ONLY its own Service (never veri's)
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: zeppelin-sandbox-finans
+        documentSelector:
+          path: metadata.name
+          value: zeppelin-sandbox-finans

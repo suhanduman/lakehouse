@@ -139,6 +139,36 @@ spec:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
 {{- end }}
+{{- if .Values.sandbox.enabled }}
+{{- range .Values.sandbox.departments }}
+---
+# Per-department analyst sandbox Zeppelin instance (Consumption slice c2,
+# chart/templates/09c-zeppelin-sandbox.yaml) — mirrors the shared `zeppelin`
+# Route above, one per department. Gated on `sandbox.enabled` + non-empty
+# `sandbox.departments` ONLY (NOT `components.zeppelin` — the per-dept
+# sandbox instances are independent of the shared c1 Zeppelin toggle),
+# matching 09c-zeppelin-sandbox.yaml's own gate exactly so this Route's
+# backing Service (`zeppelin-sandbox-<name>`) always exists when this Route
+# does (Route-referans kapalılığı, bkz. dosya header notu).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zeppelin-sandbox-{{ .name }}
+  namespace: {{ include "lakehouse.namespace" $ }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $.Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" (printf "zeppelin-sandbox-%s" .name) "context" $) }}
+  to:
+    kind: Service
+    name: zeppelin-sandbox-{{ .name }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
+{{- end }}
 {{- if .Values.components.sparkHistory }}
 ---
 # Spark History Server (Consumption slice d, chart/templates/21-spark-history.

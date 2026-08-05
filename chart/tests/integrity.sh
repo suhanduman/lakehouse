@@ -67,13 +67,40 @@ NAMESPACES=(strayprobe lakehouse-test)
 #                            on in values-prod.example.yaml; this toggle adds
 #                            the OIDC-on Grafana + Keycloak grafana-client path
 #                            on top so both render shapes are covered.)
+#
+# - sandbox-on-openshift   : Consumption slice c2 per-department analyst
+#                            sandboxes (chart/templates/09c-zeppelin-sandbox.
+#                            yaml + the per-dept Route in 08-routes-tls.yaml)
+#                            — `sandbox.enabled=true` + one department,
+#                            platform stays `openshift` (values-prod.example.
+#                            yaml default). Proves the per-dept
+#                            `zeppelin-sandbox-<name>` Route's `spec.to.name`
+#                            resolves to the per-dept Service THIS SAME
+#                            render produces (no dangling backend) — the
+#                            08-routes-tls.yaml `zeppelin` entry's sandbox
+#                            equivalent.
+# - sandbox-on-vanilla     : SAME sandbox toggle as above, but
+#                            `platform=vanilla` — exercises the mirrored
+#                            per-dept Ingress in 08b-ingress-tls.yaml through
+#                            the SAME closure check (Ingress
+#                            `backend.service.name` resolution). `platform:
+#                            vanilla` is otherwise UNEXERCISED by this script
+#                            (values-prod.example.yaml ships `platform:
+#                            openshift`), so this is also the only place the
+#                            vanilla Ingress path (08b-ingress-tls.yaml) is
+#                            closure-checked at all.
+SANDBOX_DEPT_JSON='[{"name":"veri","adGroup":"CN=sandbox-veri,OU=Groups,DC=example,DC=com","s3SecretName":"s3-sandbox-veri","oidcClientSecret":"devz"}]'
 TOGGLE_LABELS=(
   "defaults"
   "monitoring-oidc-on"
+  "sandbox-on-openshift"
+  "sandbox-on-vanilla"
 )
 TOGGLE_ARGS=(
   ""
   "--set components.monitoring=true --set monitoring.grafana.oidc.enabled=true"
+  "--set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
+  "--set platform=vanilla --set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
 )
 
 total=0
