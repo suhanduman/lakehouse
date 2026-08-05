@@ -269,6 +269,79 @@ superset-init pod'ları `CreateContainerConfigError`'da kalır.
 
 ---
 
+## dbt-trino Certified Gold (b2)
+
+`components.dbt: true` iken (medium/large tier'larda açık — dev tier'da
+kapalı, bkz. `values-medium.yaml`/`values-large.yaml`) chart, Silver üzerine
+**dbt-trino** ile transform edilen, iş-hazır (business-ready) bir
+**Certified Gold** katmanı ekler: `dbt-build` CronJob + `dbt-profiles`
+ConfigMap + (sağlanmışsa) `dbt-trino-oidc-credentials`/`dbt-repo-deploy-key`
+Secret'ları (`chart/templates/20-dbt.yaml`).
+
+- **`svc-dbt-trino` — tek-yazar (sole-writer) modeli:** Superset'teki (b1)
+  aynı desenle, confidential bir Keycloak service-account client'ı
+  (`client_credentials` grant, zorunlu `aud: trino` mapper'ı ile —
+  mapper olmadan Trino her isteği 401'ler) dbt'nin Trino kimliğidir
+  (`10-keycloak.yaml`). `lakehouse.gold` şemasının (Nessie/Iceberg-REST
+  `lakehouse` katalogunun sertifikalı, iş-hazır bölgesi) TEK yazarı budur —
+  başka hiçbir principal oraya yazmaz.
+- **Yazma-sınırlama (write-confinement) ACL'i — dbt Depo'yu bozamaz:**
+  `06-trino-ha.yaml`'daki paylaşılan `rules.json`, `components.dbt` ile
+  gated üç ek kural katmanıyla `svc-dbt-trino`'yu daraltır: şema düzeyinde
+  yalnızca `lakehouse.gold`'un owner'ı; tablo düzeyinde `lakehouse.gold`
+  üzerinde tam DML (SELECT/INSERT/DELETE/UPDATE/OWNERSHIP) YALNIZCA,
+  `lakehouse` katalogunun GERİ KALANI (Silver dahil) üzerinde ise yalnızca
+  SELECT. Yani dbt Silver'ı okuyabilir ama asla yazamaz — Gold'un dışına
+  hiçbir DDL/DML sızmaz, depo (Silver) yanlışlıkla dbt tarafından
+  bozulamaz.
+- **`dbt-build` CronJob (clone → per-run JWT → dbt build):**
+  `.Values.dbt.schedule` (varsayılan `0 3 * * *`) ile çalışan CronJob her
+  run'da (1) `dbt.repo.url`'i salt-okunur bir SSH deploy key
+  (`dbt-repo-deploy-key`) ile klonlar, (2) Keycloak'tan `client_credentials`
+  grant'ıyla TEK SEFERLİK (per-run) bir Bearer JWT çeker ve
+  `DBT_TRINO_JWT` env var'ına yazar (Postgres/disk'te asla kalıcı
+  saklanmaz — Superset mutator'ının "token hiçbir yerde saklanmaz"
+  ilkesiyle aynı), (3) `dbt-profiles` ConfigMap'inden gelen `profiles.yml`'i
+  repo'ya kopyalayıp `dbt build` çalıştırır. `profiles.yml`'deki
+  `jwt_token: "{{ env_var('DBT_TRINO_JWT') }}"` alanı dbt'nin KENDİ
+  Jinja'sıdır (Helm'in değil) — host/port/catalog/schema Helm tarafından
+  baked-in gelir, dbt yalnızca JWT'yi runtime'da okur.
+- **Git tek-doğruluk-kaynağı + `examples/dbt-gold/`:** dbt projesinin
+  kendisi bu chart'ın DIŞINDA, müşterinin kendi git deposunda yaşar
+  (`dbt.repo.url`+`dbt.repo.branch`) — chart yalnızca runner'ı taşır,
+  modelleri değil. `examples/dbt-gold/` (Silver `customers` üzerinde bir
+  model + test) mekanizmanın çalıştığını göstermek için bir BAŞLANGIÇ
+  NOKTASIDIR; customer kendi deposunu sağlar. (In-cluster bir
+  Gitea-seed out-of-box demo'su bilinçli olarak bir sonraki iterasyona
+  ertelendi — v1 mekanizma + `examples/dbt-gold/` starter + `dbt.repo.url`
+  clone ile gelir.)
+- **Özel dbt image'ı:** Upstream `dbt-core` image'ı Trino adaptörünü
+  içermediği için özel bir image kullanılır (`images/dbt/Dockerfile`,
+  `dbt-trino==1.10.3`, `.Values.versions.dbtImageTag`) — Superset'in özel
+  Trino-driver image'ıyla aynı gerekçe.
+- **Internal-CA trust:** CronJob, b1'in `trino-internal-tls` Secret'ının
+  `ca.crt`'ini `/etc/trino-ca/ca.crt`'a mount eder; `profiles.yml`'in
+  `cert:` alanı buna işaret eder — dbt, Trino coordinator'ın internal
+  TLS'ini (aynı cert-manager `Certificate`, `:8443`) doğrular.
+
+**Bilinen sınırlama:** b2 dbt-Gold is helm-unittest + docker-spike verified
+(dbt-trino image builds + parses the example; Trino Iceberg-REST write
+capability + the svc-dbt-trino principal confirmed); the full
+Keycloak→dbt→Trino→lakehouse.gold end-to-end (clone, per-run JWT,
+materialize, and the write-to-depo-denied check) is an OpenShift UAT
+deliverable. The custom dbt image must be built+pushed (arm64 for
+microk8s), the customer must set dbt.repo.url + provide a read-only deploy
+key, and routes.certIssuer must issue for *.svc.cluster.local (same
+assumption as keycloak-tls).
+
+Medium/large tier'larda (`components.dbt: true`) iki dbt secret'ı —
+`dbt.oidc.clientSecret`, `dbt.repo.deployKey` — ilk `dbt-build` run'ından
+ÖNCE `secrets.mode`'a göre out-of-band provision edilmelidir
+(keycloak-admin-credentials ile AYNI konvansiyon); aksi halde `dbt-build`
+pod'u `CreateContainerConfigError`'da kalır.
+
+---
+
 ## İngest — bilinen tradeoff'lar ve gerekçeler
 
 Aşağıdaki üç nokta, mevcut ingest mimarisinin bilinçli tradeoff'ları ve
