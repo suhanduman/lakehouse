@@ -28,7 +28,149 @@ templates:
   - 10-keycloak.yaml
   - 09-zeppelin.yaml
   - 22-nessie-machine-auth.yaml
+  - 04-nessie-ha.yaml
 tests:
+  # --- Task 3: Nessie server authorization + CEL rules --------------------
+  # `04-nessie-ha.yaml` documentIndex:1 is the Deployment (same convention as
+  # chart/tests/auth-oidc_test.yaml's existing Nessie assertions — `helm
+  # template`'s fixed kind-sort order puts PDB[0]/ServiceAccount before
+  # Service/Deployment; helm-unittest preserves that same ordering here).
+  #
+  # LOAD-BEARING property under test: every one of the 5 identities (trino,
+  # spark, connect, zeppelin, sandbox-<dept>) must have the CORRECT allow/
+  # deny outcome — a missing writer allow-rule silently breaks that
+  # committer (the b2 rules.json catch-all lesson), and any rule
+  # accidentally granting zeppelin write access breaks its read-only
+  # guarantee. Exact CEL text asserted verbatim (not just presence) so a
+  # future edit that subtly narrows/widens a rule fails loudly.
+  - it: auth.oidc.enabled=true + a sandbox dept renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 5-identity CEL policy (trino/spark/connect all-path, connect rawlake-only, sandbox dept-only, zeppelin absent from every write/commit rule)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+      sandbox.departments[0].name: veri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_ENABLED
+            value: "true"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
+            value: "op in ['VIEW_REFERENCE','READ_ENTRIES','LIST_COMMIT_LOG','READ_CONTENT_KEY','READ_ENTITY_VALUE','READ_REPOSITORY_CONFIG']"
+        documentIndex: 1
+      # Ref-level COMMIT_TO_MAIN: trino + spark + connect + the sandbox dept
+      # all present (every writer that must be able to commit at all);
+      # zeppelin absent (read-only — denied at this ref-level gate already).
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie' || role=='service-account-svc-sandbox-veri')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'zeppelin'
+        documentIndex: 1
+      # Per-key writes: trino (all paths), spark (all paths), connect
+      # (rawlake only), sandbox-veri (sandbox_veri only).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_TRINO_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-trino-nessie'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-spark-nessie'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie' && path.startsWith('rawlake')"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-veri' && path.startsWith('sandbox_veri')"
+        documentIndex: 1
+      # svc-zeppelin-nessie must appear in NO write/commit rule at all —
+      # a defensive guard against the naming convention every other write
+      # rule in this file follows (ALLOW_<IDENTITY>_WRITE), in addition to
+      # the exact-content assertions above already proving zeppelin is
+      # absent from the read-all/commit-to-main/trino/spark/connect/sandbox
+      # rule text verbatim.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=true with NO sandbox departments still covers trino/spark/connect (commit-to-main + per-key) with zeppelin absent
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'zeppelin'
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=false renders NO authorization env at all (byte-identity control — authz is entirely absent, not just disabled)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_ENABLED
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_TRINO_WRITE
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
+        documentIndex: 1
+
   - it: auth on + keycloak on renders all 4 svc-*-nessie clients with the right fields + secrets + NO aud mapper
     templates:
       - 10-keycloak.yaml

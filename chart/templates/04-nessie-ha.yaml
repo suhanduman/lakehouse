@@ -130,6 +130,53 @@ spec:
         - name: QUARKUS_OIDC_CLIENT_ID
           value: {{ .Values.nessie.oidcClientId | quote }}
         - {name: NESSIE_SERVER_AUTHENTICATION_ENABLED, value: "true"}
+
+        # --- AuthZ — CEL rules (machine-auth policy; Task 3, nessie-machine-
+        # auth plan). Exact rule text + property/env-var shape confirmed live
+        # against Nessie 0.104.3 — see docs/superpowers/spikes/2026-08-06-
+        # nessie-machine-auth-config.md §4 ("Setup common to items 1 and 4"
+        # + item 4 itself). LOAD-BEARING: every legitimate committer MUST
+        # have an allow rule, or that identity's commits silently 403 — this
+        # policy exists to FIX the latent prod 401/403, not add new denials.
+        #
+        # Two rule classes, both required per writer (missing either half
+        # breaks that committer):
+        #   - COMMIT_TO_MAIN is a REF-LEVEL check (no `path` binding
+        #     possible — evaluated once per commit regardless of how many
+        #     keys it touches, per the spike's "mechanical surprise"). Every
+        #     identity allowed to commit at all must be listed here.
+        #   - The per-key CREATE/UPDATE/DELETE_ENTITY rules DO carry `path`
+        #     and scope each writer to its own namespace(s).
+        # svc-zeppelin-nessie is deliberately ABSENT from every rule below
+        # (both the commit-to-main OR-chain and all per-key write rules) —
+        # default-deny leaves it read-only, confirmed live in the spike.
+        {{- $writerRoles := list "service-account-svc-trino-nessie" "service-account-svc-spark-nessie" "service-account-svc-connect-nessie" }}
+        {{- range .Values.sandbox.departments }}
+        {{- $writerRoles = append $writerRoles (printf "service-account-svc-sandbox-%s" .name) }}
+        {{- end }}
+        {{- $roleExpr := "" }}
+        {{- range $i, $r := $writerRoles }}
+        {{- if eq $i 0 }}
+        {{- $roleExpr = printf "role=='%s'" $r }}
+        {{- else }}
+        {{- $roleExpr = printf "%s || role=='%s'" $roleExpr $r }}
+        {{- end }}
+        {{- end }}
+        - {name: NESSIE_SERVER_AUTHORIZATION_ENABLED, value: "true"}
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
+          value: "op in ['VIEW_REFERENCE','READ_ENTRIES','LIST_COMMIT_LOG','READ_CONTENT_KEY','READ_ENTITY_VALUE','READ_REPOSITORY_CONFIG']"
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN
+          value: {{ printf "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (%s)" $roleExpr | quote }}
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_TRINO_WRITE
+          value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-trino-nessie'"
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
+          value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-spark-nessie'"
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
+          value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie' && path.startsWith('rawlake')"
+        {{- range .Values.sandbox.departments }}
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_{{ .name | upper | replace "-" "_" }}_WRITE
+          value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-%s' && path.startsWith('sandbox_%s')" .name .name | quote }}
+        {{- end }}
 {{- else }}
         - {name: QUARKUS_OIDC_ENABLED, value: "false"}
         - {name: NESSIE_SERVER_AUTHENTICATION_ENABLED, value: "false"}
