@@ -26,6 +26,8 @@
 suite: nessie.machineAuth values + Keycloak svc-<x>-nessie clients
 templates:
   - 10-keycloak.yaml
+  - 09-zeppelin.yaml
+  - 22-nessie-machine-auth.yaml
 tests:
   - it: auth on + keycloak on renders all 4 svc-*-nessie clients with the right fields + secrets + NO aud mapper
     templates:
@@ -150,3 +152,184 @@ tests:
         documentSelector:
           path: kind
           value: KeycloakRealmImport
+
+  # --- Task 6: shared c1 Zeppelin's Spark interpreter authenticates to
+  # Nessie as the READ-ONLY svc-zeppelin-nessie identity, reusing the c2
+  # sandbox sed->tmpfs mechanism (chart/templates/_zeppelin.tpl) — plus the
+  # nessie-machine-auth-credentials Secret (chart/templates/22-nessie-
+  # machine-auth.yaml) that all 4 machine-auth identities key into. ---------
+
+  - it: nessie-machine-auth-credentials Secret renders with all 4 keys when auth on + at least one machineAuth.* secret supplied (dev-convenience)
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nessie-machine-auth-credentials
+      - equal:
+          path: stringData.zeppelin
+          value: "dev-zeppelin-nessie"
+      - equal:
+          path: stringData.trino
+          value: ""
+      - equal:
+          path: stringData.spark
+          value: ""
+      - equal:
+          path: stringData.connect
+          value: ""
+
+  - it: nessie-machine-auth-credentials Secret does NOT render when auth on but no machineAuth.* secret is set (out-of-band contract)
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: nessie-machine-auth-credentials Secret does NOT render when auth.oidc.enabled is false, even with a machineAuth.* secret set
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: false
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: shared zeppelin spark-defaults ConfigMap gains the svc-zeppelin-nessie OAuth2 block on lakehouse+rawlake (literal placeholders, NO write catalog) when auth on
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-spark-defaults
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-zeppelin-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-id=svc-zeppelin-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # read-only identity: no write catalog — the sandbox_<dept> write
+      # catalog block (chart/templates/_zeppelin.tpl `$sandbox` arm) must
+      # NEVER appear on the shared instance.
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox'
+      # the resolved secret literal (dev-convenience value supplied via
+      # values) must NEVER appear in this ConfigMap — only the `${OAUTH_
+      # CLIENT_SECRET}` placeholder above, resolved later by the sed
+      # initContainer into a tmpfs, never a ConfigMap.
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'client-secret=dev-zeppelin-nessie'
+
+  - it: shared zeppelin spark-defaults ConfigMap has NO OAuth2/Nessie-machine-auth block when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-spark-defaults
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'OAUTH2'
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'svc-zeppelin-nessie'
+
+  - it: shared zeppelin Deployment gains the sed->tmpfs spark-conf-render initContainer with OAUTH_CLIENT_SECRET via secretKeyRef nessie-machine-auth-credentials/zeppelin, SPARK_CONF_DIR pointed at the rendered dir, when auth on
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: spark-conf-render
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: 'sed '
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: zeppelin
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered
+      # the shared instance passes no `saName` — this stays unaffected by
+      # the Nessie machine-auth wiring (sandbox-only field).
+      - notExists:
+          path: spec.template.spec.serviceAccountName
+
+  - it: shared zeppelin Deployment has NO spark-conf-render initContainer / spark-conf-rendered volume / rewired SPARK_CONF_DIR when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spark-conf-rendered

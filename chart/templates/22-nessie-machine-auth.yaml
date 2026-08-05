@@ -1,0 +1,41 @@
+# nessie-machine-auth-credentials — the ONE shared Secret holding all 4
+# `svc-<x>-nessie` machine-auth client secrets (Trino/Spark/Kafka Connect/
+# Zeppelin), single-sourced with the Keycloak clients of the SAME name
+# (chart/templates/10-keycloak.yaml `spec.realm.clients[].secret`, via
+# `.Values.nessie.machineAuth.<x>ClientSecret` — the two can never drift).
+#
+# Renders EXACTLY ONCE regardless of how many engines end up consuming it
+# (Task 2 created only the Keycloak clients; this task adds the Secret
+# itself). Later tasks (Trino Task 4, Spark/Connect Tasks 4-5, this
+# Zeppelin wiring Task 6, Task 7) all `secretKeyRef` this SAME Secret name
+# by their own key (`trino`/`spark`/`connect`/`zeppelin`) — none of them
+# render their own copy.
+#
+# Same dev-convenience-else-out-of-band contract as
+# `zeppelin-trino-oidc-credentials`/`ad-bind-credentials`
+# (chart/templates/_zeppelin.tpl): rendered ONLY when BOTH
+# `.Values.auth.oidc.enabled` is true (Nessie's OIDC validation is off
+# entirely when false — see chart/values.yaml `auth.oidc.enabled` comment —
+# so these credentials would be dead weight) AND at least one of the 4
+# `nessie.machineAuth.*ClientSecret` values is explicitly supplied
+# (dev/test convenience). Otherwise this Secret's name/keys must be
+# provisioned out-of-band (ExternalSecret/Vault or
+# `oc create secret generic nessie-machine-auth-credentials
+# --from-literal=...`) per `.Values.secrets.mode`, BEFORE install — same as
+# every other machine-auth credential in this chart. NEVER logged, NEVER
+# placed in a ConfigMap.
+{{- if .Values.auth.oidc.enabled }}
+{{- if or .Values.nessie.machineAuth.trinoClientSecret .Values.nessie.machineAuth.sparkClientSecret .Values.nessie.machineAuth.connectClientSecret .Values.nessie.machineAuth.zeppelinClientSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nessie-machine-auth-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  trino: {{ .Values.nessie.machineAuth.trinoClientSecret | quote }}
+  spark: {{ .Values.nessie.machineAuth.sparkClientSecret | quote }}
+  connect: {{ .Values.nessie.machineAuth.connectClientSecret | quote }}
+  zeppelin: {{ .Values.nessie.machineAuth.zeppelinClientSecret | quote }}
+{{- end }}
+{{- end }}
