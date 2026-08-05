@@ -445,3 +445,309 @@ tests:
           content:
             name: SPARK_CONF_DIR
             value: /spark-conf-rendered
+
+  # --- Task 5: per-dept sandbox Zeppelin instance (range calling
+  # `lakehouse.zeppelin.instance` with sandbox params) — full end-to-end
+  # Deployment/Service/Shiro correctness, plus two-department isolation ------
+
+  - it: sandbox instance Deployment (dept veri, auth+tls on) — serviceAccountName sa-sandbox-veri, AWS_* from s3-sandbox-veri, c1 %trino interpreter volume/mount present
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      # serviceAccountName wired from `saName` (Task 5), gated `sandbox: true`
+      # only — see chart/templates/_zeppelin.tpl.
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: sa-sandbox-veri
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_SECRET_ACCESS_KEY
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: secret-access-key}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ENDPOINT_URL_S3
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: endpoint}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: region}}
+      # the c1 %trino read interpreter (chart/templates/_zeppelin.tpl) is
+      # carried by the sandbox instance too — same seed ConfigMap + TLS mount.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-interp
+            configMap: {name: zeppelin-trino-interpreter}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: trino-interp
+            mountPath: /seed
+            readOnly: true
+
+  - it: sandbox instance Shiro ConfigMap (dept veri) — groupRolesMap maps ONLY the dept adGroup -> sandbox, [urls] /** gated roles[sandbox]
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri-shiro
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: 'CN=veri-grp:sandbox"'
+      # ONLY the dept group is mapped — no shared admin/analyst/student AD
+      # groups leak into a sandbox instance's groupRolesMap.
+      - notMatchRegex:
+          path: data["shiro.ini"]
+          pattern: ':admin,'
+      - notMatchRegex:
+          path: data["shiro.ini"]
+          pattern: ':analyst,'
+      - notMatchRegex:
+          path: data["shiro.ini"]
+          pattern: ':student"'
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: '/\*\* = authc, roles\[sandbox\]'
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: 'sandbox = \*'
+
+  - it: sandbox instance Service (dept veri) — zeppelin-sandbox-veri, http:8080
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Service
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      - equal:
+          path: spec.selector
+          value: {app: zeppelin-sandbox-veri}
+      - equal:
+          path: spec.ports[0]
+          value: {name: http, port: 8080, targetPort: 8080}
+
+  - it: TWO departments (veri + finans) render TWO independent Deployments and Services
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+      matchMany: true
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz1
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+          oidcClientSecret: devz2
+    asserts:
+      - hasDocuments:
+          count: 2
+          filterAware: true
+      - matchRegex:
+          path: metadata.name
+          pattern: '^zeppelin-sandbox-(veri|finans)$'
+
+  - it: TWO departments — veri's Deployment references ONLY its own SA/S3-secret (never finans')
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    # spec.template.spec.serviceAccountName is unique to this ONE Deployment
+    # among all rendered documents (Service/PDB/ConfigMap/PVC don't have it,
+    # and the OTHER department's Deployment has a different value) — a
+    # precise, unambiguous selector without relying on the (non-unique
+    # across kinds) `metadata.name`.
+    documentSelector:
+      path: spec.template.spec.serviceAccountName
+      value: sa-sandbox-veri
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz1
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+          oidcClientSecret: devz2
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: s3-sandbox-finans, key: access-key-id}}
+
+  - it: TWO departments — finans' Deployment references ONLY its own SA/S3-secret (never veri's)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: spec.template.spec.serviceAccountName
+      value: sa-sandbox-finans
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz1
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+          oidcClientSecret: devz2
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-finans
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: s3-sandbox-finans, key: access-key-id}}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
+
+  - it: TWO departments — veri's Shiro ConfigMap maps ONLY CN=veri-grp (never finans' group), and vice versa
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri-shiro
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: 'CN=veri-grp:sandbox"'
+      - notMatchRegex:
+          path: data["shiro.ini"]
+          pattern: 'finans'
+
+  - it: TWO departments — finans' Shiro ConfigMap maps ONLY CN=finans-grp (never veri's group)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-finans-shiro
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - matchRegex:
+          path: data["shiro.ini"]
+          pattern: 'CN=finans-grp:sandbox"'
+      - notMatchRegex:
+          path: data["shiro.ini"]
+          pattern: 'veri'
+
+  - it: TWO departments — veri's sandbox_<dept> catalog config never references finans' bucket/catalog, and vice versa
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri-spark-defaults
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+        - name: finans
+          adGroup: "CN=finans-grp"
+          s3SecretName: s3-sandbox-finans
+    asserts:
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.warehouse=s3a://sandbox-veri/'
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'finans'
+
+  - it: dev default (sandbox.enabled=false, no departments) renders NO sandbox Deployment/Service at all — full 09c file is a no-op
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+      matchMany: true
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+          filterAware: true

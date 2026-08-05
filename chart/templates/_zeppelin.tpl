@@ -18,12 +18,21 @@ Dict keys:
                  instance passes "zeppelin", preserving today's literal names)
   s3SecretName - name of the Secret holding S3 access-key-id/secret-access-
                  key/endpoint/region (today: .Values.storage.s3.secretName)
-  sandbox      - bool; false for the shared c1 instance. When true (future
-                 per-dept sandbox task), the Shiro groupRolesMap branch below
-                 maps a single `adGroup` -> role `sandbox` instead of reading
-                 the shared admin/analyst/student AD groups from ctx. Only
-                 wired for `sandbox: false` so far — the `sandbox: true` arm
-                 is scaffolding for that later task, not exercised yet.
+  sandbox      - bool; false for the shared c1 instance. When true (per-dept
+                 sandbox, Consumption slice c2), the Shiro groupRolesMap/
+                 [roles]/[urls] branches map a single `adGroup` -> role
+                 `sandbox` (URL-gated `roles[sandbox]`) instead of the shared
+                 admin/analyst/student AD groups from ctx, and the pod runs
+                 as `saName` (see below) instead of the namespace default.
+  saName       - K8s ServiceAccount name for the pod (`sandbox: true` only;
+                 e.g. sa-sandbox-<dept>, chart/templates/09c-zeppelin-
+                 sandbox.yaml). The shared c1 instance passes none — its
+                 Deployment carries NO `serviceAccountName` field at all, to
+                 stay byte-identical to before this template was extracted.
+  adGroup      - single AD group DN mapped to the `sandbox` Shiro role
+                 (`sandbox: true` only).
+  oauth2ClientId, oidcSecretName, sandboxCatalog - sandbox-only Nessie/Spark
+                 OAuth2 + sandbox_<dept> catalog wiring (Task 4).
 */}}
 {{- define "lakehouse.zeppelin.instance" -}}
 {{- $ctx := .ctx -}}
@@ -184,16 +193,24 @@ data:
     shiro.loginUrl = /api/login
 
     [roles]
+{{- if $sandbox }}
+    sandbox = *
+{{- else }}
     admin = *
     analyst = *
     student = *
+{{- end }}
 
     [urls]
     /api/version = anon
     /api/interpreter/** = authc, roles[admin]
     /api/configurations/** = authc, roles[admin]
     /api/credential/** = authc
+{{- if $sandbox }}
+    /** = authc, roles[sandbox]
+{{- else }}
     /** = authc
+{{- end }}
 ---
 # Spark interpreter config — spark.yaml ile aynı iki catalog + hadoop-aws.
 # 05-spark-operator.yaml'daki paylaşılan `spark-defaults` ConfigMap ile KASITLI
@@ -268,6 +285,14 @@ spec:
     metadata:
       labels: {app: {{ $name }}}
     spec:
+      {{- if $sandbox }}
+      # Sandbox instance ONLY: run as the dept's own K8s ServiceAccount
+      # (sa-sandbox-<dept>, chart/templates/09c-zeppelin-sandbox.yaml) instead
+      # of the namespace default — the shared c1 instance passes no `saName`
+      # and MUST keep no `serviceAccountName` at all (its render stays
+      # byte-identical to before this template was made reusable).
+      serviceAccountName: {{ .saName }}
+      {{- end }}
       {{- $psc := include "lakehouse.podSecurityContext" $ctx | trim }}
       {{- if $psc }}
       securityContext:
