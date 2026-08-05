@@ -80,7 +80,6 @@ spec:
               print(json.load(urllib.request.urlopen(u,data=d,timeout=15))["access_token"])
               PY
               )"
-              export DBT_TRINO_HOST="{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) }}"
               cp /profiles/profiles.yml /work/proj/profiles.yml
               cd /work/proj
               dbt build --project-dir . --profiles-dir .

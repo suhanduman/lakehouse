@@ -53,3 +53,9 @@ dist/
 
 # Internal dev/process artifacts — not shipped in the OSS product
 /.superpowers/
+
+# --- dbt-gold example (local dbt runs — not shipped/committed artifacts) ---
+examples/dbt-gold/target/
+examples/dbt-gold/logs/
+examples/dbt-gold/.user.yml
+examples/dbt-gold/dbt_packages/
