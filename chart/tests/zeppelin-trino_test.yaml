@@ -1,9 +1,15 @@
-# chart/tests/zeppelin-trino_test.yaml — proves the zeppelin-trino-oidc-
-# credentials Secret (chart/templates/09-zeppelin.yaml, c1) renders only when
-# BOTH components.zeppelin is enabled AND a real zeppelin.trino.oidc.
+# chart/tests/zeppelin-trino_test.yaml — proves (1) the zeppelin-trino-oidc-
+# credentials Secret (chart/templates/09-zeppelin.yaml, c1 Task 2) renders only
+# when BOTH components.zeppelin is enabled AND a real zeppelin.trino.oidc.
 # clientSecret is supplied (dev-convenience contract, same as the
-# superset-trino-oidc-credentials / dbt-trino-oidc-credentials Secrets).
-suite: zeppelin %trino service-account Secret (c1)
+# superset-trino-oidc-credentials / dbt-trino-oidc-credentials Secrets), and
+# (2) the %trino interpreter seed ConfigMap + container command override +
+# TLS/interpreter volume mounts (Task 4) render ONLY when components.zeppelin
+# + auth.oidc.enabled are BOTH true, are byte-identical to the pre-Task-4 form
+# when auth is off, and the TLS-coherence guard (reusing the SAME
+# superset.trino.tls.enabled flag that gates Trino's :8443 listener) fails
+# the render on an incoherent combination.
+suite: zeppelin %trino service-account Secret + interpreter seed (c1)
 templates:
   - 09-zeppelin.yaml
 tests:
@@ -25,3 +31,112 @@ tests:
       zeppelin.trino.oidc.clientSecret: "dev-z-secret"
     asserts:
       - hasDocuments: {count: 0}
+
+# --- Task 4: %trino interpreter seed ConfigMap + command-copy + TLS mounts ---
+  - it: renders the zeppelin-trino-interpreter ConfigMap when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: zeppelin-trino-interpreter, any: true}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: 'jdbc:trino://trino-coordinator:8443/lakehouse\?SSL=true&SSLTrustStorePath=/mnt/trino-tls/ca\.crt'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: '"default\.driver": \{"name": "default\.driver", "value": "io\.trino\.jdbc\.TrinoDriver"'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: '"dependencies": \[\]'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+
+  - it: does NOT leak the real JWT into the interpreter ConfigMap (placeholder only)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: 'PLACEHOLDER_REPLACED_BY_REFRESHER'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - notMatchRegex:
+          path: data["interpreter.json"]
+          pattern: 'eyJ'   # a real JWT would start with a base64url JSON header
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+
+  - it: overrides the zeppelin container command to seed interpreter.json then exec the stock entrypoint, when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["/bin/sh", "-c"]
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'cp /seed/interpreter\.json'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'exec /usr/bin/tini -- bin/zeppelin\.sh'
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: mounts the trino-interp (ConfigMap) and trino-tls (Secret) volumes when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-interp, mountPath: /seed, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-tls, mountPath: /mnt/trino-tls, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: trino-interp, configMap: {name: zeppelin-trino-interpreter}}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: trino-tls, secret: {secretName: trino-internal-tls}}
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: fails the render when zeppelin+oidc are on but the Trino :8443 TLS listener is off (incoherent)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.zeppelin + auth.oidc.enabled requires superset.trino.tls.enabled=true (the %trino interpreter connects over Trino's :8443 HTTPS listener, gated by that SAME flag — see chart/templates/06-trino-ha.yaml)"
+
+  - it: renders NONE of the %trino interpreter wiring when auth.oidc.enabled is false (byte-identity of the existing form)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: zeppelin-trino-interpreter, any: true}
+        not: true
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        documentSelector: {path: kind, value: Deployment}
+      - notExists:
+          path: spec.template.spec.containers[0].args
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-interp, mountPath: /seed, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: trino-tls, secret: {secretName: trino-internal-tls}}
+        documentSelector: {path: kind, value: Deployment}

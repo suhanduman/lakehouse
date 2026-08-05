@@ -89,6 +89,54 @@ type: Opaque
 stringData:
   client-secret: {{ .Values.zeppelin.trino.oidc.clientSecret | quote }}
 {{- end }}
+{{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
+{{- if not .Values.superset.trino.tls.enabled }}
+{{- fail "components.zeppelin + auth.oidc.enabled requires superset.trino.tls.enabled=true (the %trino interpreter connects over Trino's :8443 HTTPS listener, gated by that SAME flag — see chart/templates/06-trino-ha.yaml)" }}
+{{- end }}
+---
+# %trino read-only JDBC interpreter seed (Consumption slice c1). Spike-
+# confirmed mechanism (docs/superpowers/spikes/2026-08-04-c1-zeppelin-trino-
+# interp.md §1): a direct ConfigMap mount AT conf/interpreter.json crashes
+# Zeppelin (it rewrites that file at runtime; a read-only volume can't be
+# rewritten). Instead this ConfigMap is mounted at a SEPARATE path (/seed)
+# and copied into the writable conf/ dir by the container command override
+# below, before the real entrypoint starts. trino-jdbc driver is baked into
+# the image (images/zeppelin, Task 3) — `dependencies: []`, no runtime Maven
+# download. `default.accessToken` starts as a placeholder; the Task-5
+# sidecar PUTs the real svc-zeppelin-trino JWT via the Zeppelin REST API
+# (the JDBC interpreter connects lazily on first paragraph, so the
+# placeholder itself never reaches Trino).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeppelin-trino-interpreter
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  interpreter.json: |
+    {
+      "interpreterSettings": {
+        "trino": {
+          "id": "trino",
+          "name": "trino",
+          "group": "jdbc",
+          "properties": {
+            "default.url": {"name": "default.url", "value": "jdbc:trino://{{ include "lakehouse.svc.trino" . }}:8443/{{ .Values.zeppelin.trino.catalog }}?SSL=true&SSLTrustStorePath=/mnt/trino-tls/ca.crt", "type": "string"},
+            "default.user": {"name": "default.user", "value": "svc-zeppelin-trino", "type": "string"},
+            "default.password": {"name": "default.password", "value": "", "type": "password"},
+            "default.driver": {"name": "default.driver", "value": "io.trino.jdbc.TrinoDriver", "type": "string"},
+            "default.accessToken": {"name": "default.accessToken", "value": "PLACEHOLDER_REPLACED_BY_REFRESHER", "type": "password"}
+          },
+          "status": "READY",
+          "interpreterGroup": [
+            {"name": "sql", "class": "org.apache.zeppelin.jdbc.JDBCInterpreter", "defaultInterpreter": false,
+             "editor": {"language": "sql", "editOnDblClick": false, "completionSupport": true}}
+          ],
+          "dependencies": [],
+          "option": {"remote": true, "port": -1, "isExistingProcess": false, "setPermission": false, "owners": [], "isUserImpersonate": false}
+        }
+      }
+    }
+{{- end }}
 ---
 # Apache Shiro — ActiveDirectoryGroupRealm
 apiVersion: v1
@@ -193,6 +241,20 @@ spec:
         securityContext:
           {{- $csc | nindent 10 }}
         {{- end }}
+        {{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
+        # Seed the %trino interpreter (c1) before Zeppelin starts: copy the
+        # ConfigMap-provided seed JSON into the live (writable) conf/ dir,
+        # then exec the stock entrypoint. Mirrors the image's own
+        # ENTRYPOINT ["/usr/bin/tini","--"] + CMD ["bin/zeppelin.sh"]
+        # (WORKDIR $ZEPPELIN_HOME) — using $ZEPPELIN_CONF_DIR/$ZEPPELIN_HOME
+        # keeps this layout-agnostic across the platform's /zeppelin base
+        # and a stock /opt/zeppelin stand-in.
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            cp /seed/interpreter.json "${ZEPPELIN_CONF_DIR:-$ZEPPELIN_HOME/conf}/interpreter.json"
+            exec /usr/bin/tini -- bin/zeppelin.sh
+        {{- end }}
         ports: [{containerPort: 8080}]
         env:
         - {name: SPARK_HOME,            value: "/opt/spark"}
@@ -211,6 +273,10 @@ spec:
         - {name: zeppelin-notebooks, mountPath: /zeppelin/notebook}
         - {name: spark-conf,         mountPath: /spark-conf}
         - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
+        {{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
+        - {name: trino-interp, mountPath: /seed,          readOnly: true}
+        - {name: trino-tls,    mountPath: /mnt/trino-tls, readOnly: true}
+        {{- end }}
         resources:
           requests: {memory: {{ .Values.zeppelin.resources.requests.memory | quote }}, cpu: {{ .Values.zeppelin.resources.requests.cpu | quote }}}
           limits:   {memory: {{ .Values.zeppelin.resources.limits.memory | quote }},   cpu: {{ .Values.zeppelin.resources.limits.cpu | quote }}}
@@ -229,6 +295,12 @@ spec:
         configMap: {name: zeppelin-spark-defaults}
       - name: shiro-conf
         configMap: {name: zeppelin-shiro}
+      {{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
+      - name: trino-interp
+        configMap: {name: zeppelin-trino-interpreter}
+      - name: trino-tls
+        secret: {secretName: trino-internal-tls}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
