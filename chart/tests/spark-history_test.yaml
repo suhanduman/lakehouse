@@ -22,6 +22,8 @@ templates:
   - 14-nginx-ingest.yaml
   - 18-bucket-init.yaml
   - 21-spark-history.yaml
+  - 08-routes-tls.yaml
+  - 08b-ingress-tls.yaml
 tests:
   - it: silver-merge sparkConf gets eventLog conf when components.sparkHistory is true
     template: templates/05-spark-operator.yaml
@@ -175,3 +177,75 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: spark-history Route renders (OpenShift) when components.sparkHistory is true (Task 4)
+    template: templates/08-routes-tls.yaml
+    set:
+      platform: openshift
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: metadata.name
+      value: spark-history
+    asserts:
+      - equal:
+          path: kind
+          value: Route
+      - equal:
+          path: spec.to.name
+          value: spark-history
+      - equal:
+          path: spec.port.targetPort
+          value: http
+      - equal:
+          path: spec.tls.termination
+          value: edge
+
+  - it: spark-history Route does NOT render (OpenShift) when components.sparkHistory is false (default) (Task 4)
+    template: templates/08-routes-tls.yaml
+    set:
+      platform: openshift
+      components.sparkHistory: false
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: spark-history
+          any: true
+        not: true
+
+  - it: spark-history Ingress renders (vanilla) when components.sparkHistory is true (Task 4)
+    template: templates/08b-ingress-tls.yaml
+    set:
+      platform: vanilla
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: metadata.name
+      value: spark-history
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: spark-history
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+          value: http
+      - equal:
+          path: spec.tls[0].secretName
+          value: spark-history-tls
+
+  - it: spark-history Ingress does NOT render (vanilla) when components.sparkHistory is false (default) (Task 4)
+    template: templates/08b-ingress-tls.yaml
+    set:
+      platform: vanilla
+      components.sparkHistory: false
+    asserts:
+      - containsDocument:
+          kind: Ingress
+          apiVersion: networking.k8s.io/v1
+          name: spark-history
+          any: true
+        not: true
