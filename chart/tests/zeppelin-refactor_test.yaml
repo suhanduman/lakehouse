@@ -1,0 +1,55 @@
+# chart/tests/zeppelin-refactor_test.yaml — guard for the pure extraction of
+# the shared c1 Zeppelin instance into the reusable named template
+# `lakehouse.zeppelin.instance` (chart/templates/_zeppelin.tpl), called from
+# chart/templates/09-zeppelin.yaml via
+# `include "lakehouse.zeppelin.instance" (dict "ctx" . "name" "zeppelin" ...)`.
+# The refactor's hard requirement is BYTE-IDENTICAL output vs. the pre-
+# refactor inline template (verified separately with `helm template --show-
+# only templates/09-zeppelin.yaml | diff` against saved baselines, both
+# auth-on and auth-off) — this suite is a lighter-weight regression guard
+# that the include still produces the expected `zeppelin` Deployment, the
+# %trino interpreter ConfigMap, and the token-refresher sidecar when auth is
+# on, so a future edit to _zeppelin.tpl that silently drops one of these
+# pieces fails fast here instead of only showing up as a byte-diff much
+# later. Complements (does not replace) zeppelin-trino_test.yaml and
+# component-enabled_test.yaml, which must ALSO still pass unmodified.
+suite: zeppelin instance extraction (lakehouse.zeppelin.instance) — regression guard
+templates:
+  - 09-zeppelin.yaml
+tests:
+  - it: still renders the zeppelin Deployment with its image via the named-template include
+    set:
+      components.zeppelin: true
+    asserts:
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: zeppelin, any: true}
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: zeppelin
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '/zeppelin:'
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: still renders the %trino interpreter ConfigMap and the refresher sidecar when zeppelin+oidc+tls are all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: zeppelin-trino-interpreter, any: true}
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+        documentSelector: {path: kind, value: Deployment}
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: zeppelin-trino-refresher
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: renders nothing when components.zeppelin is false (the include stays inside the same outer if-gate)
+    set:
+      components.zeppelin: false
+    asserts:
+      - hasDocuments:
+          count: 0
