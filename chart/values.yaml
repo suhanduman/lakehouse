@@ -1201,6 +1201,14 @@ zeppelin:
     # infrequently. Must stay below the svc-zeppelin-trino token lifespan (3600).
     tokenRefreshSeconds: 3000
     catalog: "lakehouse"
+    refresher:
+      # AD service account the token-refresher sidecar uses to authenticate to
+      # Zeppelin's REST API (POST /api/login). MUST be a member of the Zeppelin
+      # admin AD group (zeppelin.ad.groups.admin) so it can PUT interpreter
+      # settings. restPassword follows the same dev-convenience/out-of-band
+      # contract as zeppelin.ad.bindPassword and zeppelin.trino.oidc.clientSecret.
+      restUsername: "svc-zeppelin-refresher"
+      restPassword: ""
 
 # Spark History Server (Consumption slice d). Gated by components.sparkHistory
 # (default false; on in medium/large). Reuses the spark-py image; reads event

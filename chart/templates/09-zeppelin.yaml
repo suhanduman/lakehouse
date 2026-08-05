@@ -80,6 +80,14 @@ stringData:
 # superset-trino-oidc-credentials above: rendered ONLY when a real secret is
 # supplied; otherwise provision this Secret's name/keys out-of-band before
 # install. Read-only %trino interpreter identity (c1).
+#
+# rest-password (Task 5): the Zeppelin-admin AD service-account password the
+# token-refresher sidecar uses for `POST /api/login` (Shiro form-login).
+# Follows the SAME dev-convenience/out-of-band contract as `client-secret`
+# above and `ad-bind-credentials` — if `zeppelin.trino.refresher.restPassword`
+# is left empty while `clientSecret` is set (so this Secret still renders),
+# the key is rendered empty and the real value must be supplied out-of-band
+# under this SAME name/key before install.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -88,6 +96,7 @@ metadata:
 type: Opaque
 stringData:
   client-secret: {{ .Values.zeppelin.trino.oidc.clientSecret | quote }}
+  rest-password: {{ .Values.zeppelin.trino.refresher.restPassword | quote }}
 {{- end }}
 {{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
 {{- if not .Values.superset.trino.tls.enabled }}
@@ -288,6 +297,121 @@ spec:
           httpGet: {path: /api/version, port: 8080}
           initialDelaySeconds: 120
           periodSeconds: 30
+      {{- if and .Values.components.zeppelin .Values.auth.oidc.enabled }}
+      # Trino JWT refresher sidecar (c1 Task 5). Keeps the %trino interpreter's
+      # `default.accessToken` fresh, mirroring the b1 Superset↔Trino sidecar
+      # (19-superset.yaml `trino-token-refresher`) but with a different delivery
+      # mechanism, per the spike (docs/superpowers/spikes/2026-08-04-c1-
+      # zeppelin-trino-interp.md §4, CONFIRMED): Zeppelin has no shared-file
+      # token slot like Superset's DB_CONNECTION_MUTATOR — the JDBC interpreter
+      # only re-reads `default.accessToken` from its in-memory settings object,
+      # so the sidecar must (1) fetch a fresh svc-zeppelin-trino JWT from
+      # Keycloak, (2) log into Zeppelin's own REST API as a Zeppelin ADMIN
+      # (shiro.ini gates /api/interpreter/** to `roles[admin]` — the
+      # ActiveDirectoryGroupRealm + `shiro.loginUrl=/api/login` above already
+      # handle this via POST /api/login form-login, the SAME mechanism real UI
+      # users use; the REST user MUST be a member of `zeppelin.ad.groups.admin`),
+      # (3) GET the current trino interpreter setting, (4) patch
+      # `properties["default.accessToken"].value`, (5) PUT the whole object
+      # back. PUT ALONE recycles the interpreter — Zeppelin tears down and
+      # rebuilds the interpreter process as part of applying new settings, so
+      # NO separate restart call is needed (spike-confirmed). This recycle
+      # interrupts any in-flight %trino paragraph on every refresh — a real,
+      # documented cost, not an artifact — which is why
+      # `zeppelin.trino.tokenRefreshSeconds` defaults deliberately long (3000s)
+      # to keep refreshes rare. The exact GET/PUT JSON envelope is
+      # UAT-confirmable per the spike, but GET→patch→PUT-the-same-object is
+      # the flow the spike verified returns 200.
+      - name: zeppelin-trino-refresher
+        image: {{ printf "%s/zeppelin:%s" .Values.global.imageRegistry .Values.versions.zeppelinImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -uo pipefail
+            BACKOFF=5
+            while true; do
+              if python3 - <<'PY'
+            import os, sys, json, urllib.request, urllib.parse, http.cookiejar
+
+            def fail(msg):
+                sys.stderr.write("WARN: %s; keeping interpreter as-is\n" % msg)
+                sys.exit(1)
+
+            # 1) fetch a fresh svc-zeppelin-trino JWT (client_credentials)
+            issuer = os.environ["OIDC_ISSUER"].rstrip("/")
+            token_req = urllib.parse.urlencode({
+                "grant_type": "client_credentials",
+                "client_id": "svc-zeppelin-trino",
+                "client_secret": os.environ["SVC_CLIENT_SECRET"],
+            }).encode()
+            try:
+                r = urllib.request.urlopen(issuer + "/protocol/openid-connect/token", data=token_req, timeout=10)
+                token = json.load(r)["access_token"]
+            except Exception as e:
+                fail("token fetch failed: %s" % type(e).__name__)
+
+            # 2) log into Zeppelin's REST API as the admin AD service account
+            #    (Shiro form-login: POST /api/login, form userName/password)
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            login_req = urllib.parse.urlencode({
+                "userName": os.environ["ZEPPELIN_REST_USER"],
+                "password": os.environ["ZEPPELIN_REST_PASSWORD"],
+            }).encode()
+            try:
+                resp = opener.open("http://localhost:8080/api/login", data=login_req, timeout=10)
+                if resp.status != 200:
+                    fail("zeppelin login returned HTTP %s" % resp.status)
+            except Exception as e:
+                fail("zeppelin login failed: %s" % type(e).__name__)
+
+            # 3) GET the current trino interpreter setting
+            try:
+                resp = opener.open("http://localhost:8080/api/interpreter/setting/trino", timeout=10)
+                setting = json.load(resp)["body"]
+            except Exception as e:
+                fail("GET interpreter setting failed: %s" % type(e).__name__)
+
+            # 4) patch default.accessToken, PUT the whole object back — PUT
+            #    alone recycles the interpreter, no separate restart call.
+            try:
+                setting["properties"]["default.accessToken"]["value"] = token
+                put_req = urllib.request.Request(
+                    "http://localhost:8080/api/interpreter/setting/trino",
+                    data=json.dumps(setting).encode(),
+                    method="PUT",
+                    headers={"Content-Type": "application/json"},
+                )
+                resp = opener.open(put_req, timeout=15)
+                if resp.status != 200:
+                    fail("PUT interpreter setting returned HTTP %s" % resp.status)
+            except Exception as e:
+                fail("PUT interpreter setting failed: %s" % type(e).__name__)
+
+            sys.exit(0)
+            PY
+              then
+                BACKOFF=5
+                sleep {{ .Values.zeppelin.trino.tokenRefreshSeconds }}
+              else
+                echo "WARN: trino token refresh cycle failed; retry in ${BACKOFF}s" >&2
+                sleep "$BACKOFF"; BACKOFF=$(( BACKOFF*2 > 60 ? 60 : BACKOFF*2 ))
+              fi
+            done
+        env:
+        - {name: OIDC_ISSUER,           valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: SVC_CLIENT_SECRET,     valueFrom: {secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: client-secret}}}
+        - {name: ZEPPELIN_REST_USER,    value: {{ .Values.zeppelin.trino.refresher.restUsername | quote }}}
+        - {name: ZEPPELIN_REST_PASSWORD, valueFrom: {secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: rest-password}}}
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:   {cpu: "200m", memory: "128Mi"}
+      {{- end }}
       volumes:
       - name: zeppelin-notebooks
         persistentVolumeClaim: {claimName: zeppelin-notebooks-pvc}
