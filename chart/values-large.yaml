@@ -14,6 +14,13 @@
 components:
   superset: true
   dbt: true
+  sparkHistory: true
+
+# Consumption slice d (Spark History Server): non-empty S3 endpoint keeps the
+# jobs' eventLog conf valid AND is what the History Server itself reads from.
+# MUST match the s3-credentials Secret's endpoint; override per environment.
+sparkHistory:
+  s3Endpoint: "http://minio.CHANGE-ME.svc:9000"
 
 # b2 (dbt-trino Gold): with `components.dbt: true` above, the chart default
 # `auth.oidc.enabled: true` (Keycloak present) and `superset.trino.tls.
