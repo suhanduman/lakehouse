@@ -342,6 +342,45 @@ pod'u `CreateContainerConfigError`'da kalır.
 
 ---
 
+## Spark History Server (Consumption slice d)
+
+`components.sparkHistory: true` iken (medium/large tier'larda açık —
+`values-medium.yaml`/`values-large.yaml`; dev tier'da kapalı) chart, batch ve
+streaming Spark job'ları için gerçek bir **Spark debug UI** ekler: stage'ler,
+SQL planları, executor metrikleri ve job zaman çizelgesi görünür hale gelir
+(`chart/templates/21-spark-history.yaml` — Deployment + Service + PDB,
+`spark-py` image'ı yeniden kullanılır).
+
+- **Etkinleştirme:** `components.sparkHistory: true` + `sparkHistory.s3Endpoint`
+  ayarı — bu, kullanılan S3 endpoint'iyle (MinIO/non-AWS) EŞLEŞMEK
+  ZORUNDADIR; `s3-credentials` Secret'ının `endpoint`'iyle aynı değer
+  olmalıdır (hadoop-aws bunu explicit ister). Dev tier'da boş bırakılır
+  (sparkHistory zaten kapalı orada).
+- **`spark-events` bucket + rolling event log'lar:** History Server'ın
+  okuduğu event log dizini `s3a://spark-events/`
+  (`sparkHistory.eventLogDir`) — bucket, `bucket-init` Job'ı tarafından
+  diğer bucket'larla birlikte otomatik oluşturulur
+  (`chart/templates/18-bucket-init.yaml`). Event log'lar
+  `spark.eventLog.rolling.enabled: true` +
+  `spark.eventLog.rolling.maxFileSize: 128m` ile ROLLING yazılır — sürekli
+  çalışan streaming job için tek-dosya event log'un sınırsız büyümesi
+  yerine, güvenli/parçalı bir yazım modeli.
+- **Job'lar nasıl opt-in olur — paylaşılan `baseConf`:** eventLog konfigürasyonu
+  chart'ın PAYLAŞILAN `lakehouse.spark.baseConf` helper'ına (`_helpers.tpl`)
+  eklenmiştir, `components.sparkHistory` ile gated — yani hem mevcut batch
+  hem de streaming job'lar (05-spark-operator.yaml) OTOMATİK olarak eventLog
+  yazmaya başlar, ayrı bir per-job konfigürasyon gerekmez. `components.sparkHistory:
+  false` iken bu bloklar hiç render edilmez (`05-spark-operator.yaml`'ın
+  render'ı byte-for-byte değişmez). Gelecekteki/müşteri job'ları da AYNI
+  `baseConf` helper'ını kullandığı sürece hiçbir ek iş yapmadan History
+  Server'a event log göndermeye başlar.
+- **UI:** `spark-history.<global.domain>` adresinden erişilir (platforma göre
+  Route veya Ingress — diğer bileşenlerle aynı `lakehouse.routeHost` deseni).
+
+**Bilinen sınırlama:** Spark History is helm-unittest + docker-spike verified (spark-py eventLog->s3a->HistoryServer loop against MinIO); the full in-cluster loop (real jobs write event logs, the server lists them, UI renders stages/SQL) is an OpenShift UAT deliverable. AUTH: the History UI is EDGE-ONLY (TLS Route, no OIDC) — it exposes job internals (SQL/config) to anyone who can reach the host; front it with an oauth2-proxy (Keycloak) before exposing it beyond a trusted network — tracked hardening follow-up. sparkHistory.s3Endpoint must match the s3-credentials endpoint; the spark-py image must be built+pushed (arm64).
+
+---
+
 ## İngest — bilinen tradeoff'lar ve gerekçeler
 
 Aşağıdaki üç nokta, mevcut ingest mimarisinin bilinçli tradeoff'ları ve
