@@ -29,6 +29,7 @@ templates:
   - 09-zeppelin.yaml
   - 22-nessie-machine-auth.yaml
   - 04-nessie-ha.yaml
+  - 06-trino-ha.yaml
 tests:
   # --- Task 3: Nessie server authorization + CEL rules --------------------
   # `04-nessie-ha.yaml` documentIndex:1 is the Deployment (same convention as
@@ -475,3 +476,162 @@ tests:
           path: spec.template.spec.volumes
           content:
             name: spark-conf-rendered
+
+  # --- Task 4: Trino >= 465 upgrade + Nessie OAuth2 client-credentials
+  # (svc-trino-nessie) -------------------------------------------------------
+  # Trino 439's iceberg REST-catalog OAuth2 has no auto-refreshing
+  # client-credentials mode (the enabling property
+  # `iceberg.rest-catalog.oauth2.server-uri` is Trino 465+ only — see
+  # docs/superpowers/spikes/2026-08-06-nessie-machine-auth-config.md §1 and
+  # versions.trinoImage's comment in values.yaml). Both catalogs
+  # (lakehouse/rawlake) share the SAME `svc-trino-nessie` identity + secret;
+  # both the coordinator AND worker Deployments need OIDC_ISSUER (server-uri)
+  # + NESSIE_OAUTH_SECRET (credential) since both mount the catalog
+  # properties files and talk to Nessie directly.
+
+  - it: versions.trinoImage is pinned to a Trino >= 465 tag (the Nessie OAuth2 client-credentials auto-refresh floor)
+    templates:
+      - 06-trino-ha.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: trinodb/trino:476
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: trinodb/trino:476
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+
+  - it: auth on renders the Nessie OAuth2 client-credentials block on BOTH lakehouse + rawlake catalogs, secret never a literal
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.security=OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.credential=svc-trino-nessie:\$\{ENV:NESSIE_OAUTH_SECRET\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.server-uri=\$\{ENV:OIDC_ISSUER\}/protocol/openid-connect/token'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.security=OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.credential=svc-trino-nessie:\$\{ENV:NESSIE_OAUTH_SECRET\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.server-uri=\$\{ENV:OIDC_ISSUER\}/protocol/openid-connect/token'
+        documentSelector: {path: metadata.name, value: trino-config}
+      # The exact-match regexes above already prove the credential line's
+      # value is the literal string `${ENV:NESSIE_OAUTH_SECRET}` and nothing
+      # else (Go's RE2 engine — used by helm-unittest — has no lookahead, so
+      # a leak-check needs the SENTINEL run below rather than a negative
+      # regex here): a real resolved secret value would fail these anchored
+      # patterns outright.
+
+  - it: auth on wires NESSIE_OAUTH_SECRET (secretKeyRef nessie-machine-auth-credentials/trino) onto the COORDINATOR
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: trino
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+
+  - it: auth on wires OIDC_ISSUER + NESSIE_OAUTH_SECRET (secretKeyRef nessie-machine-auth-credentials/trino) onto the WORKER too (workers talk to Nessie directly)
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef:
+                name: oidc-credentials
+                key: issuer-url
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: trino
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+
+  - it: auth off leaves lakehouse + rawlake catalogs unchanged (no OAuth2 block, http:// as today — byte-identity control)
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'NESSIE_OAUTH_SECRET'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'NESSIE_OAUTH_SECRET'
+        documentSelector: {path: metadata.name, value: trino-config}
+
+  - it: auth off wires NO NESSIE_OAUTH_SECRET / OIDC_ISSUER on either coordinator or worker
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
