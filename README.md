@@ -480,8 +480,9 @@ AMA departmana özel `%spark`/`%pyspark` YAZMA erişimiyle
 - **AKTİF v1 bariyeri — departmana-özel scoped S3 kimlik bilgisi:**
   gerçek veri KORUMASI bugün Nessie katmanında DEĞİL, S3/MinIO IAM
   katmanındadır. Her departmanın `s3-sandbox-<name>` Secret'ı yalnızca
-  KENDİ `sandbox-<name>` bucket'ında RW, prod `depo`/`ham-<dept>`
-  bucket'larında ise yalnızca RO yetkisi taşır (`18b-sandbox-minio-
+  KENDİ `sandbox-<name>` bucket'ında RW, prod `depo`/`ham-veri`
+  bucket'larında (bunlar sabit, PAYLAŞILAN bucket'lardır — departmana-özel
+  DEĞİL) ise yalnızca RO yetkisi taşır (`18b-sandbox-minio-
   policy.yaml`, dev-cluster MinIO Job'ı; gerçek kurulumda operatörün
   kendi S3 IAM'i üzerinden AYNI en-az-yetki policy'siyle out-of-band
   sağlanması gerekir). Yani bir departman Spark job'u prod bucket'ına
@@ -545,6 +546,13 @@ AMA departmana özel `%spark`/`%pyspark` YAZMA erişimiyle
   sağlayın; `auth.oidc.enabled: true`'yu (guard'ın gerektirdiği gibi) ve
   `superset.trino.tls.enabled: true`'yu açık tutun (medium/large'da zaten
   varsayılan).
+- **Köşe-durum — `components.zeppelin: false` + `sandbox.enabled: true`:**
+  bu alışılmadık kombinasyonda (paylaşılan Zeppelin'in c1 `%trino`
+  parçaları kapalıyken sandbox açık), per-departman sandbox instance'ları
+  `%trino` salt-okunur interpreter'ı OLMADAN render edilir (yalnızca c2'nin
+  asıl amacı olan `%spark`/`%pyspark` YAZMA yolunu korurlar) — varsayılan
+  `components.zeppelin: true` ise sandbox'lara `%trino` okuma erişimini de
+  verir.
 
 **Bilinen sınırlama:** c2, helm-unittest ile doğrulanmıştır (gating/
 izolasyon/coherence guard'ın tamamı — 40 test case, `chart/tests/

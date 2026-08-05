@@ -270,6 +270,17 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'arn:aws:s3:::ham-veri'
+      # Regression-insurance negative assertion: the prod depo/ham-veri
+      # statement's Action array (the one immediately followed by a
+      # Resource list starting with the depo ARN — i.e. THIS SAME JSON
+      # statement, not the sandbox-veri RW statement above, which is
+      # followed by the sandbox-veri ARN instead) must never carry
+      # s3:PutObject, s3:DeleteObject, or a wildcard "*" action. Today the
+      # rendered RO statement is `["s3:GetObject", "s3:ListBucket"]` only —
+      # this pins that against a future accidental widening of prod access.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"Action": \[[^\]]*(?:PutObject|DeleteObject|"\*")[^\]]*\],\s*"Resource": \[\s*"arn:aws:s3:::depo"'
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'mc admin policy create s3 sandbox-veri-policy'
