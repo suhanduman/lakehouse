@@ -151,8 +151,10 @@ spec:
         # (both the commit-to-main OR-chain and all per-key write rules) —
         # default-deny leaves it read-only, confirmed live in the spike.
         {{- $writerRoles := list "service-account-svc-trino-nessie" "service-account-svc-spark-nessie" "service-account-svc-connect-nessie" }}
+        {{- if .Values.sandbox.enabled }}
         {{- range .Values.sandbox.departments }}
         {{- $writerRoles = append $writerRoles (printf "service-account-svc-sandbox-%s" .name) }}
+        {{- end }}
         {{- end }}
         {{- $roleExpr := "" }}
         {{- range $i, $r := $writerRoles }}
@@ -173,9 +175,21 @@ spec:
           value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-spark-nessie'"
         - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
           value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie' && path.startsWith('rawlake')"
+        # Sandbox per-dept write rules — gated on BOTH `sandbox.enabled` AND
+        # non-empty `sandbox.departments`, matching the chart's two-gate
+        # sandbox contract everywhere else (09c-zeppelin-sandbox.yaml,
+        # 08-routes-tls.yaml, 18-bucket-init.yaml, 18b-sandbox-minio-
+        # policy.yaml). Without this gate, setting `sandbox.enabled=false`
+        # while `departments` stays populated would still grant
+        # `svc-sandbox-<dept>` write access here even though every other
+        # sandbox artifact (Route, Zeppelin instance, MinIO policy) is torn
+        # down — a CEL rule outliving its own sandbox is a silent privilege
+        # leak, not a correctness fix like the rest of this file's gating.
+        {{- if .Values.sandbox.enabled }}
         {{- range .Values.sandbox.departments }}
         - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_{{ .name | upper | replace "-" "_" }}_WRITE
           value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-%s' && path.startsWith('sandbox_%s')" .name .name | quote }}
+        {{- end }}
         {{- end }}
 {{- else }}
         - {name: QUARKUS_OIDC_ENABLED, value: "false"}

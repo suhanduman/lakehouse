@@ -118,6 +118,29 @@ tests:
             name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
         documentIndex: 1
 
+  - it: auth.oidc.enabled=true + sandbox.enabled=false with a populated sandbox department renders NO svc-sandbox-* CEL rule anywhere (routed fix — Task-3 review; the sandbox CEL rules must gate on sandbox.enabled too, matching the chart's two-gate sandbox contract used by every other sandbox artifact)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: false
+      sandbox.departments[0].name: veri
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'sandbox'
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
+        documentIndex: 1
+
   - it: auth.oidc.enabled=true with NO sandbox departments still covers trino/spark/connect (commit-to-main + per-key) with zeppelin absent
     templates:
       - 04-nessie-ha.yaml
