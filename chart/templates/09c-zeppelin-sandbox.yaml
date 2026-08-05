@@ -9,6 +9,29 @@
 # true AND `.Values.sandbox.departments` is non-empty (dev/default = neither,
 # so nothing renders) — see chart/values.yaml's `sandbox:` block comment.
 #
+# --- Coherence guard (Task 7, review-routed from Task 4): every sandbox
+# Zeppelin instance's Spark interpreter carries an OAuth2 block whose
+# `spark-conf-render` initContainer (chart/templates/_zeppelin.tpl,
+# `$sandbox` arm) unconditionally reads the OIDC issuer-url from
+# `.Values.oidc.secretName` (the `oidc-credentials` Secret) — but per that
+# Secret's own comment in chart/values.yaml, it is only guaranteed to exist
+# when `auth.oidc.enabled` is true. `sandbox.enabled` is gated completely
+# independently of `auth.oidc.enabled`, so without this guard a
+# `sandbox.enabled=true` + `auth.oidc.enabled=false` install renders a
+# sandbox Zeppelin that crash-loops at runtime on a Secret the chart
+# otherwise says isn't needed. Fail loudly at render time instead — same
+# fail-loud coherence-guard pattern as `superset.trino.authMode=jwt`
+# (chart/templates/19-superset.yaml) and `components.dbt`
+# (chart/templates/20-dbt.yaml). Placed here, OUTSIDE the per-department
+# `range` below (unlike those two, this file has no single top-level `if`
+# wrapping its whole body), so it always evaluates regardless of how many
+# departments are configured — as long as sandbox is meaningfully enabled at
+# all (both `sandbox.enabled` AND a non-empty `sandbox.departments`, the same
+# two-gate contract as everything else in this file).
+{{- if and .Values.sandbox.enabled (gt (len .Values.sandbox.departments) 0) (not .Values.auth.oidc.enabled) }}
+{{- fail "sandbox requires auth.oidc.enabled — the sandbox Zeppelin authenticates to Nessie via OAuth2" }}
+{{- end }}
+#
 # svc-sandbox-<name> OIDC credentials Secret — single source with the
 # Keycloak `svc-sandbox-<name>` service-account client
 # (chart/templates/10-keycloak.yaml `clients[].secret`, same

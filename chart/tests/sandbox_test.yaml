@@ -1131,3 +1131,66 @@ tests:
         documentSelector:
           path: metadata.name
           value: zeppelin-sandbox-finans
+
+  # --- Task 7 (review-routed from Task 4): coherence guard — sandbox
+  # requires auth.oidc.enabled. The sandbox Zeppelin's Spark interpreter
+  # initContainer (`spark-conf-render`, chart/templates/_zeppelin.tpl)
+  # unconditionally reads the `oidc-credentials` Secret (`.Values.oidc.
+  # secretName`) for the OIDC issuer-url, but that Secret is only
+  # guaranteed to exist when `auth.oidc.enabled` is true (chart/values.yaml
+  # `oidc:` block comment) — `sandbox.enabled` alone does not require it.
+  # Without this guard, `sandbox.enabled=true` + `auth.oidc.enabled=false`
+  # would render a sandbox Zeppelin that crash-loops at runtime on a
+  # Secret the chart otherwise says isn't needed. -----------------------
+
+  - it: sandbox.enabled + non-empty departments + auth.oidc.enabled=false FAILS the render loudly (coherence guard)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      auth.oidc.enabled: false
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - failedTemplate:
+          errorMessage: "sandbox requires auth.oidc.enabled — the sandbox Zeppelin authenticates to Nessie via OAuth2"
+
+  - it: sandbox.enabled + non-empty departments + auth.oidc.enabled=true (chart default) renders cleanly (guard does NOT fire)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=veri-grp"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: zeppelin-sandbox-veri
+          any: true
+
+  - it: sandbox.enabled=false + auth.oidc.enabled=false does NOT trigger the guard (sandbox not meaningfully enabled — nothing to guard)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: false
+      auth.oidc.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sandbox.enabled=true but departments empty + auth.oidc.enabled=false does NOT trigger the guard (both gates required before the guard is even relevant)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      auth.oidc.enabled: false
+      sandbox.departments: []
+    asserts:
+      - hasDocuments:
+          count: 0
