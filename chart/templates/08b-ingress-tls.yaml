@@ -171,6 +171,35 @@ spec:
             port:
               name: http
 {{- end }}
+{{- if .Values.components.sparkHistory }}
+---
+# Spark History Server (Consumption slice d) — bkz. 08-routes-tls.yaml Route
+# eşleniği; backing `spark-history` Service bu chart'ta üretiliyor (Task 3).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: spark-history
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+  - hosts:
+    - {{ include "lakehouse.routeHost" (dict "name" .Values.sparkHistory.routeHost "context" .) }}
+    secretName: spark-history-tls
+  rules:
+  - host: {{ include "lakehouse.routeHost" (dict "name" .Values.sparkHistory.routeHost "context" .) }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: spark-history
+            port:
+              name: http
+{{- end }}
 {{- if .Values.components.jupyter }}
 ---
 # JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu pakette YOK

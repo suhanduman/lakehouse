@@ -1,0 +1,251 @@
+# chart/tests/spark-history_test.yaml — helm-unittest suite for Consumption
+# slice d (Spark History Server). Covers the `lakehouse.spark.baseConf`
+# helper's gated eventLog block (chart/templates/_helpers.tpl), consumed by
+# BOTH ScheduledSparkApplications in chart/templates/05-spark-operator.yaml
+# AND the long-running nginx-streaming SparkApplication in
+# chart/templates/14-nginx-ingest.yaml, plus the `spark-events` bucket entry
+# in chart/templates/18-bucket-init.yaml. `components.sparkHistory` defaults
+# to false — these assertions confirm the gate is fully additive (nothing
+# renders when off; all three Spark-job consumers + the bucket list pick up
+# the new conf/bucket when on).
+#
+# Fix round 1: nginx-streaming is `restartPolicy.type: Always` (indefinite
+# lifetime) — without rolling event logs it would write ONE ever-growing
+# event log file for the life of the stream (S3 bloat + a giant
+# in-progress file the History Server strains to replay). `spark.eventLog.
+# rolling.enabled`/`rolling.maxFileSize` are added to the SAME gated block
+# so the streaming job's log is safely capped (and the batch jobs' logs are
+# capped too, as a bonus).
+suite: spark history (d)
+templates:
+  - 05-spark-operator.yaml
+  - 14-nginx-ingest.yaml
+  - 18-bucket-init.yaml
+  - 21-spark-history.yaml
+  - 08-routes-tls.yaml
+  - 08b-ingress-tls.yaml
+tests:
+  - it: silver-merge sparkConf gets eventLog conf when components.sparkHistory is true
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.dir"]'
+          value: "s3a://spark-events/"
+      - equal:
+          path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
+          value: "http://minio.test.svc:9000"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+          value: "128m"
+
+  - it: iceberg-maintenance sparkConf ALSO gets eventLog conf when components.sparkHistory is true (shared baseConf helper)
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: iceberg-maintenance
+    asserts:
+      - equal:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+
+  - it: no eventLog conf on either job when components.sparkHistory is false (default)
+    template: templates/05-spark-operator.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: metadata.name
+      value: silver-merge
+    asserts:
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.enabled"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.dir"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.hadoop.fs.s3a.endpoint"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.enabled"]'
+      - notExists:
+          path: 'spec.template.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+
+  - it: nginx-streaming (long-running, restartPolicy.type=Always) sparkConf gets ROLLING eventLog conf when components.sparkHistory is true
+    template: templates/14-nginx-ingest.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://minio.test.svc:9000"
+    documentSelector:
+      path: metadata.name
+      value: nginx-streaming
+    asserts:
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.rolling.enabled"]'
+          value: "true"
+      - equal:
+          path: 'spec.sparkConf["spark.eventLog.rolling.maxFileSize"]'
+          value: "128m"
+
+  - it: nginx-streaming sparkConf has NO eventLog/rolling conf when components.sparkHistory is false (default)
+    template: templates/14-nginx-ingest.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: metadata.name
+      value: nginx-streaming
+    asserts:
+      - notExists:
+          path: 'spec.sparkConf["spark.eventLog.enabled"]'
+      - notExists:
+          path: 'spec.sparkConf["spark.eventLog.rolling.enabled"]'
+
+  - it: bucket-init includes spark-events when components.sparkHistory is true
+    template: templates/18-bucket-init.yaml
+    set:
+      components.sparkHistory: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/spark-events"
+
+  - it: bucket-init does NOT include spark-events when components.sparkHistory is false (default)
+    template: templates/18-bucket-init.yaml
+    set:
+      components.sparkHistory: false
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "s3/spark-events"
+
+  - it: spark-history Deployment + Service render when components.sparkHistory is true (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: spark-history
+
+  - it: spark-history Service has http:18080 when components.sparkHistory is true (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: spark-history
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 18080
+
+  - it: spark-history renders NOTHING (0 docs) when components.sparkHistory is false (default) (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: spark-history Route renders (OpenShift) when components.sparkHistory is true (Task 4)
+    template: templates/08-routes-tls.yaml
+    set:
+      platform: openshift
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: metadata.name
+      value: spark-history
+    asserts:
+      - equal:
+          path: kind
+          value: Route
+      - equal:
+          path: spec.to.name
+          value: spark-history
+      - equal:
+          path: spec.port.targetPort
+          value: http
+      - equal:
+          path: spec.tls.termination
+          value: edge
+
+  - it: spark-history Route does NOT render (OpenShift) when components.sparkHistory is false (default) (Task 4)
+    template: templates/08-routes-tls.yaml
+    set:
+      platform: openshift
+      components.sparkHistory: false
+    asserts:
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: spark-history
+          any: true
+        not: true
+
+  - it: spark-history Ingress renders (vanilla) when components.sparkHistory is true (Task 4)
+    template: templates/08b-ingress-tls.yaml
+    set:
+      platform: vanilla
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: metadata.name
+      value: spark-history
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: spark-history
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+          value: http
+      - equal:
+          path: spec.tls[0].secretName
+          value: spark-history-tls
+
+  - it: spark-history Ingress does NOT render (vanilla) when components.sparkHistory is false (default) (Task 4)
+    template: templates/08b-ingress-tls.yaml
+    set:
+      platform: vanilla
+      components.sparkHistory: false
+    asserts:
+      - containsDocument:
+          kind: Ingress
+          apiVersion: networking.k8s.io/v1
+          name: spark-history
+          any: true
+        not: true

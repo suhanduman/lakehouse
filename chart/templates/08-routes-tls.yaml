@@ -139,6 +139,30 @@ spec:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
 {{- end }}
+{{- if .Values.components.sparkHistory }}
+---
+# Spark History Server (Consumption slice d, chart/templates/21-spark-history.
+# yaml). `components.sparkHistory` gate'i — backing `spark-history` Service
+# bu chart'ta üretiliyor (Task 3), bu yüzden diğer follow-up bileşenlerin
+# aksine dangling bir Route DEĞİL, sadece flag kapalıyken (varsayılan) skip.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: spark-history
+  namespace: {{ include "lakehouse.namespace" . }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.routes.certIssuer | quote }}
+spec:
+  host: {{ include "lakehouse.routeHost" (dict "name" .Values.sparkHistory.routeHost "context" .) }}
+  to:
+    kind: Service
+    name: spark-history
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
 {{- if .Values.components.jupyter }}
 ---
 # JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu paketta
