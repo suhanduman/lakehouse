@@ -21,6 +21,7 @@ templates:
   - 05-spark-operator.yaml
   - 14-nginx-ingest.yaml
   - 18-bucket-init.yaml
+  - 21-spark-history.yaml
 tests:
   - it: silver-merge sparkConf gets eventLog conf when components.sparkHistory is true
     template: templates/05-spark-operator.yaml
@@ -134,3 +135,43 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "s3/spark-events"
+
+  - it: spark-history Deployment + Service render when components.sparkHistory is true (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: spark-history
+
+  - it: spark-history Service has http:18080 when components.sparkHistory is true (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: true
+      sparkHistory.s3Endpoint: "http://x:9000"
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: spark-history
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 18080
+
+  - it: spark-history renders NOTHING (0 docs) when components.sparkHistory is false (default) (Task 3)
+    template: templates/21-spark-history.yaml
+    set:
+      components.sparkHistory: false
+    asserts:
+      - hasDocuments:
+          count: 0
