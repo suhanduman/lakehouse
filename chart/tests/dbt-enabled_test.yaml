@@ -1,0 +1,12 @@
+suite: dbt component (b2)
+templates:
+  - 20-dbt.yaml
+tests:
+  - it: renders nothing when components.dbt is false
+    set: {components.dbt: false}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: renders the dbt-trino-oidc-credentials Secret when enabled + clientSecret supplied
+    set: {components.dbt: true, dbt.oidc.clientSecret: "dev-svc", auth.oidc.enabled: true, superset.trino.tls.enabled: true}
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: dbt-trino-oidc-credentials, any: true}

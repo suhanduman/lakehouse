@@ -1,0 +1,19 @@
+# dbt-trino Certified Gold (b2). All gated by components.dbt.
+{{- if .Values.components.dbt }}
+{{- if .Values.dbt.oidc.clientSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: dbt-trino-oidc-credentials, namespace: {{ include "lakehouse.namespace" . }}}
+type: Opaque
+stringData: {client-secret: {{ .Values.dbt.oidc.clientSecret | quote }}}
+{{- end }}
+{{- if .Values.dbt.repo.deployKey }}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: dbt-repo-deploy-key, namespace: {{ include "lakehouse.namespace" . }}}
+type: Opaque
+stringData: {ssh-privatekey: {{ .Values.dbt.repo.deployKey | quote }}}
+{{- end }}
+{{- end }}
