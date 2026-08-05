@@ -126,7 +126,7 @@ tests:
           path: stringData.client-secret
           value: "devz"
 
-  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled (the sa-sandbox-veri ServiceAccount still does)
+  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled (the sa-sandbox-veri ServiceAccount + the sandbox Zeppelin instance still do)
     templates:
       - 09c-zeppelin-sandbox.yaml
     set:
@@ -136,12 +136,31 @@ tests:
           adGroup: "CN=x"
           oidcClientSecret: ""
     asserts:
+      # The dev-convenience Secret specifically is gated on oidcClientSecret
+      # (out-of-band provisioning contract); everything else the sandbox
+      # instance renders (SA + the full `lakehouse.zeppelin.instance`: PDB,
+      # 3x ConfigMap, PVC, Service, Deployment — 8 documents total) is
+      # NOT — those reference the Secret by name regardless of who
+      # provisioned it. `skipEmptyTemplates` lets the Secret-kind selector
+      # legitimately match zero documents instead of erroring.
       - hasDocuments:
-          count: 1
+          count: 8
+      - hasDocuments:
+          count: 0
+          filterAware: true
+        documentSelector:
+          path: kind
+          value: Secret
+          skipEmptyTemplates: true
       - containsDocument:
           kind: ServiceAccount
           apiVersion: v1
           name: sa-sandbox-veri
+          any: true
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: zeppelin-sandbox-veri
           any: true
 
   - it: sandbox-<dept>-oidc-credentials Secret does NOT render when sandbox.enabled is false, even if oidcClientSecret is supplied
@@ -295,3 +314,134 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # --- Task 4: sandbox Spark interpreter config — sandbox_<dept> catalog +
+  # Nessie OAuth2 (all 3 catalogs) + envsubst/sed secret-injection ---------
+
+  - it: sandbox instance spark-defaults ConfigMap — sandbox_veri write catalog (warehouse s3a://sandbox-veri/) + OAuth2 block (literal placeholders) on ALL THREE catalogs, no resolved secret literal
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-sandbox-veri-spark-defaults
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri-spark-defaults
+      # sandbox_veri write catalog
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri=org\.apache\.iceberg\.spark\.SparkCatalog'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.warehouse=s3a://sandbox-veri/'
+      # OAuth2 block on lakehouse (prod read)
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-sandbox-veri'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # OAuth2 block on rawlake (prod read)
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-id=svc-sandbox-veri'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # OAuth2 block on sandbox_veri (write)
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.client-id=svc-sandbox-veri'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # the client-secret value supplied via values (`devz`, dev-convenience
+      # path) must NEVER appear resolved in this ConfigMap — only the
+      # literal `${OAUTH_CLIENT_SECRET}` placeholder above.
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'client-secret=devz'
+
+  - it: sandbox instance Deployment — tmpfs spark-conf-rendered emptyDir{medium:Memory} + sed-based placeholder-resolution initContainer (envsubst absent from the Zeppelin image) with OAUTH_CLIENT_SECRET via secretKeyRef, SPARK_CONF_DIR pointed at the rendered dir
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: devz
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin-sandbox-veri
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: spark-conf-render
+      # envsubst is NOT shipped in the Zeppelin image (verified against
+      # apache/zeppelin:0.11.2) — a POSIX `sed` substitution is used instead,
+      # no new package added to the image.
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: 'sed '
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: 'envsubst'
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: sandbox-veri-oidc-credentials
+                key: client-secret
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: spark-conf-rendered
+            mountPath: /spark-conf-rendered
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: spark-conf-rendered
+            mountPath: /spark-conf-rendered
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered

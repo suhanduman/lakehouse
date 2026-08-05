@@ -36,10 +36,10 @@ stringData:
 {{- end }}
 
 # Per-dept `sa-sandbox-<name>` ServiceAccount — the K8s identity the
-# dept's sandbox Zeppelin Pod (a later task in this slice) runs as. One per
-# department, independent of whether `oidcClientSecret` is supplied (the SA
-# itself carries no secret material), gated only by the file-wide
-# `sandbox.enabled` + non-empty `sandbox.departments` contract above.
+# dept's sandbox Zeppelin Pod runs as. One per department, independent of
+# whether `oidcClientSecret` is supplied (the SA itself carries no secret
+# material), gated only by the file-wide `sandbox.enabled` + non-empty
+# `sandbox.departments` contract above.
 {{- range .Values.sandbox.departments }}
 {{- if $.Values.sandbox.enabled }}
 ---
@@ -50,5 +50,31 @@ metadata:
   namespace: {{ include "lakehouse.namespace" $ }}
   labels:
     {{- include "lakehouse.labels" $ | nindent 4 }}
+{{- end }}
+{{- end }}
+
+# Per-dept sandbox Zeppelin instance (Consumption slice c2, Task 4) — reuses
+# `lakehouse.zeppelin.instance` (chart/templates/_zeppelin.tpl) with
+# `sandbox: true`, same as the shared c1 instance (09-zeppelin.yaml) reuses
+# it with `sandbox: false`. Rendered unconditionally per dept (gated only on
+# the file-wide `sandbox.enabled` contract, like the ServiceAccount above,
+# NOT on `oidcClientSecret`) — the dev-convenience-inline-else-out-of-band
+# contract only governs whether THIS chart also renders the
+# `sandbox-<name>-oidc-credentials` Secret inline; the Pod always references
+# that Secret's name/keys via `secretKeyRef`, same pattern as
+# `ad-bind-credentials`/`s3-credentials` elsewhere in this chart.
+{{- range .Values.sandbox.departments }}
+{{- if $.Values.sandbox.enabled }}
+---
+{{ include "lakehouse.zeppelin.instance" (dict
+     "ctx" $
+     "name" (printf "zeppelin-sandbox-%s" .name)
+     "s3SecretName" .s3SecretName
+     "sandbox" true
+     "sandboxCatalog" (printf "sandbox_%s" .name)
+     "oauth2ClientId" (printf "svc-sandbox-%s" .name)
+     "oidcSecretName" (printf "sandbox-%s-oidc-credentials" .name)
+     "saName" (printf "sa-sandbox-%s" .name)
+     "adGroup" .adGroup) }}
 {{- end }}
 {{- end }}

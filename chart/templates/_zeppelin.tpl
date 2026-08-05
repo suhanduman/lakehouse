@@ -218,12 +218,40 @@ data:
     spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.lakehouse.warehouse={{ $ctx.Values.nessie.catalog.warehouse.location }}
     spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+{{- if $sandbox }}
+    spark.sql.catalog.lakehouse.authentication.type=OAUTH2
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-id={{ .oauth2ClientId }}
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.lakehouse.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
+{{- end }}
 
     spark.sql.catalog.rawlake=org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.rawlake.catalog-impl=org.apache.iceberg.rest.RESTCatalog
     spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.rawlake.warehouse=rawdata
     spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+{{- if $sandbox }}
+    spark.sql.catalog.rawlake.authentication.type=OAUTH2
+    spark.sql.catalog.rawlake.authentication.oauth2.client-id={{ .oauth2ClientId }}
+    spark.sql.catalog.rawlake.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.rawlake.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
+
+    # sandbox_<dept> write catalog (c2) — same Nessie REST endpoint, dept-
+    # private warehouse prefix (bucket provisioned by 18b-sandbox-minio-
+    # policy.yaml / operator out-of-band). OAuth2 wiring is forward-compat
+    # (token minted+sent; Nessie authn stays OFF platform-wide in c2 — see
+    # plan Global Constraints) — inert until a later Nessie-machine-auth
+    # slice turns Nessie-side validation on.
+    spark.sql.catalog.{{ .sandboxCatalog }}=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.{{ .sandboxCatalog }}.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.{{ .sandboxCatalog }}.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
+    spark.sql.catalog.{{ .sandboxCatalog }}.warehouse=s3a://sandbox-{{ trimPrefix "sandbox_" .sandboxCatalog }}/
+    spark.sql.catalog.{{ .sandboxCatalog }}.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.type=OAUTH2
+    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.client-id={{ .oauth2ClientId }}
+    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -246,6 +274,48 @@ spec:
         {{- $psc | nindent 8 }}
       {{- end }}
       # Spark image'a gömülü olduğu için initContainers yok.
+{{- if $sandbox }}
+      # Sandbox instance ONLY: the spark-defaults ConfigMap above holds a
+      # TEMPLATE — the OAuth2 client-secret and OIDC issuer-url can only be
+      # literal `${...}` placeholders there (never a resolved value in a
+      # ConfigMap; the issuer-url itself also only ever lives in the
+      # `oidc.secretName` Secret, never in a plain Helm value — see
+      # `_zeppelin.tpl`'s c1 refresher sidecar / chart-wide OIDC_ISSUER
+      # convention). This initContainer resolves both placeholders at pod
+      # start into a tmpfs (`emptyDir{medium: Memory}` — never disk, never
+      # logged) that the Spark interpreter's `SPARK_CONF_DIR` points at
+      # below. Substitution mechanism: `envsubst` is NOT present in the
+      # Zeppelin image (verified: apache/zeppelin:0.11.2, Ubuntu 20.04 base,
+      # `command -v envsubst` → absent), so this uses a POSIX `sed`
+      # substitution instead (present, no new package added) — replacement
+      # text is escaped for sed's `\`/`&`/delimiter metacharacters so an
+      # arbitrary secret value round-trips literally.
+      initContainers:
+      - name: spark-conf-render
+        image: {{ printf "%s/zeppelin:%s" $ctx.Values.global.imageRegistry $ctx.Values.versions.zeppelinImageTag | quote }}
+        {{- $icsc := include "lakehouse.containerSecurityContext" $ctx | trim }}
+        {{- if $icsc }}
+        securityContext:
+          {{- $icsc | nindent 10 }}
+        {{- end }}
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -eu
+            esc_secret=$(printf '%s' "$OAUTH_CLIENT_SECRET" | sed -e 's/[\\&|]/\\&/g')
+            esc_issuer=$(printf '%s' "$OIDC_ISSUER_URL" | sed -e 's/[\\&|]/\\&/g')
+            sed -e "s|\${OAUTH_CLIENT_SECRET}|$esc_secret|g" -e "s|\${OIDC_ISSUER_URL}|$esc_issuer|g" \
+              /conf-tpl/spark-defaults.conf > /spark-conf-rendered/spark-defaults.conf
+        env:
+        - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .oidcSecretName }}, key: client-secret}}}
+        - {name: OIDC_ISSUER_URL,     valueFrom: {secretKeyRef: {name: {{ $ctx.Values.oidc.secretName }}, key: issuer-url}}}
+        volumeMounts:
+        - {name: spark-conf,          mountPath: /conf-tpl,           readOnly: true}
+        - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
+        resources:
+          requests: {cpu: "10m", memory: "16Mi"}
+          limits:   {cpu: "100m", memory: "32Mi"}
+{{- end }}
       containers:
       - name: {{ $name }}
         image: {{ printf "%s/zeppelin:%s" $ctx.Values.global.imageRegistry $ctx.Values.versions.zeppelinImageTag | quote }}
@@ -277,7 +347,7 @@ spec:
         env:
         - {name: SPARK_HOME,            value: "/opt/spark"}
         - {name: ZEPPELIN_NOTEBOOK_DIR, value: "/zeppelin/notebook"}
-        - {name: SPARK_CONF_DIR,        value: "/spark-conf"}
+        - {name: SPARK_CONF_DIR,        value: {{ if $sandbox }}"/spark-conf-rendered"{{ else }}"/spark-conf"{{ end }}}
         - {name: ZEPPELIN_SHIRO_CONF,   value: "/zeppelin/conf/shiro.ini"}
         - {name: AD_BIND_DN,          valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-dn}}}
         - {name: AD_BIND_PASSWORD,    valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-password}}}
@@ -291,6 +361,9 @@ spec:
         - {name: {{ $name }}-notebooks, mountPath: /zeppelin/notebook}
         - {name: spark-conf,         mountPath: /spark-conf}
         - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
+        {{- if $sandbox }}
+        - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
+        {{- end }}
         {{- if and $ctx.Values.components.zeppelin $ctx.Values.auth.oidc.enabled }}
         - {name: trino-interp, mountPath: /seed,          readOnly: true}
         - {name: trino-tls,    mountPath: /mnt/trino-tls, readOnly: true}
@@ -428,6 +501,10 @@ spec:
         configMap: {name: {{ $name }}-spark-defaults}
       - name: shiro-conf
         configMap: {name: {{ $name }}-shiro}
+      {{- if $sandbox }}
+      - name: spark-conf-rendered
+        emptyDir: {medium: Memory}
+      {{- end }}
       {{- if and $ctx.Values.components.zeppelin $ctx.Values.auth.oidc.enabled }}
       - name: trino-interp
         configMap: {name: zeppelin-trino-interpreter}
