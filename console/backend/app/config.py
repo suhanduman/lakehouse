@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     apicurio_url: str = "http://apicurio-registry:8080/apis/registry/v2"
     oidc_issuer: str = ""
     oidc_audience: str = "lakehouse-console"
+    # Nessie machine-auth (2026-08-06-nessie-machine-auth Task 7): whether the
+    # platform's OIDC/Keycloak auth tier is on at all
+    # (chart `.Values.auth.oidc.enabled`, passed plain via console.yaml's
+    # ConfigMap -- never a secret). Gates whether render_service.
+    # _iceberg_catalog_io() emits the svc-connect-nessie OAuth2 keys for the
+    # Kafka Connect Iceberg sink; when False, render_service stays
+    # byte-identical to pre-Task-7 behavior.
+    auth_oidc_enabled: bool = False
     # Explicit JWT signature-algorithm allowlist. NEVER trust the token's own
     # `alg` header -- an attacker can set `alg: none` or swap to a weaker/HMAC
     # algorithm. jose only accepts a signature matching one of these.

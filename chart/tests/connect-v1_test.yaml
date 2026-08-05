@@ -63,6 +63,12 @@ tests:
     documentSelector: {path: kind, value: KafkaConnect}
 
   - it: mounts all 6 secrets via spec.template.pod.volumes (incl. pg, added after the original v1beta2 shape)
+    # Pinned with auth.oidc.enabled=false: this suite covers the base v1
+    # shape, unaffected by the Nessie machine-auth 7th mount added when auth
+    # is on (2026-08-06-nessie-machine-auth Task 7, see nessie-auth_test.yaml
+    # for that gated volume/mount coverage).
+    set:
+      auth.oidc.enabled: false
     asserts:
       - lengthEqual:
           path: spec.template.pod.volumes
@@ -79,6 +85,9 @@ tests:
     documentSelector: {path: kind, value: KafkaConnect}
 
   - it: mounts every volume at /mnt/external-configuration/<name> (NOT the removed /opt/kafka/external-configuration path), including pg
+    # Pinned with auth.oidc.enabled=false — see comment on the previous test.
+    set:
+      auth.oidc.enabled: false
     asserts:
       - lengthEqual:
           path: spec.template.connectContainer.volumeMounts

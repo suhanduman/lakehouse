@@ -32,6 +32,8 @@ templates:
   - 06-trino-ha.yaml
   - 05-spark-operator.yaml
   - 14-nginx-ingest.yaml
+  - 12-kafka-connect.yaml
+  - templates/console/console.yaml
 tests:
   # --- Task 3: Nessie server authorization + CEL rules --------------------
   # `04-nessie-ha.yaml` documentIndex:1 is the Deployment (same convention as
@@ -962,6 +964,116 @@ tests:
           content:
             name: kafka-ca
             secret: {secretName: kafka-cluster-ca-cert}
+
+  # ------------------------------------------------------------------------
+  # Task 7 — Connect Iceberg sink -> Nessie OAuth2 (svc-connect-nessie):
+  # the Strimzi Connect worker's `nessie-oauth` external-configuration mount
+  # (chart/templates/12-kafka-connect.yaml) + the Console's AUTH_OIDC_ENABLED
+  # flag (chart/templates/console/console.yaml), both gated ONLY on
+  # auth.oidc.enabled. The actual Console-rendered connector OAuth2 keys
+  # (iceberg.catalog.credential/oauth2-server-uri/token-refresh-enabled/
+  # scope) are a Console-backend concern, covered by
+  # console/backend/tests/test_render_service.py, NOT by this chart suite.
+  # ------------------------------------------------------------------------
+
+  - it: auth on — Connect worker mounts the nessie-machine-auth-credentials Secret as nessie-oauth at /mnt/external-configuration/nessie-oauth
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+            secret: {secretName: nessie-machine-auth-credentials}
+      - contains:
+          path: spec.template.connectContainer.volumeMounts
+          content:
+            name: nessie-oauth
+            mountPath: /mnt/external-configuration/nessie-oauth
+
+  - it: auth off — Connect worker has NO nessie-oauth volume/mount (byte-identity control, base 6-secret mount set unaffected)
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+      - notContains:
+          path: spec.template.connectContainer.volumeMounts
+          content:
+            name: nessie-oauth
+      - lengthEqual:
+          path: spec.template.pod.volumes
+          count: 6
+      - lengthEqual:
+          path: spec.template.connectContainer.volumeMounts
+          count: 6
+
+  - it: auth on — Console ConfigMap carries AUTH_OIDC_ENABLED=true
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - equal:
+          path: data.AUTH_OIDC_ENABLED
+          value: "true"
+
+  - it: auth off — Console ConfigMap OMITS AUTH_OIDC_ENABLED entirely (byte-identity control -- backend's Settings.auth_oidc_enabled defaults False when the key is absent)
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: data.AUTH_OIDC_ENABLED
+
+  - it: leak check — SENTINEL nessie.machineAuth.connectClientSecret appears ONLY in nessie-machine-auth-credentials Secret's connect key, never on the Connect worker CR or the Console ConfigMap
+    template: 22-nessie-machine-auth.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      - equal:
+          path: stringData.connect
+          value: "SENTINEL-CONNECT-SECRET"
+
+  - it: leak check — SENTINEL never appears on the Connect worker's KafkaConnect CR (only the secret NAME, resolved server-side via DirectoryConfigProvider, never the value)
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      # The CR's volume entry is invariant to the actual secret material --
+      # it only ever references the Secret by NAME (secretName), regardless
+      # of what nessie.machineAuth.connectClientSecret is set to. An exact
+      # `contains` match on this shape would fail if a literal secret value
+      # were ever accidentally interpolated into the volume spec instead.
+      - contains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+            secret: {secretName: nessie-machine-auth-credentials}
+
+  - it: leak check — SENTINEL never appears in the Console ConfigMap (AUTH_OIDC_ENABLED is a plain bool flag, never carries the client secret)
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      - notMatchRegex:
+          path: data.AUTH_OIDC_ENABLED
+          pattern: 'SENTINEL-CONNECT-SECRET'
 
   # Leak check — SENTINEL nessie.machineAuth.sparkClientSecret must appear
   # ONLY in nessie-machine-auth-credentials Secret's `spark` key, NEVER in

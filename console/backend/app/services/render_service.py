@@ -762,8 +762,21 @@ def _sasl_jaas(mechanism: str, user: str, password: str) -> str:
 def _iceberg_catalog_io() -> dict:
     """Nessie REST catalog + S3 (rawdata Bronze warehouse) + dynamic-routing
     knobs shared by every Console-rendered Iceberg sink. Routing reads the
-    source-stamped `_target_table` field."""
-    return {
+    source-stamped `_target_table` field.
+
+    Nessie machine-auth (2026-08-06-nessie-machine-auth Task 7, spike §2):
+    when `settings.auth_oidc_enabled` (chart `.Values.auth.oidc.enabled`,
+    passed plain via console.yaml's ConfigMap `AUTH_OIDC_ENABLED`), also emit
+    the `svc-connect-nessie` OAuth2 client-credentials keys the Iceberg 1.9.0
+    RESTCatalog understands (decompiled from `iceberg-core-1.9.0.jar`
+    `OAuth2Properties`, live cross-verified via `pyiceberg` in the spike).
+    `credential` is `<client_id>:<client_secret>` -- the secret half is NEVER
+    a literal, only the DirectoryConfigProvider reference the Connect worker
+    resolves at runtime from the `nessie-oauth` mount (chart/templates/
+    12-kafka-connect.yaml, `nessie-machine-auth-credentials` Secret's
+    `connect` key). When the flag is off, none of these keys are emitted --
+    identical to pre-Task-7 behavior."""
+    io: dict = {
         "iceberg.catalog.type": "rest",
         "iceberg.catalog.uri": NESSIE_URI,
         "iceberg.catalog.warehouse": "rawdata",
@@ -777,6 +790,12 @@ def _iceberg_catalog_io() -> dict:
         "iceberg.tables.auto-create-enabled": "true",
         "iceberg.tables.evolve-schema-enabled": "true",
     }
+    if settings.auth_oidc_enabled:
+        io["iceberg.catalog.credential"] = f"svc-connect-nessie:{_cred('nessie-oauth', 'connect')}"
+        io["iceberg.catalog.oauth2-server-uri"] = settings.oidc_issuer.rstrip("/") + "/protocol/openid-connect/token"
+        io["iceberg.catalog.token-refresh-enabled"] = "true"
+        io["iceberg.catalog.scope"] = "openid"
+    return io
 
 
 def _iceberg_control_tuning(name: str) -> dict:
