@@ -34,3 +34,21 @@ stringData:
   client-secret: {{ .oidcClientSecret | quote }}
 {{- end }}
 {{- end }}
+
+# Per-dept `sa-sandbox-<name>` ServiceAccount — the K8s identity the
+# dept's sandbox Zeppelin Pod (a later task in this slice) runs as. One per
+# department, independent of whether `oidcClientSecret` is supplied (the SA
+# itself carries no secret material), gated only by the file-wide
+# `sandbox.enabled` + non-empty `sandbox.departments` contract above.
+{{- range .Values.sandbox.departments }}
+{{- if $.Values.sandbox.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-sandbox-{{ .name }}
+  namespace: {{ include "lakehouse.namespace" $ }}
+  labels:
+    {{- include "lakehouse.labels" $ | nindent 4 }}
+{{- end }}
+{{- end }}

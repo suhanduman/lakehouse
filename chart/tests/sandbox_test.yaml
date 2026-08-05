@@ -18,6 +18,8 @@ suite: sandbox.* values + Keycloak svc-sandbox-<dept> clients + per-dept OIDC se
 templates:
   - 10-keycloak.yaml
   - 09c-zeppelin-sandbox.yaml
+  - 18-bucket-init.yaml
+  - 18b-sandbox-minio-policy.yaml
 tests:
   - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
     templates:
@@ -104,6 +106,9 @@ tests:
   - it: sandbox.departments[].oidcClientSecret renders the sandbox-veri-oidc-credentials Secret with the client-secret key
     templates:
       - 09c-zeppelin-sandbox.yaml
+    documentSelector:
+      path: kind
+      value: Secret
     set:
       sandbox.enabled: true
       sandbox.departments:
@@ -113,6 +118,7 @@ tests:
     asserts:
       - hasDocuments:
           count: 1
+          filterAware: true
       - equal:
           path: metadata.name
           value: sandbox-veri-oidc-credentials
@@ -120,7 +126,7 @@ tests:
           path: stringData.client-secret
           value: "devz"
 
-  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled
+  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled (the sa-sandbox-veri ServiceAccount still does)
     templates:
       - 09c-zeppelin-sandbox.yaml
     set:
@@ -131,7 +137,12 @@ tests:
           oidcClientSecret: ""
     asserts:
       - hasDocuments:
-          count: 0
+          count: 1
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: sa-sandbox-veri
+          any: true
 
   - it: sandbox-<dept>-oidc-credentials Secret does NOT render when sandbox.enabled is false, even if oidcClientSecret is supplied
     templates:
@@ -148,6 +159,139 @@ tests:
   - it: no departments (default) renders nothing from 09c-zeppelin-sandbox.yaml at all
     templates:
       - 09c-zeppelin-sandbox.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sandbox.enabled + one department renders the sa-sandbox-veri ServiceAccount
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: sa-sandbox-veri
+          any: true
+
+  - it: sandbox.enabled=false (default) renders NO sa-sandbox-* ServiceAccount (nothing at all from 09c)
+    templates:
+      - 09c-zeppelin-sandbox.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sandbox.enabled + storage.createBuckets -- bucket-init Job's args include sandbox-veri
+    templates:
+      - 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      storage.createBuckets: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/sandbox-veri"
+
+  - it: sandbox.enabled=false (default) bucket-init Job's args do NOT include any sandbox-* bucket
+    templates:
+      - 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      storage.createBuckets: true
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "sandbox-"
+
+  - it: sandbox.enabled + components.minio=true renders the 18b sandbox-veri-minio-policy Job granting RW sandbox-veri + RO depo/ham-veri, with the user secret via secretKeyRef
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      sandbox.enabled: true
+      components.minio: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: sandbox-veri-minio-policy
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::sandbox-veri'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::depo'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::ham-veri'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin policy create s3 sandbox-veri-policy'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin user add s3 "\$SANDBOX_ACCESS_KEY" "\$SANDBOX_SECRET_KEY"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin policy attach s3 sandbox-veri-policy --user "\$SANDBOX_ACCESS_KEY"'
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: SANDBOX_ACCESS_KEY
+      - equal:
+          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.name
+          value: s3-sandbox-veri
+      - equal:
+          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.key
+          value: access-key-id
+      - equal:
+          path: spec.template.spec.containers[0].env[4].name
+          value: SANDBOX_SECRET_KEY
+      - equal:
+          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.name
+          value: s3-sandbox-veri
+      - equal:
+          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.key
+          value: secret-access-key
+
+  - it: sandbox.enabled but components.minio=false (default) renders NO 18b policy Job
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    set:
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: dev default (sandbox.enabled=false, components.minio=false) renders NO 18b policy Job
+    templates:
+      - 18b-sandbox-minio-policy.yaml
     asserts:
       - hasDocuments:
           count: 0

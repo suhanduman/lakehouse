@@ -16,7 +16,12 @@
 # `postgres.nessie.backup.destinationPath`'s bucket (CNPG barman,
 # "backups") — see the `lakehouse.s3BucketFromUri` helper (_helpers.tpl).
 # ONE extraction so this list and those `s3://...` values can never
-# silently drift apart.
+# silently drift apart. Also appended: `sparkHistory.eventsBucket` when
+# `components.sparkHistory` is on, and one `sandbox-<name>` bucket per
+# department when `.Values.sandbox.enabled` (Consumption slice c2) — the
+# ROOT `s3-credentials` cred used here can always create these; the
+# scoped per-dept RW/RO policy narrowing happens separately (dev-only, see
+# `18b-sandbox-minio-policy.yaml`).
 #
 # Runs on BOTH install paths so first ingest always has somewhere to
 # land: plain `helm install/upgrade` (`helm.sh/hook`
@@ -37,6 +42,11 @@
 {{- end }}
 {{- if .Values.components.sparkHistory }}
 {{- $buckets = append $buckets .Values.sparkHistory.eventsBucket }}
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+{{- range .Values.sandbox.departments }}
+{{- $buckets = append $buckets (printf "sandbox-%s" .name) }}
+{{- end }}
 {{- end }}
 apiVersion: batch/v1
 kind: Job
