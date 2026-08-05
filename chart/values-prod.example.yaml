@@ -166,7 +166,7 @@ versions:
   postgresqlJdbc: "42.7.4"
   icebergKafkaConnect: "1.9.0"
   apicurioConverter: "2.6.5"
-  zeppelinImage: registry.apps.ocp.example.com/lakehouse/zeppelin:1.0
+  zeppelinImageTag: "1.0"
   keycloakImage: ""
   consoleBackendImageTag: "1.0"
   consoleFrontendImageTag: "1.0"

@@ -4,15 +4,20 @@
 # remains the primary spec §3.1/§8 gate).
 #
 # Uses Zeppelin (chart/templates/09-zeppelin.yaml, gated by
-# `.Values.components.zeppelin`) as the representative case: 6 documents
-# (PVC, 2x ConfigMap, Deployment, Service, PodDisruptionBudget) when enabled
+# `.Values.components.zeppelin`) as the representative case: 7 documents
+# (PVC, 3x ConfigMap, Deployment, Service, PodDisruptionBudget) when enabled
 # with the default (empty) `zeppelin.ad.bindPassword` — the `ad-bind-
 # credentials` Secret itself is conditionally rendered only when a real
 # bindPassword is supplied (final-review FIX 4: dev-convenience-only inline
-# Secret, see chart/values.yaml's `secrets:` comment) — 7 documents when a
+# Secret, see chart/values.yaml's `secrets:` comment) — 8 documents when a
 # bindPassword IS supplied, 0 when the component is disabled — verified
 # against a real `helm template` render of this exact file before writing
-# these assertions.
+# these assertions. The 3rd ConfigMap is `zeppelin-trino-interpreter` (c1
+# Task 4 %trino interpreter seed) — gated `components.zeppelin +
+# auth.oidc.enabled`, and `auth.oidc.enabled` defaults to `true` (see
+# chart/values.yaml `auth.oidc.enabled`), so it renders in this suite's
+# default-values control case too (see chart/tests/zeppelin-trino_test.yaml
+# for the auth-off byte-identity proof of this template).
 suite: enabled:false component disappears from render
 templates:
   - 09-zeppelin.yaml
@@ -29,7 +34,7 @@ tests:
       components.zeppelin: true
     asserts:
       - hasDocuments:
-          count: 6
+          count: 7
       # `any: true` searches ACROSS all rendered docs for a match, instead
       # of asserting every doc individually (which fails on the PVC/
       # ConfigMap/PDB siblings). Names verified against a real
@@ -58,7 +63,7 @@ tests:
       zeppelin.ad.bindPassword: "dev-only-test-password"
     asserts:
       - hasDocuments:
-          count: 7
+          count: 8
       - containsDocument:
           kind: Secret
           apiVersion: v1

@@ -381,6 +381,75 @@ SQL planları, executor metrikleri ve job zaman çizelgesi görünür hale gelir
 
 ---
 
+## Zeppelin `%trino` interpreter (Consumption slice c1)
+
+`auth.oidc.enabled: true` iken (medium/large tier'larda açık; dev'de kapalı)
+Zeppelin notebook'larına **read-only bir `%trino` JDBC interpreter'ı** eklenir —
+böylece analistler AYNI notebook içinde hem `%spark`/`%pyspark` (hesaplama) hem
+de `%trino` (hızlı interaktif MPP SQL, Superset + dbt ile aynı Trino motoru)
+çalıştırır. Trino'ya **b1 machine-auth'u yeniden kullanan** salt-okunur bir
+servis kimliğiyle (`svc-zeppelin-trino`, `client_credentials` + `aud:trino`)
+bağlanır; Trino'nun `.*` read-only kuralına düşer, YAZMA yetkisi yoktur
+(gold-write yalnızca `svc-dbt-trino`'dadır).
+
+- **İmaj — ince katman (thin layer):** `apache/zeppelin` JDBC sürücüsü
+  içermez. `images/zeppelin/Dockerfile`, **platformun kendi Zeppelin imajının
+  ÜZERİNE** (`ARG ZEPPELIN_BASE`, build-arg ile override edilir)
+  `trino-jdbc:439`'u (Trino sunucusuyla — `trinodb/trino:439` — sürüm-eşli)
+  `${ZEPPELIN_HOME}/interpreter/jdbc`'ye bake eder. Stock apache/zeppelin'e
+  REBASE ETMEZ — çünkü platform imajı LDAPS için kurumsal AD CA sertifikasını
+  JVM truststore'una ve `/zeppelin` dizin düzenini gömer; rebase bunları
+  sessizce düşürüp AD login'i kırardı. Sürücü **maven `dependencies` yerine
+  BAKE edilir**: air-gap kümeler Maven Central'a erişemez, VE her
+  interpreter-ayar PUT'u (token-refresher her rotasyonda bir tane yapar) aksi
+  halde yeniden indirme + non-READY penceresi tetiklerdi. İç build
+  `versions.zeppelinImageTag` + `global.imageRegistry` (superset/dbt gibi).
+- **Interpreter provisioning:** `zeppelin-trino-interpreter` ConfigMap'i
+  `interpreter.json`'ı taşır (`dependencies: []` — sürücü baked; URL
+  `jdbc:trino://<trino-coordinator>:8443/<catalog>?SSL=true&SSLTrustStorePath=/mnt/trino-tls/ca.crt`).
+  Container command'i, bu seed dosyasını başlangıçta Zeppelin'in conf
+  dizinine KOPYALAYIP normal entrypoint'i exec eder (interpreter.json'ı
+  doğrudan bind-mount etmek Zeppelin'in çalışma-anı yeniden-yazımını "Device
+  or resource busy" ile çökertir — spike bulgusu). TLS: PEM `ca.crt`
+  DOĞRUDAN `SSLTrustStorePath` ile çalışır, JKS/PKCS12 dönüşümü gerekmez
+  (trino-client `loadTrustStore()` önce PEM dener).
+- **Token enjeksiyonu — refresher sidecar:** Zeppelin'in JDBC interpreter'ı
+  STATİK bir `accessToken` okur (Superset'in per-connection mutator'ı gibi bir
+  hook yok). Bir sidecar döngüsü: `svc-zeppelin-trino` JWT'sini çeker →
+  Zeppelin'e admin olarak login olur → `GET`/patch/`PUT
+  /api/interpreter/setting/trino` (PUT interpreter'ı yeniden yükler, ayrı
+  restart gerekmez). REST auth için, `shiro.ini`'ye dokunmak yerine
+  **Zeppelin admin AD grubunun üyesi, operatör-tarafından-sağlanan bir AD
+  servis hesabı** kullanılır (`zeppelin.trino.refresher.restUsername` +
+  `restPassword`). PUT çalışan `%trino` paragraflarını KESTİĞİNDEN,
+  `zeppelin.trino.tokenRefreshSeconds` bilerek uzundur (3000s) → kesinti
+  seyrek. Hata halinde exponential backoff (5→60s), son-iyi durumu korur,
+  token/parola loglanmaz.
+- **Gating:** hepsi `components.zeppelin` && `auth.oidc.enabled` (+ `:8443`
+  dinleyicisini yöneten mevcut `superset.trino.tls.enabled` coherence guard'ı)
+  ile gated. Dev'de (`auth.oidc.enabled: false`) Zeppelin bugünküyle
+  BYTE-FOR-BYTE aynı render edilir — yalnızca Spark-read, Trino interpreter yok.
+- **Operatör gereksinimleri:** `images/zeppelin`'i platform base ile build
+  et+push et; `zeppelin.trino.oidc.clientSecret`'i sağla (Keycloak
+  `svc-zeppelin-trino` client'ıyla tek-kaynak); refresher AD hesabını
+  (admin grubunda) + `zeppelin.trino.refresher.restPassword`'ü sağla.
+
+**Bilinen sınırlama:** c1 helm-unittest + docker-spike doğrulanmıştır (interpreter
+seeding, PEM TLS trust, ve `default.accessToken` → trino-jdbc plumbing hepsi
+canlı bir `apache/zeppelin` + `trinodb/trino:439` konteynerine karşı doğrulandı;
+thin-layer imaj mekaniği stock-base stand-in build ile). Tam
+Keycloak → Zeppelin (sidecar login) → Trino (gerçek JWKS-doğrulamalı JWT) E2E'si
+bir **OpenShift UAT** teslimatıdır (burada Keycloak yok + Trino scaled-0). UAT'ta
+netleşecek: platform `zeppelin:1.0` imajının trino-jdbc'yi zaten içerip
+içermediği (thin-layer her iki durumda güvenli — üzerine yazar); GET/PUT REST
+zarfının tam şekli; ve platform Zeppelin'inin chart'ın shiro'sunu (OIDC ile
+override etmeyip) kullandığının doğrulanması. Interpreter identity SALT-OKUNUR;
+per-user Trino kimliği (Zeppelin Shiro/AD ile auth eder, OIDC değil) Day-2
+per-user-identity slice'ıdır; sandbox WRITE (`%pyspark` → `sandbox_<dept>`)
+slice (c2)'dir.
+
+---
+
 ## İngest — bilinen tradeoff'lar ve gerekçeler
 
 Aşağıdaki üç nokta, mevcut ingest mimarisinin bilinçli tradeoff'ları ve

@@ -1,0 +1,286 @@
+# chart/tests/zeppelin-trino_test.yaml — proves (1) the zeppelin-trino-oidc-
+# credentials Secret (chart/templates/09-zeppelin.yaml, c1 Task 2) renders only
+# when BOTH components.zeppelin is enabled AND a real zeppelin.trino.oidc.
+# clientSecret is supplied (dev-convenience contract, same as the
+# superset-trino-oidc-credentials / dbt-trino-oidc-credentials Secrets), and
+# (2) the %trino interpreter seed ConfigMap + container command override +
+# TLS/interpreter volume mounts (Task 4) render ONLY when components.zeppelin
+# + auth.oidc.enabled are BOTH true, are byte-identical to the pre-Task-4 form
+# when auth is off, and the TLS-coherence guard (reusing the SAME
+# superset.trino.tls.enabled flag that gates Trino's :8443 listener) fails
+# the render on an incoherent combination.
+suite: zeppelin %trino service-account Secret + interpreter seed (c1)
+templates:
+  - 09-zeppelin.yaml
+tests:
+  - it: renders the zeppelin-trino-oidc-credentials Secret when enabled + clientSecret supplied
+    set:
+      components.zeppelin: true
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-trino-oidc-credentials, any: true}
+  - it: does NOT render zeppelin-trino-oidc-credentials when clientSecret is empty (default)
+    set:
+      components.zeppelin: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-trino-oidc-credentials, any: true}
+        not: true
+  - it: does NOT render zeppelin-trino-oidc-credentials when components.zeppelin is false, even with clientSecret set
+    set:
+      components.zeppelin: false
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+    asserts:
+      - hasDocuments: {count: 0}
+
+# --- Task 4: %trino interpreter seed ConfigMap + command-copy + TLS mounts ---
+  - it: renders the zeppelin-trino-interpreter ConfigMap when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: zeppelin-trino-interpreter, any: true}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: 'jdbc:trino://trino-coordinator:8443/lakehouse\?SSL=true&SSLTrustStorePath=/mnt/trino-tls/ca\.crt'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: '"default\.driver": \{"name": "default\.driver", "value": "io\.trino\.jdbc\.TrinoDriver"'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: '"dependencies": \[\]'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+
+  - it: does NOT leak the real JWT into the interpreter ConfigMap (placeholder only)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["interpreter.json"]
+          pattern: 'PLACEHOLDER_REPLACED_BY_REFRESHER'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - notMatchRegex:
+          path: data["interpreter.json"]
+          pattern: 'eyJ'   # a real JWT would start with a base64url JSON header
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+
+  - it: overrides the zeppelin container command to seed interpreter.json then exec the stock entrypoint, when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["/bin/sh", "-c"]
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'cp /seed/interpreter\.json'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'exec /usr/bin/tini -- bin/zeppelin\.sh'
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: mounts the trino-interp (ConfigMap) and trino-tls (Secret) volumes when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-interp, mountPath: /seed, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-tls, mountPath: /mnt/trino-tls, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: trino-interp, configMap: {name: zeppelin-trino-interpreter}}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: trino-tls, secret: {secretName: trino-internal-tls}}
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: fails the render when zeppelin+oidc are on but the Trino :8443 TLS listener is off (incoherent)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.zeppelin + auth.oidc.enabled requires superset.trino.tls.enabled=true (the %trino interpreter connects over Trino's :8443 HTTPS listener, gated by that SAME flag — see chart/templates/06-trino-ha.yaml)"
+
+  - it: renders NONE of the %trino interpreter wiring when auth.oidc.enabled is false (byte-identity of the existing form)
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: zeppelin-trino-interpreter, any: true}
+        not: true
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        documentSelector: {path: kind, value: Deployment}
+      - notExists:
+          path: spec.template.spec.containers[0].args
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: trino-interp, mountPath: /seed, readOnly: true}
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: trino-tls, secret: {secretName: trino-internal-tls}}
+        documentSelector: {path: kind, value: Deployment}
+      # Task 5: the refresher sidecar is itself gated the SAME way — must be
+      # absent too when auth is off, else byte-identity would be violated by
+      # an extra container.
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+        documentSelector: {path: kind, value: Deployment}
+      - notContains:
+          path: spec.template.spec.containers
+          content: {name: zeppelin-trino-refresher}
+        documentSelector: {path: kind, value: Deployment}
+
+# --- Task 5: Trino JWT token-refresher sidecar (Zeppelin REST API PUT) ---
+  - it: adds the zeppelin-trino-refresher sidecar as the pod's second container when zeppelin+oidc+tls all on
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+        documentSelector: {path: kind, value: Deployment}
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: zeppelin-trino-refresher
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'GET the current trino interpreter setting|api/interpreter/setting/trino'
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: the refresher sidecar's script drives the spike-confirmed GET/PUT + login flow
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'http://localhost:8080/api/login'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'http://localhost:8080/api/interpreter/setting/trino'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'method="PUT"'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: '"client_id": "svc-zeppelin-trino"'
+        documentSelector: {path: kind, value: Deployment}
+      - matchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: '\["properties"\]\["default\.accessToken"\]\["value"\] = token'
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: the refresher sidecar's env wires the Zeppelin admin login + Keycloak client-credentials secrets correctly
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content: {name: ZEPPELIN_REST_USER, value: "svc-zeppelin-refresher"}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: ZEPPELIN_REST_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: rest-password}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: SVC_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef: {name: zeppelin-trino-oidc-credentials, key: client-secret}
+        documentSelector: {path: kind, value: Deployment}
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef: {name: oidc-credentials, key: issuer-url}
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: overriding zeppelin.trino.refresher.restUsername changes the sidecar's ZEPPELIN_REST_USER value
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      zeppelin.trino.refresher.restUsername: "svc-custom-refresher"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content: {name: ZEPPELIN_REST_USER, value: "svc-custom-refresher"}
+        documentSelector: {path: kind, value: Deployment}
+
+  - it: renders the rest-password key in zeppelin-trino-oidc-credentials when a dev restPassword is supplied
+    set:
+      components.zeppelin: true
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+      zeppelin.trino.refresher.restPassword: "dev-rest-pw"
+    asserts:
+      - equal:
+          path: stringData["rest-password"]
+          value: "dev-rest-pw"
+        documentSelector: {path: metadata.name, value: zeppelin-trino-oidc-credentials}
+
+  - it: renders an EMPTY rest-password key when restPassword is left default but clientSecret is supplied (out-of-band contract)
+    set:
+      components.zeppelin: true
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+    asserts:
+      - equal:
+          path: stringData["rest-password"]
+          value: ""
+        documentSelector: {path: metadata.name, value: zeppelin-trino-oidc-credentials}
+
+  - it: does NOT leak the dev restPassword or a JWT literal into the interpreter ConfigMap or the sidecar's args
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+      zeppelin.trino.refresher.restPassword: "SUPER-SECRET-DEV-PW"
+    asserts:
+      - notMatchRegex:
+          path: data["interpreter.json"]
+          pattern: 'SUPER-SECRET-DEV-PW'
+        documentSelector: {path: metadata.name, value: zeppelin-trino-interpreter}
+      - notMatchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'SUPER-SECRET-DEV-PW'
+        documentSelector: {path: kind, value: Deployment}
+      - notMatchRegex:
+          path: spec.template.spec.containers[1].args[0]
+          pattern: 'eyJ'   # a real JWT would start with a base64url JSON header
+        documentSelector: {path: kind, value: Deployment}

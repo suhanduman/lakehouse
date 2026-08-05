@@ -585,11 +585,14 @@ versions:
   # (images/connect/Dockerfile, ARG CAMEL_KC_VERSION). Backs the Console
   # stream/http, stream/mqtt, stream/rabbitmq source types (Plan B3).
   camelKafkaConnector: "4.10.3"
-  # chart/templates/09-zeppelin.yaml: custom image (apache/zeppelin + Spark
-  # binary baked in at build time — see that template's header comment for
-  # the Dockerfile). Independent release cadence from `sparkImageTag` above
-  # (Zeppelin is an interactive notebook, not a submitted SparkApplication).
-  zeppelinImage: registry.apps.ocp.example.com/lakehouse/zeppelin:1.0
+  # chart/templates/09-zeppelin.yaml: internally-built Zeppelin image
+  # (images/zeppelin/Dockerfile — apache/zeppelin, which bundles the Spark
+  # interpreter, + the trino-jdbc driver baked onto the JDBC interpreter
+  # classpath for the %trino interpreter). Same `.Values.global.imageRegistry`
+  # + tag convention as `supersetImageTag`/`dbtImageTag`. Independent release
+  # cadence from `sparkImageTag` above (Zeppelin is an interactive notebook,
+  # not a submitted SparkApplication).
+  zeppelinImageTag: "1.0"
   # chart/templates/10-keycloak.yaml: OPTIONAL override for the Keycloak
   # Operator CR's `spec.image`. Empty string (default) means the field is
   # OMITTED from the rendered CR entirely — matching prod-manifests/
@@ -603,8 +606,8 @@ versions:
   consoleBackendImageTag: "1.0"
   consoleFrontendImageTag: "1.0"
   # chart/templates/console/kafka-ui.yaml: external (community) image, same
-  # full-string-pin convention as `zeppelinImage` above (not built via
-  # `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
+  # full-string-pin convention as `nessieImage`/`trinoImage` above (not built
+  # via `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
   kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
   # chart/templates/19-superset.yaml: internally-built Superset image (same
   # `.Values.global.imageRegistry` + tag convention as `consoleBackendImageTag`
@@ -1142,9 +1145,10 @@ nginx:
     kafkaExternalBootstrap: "{{KAFKA_EXTERNAL_BOOTSTRAP}}"
     kafkaPassword: "{{FLUENTBIT_KAFKA_PASSWORD}}"
 
-# Apache Zeppelin. Gated by `.Values.components.zeppelin`. Image pinned under
-# `versions.zeppelinImage` (single source, same convention as
-# `versions.nessieImage`/`versions.trinoImage`). AD/LDAPS bind DN/search-base
+# Apache Zeppelin. Gated by `.Values.components.zeppelin`. Internally-built
+# image pinned under `versions.zeppelinImageTag` (single source, same
+# `.Values.global.imageRegistry` + tag convention as
+# `versions.supersetImageTag`/`versions.dbtImageTag`). AD/LDAPS bind DN/search-base
 # fields follow the SAME `{{TOKEN}}` plain-placeholder convention as
 # `postgres.nessie.backup.endpointURL` — override with real values in a
 # values-<env>.yaml. `bindPassword` (the actual secret material) is
@@ -1185,6 +1189,26 @@ zeppelin:
       analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
       student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
     sessionTimeoutMs: 28800000   # 8 saat
+  # %trino read interpreter (Consumption slice c1). Gated by components.zeppelin
+  # + auth.oidc.enabled. Read-only svc-zeppelin-trino identity (b1 pattern).
+  trino:
+    oidc:
+      # Confidential client secret for svc-zeppelin-trino (10-keycloak.yaml
+      # clients[].secret, single source). Empty => Secret NOT rendered.
+      clientSecret: ""
+    # Longer refresh than Superset's: each rotation recycles the Zeppelin
+    # interpreter (interrupts running paragraphs, spike finding), so refresh
+    # infrequently. Must stay below the svc-zeppelin-trino token lifespan (3600).
+    tokenRefreshSeconds: 3000
+    catalog: "lakehouse"
+    refresher:
+      # AD service account the token-refresher sidecar uses to authenticate to
+      # Zeppelin's REST API (POST /api/login). MUST be a member of the Zeppelin
+      # admin AD group (zeppelin.ad.groups.admin) so it can PUT interpreter
+      # settings. restPassword follows the same dev-convenience/out-of-band
+      # contract as zeppelin.ad.bindPassword and zeppelin.trino.oidc.clientSecret.
+      restUsername: "svc-zeppelin-refresher"
+      restPassword: ""
 
 # Spark History Server (Consumption slice d). Gated by components.sparkHistory
 # (default false; on in medium/large). Reuses the spark-py image; reads event
