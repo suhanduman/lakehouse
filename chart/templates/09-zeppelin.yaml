@@ -72,6 +72,23 @@ stringData:
   ad-url: {{ .Values.zeppelin.ad.url | quote }}
 {{- end }}
 ---
+{{- if and .Values.components.zeppelin .Values.zeppelin.trino.oidc.clientSecret }}
+# svc-zeppelin-trino confidential client secret — single source with the
+# Keycloak client (10-keycloak.yaml) via `.Values.zeppelin.trino.oidc.
+# clientSecret`. Same dev-convenience contract as ad-bind-credentials/
+# superset-trino-oidc-credentials above: rendered ONLY when a real secret is
+# supplied; otherwise provision this Secret's name/keys out-of-band before
+# install. Read-only %trino interpreter identity (c1).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zeppelin-trino-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.zeppelin.trino.oidc.clientSecret | quote }}
+{{- end }}
+---
 # Apache Shiro — ActiveDirectoryGroupRealm
 apiVersion: v1
 kind: ConfigMap

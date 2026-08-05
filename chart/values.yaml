@@ -1185,6 +1185,18 @@ zeppelin:
       analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
       student: "CN=lakehouse-students,OU=Groups,DC=example,DC=com"
     sessionTimeoutMs: 28800000   # 8 saat
+  # %trino read interpreter (Consumption slice c1). Gated by components.zeppelin
+  # + auth.oidc.enabled. Read-only svc-zeppelin-trino identity (b1 pattern).
+  trino:
+    oidc:
+      # Confidential client secret for svc-zeppelin-trino (10-keycloak.yaml
+      # clients[].secret, single source). Empty => Secret NOT rendered.
+      clientSecret: ""
+    # Longer refresh than Superset's: each rotation recycles the Zeppelin
+    # interpreter (interrupts running paragraphs, spike finding), so refresh
+    # infrequently. Must stay below the svc-zeppelin-trino token lifespan (3600).
+    tokenRefreshSeconds: 3000
+    catalog: "lakehouse"
 
 # Spark History Server (Consumption slice d). Gated by components.sparkHistory
 # (default false; on in medium/large). Reuses the spark-py image; reads event

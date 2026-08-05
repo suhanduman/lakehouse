@@ -325,6 +325,26 @@ spec:
           "included.client.audience": "trino"
           "id.token.claim": "false"
           "access.token.claim": "true"
+    - clientId: svc-zeppelin-trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      # Read-only service account for Zeppelin's %trino interpreter (c1).
+      secret: {{ .Values.zeppelin.trino.oidc.clientSecret | quote }}
+      attributes:
+        # 1h — longer than the other svc clients (900) because each Zeppelin
+        # token rotation recycles the interpreter; keep recycles infrequent.
+        access.token.lifespan: "3600"
+      protocolMappers:
+      - name: aud-trino
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config:
+          "included.client.audience": "trino"
+          "id.token.claim": "false"
+          "access.token.claim": "true"
     - clientId: superset
       enabled: true
       protocol: "openid-connect"

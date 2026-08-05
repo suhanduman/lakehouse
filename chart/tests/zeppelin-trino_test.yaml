@@ -1,0 +1,27 @@
+# chart/tests/zeppelin-trino_test.yaml — proves the zeppelin-trino-oidc-
+# credentials Secret (chart/templates/09-zeppelin.yaml, c1) renders only when
+# BOTH components.zeppelin is enabled AND a real zeppelin.trino.oidc.
+# clientSecret is supplied (dev-convenience contract, same as the
+# superset-trino-oidc-credentials / dbt-trino-oidc-credentials Secrets).
+suite: zeppelin %trino service-account Secret (c1)
+templates:
+  - 09-zeppelin.yaml
+tests:
+  - it: renders the zeppelin-trino-oidc-credentials Secret when enabled + clientSecret supplied
+    set:
+      components.zeppelin: true
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-trino-oidc-credentials, any: true}
+  - it: does NOT render zeppelin-trino-oidc-credentials when clientSecret is empty (default)
+    set:
+      components.zeppelin: true
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-trino-oidc-credentials, any: true}
+        not: true
+  - it: does NOT render zeppelin-trino-oidc-credentials when components.zeppelin is false, even with clientSecret set
+    set:
+      components.zeppelin: false
+      zeppelin.trino.oidc.clientSecret: "dev-z-secret"
+    asserts:
+      - hasDocuments: {count: 0}
