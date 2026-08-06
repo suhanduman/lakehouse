@@ -642,6 +642,26 @@ versions:
   # (Consumption slice b2). Same `.Values.global.imageRegistry` + tag
   # convention as `supersetImageTag` above.
   dbtImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: internally-built Hub image (same
+  # `.Values.global.imageRegistry` + tag convention as `supersetImageTag`/
+  # `dbtImageTag` above). Custom-built (images/jupyterhub/Dockerfile) because
+  # stock jupyterhub/jupyterhub ships neither the KubeSpawner nor the
+  # Keycloak OAuthenticator this platform's Hub needs — pins JupyterHub 5.5.0
+  # + jupyterhub-kubespawner 7.1.0 + oauthenticator 17.4.0 +
+  # jupyterhub-idle-culler 2.0.0 (compatible matrix, see that Dockerfile's
+  # header comment). Gated by `components.jupyter`.
+  jupyterhubImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: internally-built single-user notebook
+  # image the Hub's KubeSpawner launches per user (same
+  # `.Values.global.imageRegistry` + tag convention as `jupyterhubImageTag`
+  # above — an INDEPENDENT release cadence, the Hub and the per-user image
+  # are separate artifacts). Custom-built (images/jupyter/Dockerfile) —
+  # quay.io/jupyter/pyspark-notebook:spark-3.5.1 (matches `sparkVersion`
+  # above) + pyiceberg[s3fs,pyarrow]/trino[sqlalchemy] + the
+  # iceberg-spark-runtime-3.5_2.12/iceberg-aws-bundle jars pinned to
+  # `icebergSparkRuntime` = 1.9.0 (same Iceberg/Nessie/Spark matrix as
+  # `sparkImageTag` above). Gated by `components.jupyter`.
+  jupyterImageTag: "1.0"
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
