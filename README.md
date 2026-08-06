@@ -635,6 +635,22 @@ DÜZELTİR ve c2'nin metadata-gap sınırlamasını KAPATIR.
   içindir); `svc-sandbox-<dept>` kimlikleri zaten c2'nin kendi operatör
   checklist'inin parçasıdır (yukarıya bakın).
 
+**Sandbox path-confinement — UAT-onay gereken bilinen sınırlama:** c2'den
+devralınan `svc-sandbox-<dept>` CEL kuralı (`path.startsWith('sandbox_<dept>')`,
+`04-nessie-ha.yaml`) `svc-connect-nessie`'nin Bronze rotasıyla AYNI
+catalog-adı-vs-Nessie-namespace inceliğini taşır: c2 sandbox Spark
+**katalogunun** adı `sandbox_<dept>`'tir, ama bir analistin gerçekte
+yazdığı Nessie content-key namespace'i, tabloyu NASIL nitelediğine bağlıdır
+— `sandbox_<dept>` namespace'i altında yazmadıkça CEL prefix'i eşleşmez.
+Bu, connect-write kuralının aksine, GÜVENLİ tarafta bir belirsizlik: yanlış
+namespace REDDEDİLİR (fail-closed), fazla-izin verilmez. Kural varsayılan
+olarak KAPALI da gelir (`sandbox.enabled: false`). Kural olduğu gibi
+bırakılmıştır (fail-closed) — tam namespace prefix eşleşmesinin analistlerin
+gerçek yazma alışkanlığıyla (sandbox_<dept> altında nitelenmiş tablolar)
+uyuştuğunun doğrulanması bir **OpenShift UAT** teslimatıdır; c2'nin
+metadata-gap'ini bu noktada tam kapatmak sandbox-hardening'in bir
+UAT-sonrası takip maddesidir.
+
 **Bilinen sınırlama:** Nessie machine-auth helm-unittest ile doğrulanmıştır
 (gating, 5-kimlik CEL politikası, secret-injection mekanizmalarının her
 biri — bu chart'ın en büyük tekil test dosyalarından biri,

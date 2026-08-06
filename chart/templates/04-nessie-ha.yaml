@@ -173,8 +173,21 @@ spec:
           value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-trino-nessie'"
         - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
           value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-spark-nessie'"
-        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
-          value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie' && path.startsWith('rawlake')"
+        # ROLE-ONLY (no `path` confinement) — final-review fix. `rawlake` is
+        # only the Trino/Spark CATALOG name for the rawdata warehouse, NOT a
+        # Nessie content-key namespace; the Console-rendered Iceberg sink
+        # connector ALWAYS routes every record to Bronze namespace
+        # `<target_ns>_raw` (`console/backend/app/services/render_service.py`
+        # `_route_transform`, e.g. `depo_raw.orders`), which does NOT start
+        # with `rawlake` — so the old `path.startsWith('rawlake')` clause
+        # denied every single Connect CREATE/UPDATE/DELETE_ENTITY, i.e. all
+        # ingest->Bronze writes, with authz on. Bronze-path confinement is
+        # already enforced by the connector's own routing (operator-
+        # controlled config, not analyst-supplied), so `svc-connect-nessie`
+        # is treated as a trusted platform committer here — role-only, same
+        # as `svc-trino-nessie`/`svc-spark-nessie` above.
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
+          value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie'"
         # Sandbox per-dept write rules — gated on BOTH `sandbox.enabled` AND
         # non-empty `sandbox.departments`, matching the chart's two-gate
         # sandbox contract everywhere else (09c-zeppelin-sandbox.yaml,

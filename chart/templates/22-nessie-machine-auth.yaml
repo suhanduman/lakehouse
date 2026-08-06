@@ -1,3 +1,4 @@
+{{- if .Values.auth.oidc.enabled }}
 # nessie-machine-auth-credentials — the ONE shared Secret holding all 4
 # `svc-<x>-nessie` machine-auth client secrets (Trino/Spark/Kafka Connect/
 # Zeppelin), single-sourced with the Keycloak clients of the SAME name
@@ -24,7 +25,13 @@
 # --from-literal=...`) per `.Values.secrets.mode`, BEFORE install — same as
 # every other machine-auth credential in this chart. NEVER logged, NEVER
 # placed in a ConfigMap.
-{{- if .Values.auth.oidc.enabled }}
+#
+# NOTE: this comment header lives INSIDE the auth-enabled guard (final-
+# review fix) — it used to sit ABOVE the guard's opening action, so an
+# auth-off render emitted a comment-only document plus a stray `---` even
+# though the file has no actual manifest content when auth is off. Keeping
+# the header inside the guard makes an auth-off render emit ZERO bytes from
+# this file.
 {{- if or .Values.nessie.machineAuth.trinoClientSecret .Values.nessie.machineAuth.sparkClientSecret .Values.nessie.machineAuth.connectClientSecret .Values.nessie.machineAuth.zeppelinClientSecret }}
 apiVersion: v1
 kind: Secret

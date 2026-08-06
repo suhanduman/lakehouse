@@ -48,7 +48,7 @@ tests:
   # accidentally granting zeppelin write access breaks its read-only
   # guarantee. Exact CEL text asserted verbatim (not just presence) so a
   # future edit that subtly narrows/widens a rule fails loudly.
-  - it: auth.oidc.enabled=true + a sandbox dept renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 5-identity CEL policy (trino/spark/connect all-path, connect rawlake-only, sandbox dept-only, zeppelin absent from every write/commit rule)
+  - it: auth.oidc.enabled=true + a sandbox dept renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 5-identity CEL policy (trino/spark/connect all role-only, sandbox dept-only, zeppelin absent from every write/commit rule)
     templates:
       - 04-nessie-ha.yaml
     set:
@@ -81,7 +81,10 @@ tests:
           pattern: 'zeppelin'
         documentIndex: 1
       # Per-key writes: trino (all paths), spark (all paths), connect
-      # (rawlake only), sandbox-veri (sandbox_veri only).
+      # (role-only — the Console-rendered Iceberg sink ALWAYS routes to
+      # Bronze `<ns>_raw`, which does NOT start with `rawlake`; see
+      # 04-nessie-ha.yaml's ALLOW_CONNECT_WRITE comment), sandbox-veri
+      # (sandbox_veri only).
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -97,8 +100,8 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
-            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie' && path.startsWith('rawlake')"
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie'"
         documentIndex: 1
       - contains:
           path: spec.template.spec.containers[0].env
@@ -196,7 +199,7 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_RAWLAKE_WRITE
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
         documentIndex: 1
 
   - it: auth on + keycloak on renders all 4 svc-*-nessie clients with the right fields + secrets + NO aud mapper
