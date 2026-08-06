@@ -45,4 +45,230 @@ type: Opaque
 stringData:
   proxy-token: {{ .Values.jupyter.proxyToken | quote }}
 {{- end }}
+---
+# jupyterhub_config.py ConfigMap (Task 4, jupyterhub-per-user-sandbox) —
+# GenericOAuthenticator(Keycloak `jupyter`) + KubeSpawner + the load-bearing
+# `pre_spawn_hook`/`modify_pod_hook`. Transcribed from the spike's exact,
+# live-confirmed skeleton (docs/superpowers/spikes/
+# 2026-08-06-jupyterhub-config.md §1.2/§2), with the revisions that spike
+# flagged as spike-only (`allow_all=True`, no login gate) or missing
+# (`enable_auth_state=True` is INTENTIONALLY NOT set — spike-confirmed the
+# Hub crashes at boot without `JUPYTERHUB_CRYPT_KEY`, and it isn't needed:
+# `spawner.user.groups` is synchronous, populated by `manage_groups` at LOGIN
+# time, strictly before `pre_spawn_hook` ever runs).
+#
+# NO secret literal: OAUTH_CLIENT_SECRET/CONFIGPROXY_AUTH_TOKEN are read from
+# process env at runtime — populated by a LATER task's Hub Deployment via
+# `secretKeyRef` against `jupyter-oidc-credentials`/`jupyter-proxy-token`
+# (this task's Secrets, above) or their out-of-band equivalents. Same
+# contract as every other `os.environ[...]`-only config file in this chart
+# (superset_config.py, _zeppelin.tpl's spark-conf-render).
+#
+# Login gate: `allow_all=False` + `allowed_groups` restricted to the
+# Keycloak group each dept's `sandbox.departments[].adGroup` federates in as
+# (see 10-keycloak.yaml's `group-ldap-mapper`, `group.name.ldap.attribute:
+# cn`, `full.path: false` on the `jupyter` client's groups mapper above) — a
+# user with none of these groups cannot log in at all, not merely fail later
+# in `pre_spawn_hook`.
+#
+# IMPORTANT naming subtlety: the Keycloak/AD group name is the CN portion of
+# `adGroup` (e.g. "sandbox-veri"), which is INDEPENDENT of
+# `sandbox.departments[].name` (e.g. "veri-bilimi", the long DNS-safe id used
+# for the K8s resource names below — see that field's comment in
+# values.yaml). `pre_spawn_hook` derives its `DEPTS` dict key the SAME way
+# (the short code after "sandbox-" in the CN), then looks up the actual
+# `name`-based resource names (SA/S3-secret/Nessie-secret/catalog) from that
+# key — the two identifiers never get conflated.
+#
+# Per-dept secret injection: KubeSpawner-only for the notebook/driver
+# (`modify_pod_hook`, native pod-spec `secretKeyRef` env) — spike-confirmed
+# `spark.kubernetes.driver.secretKeyRef.*` is a silent no-op in this
+# notebook-as-driver topology (no spark-submit-constructed driver pod to
+# inject into). Executors DO go through Spark's own secret injection
+# (`spark.kubernetes.executor.secretKeyRef.*`), set in `pre_spawn_hook` as
+# real `spark.kubernetes.*` conf via `PYSPARK_SUBMIT_ARGS` (`--conf k=v ...
+# pyspark-shell`) — the documented mechanism `pyspark.java_gateway` reads
+# when launching `spark-submit` under the hood for a plain
+# `SparkSession.builder.getOrCreate()` in the notebook kernel; a bare env var
+# named after a Spark conf key has NO effect on its own.
+#
+# Gated same as the rest of this file: `components.jupyter` AND
+# `auth.oidc.enabled`.
+{{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jupyterhub-config
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  jupyterhub_config.py: |
+    import os
+
+    c = get_config()  # noqa
+
+    # --- Authenticator: GenericOAuthenticator against Keycloak client "jupyter" ---
+    c.JupyterHub.authenticator_class = "generic-oauth"
+
+    c.GenericOAuthenticator.client_id = "jupyter"
+    c.GenericOAuthenticator.client_secret = os.environ["OAUTH_CLIENT_SECRET"]
+    _OIDC_ISSUER = os.environ["OIDC_ISSUER"]
+    c.GenericOAuthenticator.authorize_url = _OIDC_ISSUER + "/protocol/openid-connect/auth"
+    c.GenericOAuthenticator.token_url = _OIDC_ISSUER + "/protocol/openid-connect/token"
+    c.GenericOAuthenticator.userdata_url = _OIDC_ISSUER + "/protocol/openid-connect/userinfo"
+    c.GenericOAuthenticator.oauth_callback_url = {{ printf "https://%s/hub/oauth_callback" (include "lakehouse.routeHost" (dict "name" "jupyter" "context" .)) | quote }}
+    c.GenericOAuthenticator.username_claim = "preferred_username"
+    c.GenericOAuthenticator.scope = ["openid", "profile", "email"]
+
+    # manage_groups=True is REQUIRED before claim_groups_key does anything
+    # (oauthenticator's generic.py `_claim_groups_key_changed` observer raises
+    # ValueError at config time otherwise -- spike-confirmed from source).
+    # spawner.user.groups is then SYNCHRONOUS -- no auth_state needed for the
+    # group-reading mechanism itself, so enable_auth_state is deliberately
+    # left unset (spike-confirmed: setting it crashes the Hub at boot without
+    # a JUPYTERHUB_CRYPT_KEY, which nothing here needs).
+    c.GenericOAuthenticator.manage_groups = True
+    c.GenericOAuthenticator.claim_groups_key = "groups"
+
+    # Login gate: only members of a configured sandbox-<dept> group may log
+    # in at all.
+    c.Authenticator.allow_all = False
+    c.Authenticator.allowed_groups = set()
+    {{- range .Values.sandbox.departments }}
+    {{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
+    c.Authenticator.allowed_groups.add({{ $cn | quote }})
+    {{- end }}
+
+    # --- Proxy: ConfigurableHTTPProxy (default class), Hub<->proxy shared secret ---
+    c.ConfigurableHTTPProxy.auth_token = os.environ["CONFIGPROXY_AUTH_TOKEN"]
+
+    # --- Spawner: KubeSpawner ---
+    c.JupyterHub.spawner_class = "kubespawner.KubeSpawner"
+    c.KubeSpawner.image = {{ printf "%s/jupyter:%s" .Values.global.imageRegistry .Values.versions.jupyterImageTag | quote }}
+    c.KubeSpawner.namespace = {{ include "lakehouse.namespace" . | quote }}
+
+    # Per-user notebook home-directory PVC -- persists `pip install --user`
+    # (and any other $HOME state) across restarts. `pvc_name_template` is
+    # KubeSpawner's own default (kept explicit for clarity); `volumes`/
+    # `volume_mounts` reference that SAME template so the PVC this creates is
+    # the one actually mounted at the notebook's home directory (jovyan, per
+    # images/jupyter's base image).
+    c.KubeSpawner.storage_pvc_ensure = True
+    c.KubeSpawner.pvc_name_template = "claim-{user_server}"
+    c.KubeSpawner.storage_capacity = {{ .Values.jupyter.storage | quote }}
+    c.KubeSpawner.volumes = [{"name": "home", "persistentVolumeClaim": {"claimName": "claim-{user_server}"}}]
+    c.KubeSpawner.volume_mounts = [{"name": "home", "mountPath": "/home/jovyan"}]
+
+    # --- Per-department config, rendered from .Values.sandbox.departments.
+    # Keyed by the SHORT code embedded in the Keycloak/AD group name (the CN
+    # of `adGroup`, stripped of its "sandbox-" prefix) -- INDEPENDENT of
+    # `sandbox.departments[].name` (the long DNS-safe id the K8s resource
+    # names below are built from). See the file-header comment.
+    DEPTS = {}
+    {{- range .Values.sandbox.departments }}
+    {{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
+    {{- $code := trimPrefix "sandbox-" $cn }}
+    DEPTS[{{ $code | quote }}] = {
+        "sa": {{ printf "sa-sandbox-%s" .name | quote }},
+        "s3_secret": {{ .s3SecretName | quote }},
+        "nessie_secret": {{ printf "sandbox-%s-oidc-credentials" .name | quote }},
+        "nessie_client_id": {{ printf "svc-sandbox-%s" .name | quote }},
+        "catalog": {{ printf "sandbox_%s" .name | quote }},
+    }
+    {{- end }}
+
+
+    def pre_spawn_hook(spawner):
+        # THE MECHANISM (spike-confirmed live, real Keycloak login -> real
+        # pre_spawn_hook received spawner.user.groups == ["sandbox-veri"]):
+        # spawner.user.groups is SYNCHRONOUS, non-async -- JupyterHub-core's
+        # User.__getattr__ delegates to orm_user.groups, already populated by
+        # Authenticator.manage_groups + user.sync_groups() at LOGIN time
+        # (auth_to_user() in jupyterhub/handlers/base.py), strictly BEFORE
+        # pre_spawn_hook ever runs. No await, no get_auth_state() needed.
+        group_names = [g.name for g in spawner.user.groups]
+        dept = None
+        for g in group_names:
+            if g.startswith("sandbox-"):
+                code = g[len("sandbox-"):]
+                if code in DEPTS:
+                    dept = code
+                    break
+        if dept is None:
+            raise Exception("user has no configured sandbox-<dept> group -- refusing to spawn")
+
+        d = DEPTS[dept]
+        # Stashed for modify_pod_hook below (same spawner instance for this
+        # spawn attempt) -- looked up ONLY through the fixed DEPTS dict built
+        # entirely from chart values, never from a user-influenced string
+        # used as a path/name directly, so there is no cross-department
+        # traversal even though `dept` originates from the user's own OIDC
+        # groups claim.
+        spawner._dept = dept
+
+        spawner.service_account = d["sa"]
+        # automount_service_account_token: KubeSpawner's own default (None)
+        # already mounts the SA token when service_account is explicitly set
+        # (spike-confirmed from source) -- no extra flag needed.
+
+        spawner.environment["DEPT"] = dept
+        spawner.environment["NESSIE_SANDBOX_CATALOG"] = d["catalog"]
+
+        # --- Spark-on-k8s-from-notebook conf (spike §2): the notebook
+        # process itself IS the driver (client mode) -- executors are always
+        # spawned by Spark via the k8s API regardless of deploy mode, so
+        # secretKeyRef.* DOES work for them (unlike the driver, handled by
+        # modify_pod_hook below). Rendered as PYSPARK_SUBMIT_ARGS so a plain
+        # `SparkSession.builder.getOrCreate()` in the notebook kernel picks
+        # these up with no notebook-side boilerplate.
+        spark_confs = {
+            "spark.master": "k8s://https://kubernetes.default.svc",
+            "spark.kubernetes.namespace": {{ include "lakehouse.namespace" . | quote }},
+            "spark.kubernetes.container.image": {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }},
+            "spark.kubernetes.authenticate.driver.serviceAccountName": d["sa"],
+            "spark.kubernetes.executor.secretKeyRef.NESSIE_OAUTH_SECRET": d["nessie_secret"] + ":client-secret",
+            "spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID": d["s3_secret"] + ":access-key-id",
+            "spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY": d["s3_secret"] + ":secret-access-key",
+        }
+        conf_args = " ".join('--conf "%s=%s"' % (k, v) for k, v in spark_confs.items())
+        spawner.environment["PYSPARK_SUBMIT_ARGS"] = "%s pyspark-shell" % conf_args
+
+
+    def modify_pod_hook(spawner, pod):
+        # THE LOAD-BEARING SURPRISE (spike §2.4, live negative control):
+        # spark.kubernetes.driver.secretKeyRef.* is a silent no-op in this
+        # notebook-as-driver topology -- that conf key only takes effect when
+        # spark-submit ITSELF constructs the driver pod spec (--deploy-mode
+        # cluster). Here the "driver pod" is the notebook pod KubeSpawner
+        # already created before pyspark/spark-submit ever runs inside it, so
+        # the driver's own S3/Nessie secrets (needed by PyIceberg AND by the
+        # Spark driver process itself) must come through KubeSpawner's own
+        # pod-spec construction instead -- native secretKeyRef env, injected
+        # here.
+        dept = getattr(spawner, "_dept", None)
+        if dept is None or dept not in DEPTS:
+            raise Exception("modify_pod_hook: no sandbox department resolved for this spawn -- refusing to inject credentials")
+        d = DEPTS[dept]
+        from kubernetes import client as k8s_client
+
+        def _secret_env(name, secret_name, key):
+            return k8s_client.V1EnvVar(
+                name=name,
+                value_from=k8s_client.V1EnvVarSource(
+                    secret_key_ref=k8s_client.V1SecretKeySelector(name=secret_name, key=key)
+                ),
+            )
+
+        extra_env = [
+            _secret_env("AWS_ACCESS_KEY_ID", d["s3_secret"], "access-key-id"),
+            _secret_env("AWS_SECRET_ACCESS_KEY", d["s3_secret"], "secret-access-key"),
+            _secret_env("NESSIE_OAUTH_SECRET", d["nessie_secret"], "client-secret"),
+        ]
+        pod.spec.containers[0].env = (pod.spec.containers[0].env or []) + extra_env
+        return pod
+
+
+    c.Spawner.pre_spawn_hook = pre_spawn_hook
+    c.KubeSpawner.modify_pod_hook = modify_pod_hook
+{{- end }}
 {{- end }}

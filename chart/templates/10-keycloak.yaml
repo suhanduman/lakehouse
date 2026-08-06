@@ -445,6 +445,24 @@ spec:
       # Empty default => client kept, secret provisioned out-of-band (same
       # contract as the `superset` client above).
       secret: {{ .Values.jupyter.oidcClientSecret | quote }}
+      # `groups` claim mapper (Task 4, jupyterhub-per-user-sandbox) —
+      # WITHOUT it Keycloak's userinfo response has NO `groups` key at all
+      # (spike-confirmed: docs/superpowers/spikes/
+      # 2026-08-06-jupyterhub-config.md §1.1/§1.2). Same
+      # oidc-group-membership-mapper shape as `lakehouse-console`/`kafka-ui`
+      # below. jupyterhub_config.py's GenericOAuthenticator
+      # (`claim_groups_key = "groups"`) reads this exact claim to gate
+      # login/spawn on `sandbox-<dept>` membership.
+      protocolMappers:
+      - name: groups
+        protocol: "openid-connect"
+        protocolMapper: "oidc-group-membership-mapper"
+        config:
+          "claim.name": "groups"
+          "full.path": "false"
+          "id.token.claim": "true"
+          "access.token.claim": "true"
+          "userinfo.token.claim": "true"
     {{- if .Values.components.ai }}
     - clientId: ai-ui
       enabled: true
