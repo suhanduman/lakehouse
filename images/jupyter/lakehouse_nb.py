@@ -30,7 +30,18 @@ def iceberg():
 
 
 def _spark_conf():
-    nu = _e("NESSIE_URI"); sb = _e("NESSIE_SANDBOX_CATALOG"); wh = os.environ.get("NESSIE_WAREHOUSE", "depo")
+    # Final-review fix wave: both warehouse values below now mirror the
+    # working Zeppelin reference (chart/templates/_zeppelin.tpl) byte-for-
+    # byte for the SAME Nessie REST catalogs -- `lakehouse.warehouse` is the
+    # FULL warehouse location (NESSIE_WAREHOUSE carries e.g.
+    # "s3://depo/warehouse", set by chart/templates/23-jupyterhub.yaml's
+    # `pre_spawn_hook` from `.Values.nessie.catalog.warehouse.location`, NOT
+    # a bucket-only name), and the sandbox catalog's warehouse is the full
+    # `s3a://sandbox-<dept>/` form -- a bare bucket name silently mis-scopes
+    # every table either helper creates.
+    nu = _e("NESSIE_URI"); sb = _e("NESSIE_SANDBOX_CATALOG")
+    wh = os.environ.get("NESSIE_WAREHOUSE", "s3://depo/warehouse")
+    sb_warehouse = "s3a://%s/" % sb.replace("sandbox_", "sandbox-")
 
     def cat(name, warehouse):
         return {f"spark.sql.catalog.{name}": "org.apache.iceberg.spark.SparkCatalog",
@@ -43,7 +54,7 @@ def _spark_conf():
 
     c = {"spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
          "spark.hadoop.fs.s3a.path.style.access": "true", "spark.hadoop.fs.s3a.endpoint": _e("AWS_ENDPOINT_URL_S3")}
-    c.update(cat("lakehouse", wh)); c.update(cat("rawlake", "rawdata")); c.update(cat(sb, sb.replace("sandbox_", "sandbox-")))
+    c.update(cat("lakehouse", wh)); c.update(cat("rawlake", "rawdata")); c.update(cat(sb, sb_warehouse))
     return c
 
 

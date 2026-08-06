@@ -306,14 +306,24 @@ data:
 
         # Task 5 (turnkey notebook): plain env consumed by images/jupyter/
         # lakehouse_nb.py's spark()/trino()/iceberg() helpers -- the Nessie
-        # REST catalog endpoint/warehouse bucket, this dept's Nessie OAuth
+        # REST catalog endpoint/warehouse location, this dept's Nessie OAuth
         # client_id (already in DEPTS, above), and the Trino coordinator's
         # internal host/port. No hardcoded endpoints: all three come from
         # the SAME chart helpers/values every other consumer in this chart
-        # reads (lakehouse.svc.nessie/lakehouse.svc.trino/lakehouse.fqdn/
-        # lakehouse.s3BucketFromUri), never a literal dev-storage hostname.
+        # reads (lakehouse.svc.nessie/lakehouse.svc.trino/lakehouse.fqdn),
+        # never a literal dev-storage hostname.
+        #
+        # Final-review fix wave: NESSIE_WAREHOUSE carries the FULL warehouse
+        # location (`.Values.nessie.catalog.warehouse.location`, e.g.
+        # "s3://depo/warehouse"), NOT the bucket-only `s3BucketFromUri` form
+        # -- this must match the Zeppelin reference's own
+        # `spark.sql.catalog.lakehouse.warehouse` value byte-for-byte
+        # (chart/templates/_zeppelin.tpl) since lakehouse_nb.py's
+        # `_spark_conf()` builds the SAME Iceberg RESTCatalog config for the
+        # SAME Nessie warehouse; a bucket-only value silently mis-scopes
+        # every table this helper creates.
         spawner.environment["NESSIE_URI"] = {{ printf "http://%s:19120/iceberg/" (include "lakehouse.svc.nessie" .) | quote }}
-        spawner.environment["NESSIE_WAREHOUSE"] = {{ include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.warehouse.location | quote }}
+        spawner.environment["NESSIE_WAREHOUSE"] = {{ .Values.nessie.catalog.warehouse.location | quote }}
         spawner.environment["NESSIE_CLIENT_ID"] = d["nessie_client_id"]
         spawner.environment["TRINO_HOST"] = {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) | quote }}
         spawner.environment["TRINO_PORT"] = "8443"

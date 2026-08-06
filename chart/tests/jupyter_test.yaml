@@ -1352,7 +1352,7 @@ tests:
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'spawner\.environment\["NESSIE_WAREHOUSE"\] = "depo"'
+          pattern: 'spawner\.environment\["NESSIE_WAREHOUSE"\] = "s3://depo/warehouse"'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]

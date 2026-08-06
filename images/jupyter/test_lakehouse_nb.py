@@ -10,7 +10,7 @@ BASE = {
     "AWS_REGION": "us-east-1",
     "AWS_ACCESS_KEY_ID": "ak",
     "AWS_SECRET_ACCESS_KEY": "sk",
-    "NESSIE_WAREHOUSE": "depo",
+    "NESSIE_WAREHOUSE": "s3://depo/warehouse",
     "TRINO_HOST": "trino-coordinator.lakehouse.svc",
     "TRINO_PORT": "8443",
     "SVC_JUPYTER_TRINO_SECRET": "jt",
@@ -34,6 +34,18 @@ def test_spark_conf_has_catalogs(monkeypatch):
     c = _load(monkeypatch)._spark_conf()
     assert c["spark.sql.catalog.sandbox_veri.uri"] == "http://nessie:19120/iceberg/"
     assert c["spark.hadoop.fs.s3a.endpoint"] == "https://flashblade.kc:443"
+
+
+def test_spark_conf_warehouse_values_match_zeppelin_reference(monkeypatch):
+    # Final-review fix wave: chart/templates/_zeppelin.tpl is the working
+    # reference for these SAME Nessie REST catalogs -- `lakehouse` gets the
+    # FULL warehouse location (NESSIE_WAREHOUSE, unmodified), `rawlake`
+    # stays the bare "rawdata" name, and the sandbox catalog gets the full
+    # "s3a://sandbox-<dept>/" form (never a bare bucket name).
+    c = _load(monkeypatch)._spark_conf()
+    assert c["spark.sql.catalog.lakehouse.warehouse"] == "s3://depo/warehouse"
+    assert c["spark.sql.catalog.rawlake.warehouse"] == "rawdata"
+    assert c["spark.sql.catalog.sandbox_veri.warehouse"] == "s3a://sandbox-veri/"
 
 
 def test_trino_connect_args(monkeypatch):
