@@ -39,6 +39,19 @@ components:
   superset: true
   dbt: true
   sparkHistory: true
+  # Hand-rolled JupyterHub (per-user notebook sandbox): OFF by default even
+  # at this tier, restating the chart default — the Hub/proxy Deployments
+  # and per-user notebook Pods do NOT render regardless of this file (see
+  # the coherence guard in chart/templates/23-jupyterhub.yaml:
+  # `components.jupyter` ALSO requires `auth.oidc.enabled`, already the
+  # default at this tier). The operator turns this on PER INSTALL by
+  # flipping this to `true` — it reuses the SAME `sandbox.departments` list
+  # as c2 below (each dept needs a `sandbox-<dept>` AD/Keycloak group whose
+  # CN drives the per-user dept mapping) plus the `jupyter` Keycloak client
+  # secret (`jupyter.oidcClientSecret`) and the Hub<->proxy shared token
+  # (`jupyter.proxyToken`). See the README's "JupyterHub per-user sandbox"
+  # section for the full operator checklist before enabling.
+  jupyter: false
 
 # c2 (per-dept analyst sandbox): OFF by default even at this tier, restating
 # the chart default — an empty `departments` list means nothing renders

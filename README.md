@@ -676,6 +676,115 @@ test cluster'ında koşulamaz).
 
 ---
 
+## JupyterHub kişi-başına notebook sandbox'ı (per-user sandbox)
+
+`components.jupyter: true` iken (dev/medium/large tier'larda VARSAYILAN
+KAPALI — `chart/values.yaml`, `values-medium.yaml`/`values-large.yaml`)
+chart, elle-örülmüş (hand-rolled) bir JupyterHub kurar
+(`chart/templates/23-jupyterhub.yaml`): her analist KENDİ notebook pod'unu
+alır — c2'nin PAYLAŞILAN, departman-başına-bir-instance Zeppelin'inin
+aksine, gerçek bir kişi-başına izolasyon modeli.
+
+- **Model — KubeSpawner + `pre_spawn_hook`:** Hub, kullanıcıyı Keycloak'ın
+  `jupyter` client'ı üzerinden (GenericOAuthenticator) authenticate eder;
+  `manage_groups=True` + `claim_groups_key=groups` sayesinde
+  `spawner.user.groups` login anında SENKRON olarak doldurulur (await
+  gerekmez). `pre_spawn_hook` bu grup listesinden `sandbox-` önekli olanı
+  bulur, önekten sonraki kısmı (`dept` kodu) c2'nin
+  `sandbox.departments[]` listesinden türetilen `DEPTS` sözlüğünde arar ve
+  BULUNURSA o departmanın c2 kaynaklarını (`sa-sandbox-<name>` K8s SA,
+  `s3-sandbox-<name>` scoped S3 Secret, `svc-sandbox-<name>` Nessie OAuth2
+  client'ı, `sandbox_<name>` katalogu) pod'a enjekte eder — YENİ kaynaklar
+  üretmez, c2'nin ZATEN var olan per-dept kaynaklarını YENİDEN KULLANIR. AD
+  grubunun CN'i (`sandbox.departments[].adGroup`'un CN kısmı, ör.
+  `sandbox-veri`) ile K8s kaynak adlarının türediği DNS-safe `name` alanı
+  (ör. `veri-bilimi`) BİLİNÇLİ OLARAK bağımsız iki alandır — `pre_spawn_hook`
+  ikisini asla karıştırmaz (bkz. `23-jupyterhub.yaml`'ın kendi başlık
+  yorumu).
+- **c2'yi TAMAMLAR, onun yerini almaz:** bir departmanın analistleri artık
+  İKİ notebook seçeneğine sahiptir — c2'nin paylaşılan, AD-grup-gated
+  Zeppelin instance'ı (`%spark`/`%pyspark`/`%trino`, çoklu-kullanıcı tek
+  pod) VE bu slice'ın kişi-başına JupyterHub pod'u (tam Python/PySpark
+  esnekliği, kendi $HOME'u, kendi paket kurulumu). İkisi AYNI departman
+  kaynaklarını (SA/S3-secret/Nessie-client/katalog) paylaşır — birinin
+  izolasyon garantisi diğerini de kapsar.
+- **İki hesaplama yolu:** (1) **PyIceberg direkt** — notebook pod'una
+  `modify_pod_hook` ile doğrudan enjekte edilen `AWS_ACCESS_KEY_ID`/
+  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET` env değişkenleriyle,
+  ayrı bir driver/executor topolojisi olmadan REST-katalog + S3'e doğrudan
+  konuşur (hafif, hızlı, tek-pod). (2) **Spark-on-k8s** — notebook
+  process'inin KENDİSİ Spark driver'ıdır (client mode); executor pod'ları
+  `d["sa"]` (departmanın `sa-sandbox-<name>` SA'sı) ALTINDA, Spark'ın kendi
+  k8s-client'ı tarafından spawn edilir — `pre_spawn_hook`, bu konfigürasyonu
+  `PYSPARK_SUBMIT_ARGS` ortam değişkeni olarak render eder (`--conf
+  spark.kubernetes.*=... pyspark-shell`), böylece kernel içindeki düz bir
+  `SparkSession.builder.getOrCreate()` notebook tarafında hiçbir ek kod
+  gerektirmeden bu conf'ları otomatik alır (bu, pyspark'ın `spark-submit`'i
+  arka planda başlatırken okuduğu belgelenmiş mekanizmadır).
+- **İzolasyon — S3 veri bariyeri + Nessie CEL metadata bariyeri:** c2 ile
+  AYNI iki katman — bir departman analistinin scoped S3 kimlik bilgisi
+  yalnızca KENDİ `sandbox-<name>` bucket'ında RW'dir (prod bucket'larında
+  yalnızca RO), VE Nessie machine-auth'un `svc-sandbox-<dept>` CEL kuralı
+  yalnızca `sandbox_<dept>` path-önekine yazmaya izin verir. Yani bir
+  `dept=veri` kullanıcısı SADECE `sandbox_veri` katalogunu okuyup/yazabilir
+  — başka bir departmanın katalogu/bucket'ı, aynı Hub'da çalışan başka bir
+  pod'un kaynaklarıdır ve bu kullanıcının kimlik bilgileriyle asla
+  erişilemez.
+- **Coherence guard — `components.jupyter` `auth.oidc.enabled` gerektirir:**
+  JupyterHub'ın authenticator'ı GenericOAuthenticator'dır, kimliksiz bir
+  fallback'i YOKTUR — bu yüzden `23-jupyterhub.yaml`'ın başında, c2/b1/b2 ile
+  AYNI desende bir fail-loud guard vardır: `components.jupyter: true` +
+  `auth.oidc.enabled: false` render'ı GÜRÜLTÜLÜ ŞEKİLDE BAŞARISIZ kılar
+  (`helm-unittest` `failedTemplate` testiyle regresyona karşı korunur,
+  `chart/tests/jupyter_test.yaml`) — aksi halde Hub'ın (backing Service'i
+  olmayan) `jupyter` Route/Ingress'i dangling kalır, hiçbir zaman
+  çalışamayacak bir Hub için.
+- **Paket esnekliği:** `images/jupyter` imajı KAPSAMLIdır —
+  `quay.io/jupyter/pyspark-notebook` tabanı (pandas/numpy/scipy/
+  scikit-learn/matplotlib/PySpark hazır) + `pyiceberg[s3fs,pyarrow]` +
+  `trino[sqlalchemy]` + version-matched `iceberg-spark-runtime`/
+  `iceberg-aws-bundle` jar'ları BAKE EDİLMİŞ (air-gap'te Maven Central
+  gerekmez). Analist bunun ÜZERİNE `pip install --user` ile ek paket
+  kurabilir — KubeSpawner'ın kişi-başına ev-dizini PVC'si (`claim-
+  {user_server}`, `.Values.jupyter.storage`) bunu pod restart'ları arasında
+  KALICI kılar. **Air-gap notu:** `pip install --user` bir air-gapped
+  kümede İNTERNETE erişemeyeceğinden başarısız olur — bu bugün ÇÖZÜLMEMİŞ
+  bir gelecek notudur; bir iç PyPI mirror'ı (ör. devpi/Nexus) sağlamak bu
+  slice'ın kapsamı DIŞINDADIR.
+- **Operatör gereksinimleri:** c2'nin `sandbox.departments[]` listesini
+  TANIMLAYIN (boşsa `DEPTS` boş kalır, hiçbir kullanıcı spawn edemez); her
+  departman için gerçek AD/Keycloak grubunu sağlayın — CN'i `sandbox-`
+  ÖNEKİYLE BAŞLAMALIDIR (aşağıdaki UAT maddesine bakın); Keycloak `jupyter`
+  client'ının secret'ını (`jupyter.oidcClientSecret`, `secrets.mode`'a göre)
+  VE Hub<->proxy paylaşımlı token'ı (`jupyter.proxyToken`) sağlayın;
+  `images/jupyterhub` + `images/jupyter`'i build edip `global.imageRegistry`'ye
+  push edin (`versions.jupyterhubImageTag`/`versions.jupyterImageTag`).
+
+**Bilinen sınırlama / UAT:** bu slice helm-unittest ile doğrulanmıştır
+(gating, coherence guard, `pre_spawn_hook`'un departman türetme mantığı VE
+hiçbir sandbox grubu OLMAYAN bir kullanıcının spawn EDEMEDİĞİ —
+`chart/tests/jupyter_test.yaml`). Aşağıdakiler bir **OpenShift UAT**
+teslimatıdır (Keycloak yok + spark-operator/gerçek k8s-Spark yok olan mevcut
+test cluster'ında koşulamaz):
+- Tam Keycloak → Hub → kişi-başına-pod → Spark-on-k8s E2E'si (gerçek bir
+  Keycloak login'inden gerçek bir notebook pod spawn'ına VE oradan gerçek
+  executor pod'larının ayağa kalkmasına kadar).
+- spark-operator/executor RBAC'ının (`sandbox-<name>-spark-executor` Role/
+  RoleBinding, spike'ın minimum-verb analiziyle türetilmiş) hedef cluster'da
+  GERÇEKTEN yeterli olduğunun doğrulanması.
+- AD grubunun CN'inin `sandbox-` ile BAŞLAMASI gerektiği — `pre_spawn_hook`
+  bu önekle eşleşmeyen (veya `DEPTS` sözlüğünde karşılığı olmayan) bir
+  kullanıcıyı FAIL-CLOSED reddeder (`raise Exception`, spawn gerçekleşmez);
+  operatörün gerçek AD grup adlandırmasının bu varsayımla uyuştuğunun UAT'ta
+  doğrulanması gerekir.
+- `PYSPARK_SUBMIT_ARGS` mekanizmasının (yukarıdaki Spark-on-k8s yolu) gerçek
+  bir spark-operator/k8s kümesine karşı canlı doğrulanması — bugüne kadar
+  yalnızca spike'ın kaynak-kodu/dokümantasyon analiziyle doğrulanmıştır,
+  çalışan bir notebook kernel'inden gerçek bir `SparkSession` kurulumuna
+  karşı DEĞİL.
+
+---
+
 ## İngest — bilinen tradeoff'lar ve gerekçeler
 
 Aşağıdaki üç nokta, mevcut ingest mimarisinin bilinçli tradeoff'ları ve
