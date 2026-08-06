@@ -141,6 +141,12 @@ data:
 
     # --- Proxy: ConfigurableHTTPProxy (default class), Hub<->proxy shared secret ---
     c.ConfigurableHTTPProxy.auth_token = os.environ["CONFIGPROXY_AUTH_TOKEN"]
+    # Task 5: the proxy runs as its OWN Deployment (the images/jupyterhub image
+    # is python-slim+pip only, no bundled Node.js configurable-http-proxy), so
+    # the Hub must NOT try to fork/manage a child CHP process -- it talks to
+    # the already-running, separately-deployed proxy's api port instead.
+    c.ConfigurableHTTPProxy.should_start = False
+    c.ConfigurableHTTPProxy.api_url = {{ printf "http://%s:8001" (include "lakehouse.svc.jupyterhubProxyApi" .) | quote }}
 
     # --- Spawner: KubeSpawner ---
     c.JupyterHub.spawner_class = "kubespawner.KubeSpawner"
@@ -271,4 +277,269 @@ data:
     c.Spawner.pre_spawn_hook = pre_spawn_hook
     c.KubeSpawner.modify_pod_hook = modify_pod_hook
 {{- end }}
+
+# --- Task 5: Hub SA + KubeSpawner RBAC + per-dept Spark-executor RBAC +
+# the Hub/proxy Deployments + Services. Same file-wide gate
+# (`components.jupyter` AND `auth.oidc.enabled`) as everything above. ---
+
+# The Hub's OWN ServiceAccount — KubeSpawner (running inside the Hub pod)
+# uses THIS identity's in-cluster token to talk to the k8s API and spawn/
+# manage per-user notebook Pods/PVCs. Distinct from `sa-sandbox-<dept>`
+# (chart/templates/09c-zeppelin-sandbox.yaml) below, which is the identity
+# the SPAWNED notebook/Spark-driver Pod itself runs as.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jupyterhub
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+---
+# KubeSpawner RBAC — spike §2b MINIMUM verbs (docs/superpowers/spikes/
+# 2026-08-06-jupyterhub-config.md), namespace-scoped Role (NOT a
+# ClusterRole — the Hub only ever spawns/manages Pods/PVCs in its OWN
+# release namespace). `deletecollection` on `pods` is DELIBERATELY separate
+# from `delete` — Kubernetes RBAC does not imply one from the other, and
+# KubeSpawner's own Pod-reflector/cleanup path performs bulk
+# delete-by-label-selector operations that need `deletecollection`
+# specifically (same class of finding the spike made for Spark's executor
+# cleanup, below).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jupyterhub-kubespawner
+  namespace: {{ include "lakehouse.namespace" . }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  # Distinct name from the Role above (NOT "jupyterhub-kubespawner" for both) —
+  # same "-role"/"-binding" naming convention as `spark-driver-role`/
+  # `spark-driver-binding` (chart/templates/05-spark-operator.yaml), so a
+  # test/tool selecting a document by `metadata.name` alone can never get an
+  # ambiguous match between the Role and its RoleBinding.
+  name: jupyterhub-kubespawner-binding
+  namespace: {{ include "lakehouse.namespace" . }}
+subjects:
+- kind: ServiceAccount
+  name: jupyterhub
+  namespace: {{ include "lakehouse.namespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jupyterhub-kubespawner
+
+# Per-dept Spark-on-k8s executor RBAC — spike §2b/§2c (same doc). Binds
+# EACH department's `sa-sandbox-<name>` SA (chart/templates/
+# 09c-zeppelin-sandbox.yaml, created when `sandbox.enabled` is true — this
+# RoleBinding is harmless if that SA does not yet exist, it simply has no
+# effect until it does) to the verbs Spark's own driver-side k8s-client
+# needs to create/watch/tear-down its OWN executor Pods (spawned from
+# inside the notebook, which itself runs AS this SA per `pre_spawn_hook`
+# above). `services`/`persistentvolumeclaims` are not exercised by
+# client-mode-in-pod but are granted anyway — spike-confirmed: without
+# them, Spark's unconditional teardown sweep throws non-fatal but
+# alarming ERROR-level `Forbidden` stack traces on every job. Namespace-
+# scoped Role per dept (NOT a ClusterRole) — one dept's executors can
+# never touch another dept's Pods/ConfigMaps.
+{{- range .Values.sandbox.departments }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-{{ .name }}-spark-executor
+  namespace: {{ include "lakehouse.namespace" $ }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  # Distinct name from the Role above (see the KubeSpawner RoleBinding's
+  # comment, same rationale/convention, per-dept here).
+  name: sandbox-{{ .name }}-spark-executor-binding
+  namespace: {{ include "lakehouse.namespace" $ }}
+subjects:
+- kind: ServiceAccount
+  name: sa-sandbox-{{ .name }}
+  namespace: {{ include "lakehouse.namespace" $ }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sandbox-{{ .name }}-spark-executor
+{{- end }}
+
+# configurable-http-proxy — a SEPARATE Deployment from the Hub (see
+# `.Values.versions.configurableHttpProxyImage`'s comment). Fronts the Hub
+# AND every per-user singleuser server behind one stable public entry
+# point (port 8000, the Route/Ingress target — `lakehouse.svc.jupyterhubProxy`)
+# while its api port (8001, `lakehouse.svc.jupyterhubProxyApi`) is where the
+# Hub pushes routing-table updates (`should_start=False` +
+# `api_url=http://<this-svc>:8001` set in the jupyterhub-config ConfigMap
+# above) — the Hub never starts/manages a child CHP process itself.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyterhub-proxy
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: jupyterhub-proxy}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: jupyterhub-proxy}
+  template:
+    metadata:
+      labels: {app: jupyterhub-proxy}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: configurable-http-proxy
+        image: {{ .Values.versions.configurableHttpProxyImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["configurable-http-proxy"]
+        args:
+        - "--ip=0.0.0.0"
+        - "--api-ip=0.0.0.0"
+        - "--api-port=8001"
+        - {{ printf "--default-target=http://%s:8081" (include "lakehouse.svc.jupyterhubHub" .) | quote }}
+        - {{ printf "--error-target=http://%s:8081/hub/error" (include "lakehouse.svc.jupyterhubHub" .) | quote }}
+        ports:
+        - {containerPort: 8000, name: http}
+        - {containerPort: 8001, name: api}
+        env:
+        - {name: CONFIGPROXY_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: jupyter-proxy-token, key: proxy-token}}}
+        resources:
+          requests: {cpu: {{ .Values.jupyter.proxy.resources.requests.cpu | quote }}, memory: {{ .Values.jupyter.proxy.resources.requests.memory | quote }}}
+          limits:   {cpu: {{ .Values.jupyter.proxy.resources.limits.cpu | quote }},   memory: {{ .Values.jupyter.proxy.resources.limits.memory | quote }}}
+---
+# The Hub Deployment itself — GenericOAuthenticator + KubeSpawner, config
+# from the `jupyterhub-config` ConfigMap (Task 4, above). `serviceAccountName:
+# jupyterhub` is what lets KubeSpawner actually spawn/manage Pods (the RBAC
+# above). Singleton (`replicas` from `.Values.jupyter.replicas`, default 1) —
+# the Hub holds the proxy routing table + user database in-process; no
+# leader-election/HA yet (see that value's own comment).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyterhub
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: jupyterhub}
+spec:
+  replicas: {{ .Values.jupyter.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: jupyterhub}
+  template:
+    metadata:
+      labels: {app: jupyterhub}
+    spec:
+      serviceAccountName: jupyterhub
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: jupyterhub
+        image: {{ printf "%s/jupyterhub:%s" .Values.global.imageRegistry .Values.versions.jupyterhubImageTag | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["jupyterhub", "-f", "/etc/jupyterhub/jupyterhub_config.py"]
+        ports: [{containerPort: 8081, name: hub}]
+        env:
+        - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: jupyter-oidc-credentials, key: client-secret}}}
+        - {name: CONFIGPROXY_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: jupyter-proxy-token, key: proxy-token}}}
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for the JupyterHub Hub) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
+        volumeMounts:
+        - {name: jupyterhub-config, mountPath: /etc/jupyterhub}
+        resources:
+          requests: {cpu: {{ .Values.jupyter.resources.requests.cpu | quote }}, memory: {{ .Values.jupyter.resources.requests.memory | quote }}}
+          limits:   {cpu: {{ .Values.jupyter.resources.limits.cpu | quote }},   memory: {{ .Values.jupyter.resources.limits.memory | quote }}}
+      volumes:
+      - name: jupyterhub-config
+        configMap: {name: jupyterhub-config}
+---
+# Services. `jupyterhub-proxy` (public, port 8000) is the Route/Ingress
+# target (chart/templates/08-routes-tls.yaml / 08b-ingress-tls.yaml,
+# pre-existing, `.Values.components.jupyter` gate — those hardcode
+# `jupyterhub-proxy` because they were added ahead of this Deployment;
+# `lakehouse.svc.jupyterhubProxy` is kept a single named constant here so
+# the two can never silently drift apart in the future). `jupyterhub-hub`
+# is the proxy's `--default-target`/`--error-target` AND where KubeSpawner-
+# spawned singleuser servers reach the Hub back. `jupyterhub-proxy-api` is
+# where the Hub pushes routing-table updates (`api_url` in the
+# jupyterhub-config ConfigMap above).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.jupyterhubProxy" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+spec:
+  selector: {app: jupyterhub-proxy}
+  ports: [{name: http, port: 8000, targetPort: 8000}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.jupyterhubProxyApi" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+spec:
+  selector: {app: jupyterhub-proxy}
+  ports: [{name: api, port: 8001, targetPort: 8001}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lakehouse.svc.jupyterhubHub" . }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+spec:
+  selector: {app: jupyterhub}
+  ports: [{name: hub, port: 8081, targetPort: 8081}]
 {{- end }}

@@ -662,6 +662,16 @@ versions:
   # `icebergSparkRuntime` = 1.9.0 (same Iceberg/Nessie/Spark matrix as
   # `sparkImageTag` above). Gated by `components.jupyter`.
   jupyterImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: the Hub's configurable-http-proxy —
+  # a SEPARATE Deployment from the Hub itself, because the internally-built
+  # `jupyterhubImageTag` image (images/jupyterhub/Dockerfile) is python-slim
+  # + pip only and does NOT bundle Node.js/npm's `configurable-http-proxy`
+  # (that's JupyterHub's own default proxy implementation, a standalone npm
+  # package, not a Python one). External full-string pin (same convention as
+  # `kafkaUiImage` above — not built via `.Values.global.imageRegistry`),
+  # matching the npm version (5.3.0) exercised live in the
+  # 2026-08-06-jupyterhub-config.md spike.
+  configurableHttpProxyImage: jupyterhub/configurable-http-proxy:5.3.0
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
@@ -1426,6 +1436,15 @@ jupyter:
   # Per-user notebook home-directory PVC size (KubeSpawner storage claim,
   # wired in a later task).
   storage: "5Gi"
+  # configurable-http-proxy — a SEPARATE Deployment from the Hub (see
+  # `.Values.versions.configurableHttpProxyImage`'s comment: the Hub image has
+  # no bundled Node.js CHP). Singleton by design (in-memory routing table,
+  # same rationale as `replicas` above) — not independently scalable, so no
+  # `replicas` knob here.
+  proxy:
+    resources:
+      requests: {cpu: "100m", memory: "128Mi"}
+      limits:   {cpu: "500m", memory: "256Mi"}
 
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport
