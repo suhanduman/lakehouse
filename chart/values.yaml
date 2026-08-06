@@ -1377,6 +1377,36 @@ sandbox:
   #   s3SecretName: s3-sandbox-veri-bilimi      # scoped cred (RW sandbox-<name>, RO prod); out-of-band else MinIO Job
   #   oidcClientSecret: ""                      # dev-convenience single-source for svc-sandbox-<name>; else out-of-band
 
+# Hand-rolled JupyterHub (per-user notebook sandbox). Gated by
+# `components.jupyter` (default false) AND `auth.oidc.enabled` (the Hub's
+# OAuthenticator needs a real Keycloak `jupyter` client — no unauthenticated
+# path is supported). chart/templates/23-jupyterhub.yaml.
+jupyter:
+  # Confidential client secret for the Keycloak `jupyter` client
+  # (chart/templates/10-keycloak.yaml `clients[].secret`, single source — the
+  # two can never drift). Empty default => the `jupyter-oidc-credentials`
+  # Secret is NOT rendered (same dev-convenience-else-out-of-band contract as
+  # `superset.oidc.clientSecret`); provision out-of-band per
+  # `.Values.secrets.mode`.
+  oidcClientSecret: ""
+  # Hub<->configurable-http-proxy shared auth token (CONFIGPROXY_AUTH_TOKEN).
+  # Dev-convenience single value inline when supplied; else provision
+  # out-of-band/generate at install time (same contract as oidcClientSecret
+  # above) — the `jupyter-proxy-token` Secret is NOT rendered when empty.
+  proxyToken: ""
+  # Hub Deployment replica count. JupyterHub's Hub is a singleton by design
+  # (holds the proxy routing table + user database) — keep at 1 unless a
+  # future task adds leader-election/HA.
+  replicas: 1
+  # Hub pod requests/limits (NOT per-user singleuser server sizing, which a
+  # later task adds separately once the KubeSpawner profile lands).
+  resources:
+    requests: {cpu: "250m", memory: "512Mi"}
+    limits:   {cpu: "1",    memory: "1Gi"}
+  # Per-user notebook home-directory PVC size (KubeSpawner storage claim,
+  # wired in a later task).
+  storage: "5Gi"
+
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport
 # `components["org.keycloak.storage.UserStorageProvider"]` + its

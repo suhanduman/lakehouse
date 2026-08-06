@@ -1,0 +1,48 @@
+# chart/templates/23-jupyterhub.yaml — hand-rolled JupyterHub (per-user
+# notebook sandbox). This task lands ONLY the two dev-convenience Secrets;
+# later tasks in this slice add the Hub Deployment/Service, the
+# configurable-http-proxy, and the KubeSpawner RBAC (ServiceAccount/Role/
+# RoleBinding) into this SAME file.
+#
+# Gated `and .Values.components.jupyter .Values.auth.oidc.enabled` — the Hub
+# only makes sense with a real Keycloak `jupyter` client to authenticate
+# against (OAuthenticator has no unauthenticated fallback), so unlike
+# `nessie-machine-auth-credentials` (gated on auth.oidc.enabled alone) this
+# whole file also requires `components.jupyter` to render anything at all.
+{{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
+{{- if .Values.jupyter.oidcClientSecret }}
+# Single source with the Keycloak `jupyter` client secret
+# (chart/templates/10-keycloak.yaml `clients[].secret`) via
+# `.Values.jupyter.oidcClientSecret` — the two can never drift. SAME
+# dev-convenience-else-out-of-band contract as `superset-oidc-credentials`
+# (chart/templates/19-superset.yaml): rendered ONLY when a value is supplied;
+# otherwise provision this Secret's name/key out-of-band per
+# `.Values.secrets.mode`, BEFORE install. NEVER logged, NEVER placed in a
+# ConfigMap.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jupyter-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.jupyter.oidcClientSecret | quote }}
+{{- end }}
+{{- if .Values.jupyter.proxyToken }}
+---
+# Hub<->configurable-http-proxy shared auth token (CONFIGPROXY_AUTH_TOKEN)
+# via `.Values.jupyter.proxyToken`. SAME dev-convenience-else-out-of-band
+# contract as above: rendered ONLY when a value is supplied; otherwise
+# provision this Secret's name/key out-of-band (or let a later task generate
+# it at install time) per `.Values.secrets.mode`. NEVER logged, NEVER placed
+# in a ConfigMap.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jupyter-proxy-token
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  proxy-token: {{ .Values.jupyter.proxyToken | quote }}
+{{- end }}
+{{- end }}

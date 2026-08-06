@@ -438,6 +438,13 @@ spec:
       standardFlowEnabled: true
       redirectUris: [{{ printf "https://%s/hub/oauth_callback" (include "lakehouse.routeHost" (dict "name" "jupyter" "context" .)) | quote }}]
       webOrigins: [{{ printf "https://%s" (include "lakehouse.routeHost" (dict "name" "jupyter" "context" .)) | quote }}]
+      # Single source with the `jupyter-oidc-credentials` Secret
+      # (chart/templates/23-jupyterhub.yaml) — both sides read
+      # `.Values.jupyter.oidcClientSecret`, so this confidential client's
+      # secret and the Secret the Hub Deployment mounts can never drift.
+      # Empty default => client kept, secret provisioned out-of-band (same
+      # contract as the `superset` client above).
+      secret: {{ .Values.jupyter.oidcClientSecret | quote }}
     {{- if .Values.components.ai }}
     - clientId: ai-ui
       enabled: true
