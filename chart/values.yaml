@@ -642,6 +642,36 @@ versions:
   # (Consumption slice b2). Same `.Values.global.imageRegistry` + tag
   # convention as `supersetImageTag` above.
   dbtImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: internally-built Hub image (same
+  # `.Values.global.imageRegistry` + tag convention as `supersetImageTag`/
+  # `dbtImageTag` above). Custom-built (images/jupyterhub/Dockerfile) because
+  # stock jupyterhub/jupyterhub ships neither the KubeSpawner nor the
+  # Keycloak OAuthenticator this platform's Hub needs — pins JupyterHub 5.5.0
+  # + jupyterhub-kubespawner 7.1.0 + oauthenticator 17.4.0 +
+  # jupyterhub-idle-culler 2.0.0 (compatible matrix, see that Dockerfile's
+  # header comment). Gated by `components.jupyter`.
+  jupyterhubImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: internally-built single-user notebook
+  # image the Hub's KubeSpawner launches per user (same
+  # `.Values.global.imageRegistry` + tag convention as `jupyterhubImageTag`
+  # above — an INDEPENDENT release cadence, the Hub and the per-user image
+  # are separate artifacts). Custom-built (images/jupyter/Dockerfile) —
+  # quay.io/jupyter/pyspark-notebook:spark-3.5.1 (matches `sparkVersion`
+  # above) + pyiceberg[s3fs,pyarrow]/trino[sqlalchemy] + the
+  # iceberg-spark-runtime-3.5_2.12/iceberg-aws-bundle jars pinned to
+  # `icebergSparkRuntime` = 1.9.0 (same Iceberg/Nessie/Spark matrix as
+  # `sparkImageTag` above). Gated by `components.jupyter`.
+  jupyterImageTag: "1.0"
+  # chart/templates/23-jupyterhub.yaml: the Hub's configurable-http-proxy —
+  # a SEPARATE Deployment from the Hub itself, because the internally-built
+  # `jupyterhubImageTag` image (images/jupyterhub/Dockerfile) is python-slim
+  # + pip only and does NOT bundle Node.js/npm's `configurable-http-proxy`
+  # (that's JupyterHub's own default proxy implementation, a standalone npm
+  # package, not a Python one). External full-string pin (same convention as
+  # `kafkaUiImage` above — not built via `.Values.global.imageRegistry`),
+  # matching the npm version (5.3.0) exercised live in the
+  # 2026-08-06-jupyterhub-config.md spike.
+  configurableHttpProxyImage: jupyterhub/configurable-http-proxy:5.3.0
   # chart/templates/17-minio.yaml: DEV/PoC/e2e-only in-cluster MinIO
   # (components.minio, default false — see that flag's comment). MinIO has
   # no semver; pinned to a specific RELEASE tag. POC-VERIFY before bumping
@@ -1376,6 +1406,45 @@ sandbox:
   #   adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"  # Shiro group -> role `sandbox`
   #   s3SecretName: s3-sandbox-veri-bilimi      # scoped cred (RW sandbox-<name>, RO prod); out-of-band else MinIO Job
   #   oidcClientSecret: ""                      # dev-convenience single-source for svc-sandbox-<name>; else out-of-band
+
+# Hand-rolled JupyterHub (per-user notebook sandbox). Gated by
+# `components.jupyter` (default false) AND `auth.oidc.enabled` (the Hub's
+# OAuthenticator needs a real Keycloak `jupyter` client — no unauthenticated
+# path is supported). chart/templates/23-jupyterhub.yaml.
+jupyter:
+  # Confidential client secret for the Keycloak `jupyter` client
+  # (chart/templates/10-keycloak.yaml `clients[].secret`, single source — the
+  # two can never drift). Empty default => the `jupyter-oidc-credentials`
+  # Secret is NOT rendered (same dev-convenience-else-out-of-band contract as
+  # `superset.oidc.clientSecret`); provision out-of-band per
+  # `.Values.secrets.mode`.
+  oidcClientSecret: ""
+  # Hub<->configurable-http-proxy shared auth token (CONFIGPROXY_AUTH_TOKEN).
+  # Dev-convenience single value inline when supplied; else provision
+  # out-of-band/generate at install time (same contract as oidcClientSecret
+  # above) — the `jupyter-proxy-token` Secret is NOT rendered when empty.
+  proxyToken: ""
+  # Hub Deployment replica count. JupyterHub's Hub is a singleton by design
+  # (holds the proxy routing table + user database) — keep at 1 unless a
+  # future task adds leader-election/HA.
+  replicas: 1
+  # Hub pod requests/limits (NOT per-user singleuser server sizing, which a
+  # later task adds separately once the KubeSpawner profile lands).
+  resources:
+    requests: {cpu: "250m", memory: "512Mi"}
+    limits:   {cpu: "1",    memory: "1Gi"}
+  # Per-user notebook home-directory PVC size (KubeSpawner storage claim,
+  # wired in a later task).
+  storage: "5Gi"
+  # configurable-http-proxy — a SEPARATE Deployment from the Hub (see
+  # `.Values.versions.configurableHttpProxyImage`'s comment: the Hub image has
+  # no bundled Node.js CHP). Singleton by design (in-memory routing table,
+  # same rationale as `replicas` above) — not independently scalable, so no
+  # `replicas` knob here.
+  proxy:
+    resources:
+      requests: {cpu: "100m", memory: "128Mi"}
+      limits:   {cpu: "500m", memory: "256Mi"}
 
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport

@@ -107,6 +107,18 @@ anywhere else.
 {{- define "lakehouse.svc.pgSupersetRw" -}}pg-superset-rw{{- end -}}
 {{- define "lakehouse.svc.keycloak" -}}keycloak-service{{- end -}}
 {{- define "lakehouse.svc.minio" -}}minio{{- end -}}
+{{- define "lakehouse.svc.jupyterhubHub" -}}jupyterhub-hub{{- end -}}
+{{/*
+lakehouse.svc.jupyterhubProxy - the configurable-http-proxy Deployment's
+PUBLIC Service (port 8000). MUST stay "jupyterhub-proxy" -- the pre-existing
+Route/Ingress (chart/templates/08-routes-tls.yaml / 08b-ingress-tls.yaml,
+`.Values.components.jupyter` gate) already hardcode `to.name`/
+`backend.service.name: jupyterhub-proxy` (added ahead of the Hub/proxy
+Deployments themselves, which land in chart/templates/23-jupyterhub.yaml) --
+renaming this Service would silently dangle that Route/Ingress.
+*/}}
+{{- define "lakehouse.svc.jupyterhubProxy" -}}jupyterhub-proxy{{- end -}}
+{{- define "lakehouse.svc.jupyterhubProxyApi" -}}jupyterhub-proxy-api{{- end -}}
 
 {{/*
 lakehouse.routeHost - public route hostname for a route's logical short name

@@ -1,0 +1,1137 @@
+# chart/tests/jupyter_test.yaml — helm-unittest suite for the hand-rolled
+# JupyterHub plan's Task 3: `.Values.jupyter.*` values + the two dev-
+# convenience Secrets (chart/templates/23-jupyterhub.yaml) + single-sourcing
+# the existing Keycloak `jupyter` client's `secret` (chart/templates/
+# 10-keycloak.yaml) from `.Values.jupyter.oidcClientSecret`.
+#
+# Gated `and .Values.components.jupyter .Values.auth.oidc.enabled` (the two
+# Secrets) — the Keycloak `jupyter` client itself is NOT jupyter-gated (it
+# already existed pre-task, gated only on `components.keycloak`), so it still
+# renders regardless of `components.jupyter`; only its `secret` field value
+# is under test here.
+#
+# Task 4 additions (below): the `jupyterhub-config` ConfigMap
+# (`jupyterhub_config.py` — GenericOAuthenticator + KubeSpawner +
+# pre_spawn_hook/modify_pod_hook) + the Keycloak `jupyter` client's `groups`
+# protocol mapper. Test fixture dept mirrors values.yaml's own
+# `sandbox.departments` example comment (name=veri-bilimi,
+# adGroup="CN=sandbox-veri,...", s3SecretName=s3-sandbox-veri-bilimi) —
+# deliberately using a case where the AD group's CN ("sandbox-veri") and the
+# DNS-safe `name` ("veri-bilimi") DIFFER, to prove the two identifiers are
+# never conflated.
+suite: jupyter values + oidc/proxy-token Secrets + Keycloak jupyter client-secret single-source
+templates:
+  - 23-jupyterhub.yaml
+  - 10-keycloak.yaml
+tests:
+  - it: components.jupyter=true + auth.oidc.enabled=true + both values supplied renders both Secrets with the right keys/values
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+      jupyter.proxyToken: "dev-proxy-token"
+    asserts:
+      # 2 Secrets + the jupyterhub-config ConfigMap (Task 4) + Task 5's
+      # always-on-under-this-gate resources (no sandbox dept configured in
+      # this test, so no per-dept executor Role/RoleBinding): the
+      # `jupyterhub` SA, the KubeSpawner Role + RoleBinding, 3 Services
+      # (jupyterhub-proxy/-api, jupyterhub-hub), 2 Deployments (Hub + proxy)
+      # = 3 + 1 + 1+1+1 + 3 + 2 = 11.
+      - hasDocuments:
+          count: 11
+      - equal:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+      - equal:
+          path: stringData.client-secret
+          value: "dev-jupyter-oidc"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+      - equal:
+          path: metadata.name
+          value: jupyter-proxy-token
+        documentSelector:
+          path: metadata.name
+          value: jupyter-proxy-token
+      - equal:
+          path: stringData.proxy-token
+          value: "dev-proxy-token"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-proxy-token
+
+  - it: components.jupyter=true + auth.oidc.enabled=true with only oidcClientSecret supplied renders ONLY jupyter-oidc-credentials (proxy Secret stays out-of-band)
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+    asserts:
+      # the Secret + the jupyterhub-config ConfigMap (Task 4; proxy Secret
+      # still correctly stays out-of-band) + Task 5's 8 always-on resources
+      # (SA + Role + RoleBinding + 3 Services + 2 Deployments, see the
+      # previous test's comment) = 2 + 8 = 10.
+      - hasDocuments:
+          count: 10
+      - equal:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+      - notEqual:
+          path: metadata.name
+          value: jupyter-proxy-token
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+
+  - it: components.jupyter=true + auth.oidc.enabled=true with neither Secret value supplied renders NO Secrets, but the jupyterhub-config ConfigMap still renders (unconditional under the same gate; Secrets are fully out-of-band, dev-convenience default)
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      # the jupyterhub-config ConfigMap (Task 4) + Task 5's 8 always-on
+      # resources (see the first test's comment) = 1 + 8 = 9.
+      - hasDocuments:
+          count: 9
+      - equal:
+          path: metadata.name
+          value: jupyterhub-config
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: components.jupyter=false renders NO Secrets even when both values are supplied (jupyter-gated)
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+      jupyter.proxyToken: "dev-proxy-token"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering no Secrets
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: false
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+      jupyter.proxyToken: "dev-proxy-token"
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  - it: components.jupyter=false AND auth.oidc.enabled=false renders NO Secrets (both gates off)
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: false
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+      jupyter.proxyToken: "dev-proxy-token"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: jupyter.oidcClientSecret single-sources the Keycloak jupyter client's secret (Keycloak client renders regardless of components.jupyter — it is not jupyter-gated)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      components.jupyter: false
+      jupyter.oidcClientSecret: "dev-jupyter-oidc"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: jupyter
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: true
+            redirectUris: ["https://jupyter.apps.example.com/hub/oauth_callback"]
+            webOrigins: ["https://jupyter.apps.example.com"]
+            secret: "dev-jupyter-oidc"
+            protocolMappers:
+            - name: groups
+              protocol: "openid-connect"
+              protocolMapper: "oidc-group-membership-mapper"
+              config:
+                "claim.name": "groups"
+                "full.path": "false"
+                "id.token.claim": "true"
+                "access.token.claim": "true"
+                "userinfo.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: default (jupyter.oidcClientSecret unset) still renders the jupyter Keycloak client with an empty-string secret (dev-convenience default, byte-identical to pre-task shape except the added field)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: jupyter
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: true
+            redirectUris: ["https://jupyter.apps.example.com/hub/oauth_callback"]
+            webOrigins: ["https://jupyter.apps.example.com"]
+            secret: ""
+            protocolMappers:
+            - name: groups
+              protocol: "openid-connect"
+              protocolMapper: "oidc-group-membership-mapper"
+              config:
+                "claim.name": "groups"
+                "full.path": "false"
+                "id.token.claim": "true"
+                "access.token.claim": "true"
+                "userinfo.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: leak check — SENTINEL jupyter.oidcClientSecret appears ONLY in the realm jupyter client's secret + the jupyter-oidc-credentials Secret, nowhere else
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      jupyter.oidcClientSecret: "LEAKJ-SENTINEL"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: jupyter
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: true
+            redirectUris: ["https://jupyter.apps.example.com/hub/oauth_callback"]
+            webOrigins: ["https://jupyter.apps.example.com"]
+            secret: "LEAKJ-SENTINEL"
+            protocolMappers:
+            - name: groups
+              protocol: "openid-connect"
+              protocolMapper: "oidc-group-membership-mapper"
+              config:
+                "claim.name": "groups"
+                "full.path": "false"
+                "id.token.claim": "true"
+                "access.token.claim": "true"
+                "userinfo.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: leak check — SENTINEL jupyter.oidcClientSecret appears in the jupyter-oidc-credentials Secret's client-secret key
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "LEAKJ-SENTINEL"
+    asserts:
+      - equal:
+          path: stringData.client-secret
+          value: "LEAKJ-SENTINEL"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+      - notEqual:
+          path: metadata.name
+          value: jupyter-proxy-token
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+
+  # --- Task 4: jupyterhub-config ConfigMap ---
+
+  - it: components.jupyter=true + auth.oidc.enabled=true + a sandbox dept renders jupyterhub-config with the authenticator, login gate, KubeSpawner, DEPTS dict, and pre_spawn_hook/modify_pod_hook — and NO secret literal
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+          oidcClientSecret: "dev-svc-sandbox-veri"
+    asserts:
+      # any: true -- Task 5 now renders many more documents under this same
+      # gate; see the "no sandbox departments configured" test's comment.
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: jupyterhub-config
+          any: true
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # authenticator
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.JupyterHub\.authenticator_class = "generic-oauth"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.GenericOAuthenticator\.client_id = "jupyter"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.GenericOAuthenticator\.oauth_callback_url = "https://jupyter\.apps\.example\.com/hub/oauth_callback"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.GenericOAuthenticator\.manage_groups = True'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.GenericOAuthenticator\.claim_groups_key = "groups"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # secrets ONLY via os.environ[...] — never a literal
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'os\.environ\["OAUTH_CLIENT_SECRET"\]'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.ConfigurableHTTPProxy\.auth_token = os\.environ\["CONFIGPROXY_AUTH_TOKEN"\]'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # NOT enable_auth_state=True (spike: crashes without JUPYTERHUB_CRYPT_KEY, not needed)
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'enable_auth_state\s*=\s*True'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # login gate: allow_all=False + allowed_groups includes the dept's Keycloak/AD group
+      # (the CN of adGroup, "sandbox-veri" — NOT "sandbox-veri-bilimi"; the AD group name
+      # and sandbox.departments[].name are independent identifiers, see file header comment)
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.Authenticator\.allow_all = False'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.Authenticator\.allowed_groups\.add\("sandbox-veri"\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # KubeSpawner: single-user image + namespace + per-user PVC
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.image = "image-registry\.openshift-image-registry\.svc:5000/lakehouse/jupyter:1\.0"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.namespace = "NAMESPACE"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.storage_pvc_ensure = True'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.storage_capacity = "5Gi"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # DEPTS dict covers the dept, keyed by the AD group's short code ("veri", from
+      # "sandbox-veri"), values built from sandbox.departments[].name ("veri-bilimi")
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'DEPTS\["veri"\] = \{'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '"sa": "sa-sandbox-veri-bilimi"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '"s3_secret": "s3-sandbox-veri-bilimi"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '"nessie_secret": "sandbox-veri-bilimi-oidc-credentials"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '"catalog": "sandbox_veri-bilimi"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # pre_spawn_hook: gates on sandbox-<dept> group, sets sa-sandbox-, refuses spawn without it
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'def pre_spawn_hook\(spawner\):'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'g\.startswith\("sandbox-"\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.service_account = d\["sa"\]'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'raise Exception\("user has no configured sandbox-<dept> group -- refusing to spawn"\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # Spark-on-k8s executor secretKeyRef conf (spike: driver secretKeyRef is a no-op,
+      # executors DO get secrets this way)
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spark\.kubernetes\.executor\.secretKeyRef\.NESSIE_OAUTH_SECRET'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spark\.kubernetes\.executor\.secretKeyRef\.AWS_ACCESS_KEY_ID'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # modify_pod_hook: driver-side secretKeyRef injection via KubeSpawner (not Spark conf)
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'def modify_pod_hook\(spawner, pod\):'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'secret_key_ref=k8s_client\.V1SecretKeySelector'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.Spawner\.pre_spawn_hook = pre_spawn_hook'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.modify_pod_hook = modify_pod_hook'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+
+  - it: components.jupyter=false renders NO jupyterhub-config ConfigMap even with a sandbox dept configured
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering no jupyterhub-config ConfigMap
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: false
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  - it: no sandbox departments configured still renders jupyterhub-config, with an empty (fail-closed) DEPTS dict and allowed_groups set — nobody can log in, but nothing crashes
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      # any: true -- this file now renders many documents under the same
+      # gate (Task 5's SA/RBAC/Deployments/Services); containsDocument
+      # without `any: true` requires EVERY document in scope to match,
+      # which only holds for a single-document render (helm-unittest
+      # semantics, see chart/tests/dbt-enabled_test.yaml's own `any: true`
+      # usage for the same reason).
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: jupyterhub-config
+          any: true
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'DEPTS = \{\}'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.Authenticator\.allowed_groups = set\(\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+
+  - it: leak check — jupyter.oidcClientSecret/proxyToken SENTINELs appear ONLY in the two dev-convenience Secrets, NEVER in the jupyterhub-config ConfigMap (only os.environ[...] references)
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "LEAKJHUB-CLIENTSECRET"
+      jupyter.proxyToken: "LEAKJHUB-PROXYTOKEN"
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'LEAKJHUB-CLIENTSECRET'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'LEAKJHUB-PROXYTOKEN'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - equal:
+          path: stringData.client-secret
+          value: "LEAKJHUB-CLIENTSECRET"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-oidc-credentials
+      - equal:
+          path: stringData.proxy-token
+          value: "LEAKJHUB-PROXYTOKEN"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-proxy-token
+
+  - it: the Keycloak jupyter client has the groups protocol mapper (WITHOUT it userinfo has no groups claim at all — spike finding)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: jupyter
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: true
+            redirectUris: ["https://jupyter.apps.example.com/hub/oauth_callback"]
+            webOrigins: ["https://jupyter.apps.example.com"]
+            secret: ""
+            protocolMappers:
+            - name: groups
+              protocol: "openid-connect"
+              protocolMapper: "oidc-group-membership-mapper"
+              config:
+                "claim.name": "groups"
+                "full.path": "false"
+                "id.token.claim": "true"
+                "access.token.claim": "true"
+                "userinfo.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  # --- Task 5: Hub SA + KubeSpawner RBAC + per-dept executor RBAC + the
+  # Hub/proxy Deployments + Services ---
+  #
+  # documentSelector notes (23-jupyterhub.yaml now renders many documents,
+  # several sharing a `metadata.name` across different `kind`s):
+  #   - ServiceAccount "jupyterhub" and Deployment "jupyterhub" share a name
+  #     -> select the Deployment via `spec.template.spec.containers[0].name`
+  #     (absent on a ServiceAccount) rather than `metadata.name`, same
+  #     technique chart/tests/console_test.yaml documents for its own
+  #     backend-Deployment/backend-Service name collision.
+  #   - Deployment "jupyterhub-proxy" and Service "jupyterhub-proxy" (the
+  #     Route/Ingress target, `lakehouse.svc.jupyterhubProxy`) ALSO share a
+  #     name -> select the Service via `spec.selector.app` (a flat
+  #     Service-only field; a Deployment's own `spec.selector` is always
+  #     nested under `matchLabels`, so this path never matches a Deployment).
+  #   - The KubeSpawner Role ("jupyterhub-kubespawner") and its RoleBinding
+  #     are DELIBERATELY named differently (`...-kubespawner` vs
+  #     `...-kubespawner-binding`, same for the per-dept executor pair) —
+  #     see the template's own comment — so plain `metadata.name` selection
+  #     is unambiguous for every Role/RoleBinding below.
+
+  - it: "Task 5: jupyterhub ServiceAccount + KubeSpawner Role/RoleBinding render with the spike §2b MINIMUM verbs (incl. deletecollection, distinct from delete) — Role is namespace-scoped, NOT a ClusterRole"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: jupyterhub
+          any: true
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: kind
+          value: Role
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+            - apiGroups: [""]
+              resources: ["pods/log"]
+              verbs: ["get"]
+            - apiGroups: [""]
+              resources: ["persistentvolumeclaims"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["get", "list", "watch"]
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner-binding
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner-binding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: jupyterhub
+              namespace: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner-binding
+      - equal:
+          path: roleRef
+          value: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: jupyterhub-kubespawner}
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-kubespawner-binding
+
+  - it: "Task 5: a sandbox dept renders sa-sandbox-<dept>'s Spark-on-k8s executor Role/RoleBinding with the spike §2b/§2c verbs (incl. deletecollection) — Role is namespace-scoped, NOT a ClusterRole"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+            - apiGroups: [""]
+              resources: ["pods/log"]
+              verbs: ["get"]
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+            - apiGroups: [""]
+              resources: ["services"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+            - apiGroups: [""]
+              resources: ["persistentvolumeclaims"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor-binding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: sa-sandbox-veri-bilimi
+              namespace: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor-binding
+      - equal:
+          path: roleRef
+          value: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sandbox-veri-bilimi-spark-executor}
+        documentSelector:
+          path: metadata.name
+          value: sandbox-veri-bilimi-spark-executor-binding
+
+  - it: "Task 5: no sandbox departments configured -> NO per-dept executor Role/RoleBinding renders (the KubeSpawner Role/RoleBinding + SA still do — independent gates)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: jupyterhub
+          any: true
+      - containsDocument:
+          kind: Role
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: jupyterhub-kubespawner
+          any: true
+      # any: true is load-bearing on a negative (not: true) check too — without
+      # it, helm-unittest's containsDocument short-circuits "success" on the
+      # FIRST document that doesn't match, without ever checking the rest for
+      # the forbidden one; any: true makes it correctly scan every document.
+      - containsDocument:
+          kind: Role
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: sandbox-veri-bilimi-spark-executor
+          any: true
+        not: true
+
+  - it: "Task 5: Hub Deployment — jupyterhub image, jupyterhub-config ConfigMap mount, serviceAccountName jupyterhub, and the 3 secretKeyRef envs (OAUTH_CLIENT_SECRET/CONFIGPROXY_AUTH_TOKEN/OIDC_ISSUER) — no secret literal"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: jupyterhub
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "image-registry.openshift-image-registry.svc:5000/lakehouse/jupyterhub:1.0"
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["jupyterhub", "-f", "/etc/jupyterhub/jupyterhub_config.py"]
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: jupyterhub-config
+            configMap: {name: jupyterhub-config}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: jupyterhub-config
+            mountPath: /etc/jupyterhub
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      # secretKeyRef ONLY — no literal (structural proof, same convention as
+      # chart/tests/nessie-auth_test.yaml's secretKeyRef leak checks: a
+      # literal-value bug could never satisfy this exact `contains` shape).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom: {secretKeyRef: {name: jupyter-oidc-credentials, key: client-secret}}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONFIGPROXY_AUTH_TOKEN
+            valueFrom: {secretKeyRef: {name: jupyter-proxy-token, key: proxy-token}}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom: {secretKeyRef: {name: oidc-credentials, key: issuer-url}}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: jupyterhub
+
+  - it: "Task 5: configurable-http-proxy Deployment — the PINNED external CHP image, CONFIGPROXY_AUTH_TOKEN via secretKeyRef, --default-target/--error-target the jupyterhub-hub Service"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "jupyterhub/configurable-http-proxy:5.3.0"
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: configurable-http-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--default-target=http://jupyterhub-hub:8081"
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: configurable-http-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--error-target=http://jupyterhub-hub:8081/hub/error"
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: configurable-http-proxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONFIGPROXY_AUTH_TOKEN
+            valueFrom: {secretKeyRef: {name: jupyter-proxy-token, key: proxy-token}}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: configurable-http-proxy
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - {containerPort: 8000, name: http}
+            - {containerPort: 8001, name: api}
+        documentSelector:
+          path: spec.template.spec.containers[0].name
+          value: configurable-http-proxy
+
+  - it: "Task 5: Services — jupyterhub-proxy (public 8000, the pre-existing Route/Ingress target), jupyterhub-proxy-api (8001, the Hub's api_url), jupyterhub-hub (8081, KubeSpawner/proxy connectivity to the Hub)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      # NOTE: `spec.selector.app` is NOT unique here — BOTH the public
+      # (8000) and api (8001) Services select the same proxy Pods
+      # (`{app: jupyterhub-proxy}`), so that path matches two documents.
+      # `spec.ports[0].name == "http"` IS unique: it's a top-level
+      # `spec.ports` field (only a Service has one at all — a Deployment's
+      # container ports live under `spec.template.spec.containers[0].ports`,
+      # a different path) and only the public proxy Service's port is named
+      # "http" (the api Service's is named "api", the Hub Service's "hub").
+      - equal:
+          path: metadata.name
+          value: jupyterhub-proxy
+        documentSelector:
+          path: "spec.ports[0].name"
+          value: http
+      - equal:
+          path: spec.ports
+          value: [{name: http, port: 8000, targetPort: 8000}]
+        documentSelector:
+          path: "spec.ports[0].name"
+          value: http
+      - equal:
+          path: kind
+          value: Service
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-proxy-api
+      - equal:
+          path: spec.ports
+          value: [{name: api, port: 8001, targetPort: 8001}]
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-proxy-api
+      - equal:
+          path: spec.selector
+          value: {app: jupyterhub-proxy}
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-proxy-api
+      - equal:
+          path: kind
+          value: Service
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-hub
+      - equal:
+          path: spec.ports
+          value: [{name: hub, port: 8081, targetPort: 8081}]
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-hub
+      - equal:
+          path: spec.selector
+          value: {app: jupyterhub}
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-hub
+
+  - it: "Task 5: the jupyterhub-config ConfigMap wires the Hub to talk to the EXTERNAL proxy (should_start=False + api_url the proxy's api Service), since CHP now runs as its own Deployment"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.ConfigurableHTTPProxy\.should_start = False'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.ConfigurableHTTPProxy\.api_url = "http://jupyterhub-proxy-api:8001"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+
+  - it: "Task 5: components.jupyter=false renders NONE of the SA/RBAC/Deployments/Services (jupyter-gated, same as the rest of the file)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "Task 5/6: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering none of the SA/RBAC/Deployments/Services"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: false
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  # --- Task 6 (review-routed from Task 5): coherence guard —
+  # components.jupyter requires auth.oidc.enabled. The pre-existing `jupyter`
+  # Route/Ingress (chart/templates/08-routes-tls.yaml / 08b-ingress-tls.yaml)
+  # gate ONLY on `components.jupyter`, but the `jupyterhub-proxy` Service they
+  # target (this file) gates on `components.jupyter` AND `auth.oidc.enabled`
+  # — without this guard, `components.jupyter=true` + `auth.oidc.enabled=
+  # false` would render the Route/Ingress with no backing Service at all (a
+  # dangling Route, `helm-check.py --service-closure` FAILs). JupyterHub
+  # genuinely cannot work without OIDC (GenericOAuthenticator has no
+  # unauthenticated fallback), so this is a hard render-time error rather
+  # than a silent no-op. Same three-case shape as the sandbox+auth.oidc.
+  # enabled guard (chart/tests/sandbox_test.yaml, "Task 7" section).
+
+  - it: "Task 6: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (coherence guard), with no other values set"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  - it: "Task 6: components.jupyter=true + auth.oidc.enabled=true (chart default) renders cleanly — guard does NOT fire"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: jupyterhub-proxy
+          any: true
+
+  - it: "Task 6: components.jupyter=false + auth.oidc.enabled=false renders cleanly (nothing to render) — guard does NOT fire when jupyter is off"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- final-review fix wave: adGroup-CN "sandbox-" prefix coherence guard
+  # + deterministic multi-group dept selection (pre_spawn_hook sorts
+  # group_names before iterating) ---
+
+  - it: "final-review: a sandbox dept whose adGroup CN does NOT start with sandbox- FAILS the render loudly (login gate would admit the group, but pre_spawn_hook could never match it)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: "dev-svc-sandbox-veri"
+    asserts:
+      - failedTemplate:
+          errorMessage: "sandbox department veri adGroup CN must start with 'sandbox-' for JupyterHub group→dept mapping (got: notsandbox-veri)"
+
+  - it: "final-review: a sandbox dept whose adGroup CN DOES start with sandbox- renders cleanly — guard does NOT fire"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: "dev-svc-sandbox-veri"
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: jupyterhub-config
+          any: true
+
+  - it: "final-review: components.jupyter=false with a non-sandbox- adGroup CN renders fine — the CN-prefix guard only evaluates under components.jupyter AND auth.oidc.enabled (the c2 Zeppelin-only sandbox path has no such constraint)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "final-review: pre_spawn_hook iterates a sorted(group_names) — deterministic first-match dept selection when a user belongs to multiple sandbox-* groups"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'for g in sorted\(group_names\):'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
