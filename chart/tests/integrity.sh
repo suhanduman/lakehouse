@@ -47,15 +47,22 @@ NAMESPACES=(strayprobe lakehouse-test)
 # - defaults               : values-prod.example.yaml as-is (components.ai=
 #                             false — the shipped production defaults).
 #
-# NOTE: the follow-up-component toggles (components.ai / .superset /
-# .jupyter) are DELIBERATELY not exercised here: each renders a Route whose
-# backing Service this chart does not (yet) produce, so turning any of them
-# on is — by design — an unsupported install shape that
-# helm-check.py's strengthened Route-target closure will (correctly) reject.
-# Their gating (all default false, see chart/templates/08-routes-tls.yaml) is
-# what keeps the DEFAULT prod render Route-reference-closed; the test-the-test
-# demonstration (see task-12-report.md) covers the "a dangling Route IS
-# caught" direction directly.
+# NOTE: components.ai / .superset are STILL DELIBERATELY not exercised here:
+# each renders a Route whose backing Service this chart does not (yet)
+# produce, so turning either on is — by design — an unsupported install
+# shape that helm-check.py's strengthened Route-target closure will
+# (correctly) reject. Their gating (default false, see chart/templates/
+# 08-routes-tls.yaml) is what keeps the DEFAULT prod render
+# Route-reference-closed; the test-the-test demonstration (see
+# task-12-report.md) covers the "a dangling Route IS caught" direction
+# directly. `components.jupyter` graduated OUT of this exclusion (Task 6,
+# jupyterhub-per-user-sandbox slice): its backing `jupyterhub-proxy` Service
+# now exists (chart/templates/23-jupyterhub.yaml) and a render-time `fail`
+# guard in that same file makes `components.jupyter=true` +
+# `auth.oidc.enabled=false` a hard error instead of a silently-renderable
+# dangling Route — so `components.jupyter=true` alone (with the chart's
+# `auth.oidc.enabled` default of `true`) is now a SUPPORTED, closure-clean
+# install shape, exercised below as `jupyter-on-openshift`.
 # - monitoring-oidc-on     : forces components.monitoring=true AND
 #                            monitoring.grafana.oidc.enabled=true, exercising
 #                            the full İzleme (D1) render — Grafana Deployment
@@ -89,18 +96,35 @@ NAMESPACES=(strayprobe lakehouse-test)
 #                            openshift`), so this is also the only place the
 #                            vanilla Ingress path (08b-ingress-tls.yaml) is
 #                            closure-checked at all.
+# - jupyter-on-openshift   : JupyterHub per-user sandbox (chart/templates/
+#                            23-jupyterhub.yaml + the pre-existing `jupyter`
+#                            Route in 08-routes-tls.yaml) — `components.
+#                            jupyter=true` (values-prod.example.yaml's
+#                            `auth.oidc.enabled` is already `true` by
+#                            inherited default from chart/values.yaml, so no
+#                            override needed there — this is exactly the
+#                            coherent combo Task 6's render-time guard
+#                            requires). Proves the `jupyter` Route's
+#                            `spec.to.name: jupyterhub-proxy` resolves to the
+#                            Service this SAME render produces (no dangling
+#                            backend) — the follow-up-component exclusion
+#                            note above no longer applies to `components.
+#                            jupyter` now that its Route/Service can never
+#                            disagree (Task 6 coherence guard).
 SANDBOX_DEPT_JSON='[{"name":"veri","adGroup":"CN=sandbox-veri,OU=Groups,DC=example,DC=com","s3SecretName":"s3-sandbox-veri","oidcClientSecret":"devz"}]'
 TOGGLE_LABELS=(
   "defaults"
   "monitoring-oidc-on"
   "sandbox-on-openshift"
   "sandbox-on-vanilla"
+  "jupyter-on-openshift"
 )
 TOGGLE_ARGS=(
   ""
   "--set components.monitoring=true --set monitoring.grafana.oidc.enabled=true"
   "--set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
   "--set platform=vanilla --set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
+  "--set components.jupyter=true --set jupyter.oidcClientSecret=devz --set jupyter.proxyToken=devz"
 )
 
 total=0

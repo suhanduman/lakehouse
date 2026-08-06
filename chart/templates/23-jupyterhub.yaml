@@ -9,6 +9,28 @@
 # against (OAuthenticator has no unauthenticated fallback), so unlike
 # `nessie-machine-auth-credentials` (gated on auth.oidc.enabled alone) this
 # whole file also requires `components.jupyter` to render anything at all.
+#
+# --- Coherence guard (Task 6, review-routed from Task 5): the pre-existing
+# `jupyter` Route/Ingress (chart/templates/08-routes-tls.yaml /
+# 08b-ingress-tls.yaml) gate ONLY on `.Values.components.jupyter` — they
+# target the `jupyterhub-proxy` Service produced by THIS file, which (see
+# the two-gate `if` right below) only renders when `auth.oidc.enabled` is
+# ALSO true. Without this guard, `components.jupyter=true` +
+# `auth.oidc.enabled=false` renders the Route/Ingress but not the Service
+# behind them — a dangling Route (`helm-check.py --service-closure` FAILs)
+# for a Hub that could never have worked anyway: JupyterHub's authenticator
+# here IS Keycloak GenericOAuthenticator (OAuthenticator has no
+# unauthenticated fallback, per the comment above). Fail loudly at render
+# time instead — same fail-loud coherence-guard pattern as
+# `sandbox.enabled`+`auth.oidc.enabled` (chart/templates/
+# 09c-zeppelin-sandbox.yaml) and `superset.trino.authMode=jwt`
+# (chart/templates/19-superset.yaml). Placed here, BEFORE the file-wide gate
+# below, so it evaluates even when `auth.oidc.enabled` is false (the file-
+# wide `if` would otherwise skip the whole file, including this check, in
+# exactly the broken case it needs to catch).
+{{- if and .Values.components.jupyter (not .Values.auth.oidc.enabled) }}
+{{- fail "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)" }}
+{{- end }}
 {{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
 {{- if .Values.jupyter.oidcClientSecret }}
 # Single source with the Keycloak `jupyter` client secret

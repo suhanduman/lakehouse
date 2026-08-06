@@ -123,7 +123,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: auth.oidc.enabled=false renders NO Secrets even when components.jupyter=true and both values are supplied (auth-gated)
+  - it: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering no Secrets
     templates:
       - 23-jupyterhub.yaml
     set:
@@ -132,8 +132,8 @@ tests:
       jupyter.oidcClientSecret: "dev-jupyter-oidc"
       jupyter.proxyToken: "dev-proxy-token"
     asserts:
-      - hasDocuments:
-          count: 0
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
 
   - it: components.jupyter=false AND auth.oidc.enabled=false renders NO Secrets (both gates off)
     templates:
@@ -493,7 +493,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: auth.oidc.enabled=false renders NO jupyterhub-config ConfigMap even with components.jupyter=true and a sandbox dept configured
+  - it: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering no jupyterhub-config ConfigMap
     templates:
       - 23-jupyterhub.yaml
     set:
@@ -504,8 +504,8 @@ tests:
           adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
           s3SecretName: s3-sandbox-veri-bilimi
     asserts:
-      - hasDocuments:
-          count: 0
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
 
   - it: no sandbox departments configured still renders jupyterhub-config, with an empty (fail-closed) DEPTS dict and allowed_groups set — nobody can log in, but nothing crashes
     templates:
@@ -1007,7 +1007,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "Task 5: auth.oidc.enabled=false renders NONE of the SA/RBAC/Deployments/Services (auth-gated, same as the rest of the file)"
+  - it: "Task 5/6: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (Task 6 coherence guard) instead of silently rendering none of the SA/RBAC/Deployments/Services"
     templates:
       - 23-jupyterhub.yaml
     set:
@@ -1017,6 +1017,52 @@ tests:
         - name: veri-bilimi
           adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
           s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  # --- Task 6 (review-routed from Task 5): coherence guard —
+  # components.jupyter requires auth.oidc.enabled. The pre-existing `jupyter`
+  # Route/Ingress (chart/templates/08-routes-tls.yaml / 08b-ingress-tls.yaml)
+  # gate ONLY on `components.jupyter`, but the `jupyterhub-proxy` Service they
+  # target (this file) gates on `components.jupyter` AND `auth.oidc.enabled`
+  # — without this guard, `components.jupyter=true` + `auth.oidc.enabled=
+  # false` would render the Route/Ingress with no backing Service at all (a
+  # dangling Route, `helm-check.py --service-closure` FAILs). JupyterHub
+  # genuinely cannot work without OIDC (GenericOAuthenticator has no
+  # unauthenticated fallback), so this is a hard render-time error rather
+  # than a silent no-op. Same three-case shape as the sandbox+auth.oidc.
+  # enabled guard (chart/tests/sandbox_test.yaml, "Task 7" section).
+
+  - it: "Task 6: components.jupyter=true + auth.oidc.enabled=false FAILS the render loudly (coherence guard), with no other values set"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  - it: "Task 6: components.jupyter=true + auth.oidc.enabled=true (chart default) renders cleanly — guard does NOT fire"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: jupyterhub-proxy
+          any: true
+
+  - it: "Task 6: components.jupyter=false + auth.oidc.enabled=false renders cleanly (nothing to render) — guard does NOT fire when jupyter is off"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: false
     asserts:
       - hasDocuments:
           count: 0
