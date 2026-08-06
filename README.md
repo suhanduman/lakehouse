@@ -566,9 +566,113 @@ Tam Keycloak → per-departman-Zeppelin → Nessie (OAuth2, bugün atıl) → S3
 bir **OpenShift UAT** teslimatıdır (Keycloak yok + Trino scaled-0 olan
 mevcut test cluster'ında koşulamaz). UAT'ta netleşecek: gerçek AD
 gruplarının Keycloak'a federe edildiği kurulumda departman-izolasyonunun
-uçtan-uca doğrulanması; ve — Nessie-machine-auth slice'ı henüz
-gelmediğinden — metadata-gap sınırlamasının operatör tarafından bilinip
-kabul edildiğinin teyidi.
+uçtan-uca doğrulanması. **Güncelleme:** yukarıdaki "atıl OAuth2/metadata-gap"
+notu artık TARİHSEL — aşağıdaki **Nessie machine-auth** bölümü tam olarak bu
+gap'i kapatan CEL yetkilendirme kurallarını ekliyor (`svc-sandbox-<dept>`
+dahil); UAT'ta netleşecek diğer madde de artık o bölümün kapsamında.
+
+---
+
+## Nessie machine-auth
+
+`auth.oidc.enabled: true` iken (medium/large tier'larda varsayılan; dev'de
+kapalı) Nessie'nin kendi kimlik doğrulaması VE yetkilendirmesi devreye girer
+(`chart/templates/04-nessie-ha.yaml`) — bu, gizli kalmış bir prod hatasını
+DÜZELTİR ve c2'nin metadata-gap sınırlamasını KAPATIR.
+
+- **NEDEN — gizli 401 + c2 metadata-gap:** Nessie'nin Quarkus OIDC eklentisi
+  LAZY discovery yapar: `auth.oidc.enabled` zaten AÇIKTI (medium/large'da,
+  b1/b2/c1/c2'den beri), Nessie pod'u `Running` kalıyordu, ama HİÇBİR
+  committer (Trino, Spark, Connect, Zeppelin, sandbox instance'ları) gerçekte
+  kendi kimliğiyle authenticate OLMUYORDU — yani her REST çağrısı sessizce
+  401/500 alıyordu ya da (authorization henüz yokken) sınırsız/kimliksiz
+  yazma mümkündü. Bu slice her committer'a GERÇEK bir Keycloak
+  service-account kimliği verir VE Nessie CEL authz kurallarını ekler — c2
+  bölümünün yukarıda işaretlediği "metadata-gap" (bir departman kullanıcısı
+  kendi `sandbox_<dept>` katalogunun dışına commit gönderebiliyordu) bu CEL
+  kurallarıyla artık REDDEDİLİR.
+- **5 kimlik + CEL kapsamı (`NESSIE_SERVER_AUTHORIZATION_RULES_*`,
+  `04-nessie-ha.yaml`):** herkes authenticate olduğunda READ tüm depoya
+  serbesttir (`ALLOW_READ_ALL`); yazma ise kimliğe göre daraltılır —
+  `svc-trino-nessie` VE `svc-spark-nessie` her iki Iceberg katalogunda
+  (`lakehouse`/`rawlake`) GENİŞ-YAZMA (broad-write, tüm path'ler);
+  `svc-connect-nessie` (Kafka Connect Iceberg sink) YALNIZCA `rawlake`/Bronze
+  path'ine yazar; `svc-zeppelin-nessie` (paylaşılan c1 Zeppelin) HİÇBİR yazma
+  kuralında yer almaz — default-deny onu salt-okunur bırakır (canlı
+  doğrulanmıştır); `svc-sandbox-<dept>` (c2, her departman için bir tane)
+  YALNIZCA kendi `sandbox_<dept>` path'ine yazar. Her yazan kimlik ayrıca
+  ref-seviyesinde bir `COMMIT_TO_MAIN` kuralına dahildir (path bağlanamayan,
+  commit-başına bir kez değerlendirilen ayrı bir kural sınıfı) —
+  `svc-zeppelin-nessie` bu OR-zincirinden de bilinçli olarak dışarıdadır.
+- **Trino ≥465 yükseltmesi (439 → 476, LATEST DEĞİL, pinlenmiş):** Trino
+  439'un Iceberg REST-katalog OAuth2'si client-credentials'ı
+  OTOMATİK-YENİLEMİYOR (`iceberg.rest-catalog.oauth2.server-uri`, token'ı
+  auto-refresh eden anahtar, yalnızca Trino 465+'ta var) — kısa ömürlü bir
+  token süresi dolunca coordinator/worker sessizce 401'e düşerdi. Bu yüzden
+  image `trinodb/trino:476`'ya pinlendi (`versions.trinoImage`, single
+  source) — EN YENİ (latest) tag değil, 465+ floor'unu karşılayan VE hedef
+  cluster'ın air-gapped mirror'ına karşı doğrulanmış belirli bir sürüm
+  (versiyon-matrisi disiplini, `nessieImage`/`sparkVersion` ile aynı
+  konvansiyon).
+- **Committer-başına secret-injection (secret asla ConfigMap/CR/connector
+  JSON'da düz metin değil):** Trino coordinator+worker, secret'ı
+  `${ENV:NESSIE_OAUTH_SECRET}` ile OKUR (Trino'nun kendi `${ENV:...}`
+  property-dosyası genişletmesi — b1'in aynı deseni). Spark (silver-merge,
+  iceberg-maintenance, nginx-streaming, driver-only) VE paylaşılan Zeppelin,
+  c2'nin `sed`→tmpfs initContainer mekanizmasını yeniden kullanır: bir
+  `${OAUTH_CLIENT_SECRET}` yer-tutuculu ConfigMap şablonu, pod başlangıcında
+  bir initContainer tarafından `sed` ile gerçek değere çözülüp paylaşılan bir
+  `emptyDir{medium:Memory}` tmpfs'e yazılır, `SPARK_CONF_DIR` oraya işaret
+  eder — CR/ConfigMap'te asla çözülmüş bir secret görünmez. Kafka Connect
+  ise Strimzi'nin `externalConfiguration` mount'unu + DirectoryConfigProvider
+  dosya-referansını kullanır (S3 kimlik bilgileri için chart'ın zaten
+  kullandığı AYNI mekanizma) — connector JSON'ında yalnızca bir dosya yolu
+  görünür, secret değeri değil.
+- **Operatör gereksinimleri:** 4 `svc-*-nessie` Keycloak client secret'ını
+  (`nessie.machineAuth.{trino,spark,connect,zeppelin}ClientSecret` —
+  `chart/values.yaml`) ilk kurulumdan ÖNCE `secrets.mode`'a göre out-of-band
+  sağlayın (dev-convenience boş string varsayılanı yalnızca dev/smoke-test
+  içindir); `svc-sandbox-<dept>` kimlikleri zaten c2'nin kendi operatör
+  checklist'inin parçasıdır (yukarıya bakın).
+
+**Sandbox path-confinement — UAT-onay gereken bilinen sınırlama:** c2'den
+devralınan `svc-sandbox-<dept>` CEL kuralı (`path.startsWith('sandbox_<dept>')`,
+`04-nessie-ha.yaml`) `svc-connect-nessie`'nin Bronze rotasıyla AYNI
+catalog-adı-vs-Nessie-namespace inceliğini taşır: c2 sandbox Spark
+**katalogunun** adı `sandbox_<dept>`'tir, ama bir analistin gerçekte
+yazdığı Nessie content-key namespace'i, tabloyu NASIL nitelediğine bağlıdır
+— `sandbox_<dept>` namespace'i altında yazmadıkça CEL prefix'i eşleşmez.
+Bu, connect-write kuralının aksine, GÜVENLİ tarafta bir belirsizlik: yanlış
+namespace REDDEDİLİR (fail-closed), fazla-izin verilmez. Kural varsayılan
+olarak KAPALI da gelir (`sandbox.enabled: false`). Kural olduğu gibi
+bırakılmıştır (fail-closed) — tam namespace prefix eşleşmesinin analistlerin
+gerçek yazma alışkanlığıyla (sandbox_<dept> altında nitelenmiş tablolar)
+uyuştuğunun doğrulanması bir **OpenShift UAT** teslimatıdır; c2'nin
+metadata-gap'ini bu noktada tam kapatmak sandbox-hardening'in bir
+UAT-sonrası takip maddesidir.
+
+**Bilinen sınırlama:** Nessie machine-auth helm-unittest ile doğrulanmıştır
+(gating, 5-kimlik CEL politikası, secret-injection mekanizmalarının her
+biri — bu chart'ın en büyük tekil test dosyalarından biri,
+`chart/tests/nessie-auth_test.yaml`) VE bir canlı Podman spike'ıyla (Nessie
+0.104.3 + Keycloak + gerçek `client_credentials` client'ları,
+`docs/superpowers/spikes/2026-08-06-nessie-machine-auth-config.md` — Trino
+OAuth2 anahtarları ve CEL kuralları uçtan-uca canlı doğrulanmıştır; Connect
+OAuth2 anahtarları gerçek `iceberg-core-1.9.0.jar`'ın decompile edilmesiyle
+VE `pyiceberg`'in `RestCatalog`'u ile canlı doğrulanmıştır, ama tam bir
+Strimzi Kafka Connect stand-up'ı koşulmamıştır; SparkApplication
+secret-injection mekanizması spark-operator KAYNAK KODUNDAN — `internal/
+webhook/sparkpod_defaulter.go` — okunarak doğrulanmıştır, çalışan bir
+spark-operator'a karşı DEĞİL). Tam authenticated Keycloak→her-5-kimlik→
+Nessie E2E'si (özellikle `svc-sandbox-<dept>` write-confinement'ının CEL
+üzerinden GERÇEKTEN reddedildiğinin doğrulanması), b1'in Superset→Trino
+JWT auth-zincirinin VE b2'nin dbt-Gold'unun Trino 476 üzerinde hâlâ
+çalıştığının yeniden-doğrulanması, VE **spark-operator'ın mutating admission
+webhook'unun** (driver initContainer/volume/env enjeksiyonunun GERÇEKTEN
+gerçekleştiği mekanizma — devre dışıysa CR yine de geçerli kalır ama enjeksiyon
+SESSİZCE hiç olmaz) hedef cluster'da etkin olduğunun teyidi, bir
+**OpenShift UAT** teslimatıdır (Keycloak yok + Trino scaled-0 olan mevcut
+test cluster'ında koşulamaz).
 
 ---
 

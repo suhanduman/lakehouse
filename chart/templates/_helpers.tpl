@@ -319,3 +319,104 @@ spark.eventLog.rolling.maxFileSize: "128m"
 - {name: AWS_REGION,            valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}}
 - {name: HOME, value: /tmp}
 {{- end -}}
+
+{{- /*
+================ Nessie OAuth2 -> Spark SparkApplication driver
+SPARK_CONF_DIR injection (nessie-machine-auth plan, Task 5) ================
+
+Gives the platform's SparkApplications (05-spark-operator.yaml's
+iceberg-maintenance/silver-merge, 14-nginx-ingest.yaml's nginx-streaming) the
+`svc-spark-nessie` Nessie OAuth2 identity WITHOUT the client-secret ever
+landing in the CR or a ConfigMap.
+
+Why not just add it to `lakehouse.spark.baseConf` above: that helper's
+output is emitted under inline `sparkConf:` (-> spark-submit `--conf`
+flags) — Spark does NOT expand `${VAR}` there (c2 spike finding), so a
+`${OAUTH_CLIENT_SECRET}` placeholder in `sparkConf` would reach the driver
+UNRESOLVED, and a resolved secret there would be a literal baked into the
+CR (leak, visible via `kubectl get sparkapplication -o yaml`). `baseConf`
+itself is therefore left BYTE-IDENTICAL — the OAuth2 keys instead live in a
+SEPARATE rendered file, `SPARK_CONF_DIR/spark-defaults.conf`, which Spark
+merges with the inline `--conf` props at driver startup (disjoint keys, no
+override conflict).
+
+Mechanism (spike-confirmed: docs/superpowers/spikes/
+2026-08-06-nessie-machine-auth-config.md §3 — spark-operator's mutating
+admission webhook honors `spec.driver.initContainers`/`spec.volumes`/
+`spec.driver.env` verbatim):
+  1. `spark-nessie-oauth-defaults` ConfigMap (chart/templates/
+     22-nessie-machine-auth.yaml) holds a spark-defaults.conf TEMPLATE with
+     ONLY the OAuth2 auth keys; `${OAUTH_CLIENT_SECRET}`/`${OIDC_ISSUER}`
+     are LITERAL placeholders there — never a resolved value.
+  2. `lakehouse.spark.nessieOAuthInitContainer` (below) copies the image's
+     `/opt/spark/conf/.` into a tmpfs (`emptyDir{medium: Memory}` — never
+     disk) so image-shipped conf (log4j2.properties etc.) survives the
+     `SPARK_CONF_DIR` redirect, THEN `sed`-substitutes the two placeholders
+     — sourced from this initContainer's OWN env, secretKeyRef'd, never on
+     the main driver container's env, never echoed (no `set -x`) — into the
+     tmpfs's `spark-defaults.conf`.
+  3. The caller overrides `spec.driver.env`'s `SPARK_CONF_DIR` to the tmpfs
+     mount path, so the driver process picks up this file alongside the
+     inline `--conf` baseConf props.
+
+DRIVER-ONLY: executors do S3 I/O, not Nessie catalog ops; the catalog
+OAuth2 props still reach them via the driver's broadcasted SparkConf
+(in-memory, ephemeral, never a file executor-side) — acceptable, trusted
+platform pods, same namespace/ServiceAccount.
+
+GOTCHA (spike §3, load-bearing): NEVER set `spec.sparkConfigMap` on a
+SparkApplication that also uses this mechanism — spark-operator's
+`addSparkConfigMap` mutation step runs AFTER `addEnvVars` and would
+silently overwrite this `SPARK_CONF_DIR` override back to
+`/opt/spark/conf`, breaking the whole injection. None of this chart's
+SparkApplications set `sparkConfigMap` today (confirmed) — keep it that
+way alongside this mechanism.
+
+Each caller wraps these `include`s in its own
+`{{- if .Values.auth.oidc.enabled }}` gate (not baked into the helpers
+themselves) — same convention as `lakehouse.s3TrustVolumes` etc. above —
+so an auth-off render stays byte-identical to before this task.
+*/ -}}
+{{- define "lakehouse.spark.nessieOAuthVolumes" -}}
+- name: spark-nessie-oauth-template
+  configMap:
+    name: spark-nessie-oauth-defaults
+- name: spark-conf-rendered
+  emptyDir: {medium: Memory}
+{{- end -}}
+
+{{- /* dict keys: context (chart root `.`), image (the SparkApplication's OWN
+       driver image string — same `spark-py` image so /opt/spark/conf
+       matches what the driver actually ships). */ -}}
+{{- define "lakehouse.spark.nessieOAuthInitContainer" -}}
+{{- $ctx := .context -}}
+- name: spark-conf-render
+  image: {{ .image | quote }}
+  {{- $icsc := include "lakehouse.containerSecurityContext" $ctx | trim }}
+  {{- if $icsc }}
+  securityContext:
+    {{- $icsc | nindent 4 }}
+  {{- end }}
+  command: ["/bin/sh", "-c"]
+  args:
+    - |
+      set -eu
+      cp -r /opt/spark/conf/. /spark-conf-rendered/ 2>/dev/null || true
+      esc_secret=$(printf '%s' "$OAUTH_CLIENT_SECRET" | sed -e 's/[\\&|]/\\&/g')
+      esc_issuer=$(printf '%s' "$OIDC_ISSUER" | sed -e 's/[\\&|]/\\&/g')
+      sed -e "s|\${OAUTH_CLIENT_SECRET}|$esc_secret|g" -e "s|\${OIDC_ISSUER}|$esc_issuer|g" \
+        /nessie-oauth-template/spark-defaults.conf > /spark-conf-rendered/spark-defaults.conf
+  env:
+  - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: nessie-machine-auth-credentials, key: spark}}}
+  - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ $ctx.Values.oidc.secretName }}, key: issuer-url}}}
+  volumeMounts:
+  - {name: spark-nessie-oauth-template, mountPath: /nessie-oauth-template, readOnly: true}
+  - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
+  resources:
+    requests: {cpu: "10m", memory: "16Mi"}
+    limits:   {cpu: "100m", memory: "32Mi"}
+{{- end -}}
+
+{{- define "lakehouse.spark.nessieOAuthDriverVolumeMount" -}}
+- {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
+{{- end -}}

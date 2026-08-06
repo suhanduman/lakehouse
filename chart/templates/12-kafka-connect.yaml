@@ -154,6 +154,23 @@ spec:
         {{- if .Values.kafkaConnect.externalKafkaCa.enabled }}
         - {name: ext-kafka-ca, secret: {secretName: {{ .Values.kafkaConnect.externalKafkaCa.secretName }}}}
         {{- end }}
+        {{- if .Values.auth.oidc.enabled }}
+        # Nessie machine-auth (2026-08-06-nessie-machine-auth Task 7):
+        # svc-connect-nessie's client secret, single-sourced from the SAME
+        # shared nessie-machine-auth-credentials Secret every other engine
+        # consumes (chart/templates/22-nessie-machine-auth.yaml, `connect`
+        # key) -- provisioned there, never redefined here. Mounted whole
+        # (same convention as the `s3`/`mssql`/etc. volumes above) via the
+        # DirectoryConfigProvider mechanism this file's header documents;
+        # the Console (render_service._iceberg_catalog_io) references only
+        # the `connect` key as
+        # ${directory:/mnt/external-configuration/nessie-oauth:connect} --
+        # the secret is NEVER a literal in any rendered connector config.
+        # Gated on auth.oidc.enabled ONLY (dead weight when Nessie OIDC
+        # validation is off) so the worker stays byte-identical to today
+        # when auth.oidc.enabled=false.
+        - {name: nessie-oauth, secret: {secretName: nessie-machine-auth-credentials}}
+        {{- end }}
     connectContainer:
       volumeMounts:
         - {name: mssql, mountPath: /mnt/external-configuration/mssql}
@@ -164,6 +181,9 @@ spec:
         - {name: kafka-ca, mountPath: /mnt/external-configuration/kafka-ca}
         {{- if .Values.kafkaConnect.externalKafkaCa.enabled }}
         - {name: ext-kafka-ca, mountPath: /mnt/external-configuration/ext-kafka-ca}
+        {{- end }}
+        {{- if .Values.auth.oidc.enabled }}
+        - {name: nessie-oauth, mountPath: /mnt/external-configuration/nessie-oauth}
         {{- end }}
 ---
 apiVersion: v1

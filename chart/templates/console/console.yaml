@@ -119,6 +119,20 @@ data:
   CONNECT_URL: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
   APICURIO_URL: {{ printf "http://%s:8080/apis/registry/v2" (include "lakehouse.svc.apicurio" .) | quote }}
   OIDC_AUDIENCE: {{ .Values.console.oidc.audience | quote }}
+  {{- if .Values.auth.oidc.enabled }}
+  # Nessie machine-auth (2026-08-06-nessie-machine-auth Task 7): tells the
+  # backend's Iceberg-sink renderer (render_service._iceberg_catalog_io)
+  # whether to emit the svc-connect-nessie OAuth2 keys. Plain (non-secret)
+  # flag, same convention as OIDC_AUDIENCE above -- the client secret itself
+  # is NEVER passed as a Console env var, only resolved by the Connect
+  # worker itself via the `${directory:...}` provider reference
+  # (12-kafka-connect.yaml's nessie-oauth mount). Gated (key omitted, not
+  # just "false") on auth.oidc.enabled ONLY so the ConfigMap renders
+  # byte-identical to pre-Task-7 behavior when auth is off -- the backend's
+  # Settings.auth_oidc_enabled defaults to False when the env var is absent,
+  # so functionality is identical either way.
+  AUTH_OIDC_ENABLED: {{ .Values.auth.oidc.enabled | quote }}
+  {{- end }}
   # Spark-batch lane (render_service.render_spark_job / ScheduledSparkApplication)
   # — SAME single-source values as the chart's own Spark jobs
   # (05-spark-operator.yaml): `.Values.global.imageRegistry`/`.Values.versions.

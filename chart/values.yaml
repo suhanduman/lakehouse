@@ -555,7 +555,28 @@ versions:
   kafkaMetadata: "4.2-IV1"
   # Used by chart/templates/04-nessie-ha.yaml / 06-trino-ha.yaml.
   nessieImage: ghcr.io/projectnessie/nessie:0.104.3
-  trinoImage: trinodb/trino:439
+  # PINNED >= 465 (NOT `latest` — air-gapped/GitOps platform requires an
+  # exact, mirror-able tag). `iceberg.rest-catalog.oauth2.server-uri` (the
+  # property that lets Trino's Iceberg REST-catalog OAuth2 client
+  # auto-refresh a client-credentials token against a separate IdP, instead
+  # of only accepting a static non-refreshing bearer `.oauth2.token`) was
+  # only added in Trino Release 465 (20 Nov 2024) — this chart's prior pin
+  # (439) predates it and CANNOT do Nessie machine-auth client-credentials
+  # at all (proven live in
+  # docs/superpowers/spikes/2026-08-06-nessie-machine-auth-config.md §1 —
+  # `.credential` alone 439-side fails with "please configure ... the
+  # oauth2-server-uri property", and 439 has no way to set it). 476 was
+  # live-verified in a Podman spike (Keycloak 26 + Nessie 0.104.3 + this
+  # exact Trino tag): `iceberg.rest-catalog.oauth2.{credential,server-uri,
+  # scope}` all accepted, CREATE TABLE/INSERT/SELECT against Nessie
+  # succeeded as `service-account-svc-trino-nessie`, AND a follow-up query
+  # after the Keycloak realm's access-token lifespan (90s) elapsed still
+  # succeeded — confirmed real auto-refresh, not a coincidentally-long-lived
+  # token. Also matches the already-pinned Iceberg 1.9.0 / Nessie 0.104.3
+  # version matrix (icebergSparkRuntime/icebergKafkaConnect below) — Trino
+  # 476 bundles a compatible Iceberg core. Re-verify against the target
+  # cluster's own air-gapped mirror before bumping again.
+  trinoImage: trinodb/trino:476
   # chart/templates/05-spark-operator.yaml: driver/executor image + the
   # `spark.jars.packages` pins baked into `spark-defaults` (Spark-side
   # Iceberg support — an independent artifact/release cadence from Kafka
@@ -897,6 +918,25 @@ nessie:
   replicas: 2
   # QUARKUS_OIDC_CLIENT_ID literal from prod-manifests/04-nessie-ha.yaml.
   oidcClientId: nessie
+  # Machine-auth: confidential service-account client secrets for the 4
+  # `svc-<x>-nessie` Keycloak clients (chart/templates/10-keycloak.yaml
+  # `clients[].secret`, single source — the two can never drift), one per
+  # engine/service that talks to Nessie's Iceberg REST catalog directly with
+  # its own identity: Trino, Spark (batch/streaming jobs), Kafka Connect
+  # (Iceberg sink), and Zeppelin (%spark interpreter). Gated conceptually by
+  # `auth.oidc.enabled` — the clients themselves only render when that's
+  # true (04-nessie-ha.yaml's OIDC validation is off entirely when false, so
+  # these service accounts would be dead weight). Same dev-convenience
+  # contract as `superset.trino.oidc.clientSecret`/`dbt.oidc.clientSecret`:
+  # empty default => no dev-convenience Secret rendered inline; provision a
+  # real value out-of-band per `.Values.secrets.mode` for non-dev tiers.
+  # NO audience mapper on any of these — Nessie validates the token by
+  # ISSUER only (not audience), same as the c2 `svc-sandbox-<dept>` clients.
+  machineAuth:
+    trinoClientSecret: ""     # svc-trino-nessie
+    sparkClientSecret: ""     # svc-spark-nessie
+    connectClientSecret: ""   # svc-connect-nessie
+    zeppelinClientSecret: ""  # svc-zeppelin-nessie
   catalog:
     defaultWarehouse: warehouse
     warehouse:

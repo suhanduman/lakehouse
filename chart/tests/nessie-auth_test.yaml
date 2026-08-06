@@ -1,0 +1,1197 @@
+# chart/tests/nessie-auth_test.yaml — helm-unittest suite for Nessie
+# machine-auth (Nessie machine-auth plan, Task 2): the 4 `svc-<x>-nessie`
+# Keycloak service-account clients (chart/templates/10-keycloak.yaml) +
+# `.Values.nessie.machineAuth.*` client-secret values.
+#
+# This is the slice's test file — later tasks (Trino/Spark/Connect/Zeppelin
+# wiring to authenticate against Nessie with these identities) extend it
+# rather than adding a parallel file.
+#
+# Gated `.Values.auth.oidc.enabled` (default true, UNLIKE the c2
+# `svc-sandbox-<dept>` clients which gate on `sandbox.enabled`): when
+# auth.oidc.enabled is false, Nessie (04-nessie-ha.yaml) runs fully
+# unauthenticated, so these service accounts must not render at all — that
+# is the "auth off" control case below.
+#
+# Each of the 4 clients is asserted by `contains`/`notContains` against the
+# FULL rendered client object (clientId-equality via full-content array
+# membership), NOT a positional index — the 4 svc-*-nessie clients render
+# right after `svc-zeppelin-trino` (auth-oidc_test.yaml's control-case
+# clients[0..3]), so they're stably clients[4..7] today, but pinning to that
+# would break silently if another auth.oidc.enabled-gated client is ever
+# inserted between them. The full-content `contains` naturally also proves
+# NO `protocolMappers` key is present (an aud mapper would show up as an
+# extra key and break the exact-content match) — Nessie validates the token
+# by ISSUER only, same as the c2 `svc-sandbox-<dept>` clients.
+suite: nessie.machineAuth values + Keycloak svc-<x>-nessie clients
+templates:
+  - 10-keycloak.yaml
+  - 09-zeppelin.yaml
+  - 22-nessie-machine-auth.yaml
+  - 04-nessie-ha.yaml
+  - 06-trino-ha.yaml
+  - 05-spark-operator.yaml
+  - 14-nginx-ingest.yaml
+  - 12-kafka-connect.yaml
+  - templates/console/console.yaml
+tests:
+  # --- Task 3: Nessie server authorization + CEL rules --------------------
+  # `04-nessie-ha.yaml` documentIndex:1 is the Deployment (same convention as
+  # chart/tests/auth-oidc_test.yaml's existing Nessie assertions — `helm
+  # template`'s fixed kind-sort order puts PDB[0]/ServiceAccount before
+  # Service/Deployment; helm-unittest preserves that same ordering here).
+  #
+  # LOAD-BEARING property under test: every one of the 5 identities (trino,
+  # spark, connect, zeppelin, sandbox-<dept>) must have the CORRECT allow/
+  # deny outcome — a missing writer allow-rule silently breaks that
+  # committer (the b2 rules.json catch-all lesson), and any rule
+  # accidentally granting zeppelin write access breaks its read-only
+  # guarantee. Exact CEL text asserted verbatim (not just presence) so a
+  # future edit that subtly narrows/widens a rule fails loudly.
+  - it: auth.oidc.enabled=true + a sandbox dept renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 5-identity CEL policy (trino/spark/connect all role-only, sandbox dept-only, zeppelin absent from every write/commit rule)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+      sandbox.departments[0].name: veri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_ENABLED
+            value: "true"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
+            value: "op in ['VIEW_REFERENCE','READ_ENTRIES','LIST_COMMIT_LOG','READ_CONTENT_KEY','READ_ENTITY_VALUE','READ_REPOSITORY_CONFIG']"
+        documentIndex: 1
+      # Ref-level COMMIT_TO_MAIN: trino + spark + connect + the sandbox dept
+      # all present (every writer that must be able to commit at all);
+      # zeppelin absent (read-only — denied at this ref-level gate already).
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie' || role=='service-account-svc-sandbox-veri')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'zeppelin'
+        documentIndex: 1
+      # Per-key writes: trino (all paths), spark (all paths), connect
+      # (role-only — the Console-rendered Iceberg sink ALWAYS routes to
+      # Bronze `<ns>_raw`, which does NOT start with `rawlake`; see
+      # 04-nessie-ha.yaml's ALLOW_CONNECT_WRITE comment), sandbox-veri
+      # (sandbox_veri only).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_TRINO_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-trino-nessie'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-spark-nessie'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-veri' && path.startsWith('sandbox_veri')"
+        documentIndex: 1
+      # svc-zeppelin-nessie must appear in NO write/commit rule at all —
+      # a defensive guard against the naming convention every other write
+      # rule in this file follows (ALLOW_<IDENTITY>_WRITE), in addition to
+      # the exact-content assertions above already proving zeppelin is
+      # absent from the read-all/commit-to-main/trino/spark/connect/sandbox
+      # rule text verbatim.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=true + sandbox.enabled=false with a populated sandbox department renders NO svc-sandbox-* CEL rule anywhere (routed fix — Task-3 review; the sandbox CEL rules must gate on sandbox.enabled too, matching the chart's two-gate sandbox contract used by every other sandbox artifact)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: false
+      sandbox.departments[0].name: veri
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'sandbox'
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=true with NO sandbox departments still covers trino/spark/connect (commit-to-main + per-key) with zeppelin absent
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie')"
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: 'zeppelin'
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
+        documentIndex: 1
+
+  - it: auth.oidc.enabled=false renders NO authorization env at all (byte-identity control — authz is entirely absent, not just disabled)
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_ENABLED
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_TRINO_WRITE
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SPARK_WRITE
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
+        documentIndex: 1
+
+  - it: auth on + keycloak on renders all 4 svc-*-nessie clients with the right fields + secrets + NO aud mapper
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      nessie.machineAuth.trinoClientSecret: "dev-trino-nessie"
+      nessie.machineAuth.sparkClientSecret: "dev-spark-nessie"
+      nessie.machineAuth.connectClientSecret: "dev-connect-nessie"
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-trino-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-spark-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-spark-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-connect-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-connect-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-zeppelin-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "dev-zeppelin-nessie"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: auth.oidc.enabled=false (dev/smoke path) renders NONE of the 4 svc-*-nessie clients
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: false
+      nessie.machineAuth.trinoClientSecret: "dev-trino-nessie"
+      nessie.machineAuth.sparkClientSecret: "dev-spark-nessie"
+      nessie.machineAuth.connectClientSecret: "dev-connect-nessie"
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-spark-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-connect-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-zeppelin-nessie
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: default (nessie.machineAuth.* unset) still renders the 4 svc-*-nessie clients with empty-string secrets (dev-convenience default)
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-trino-nessie
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: ""
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  # --- Task 6: shared c1 Zeppelin's Spark interpreter authenticates to
+  # Nessie as the READ-ONLY svc-zeppelin-nessie identity, reusing the c2
+  # sandbox sed->tmpfs mechanism (chart/templates/_zeppelin.tpl) — plus the
+  # nessie-machine-auth-credentials Secret (chart/templates/22-nessie-
+  # machine-auth.yaml) that all 4 machine-auth identities key into. ---------
+
+  - it: nessie-machine-auth-credentials Secret renders with all 4 keys when auth on + at least one machineAuth.* secret supplied (dev-convenience)
+    templates:
+      - 22-nessie-machine-auth.yaml
+    documentSelector:
+      # Task 5 fix: this file now ALSO renders `spark-nessie-oauth-defaults`
+      # (a ConfigMap, unconditional whenever auth is on) alongside this
+      # Secret — narrow to the Secret document explicitly, since helm-
+      # unittest runs unselected assertions against EVERY matched document.
+      path: kind
+      value: Secret
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nessie-machine-auth-credentials
+      - equal:
+          path: stringData.zeppelin
+          value: "dev-zeppelin-nessie"
+      - equal:
+          path: stringData.trino
+          value: ""
+      - equal:
+          path: stringData.spark
+          value: ""
+      - equal:
+          path: stringData.connect
+          value: ""
+
+  - it: nessie-machine-auth-credentials Secret does NOT render when auth on but no machineAuth.* secret is set (out-of-band contract) — spark-nessie-oauth-defaults ConfigMap (Task 5, no secret material, gated ONLY on auth.oidc.enabled) still renders as the file's one document
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ConfigMap
+      - equal:
+          path: metadata.name
+          value: spark-nessie-oauth-defaults
+
+  - it: nessie-machine-auth-credentials Secret does NOT render when auth.oidc.enabled is false, even with a machineAuth.* secret set
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: false
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: shared zeppelin spark-defaults ConfigMap gains the svc-zeppelin-nessie OAuth2 block on lakehouse+rawlake (literal placeholders, NO write catalog) when auth on
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-spark-defaults
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-zeppelin-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-id=svc-zeppelin-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # read-only identity: no write catalog — the sandbox_<dept> write
+      # catalog block (chart/templates/_zeppelin.tpl `$sandbox` arm) must
+      # NEVER appear on the shared instance.
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.sandbox'
+      # the resolved secret literal (dev-convenience value supplied via
+      # values) must NEVER appear in this ConfigMap — only the `${OAUTH_
+      # CLIENT_SECRET}` placeholder above, resolved later by the sed
+      # initContainer into a tmpfs, never a ConfigMap.
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'client-secret=dev-zeppelin-nessie'
+
+  - it: shared zeppelin spark-defaults ConfigMap has NO OAuth2/Nessie-machine-auth block when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: metadata.name
+      value: zeppelin-spark-defaults
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'OAUTH2'
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'svc-zeppelin-nessie'
+
+  - it: shared zeppelin Deployment gains the sed->tmpfs spark-conf-render initContainer with OAUTH_CLIENT_SECRET via secretKeyRef nessie-machine-auth-credentials/zeppelin, SPARK_CONF_DIR pointed at the rendered dir, when auth on
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+      nessie.machineAuth.zeppelinClientSecret: "dev-zeppelin-nessie"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: zeppelin
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: spark-conf-render
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: 'sed '
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: zeppelin
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered
+      # the shared instance passes no `saName` — this stays unaffected by
+      # the Nessie machine-auth wiring (sandbox-only field).
+      - notExists:
+          path: spec.template.spec.serviceAccountName
+
+  - it: shared zeppelin Deployment has NO spark-conf-render initContainer / spark-conf-rendered volume / rewired SPARK_CONF_DIR when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 09-zeppelin.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      components.zeppelin: true
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spark-conf-rendered
+
+  # --- Task 4: Trino >= 465 upgrade + Nessie OAuth2 client-credentials
+  # (svc-trino-nessie) -------------------------------------------------------
+  # Trino 439's iceberg REST-catalog OAuth2 has no auto-refreshing
+  # client-credentials mode (the enabling property
+  # `iceberg.rest-catalog.oauth2.server-uri` is Trino 465+ only — see
+  # docs/superpowers/spikes/2026-08-06-nessie-machine-auth-config.md §1 and
+  # versions.trinoImage's comment in values.yaml). Both catalogs
+  # (lakehouse/rawlake) share the SAME `svc-trino-nessie` identity + secret;
+  # both the coordinator AND worker Deployments need OIDC_ISSUER (server-uri)
+  # + NESSIE_OAUTH_SECRET (credential) since both mount the catalog
+  # properties files and talk to Nessie directly.
+
+  - it: versions.trinoImage is pinned to a Trino >= 465 tag (the Nessie OAuth2 client-credentials auto-refresh floor)
+    templates:
+      - 06-trino-ha.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: trinodb/trino:476
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: trinodb/trino:476
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+
+  - it: auth on renders the Nessie OAuth2 client-credentials block on BOTH lakehouse + rawlake catalogs, secret never a literal
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.security=OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.credential=svc-trino-nessie:\$\{ENV:NESSIE_OAUTH_SECRET\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.server-uri=\$\{ENV:OIDC_ISSUER\}/protocol/openid-connect/token'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.security=OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.credential=svc-trino-nessie:\$\{ENV:NESSIE_OAUTH_SECRET\}'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'iceberg\.rest-catalog\.oauth2\.server-uri=\$\{ENV:OIDC_ISSUER\}/protocol/openid-connect/token'
+        documentSelector: {path: metadata.name, value: trino-config}
+      # The exact-match regexes above already prove the credential line's
+      # value is the literal string `${ENV:NESSIE_OAUTH_SECRET}` and nothing
+      # else (Go's RE2 engine — used by helm-unittest — has no lookahead, so
+      # a leak-check needs the SENTINEL run below rather than a negative
+      # regex here): a real resolved secret value would fail these anchored
+      # patterns outright.
+
+  - it: auth on wires NESSIE_OAUTH_SECRET (secretKeyRef nessie-machine-auth-credentials/trino) onto the COORDINATOR
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: trino
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+
+  - it: auth on wires OIDC_ISSUER + NESSIE_OAUTH_SECRET (secretKeyRef nessie-machine-auth-credentials/trino) onto the WORKER too (workers talk to Nessie directly)
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef:
+                name: oidc-credentials
+                key: issuer-url
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: trino
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+
+  - it: auth off leaves lakehouse + rawlake catalogs unchanged (no OAuth2 block, http:// as today — byte-identity control)
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["lakehouse.properties"]
+          pattern: 'NESSIE_OAUTH_SECRET'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'OAUTH2'
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notMatchRegex:
+          path: data["rawlake.properties"]
+          pattern: 'NESSIE_OAUTH_SECRET'
+        documentSelector: {path: metadata.name, value: trino-config}
+
+  - it: auth off wires NO NESSIE_OAUTH_SECRET / OIDC_ISSUER on either coordinator or worker
+    templates:
+      - 06-trino-ha.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-coordinator")]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_OAUTH_SECRET
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_ISSUER
+        documentSelector:
+          path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'
+
+  # --- Task 5: Spark SparkApplication driver SPARK_CONF_DIR injection
+  # (svc-spark-nessie) -------------------------------------------------------
+  # Inline `sparkConf` (`lakehouse.spark.baseConf` helper, chart/templates/
+  # _helpers.tpl) does NOT expand `${VAR}` in spark-submit `--conf` flags
+  # (c2 spike finding) — a placeholder there would be unresolved, a resolved
+  # secret there would leak into the CR. So the OAuth2 auth keys live in a
+  # SEPARATE `spark-nessie-oauth-defaults` ConfigMap TEMPLATE, rendered by a
+  # driver-only sed->tmpfs initContainer into `SPARK_CONF_DIR` at pod start
+  # (mirrors the c2 sandbox / Task-6 shared-Zeppelin mechanism, chart/
+  # templates/_zeppelin.tpl). DRIVER-ONLY — executors get the catalog
+  # OAuth2 props via the driver's broadcasted SparkConf, no separate
+  # executor initContainer/volume.
+
+  - it: spark-nessie-oauth-defaults ConfigMap has the OAuth2 keys on BOTH lakehouse+rawlake (client-id=svc-spark-nessie, client-secret/issuer-url LITERAL placeholders) when auth on
+    templates:
+      - 22-nessie-machine-auth.yaml
+    documentSelector:
+      path: metadata.name
+      value: spark-nessie-oauth-defaults
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - equal:
+          path: kind
+          value: ConfigMap
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-spark-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.type=OAUTH2'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-id=svc-spark-nessie'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+      - matchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER\}'
+      # the resolved secret must NEVER appear here — only the literal
+      # `${OAUTH_CLIENT_SECRET}`/`${OIDC_ISSUER}` placeholders above; the
+      # anchored regexes above already prove the value is EXACTLY that
+      # literal (a resolved secret would fail them outright — Go's RE2 has
+      # no lookahead, so a real leak-check needs the SENTINEL run below
+      # rather than a negative regex here, same convention as the Trino
+      # Task-4 tests in this same file).
+
+  - it: spark-nessie-oauth-defaults ConfigMap does NOT render when auth.oidc.enabled is false (whole file renders zero documents — byte-identity control)
+    templates:
+      - 22-nessie-machine-auth.yaml
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: iceberg-maintenance ScheduledSparkApplication gains the driver sed->tmpfs initContainer + tmpfs volume + OAUTH_CLIENT_SECRET/OIDC_ISSUER/SPARK_CONF_DIR wiring, NO sparkConfigMap, when auth on
+    templates:
+      - 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="iceberg-maintenance")]'
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.volumes
+          content:
+            name: spark-nessie-oauth-template
+            configMap: {name: spark-nessie-oauth-defaults}
+      - contains:
+          path: spec.template.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - equal:
+          path: spec.template.driver.initContainers[0].name
+          value: spark-conf-render
+      - matchRegex:
+          path: spec.template.driver.initContainers[0].args[0]
+          pattern: 'sed '
+      - notMatchRegex:
+          path: spec.template.driver.initContainers[0].args[0]
+          pattern: 'set -x'
+      - contains:
+          path: spec.template.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: spark
+      - contains:
+          path: spec.template.driver.initContainers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef:
+                name: oidc-credentials
+                key: issuer-url
+      - contains:
+          path: spec.template.driver.env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered
+      - contains:
+          path: spec.template.driver.volumeMounts
+          content:
+            name: spark-conf-rendered
+            mountPath: /spark-conf-rendered
+      - notExists:
+          path: spec.template.sparkConfigMap
+      # baseConf itself (the inline `--conf` sparkConf map) stays
+      # untouched — no `authentication` key leaks into it, only into the
+      # separate ConfigMap above (`spec.template.sparkConf` is a mapping,
+      # not a string, so this is asserted via `notExists` on the specific
+      # key path rather than a regex; the byte-identity worktree diff,
+      # captured separately in the task report, is the load-bearing proof
+      # baseConf is untouched).
+      - notExists:
+          path: spec.template.sparkConf["spark.sql.catalog.lakehouse.authentication.type"]
+
+  - it: iceberg-maintenance ScheduledSparkApplication has NO initContainers/tmpfs volume/SPARK_CONF_DIR override when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="iceberg-maintenance")]'
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.driver.initContainers
+      - notExists:
+          path: spec.template.volumes
+      - notContains:
+          path: spec.template.driver.env
+          content:
+            name: SPARK_CONF_DIR
+      - notExists:
+          path: spec.template.driver.volumeMounts
+
+  - it: silver-merge ScheduledSparkApplication gains the driver sed->tmpfs initContainer + tmpfs volume + OAUTH_CLIENT_SECRET/OIDC_ISSUER/SPARK_CONF_DIR wiring, NO sparkConfigMap, when auth on
+    templates:
+      - 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="silver-merge")]'
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.template.volumes
+          content:
+            name: spark-nessie-oauth-template
+            configMap: {name: spark-nessie-oauth-defaults}
+      - contains:
+          path: spec.template.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - equal:
+          path: spec.template.driver.initContainers[0].name
+          value: spark-conf-render
+      - contains:
+          path: spec.template.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: spark
+      - contains:
+          path: spec.template.driver.env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered
+      - contains:
+          path: spec.template.driver.volumeMounts
+          content:
+            name: spark-conf-rendered
+            mountPath: /spark-conf-rendered
+      - notExists:
+          path: spec.template.sparkConfigMap
+      - notExists:
+          path: spec.template.sparkConf["spark.sql.catalog.lakehouse.authentication.type"]
+
+  - it: silver-merge ScheduledSparkApplication has NO initContainers/tmpfs volume/SPARK_CONF_DIR override when auth.oidc.enabled is false (byte-identity control)
+    templates:
+      - 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="silver-merge")]'
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.driver.initContainers
+      - notExists:
+          path: spec.template.volumes
+      - notContains:
+          path: spec.template.driver.env
+          content:
+            name: SPARK_CONF_DIR
+      - notExists:
+          path: spec.template.driver.volumeMounts
+
+  - it: nginx-streaming SparkApplication gains the driver sed->tmpfs initContainer + tmpfs volume + OAUTH_CLIENT_SECRET/OIDC_ISSUER/SPARK_CONF_DIR wiring, NO sparkConfigMap, when auth on
+    templates:
+      - 14-nginx-ingest.yaml
+    documentSelector:
+      path: '$[?(@.kind=="SparkApplication" && @.metadata.name=="nginx-streaming")]'
+    set:
+      components.nginxIngest: true
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - contains:
+          path: spec.volumes
+          content:
+            name: spark-nessie-oauth-template
+            configMap: {name: spark-nessie-oauth-defaults}
+      - contains:
+          path: spec.volumes
+          content:
+            name: spark-conf-rendered
+            emptyDir: {medium: Memory}
+      - equal:
+          path: spec.driver.initContainers[0].name
+          value: spark-conf-render
+      - contains:
+          path: spec.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: nessie-machine-auth-credentials
+                key: spark
+      - contains:
+          path: spec.driver.initContainers[0].env
+          content:
+            name: OIDC_ISSUER
+            valueFrom:
+              secretKeyRef:
+                name: oidc-credentials
+                key: issuer-url
+      - contains:
+          path: spec.driver.env
+          content:
+            name: SPARK_CONF_DIR
+            value: /spark-conf-rendered
+      - contains:
+          path: spec.driver.volumeMounts
+          content:
+            name: spark-conf-rendered
+            mountPath: /spark-conf-rendered
+      # nginx-streaming's PRE-EXISTING kafka-ca/spark-nginx-scram
+      # volumes/mounts must survive untouched alongside the new ones.
+      - contains:
+          path: spec.volumes
+          content:
+            name: kafka-ca
+            secret: {secretName: kafka-cluster-ca-cert}
+      - contains:
+          path: spec.driver.volumeMounts
+          content:
+            name: kafka-ca
+            mountPath: /mnt/kafka-ca
+            readOnly: true
+      - notExists:
+          path: spec.sparkConfigMap
+      - notExists:
+          path: spec.sparkConf["spark.sql.catalog.lakehouse.authentication.type"]
+
+  - it: nginx-streaming SparkApplication has NO initContainers/tmpfs volume/SPARK_CONF_DIR override when auth.oidc.enabled is false (byte-identity control) — pre-existing kafka-ca/spark-nginx-scram wiring unaffected
+    templates:
+      - 14-nginx-ingest.yaml
+    documentSelector:
+      path: '$[?(@.kind=="SparkApplication" && @.metadata.name=="nginx-streaming")]'
+    set:
+      components.nginxIngest: true
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: spec.driver.initContainers
+      - notContains:
+          path: spec.volumes
+          content:
+            name: spark-conf-rendered
+      - notContains:
+          path: spec.driver.env
+          content:
+            name: SPARK_CONF_DIR
+      - notContains:
+          path: spec.driver.volumeMounts
+          content:
+            name: spark-conf-rendered
+      - contains:
+          path: spec.volumes
+          content:
+            name: kafka-ca
+            secret: {secretName: kafka-cluster-ca-cert}
+
+  # ------------------------------------------------------------------------
+  # Task 7 — Connect Iceberg sink -> Nessie OAuth2 (svc-connect-nessie):
+  # the Strimzi Connect worker's `nessie-oauth` external-configuration mount
+  # (chart/templates/12-kafka-connect.yaml) + the Console's AUTH_OIDC_ENABLED
+  # flag (chart/templates/console/console.yaml), both gated ONLY on
+  # auth.oidc.enabled. The actual Console-rendered connector OAuth2 keys
+  # (iceberg.catalog.credential/oauth2-server-uri/token-refresh-enabled/
+  # scope) are a Console-backend concern, covered by
+  # console/backend/tests/test_render_service.py, NOT by this chart suite.
+  # ------------------------------------------------------------------------
+
+  - it: auth on — Connect worker mounts the nessie-machine-auth-credentials Secret as nessie-oauth at /mnt/external-configuration/nessie-oauth
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+            secret: {secretName: nessie-machine-auth-credentials}
+      - contains:
+          path: spec.template.connectContainer.volumeMounts
+          content:
+            name: nessie-oauth
+            mountPath: /mnt/external-configuration/nessie-oauth
+
+  - it: auth off — Connect worker has NO nessie-oauth volume/mount (byte-identity control, base 6-secret mount set unaffected)
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+      - notContains:
+          path: spec.template.connectContainer.volumeMounts
+          content:
+            name: nessie-oauth
+      - lengthEqual:
+          path: spec.template.pod.volumes
+          count: 6
+      - lengthEqual:
+          path: spec.template.connectContainer.volumeMounts
+          count: 6
+
+  - it: auth on — Console ConfigMap carries AUTH_OIDC_ENABLED=true
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: true
+    asserts:
+      - equal:
+          path: data.AUTH_OIDC_ENABLED
+          value: "true"
+
+  - it: auth off — Console ConfigMap OMITS AUTH_OIDC_ENABLED entirely (byte-identity control -- backend's Settings.auth_oidc_enabled defaults False when the key is absent)
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: false
+    asserts:
+      - notExists:
+          path: data.AUTH_OIDC_ENABLED
+
+  - it: leak check — SENTINEL nessie.machineAuth.connectClientSecret appears ONLY in nessie-machine-auth-credentials Secret's connect key, never on the Connect worker CR or the Console ConfigMap
+    template: 22-nessie-machine-auth.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      - equal:
+          path: stringData.connect
+          value: "SENTINEL-CONNECT-SECRET"
+
+  - it: leak check — SENTINEL never appears on the Connect worker's KafkaConnect CR (only the secret NAME, resolved server-side via DirectoryConfigProvider, never the value)
+    template: 12-kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      # The CR's volume entry is invariant to the actual secret material --
+      # it only ever references the Secret by NAME (secretName), regardless
+      # of what nessie.machineAuth.connectClientSecret is set to. An exact
+      # `contains` match on this shape would fail if a literal secret value
+      # were ever accidentally interpolated into the volume spec instead.
+      - contains:
+          path: spec.template.pod.volumes
+          content:
+            name: nessie-oauth
+            secret: {secretName: nessie-machine-auth-credentials}
+
+  - it: leak check — SENTINEL never appears in the Console ConfigMap (AUTH_OIDC_ENABLED is a plain bool flag, never carries the client secret)
+    template: templates/console/console.yaml
+    documentSelector: {path: kind, value: ConfigMap}
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.connectClientSecret: "SENTINEL-CONNECT-SECRET"
+    asserts:
+      - notMatchRegex:
+          path: data.AUTH_OIDC_ENABLED
+          pattern: 'SENTINEL-CONNECT-SECRET'
+
+  # Leak check — SENTINEL nessie.machineAuth.sparkClientSecret must appear
+  # ONLY in nessie-machine-auth-credentials Secret's `spark` key, NEVER in
+  # the spark-nessie-oauth-defaults ConfigMap or any SparkApplication CR.
+  # One `it:` per template (this codebase's helm-unittest convention for
+  # narrowing a multi-document suite to a single source file, see
+  # chart/tests/helpers_test.yaml) — a single `it:` spanning multiple
+  # `templates:` does not reliably resolve cross-file `documentSelector`
+  # JSONPath filters in this helm-unittest version.
+  - it: leak check — SENTINEL appears in nessie-machine-auth-credentials Secret's spark key
+    template: 22-nessie-machine-auth.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.sparkClientSecret: "SENTINEL-SPARK-SECRET"
+    asserts:
+      - equal:
+          path: stringData.spark
+          value: "SENTINEL-SPARK-SECRET"
+
+  - it: leak check — SENTINEL never appears in the spark-nessie-oauth-defaults ConfigMap (only the ${OAUTH_CLIENT_SECRET} placeholder)
+    template: 22-nessie-machine-auth.yaml
+    documentSelector:
+      path: metadata.name
+      value: spark-nessie-oauth-defaults
+    set:
+      auth.oidc.enabled: true
+      nessie.machineAuth.sparkClientSecret: "SENTINEL-SPARK-SECRET"
+    asserts:
+      - notMatchRegex:
+          path: data["spark-defaults.conf"]
+          pattern: 'SENTINEL-SPARK-SECRET'
+
+  - it: leak check — SENTINEL never appears anywhere on iceberg-maintenance's driver (only the secretKeyRef, never a literal value)
+    template: 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="iceberg-maintenance")]'
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      nessie.machineAuth.sparkClientSecret: "SENTINEL-SPARK-SECRET"
+    asserts:
+      - notContains:
+          path: spec.template.driver.env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"
+      - notContains:
+          path: spec.template.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"
+
+  - it: leak check — SENTINEL never appears anywhere on silver-merge's driver (only the secretKeyRef, never a literal value)
+    template: 05-spark-operator.yaml
+    documentSelector:
+      path: '$[?(@.kind=="ScheduledSparkApplication" && @.metadata.name=="silver-merge")]'
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      nessie.machineAuth.sparkClientSecret: "SENTINEL-SPARK-SECRET"
+    asserts:
+      - notContains:
+          path: spec.template.driver.env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"
+      - notContains:
+          path: spec.template.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"
+
+  - it: leak check — SENTINEL never appears anywhere on nginx-streaming's driver (only the secretKeyRef, never a literal value)
+    template: 14-nginx-ingest.yaml
+    documentSelector:
+      path: '$[?(@.kind=="SparkApplication" && @.metadata.name=="nginx-streaming")]'
+    set:
+      components.nginxIngest: true
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      nessie.machineAuth.sparkClientSecret: "SENTINEL-SPARK-SECRET"
+    asserts:
+      - notContains:
+          path: spec.driver.env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"
+      - notContains:
+          path: spec.driver.initContainers[0].env
+          content:
+            name: OAUTH_CLIENT_SECRET
+            value: "SENTINEL-SPARK-SECRET"

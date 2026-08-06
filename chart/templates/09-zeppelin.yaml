@@ -30,5 +30,12 @@
 # Nessie catalog URI'si ise `lakehouse.svc.nessie` helper'ından — Trino/Spark
 # Operator'ın kullandığı AYNI helper (spec §3.1/§8).
 {{- if .Values.components.zeppelin }}
-{{ include "lakehouse.zeppelin.instance" (dict "ctx" . "name" "zeppelin" "s3SecretName" .Values.storage.s3.secretName "sandbox" false) }}
+{{ include "lakehouse.zeppelin.instance" (dict
+     "ctx" .
+     "name" "zeppelin"
+     "s3SecretName" .Values.storage.s3.secretName
+     "sandbox" false
+     "oauth2ClientId" "svc-zeppelin-nessie"
+     "oidcSecretName" "nessie-machine-auth-credentials"
+     "oidcSecretKey" "zeppelin") }}
 {{- end }}

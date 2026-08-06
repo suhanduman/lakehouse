@@ -59,12 +59,41 @@ Dict keys:
                  (`sandbox: true` only).
   oauth2ClientId, oidcSecretName, sandboxCatalog - sandbox-only Nessie/Spark
                  OAuth2 + sandbox_<dept> catalog wiring (Task 4).
+  oidcSecretKey - key inside `oidcSecretName` holding the OAuth2 client
+                 secret. Defaults to `client-secret` (the sandbox path's
+                 per-dept `sandbox-<name>-oidc-credentials` Secret key) via
+                 `default` below when omitted, so the c2 sandbox call site
+                 (chart/templates/09c-zeppelin-sandbox.yaml) doesn't need to
+                 change. The shared instance (Nessie machine-auth, Task 6)
+                 passes `"zeppelin"` — its secret material lives in the
+                 shared `nessie-machine-auth-credentials` Secret
+                 (chart/templates/22-nessie-machine-auth.yaml), which keys
+                 all 4 machine-auth identities by engine name, not by the
+                 literal `client-secret`.
+
+  Nessie machine-auth for the SHARED (`sandbox: false`) instance (Task 6):
+  when `$ctx.Values.auth.oidc.enabled` is true, the shared instance ALSO
+  gets the OAuth2 block on its `lakehouse`/`rawlake` catalogs — same sed→
+  tmpfs initContainer mechanism as the sandbox path — but with the READ-ONLY
+  `svc-zeppelin-nessie` identity (passed as `oauth2ClientId`) instead of a
+  per-dept sandbox client, and NO write catalog (no `sandboxCatalog` — that
+  stays sandbox-only). Read-only-ness itself is enforced server-side by
+  Nessie's CEL authorization rule (Task 3); this wiring only makes the
+  shared Zeppelin's %spark interpreter AUTHENTICATE for reads. Internally
+  this is `$nessieOAuth := and (not $sandbox) $ctx.Values.auth.oidc.enabled`
+  — computed from the ALREADY-available `auth.oidc.enabled` flag rather than
+  a separate passed bool, so callers don't need a new dict key just to
+  toggle it; when false (auth off, or `$sandbox` true — the sandbox path has
+  its own always-on OAuth2 block below) the shared instance's render is
+  UNCHANGED from before this task (byte-identity requirement).
 */}}
 {{- define "lakehouse.zeppelin.instance" -}}
 {{- $ctx := .ctx -}}
 {{- $name := .name -}}
 {{- $s3SecretName := .s3SecretName -}}
 {{- $sandbox := .sandbox -}}
+{{- $nessieOAuth := and (not $sandbox) $ctx.Values.auth.oidc.enabled -}}
+{{- $oidcSecretKey := default "client-secret" .oidcSecretKey -}}
 {{- $groupRolesMap := "" -}}
 {{- if $sandbox -}}
 {{- $groupRolesMap = printf "%s:sandbox,\\\n      %s:sandbox,admin\"" .adGroup $ctx.Values.zeppelin.ad.groups.admin -}}
@@ -300,7 +329,7 @@ data:
     spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.lakehouse.warehouse={{ $ctx.Values.nessie.catalog.warehouse.location }}
     spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-{{- if $sandbox }}
+{{- if or $sandbox $nessieOAuth }}
     spark.sql.catalog.lakehouse.authentication.type=OAUTH2
     spark.sql.catalog.lakehouse.authentication.oauth2.client-id={{ .oauth2ClientId }}
     spark.sql.catalog.lakehouse.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
@@ -312,11 +341,13 @@ data:
     spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.rawlake.warehouse=rawdata
     spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-{{- if $sandbox }}
+{{- if or $sandbox $nessieOAuth }}
     spark.sql.catalog.rawlake.authentication.type=OAUTH2
     spark.sql.catalog.rawlake.authentication.oauth2.client-id={{ .oauth2ClientId }}
     spark.sql.catalog.rawlake.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
     spark.sql.catalog.rawlake.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
+{{- end }}
+{{- if $sandbox }}
 
     # sandbox_<dept> write catalog (c2) — same Nessie REST endpoint, dept-
     # private warehouse prefix (bucket provisioned by 18b-sandbox-minio-
@@ -364,22 +395,23 @@ spec:
         {{- $psc | nindent 8 }}
       {{- end }}
       # Spark image'a gömülü olduğu için initContainers yok.
-{{- if $sandbox }}
-      # Sandbox instance ONLY: the spark-defaults ConfigMap above holds a
-      # TEMPLATE — the OAuth2 client-secret and OIDC issuer-url can only be
-      # literal `${...}` placeholders there (never a resolved value in a
-      # ConfigMap; the issuer-url itself also only ever lives in the
-      # `oidc.secretName` Secret, never in a plain Helm value — see
-      # `_zeppelin.tpl`'s c1 refresher sidecar / chart-wide OIDC_ISSUER
-      # convention). This initContainer resolves both placeholders at pod
-      # start into a tmpfs (`emptyDir{medium: Memory}` — never disk, never
-      # logged) that the Spark interpreter's `SPARK_CONF_DIR` points at
-      # below. Substitution mechanism: `envsubst` is NOT present in the
-      # Zeppelin image (verified: apache/zeppelin:0.11.2, Ubuntu 20.04 base,
-      # `command -v envsubst` → absent), so this uses a POSIX `sed`
-      # substitution instead (present, no new package added) — replacement
-      # text is escaped for sed's `\`/`&`/delimiter metacharacters so an
-      # arbitrary secret value round-trips literally.
+{{- if or $sandbox $nessieOAuth }}
+      # Sandbox instance OR shared instance with Nessie machine-auth on
+      # (Task 6): the spark-defaults ConfigMap above holds a TEMPLATE — the
+      # OAuth2 client-secret and OIDC issuer-url can only be literal `${...}`
+      # placeholders there (never a resolved value in a ConfigMap; the
+      # issuer-url itself also only ever lives in the `oidc.secretName`
+      # Secret, never in a plain Helm value — see `_zeppelin.tpl`'s c1
+      # refresher sidecar / chart-wide OIDC_ISSUER convention). This
+      # initContainer resolves both placeholders at pod start into a tmpfs
+      # (`emptyDir{medium: Memory}` — never disk, never logged) that the
+      # Spark interpreter's `SPARK_CONF_DIR` points at below. Substitution
+      # mechanism: `envsubst` is NOT present in the Zeppelin image (verified:
+      # apache/zeppelin:0.11.2, Ubuntu 20.04 base, `command -v envsubst` →
+      # absent), so this uses a POSIX `sed` substitution instead (present, no
+      # new package added) — replacement text is escaped for sed's `\`/`&`/
+      # delimiter metacharacters so an arbitrary secret value round-trips
+      # literally.
       initContainers:
       - name: spark-conf-render
         image: {{ printf "%s/zeppelin:%s" $ctx.Values.global.imageRegistry $ctx.Values.versions.zeppelinImageTag | quote }}
@@ -397,7 +429,7 @@ spec:
             sed -e "s|\${OAUTH_CLIENT_SECRET}|$esc_secret|g" -e "s|\${OIDC_ISSUER_URL}|$esc_issuer|g" \
               /conf-tpl/spark-defaults.conf > /spark-conf-rendered/spark-defaults.conf
         env:
-        - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .oidcSecretName }}, key: client-secret}}}
+        - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .oidcSecretName }}, key: {{ $oidcSecretKey }}}}}
         - {name: OIDC_ISSUER_URL,     valueFrom: {secretKeyRef: {name: {{ $ctx.Values.oidc.secretName }}, key: issuer-url}}}
         volumeMounts:
         - {name: spark-conf,          mountPath: /conf-tpl,           readOnly: true}
@@ -437,7 +469,7 @@ spec:
         env:
         - {name: SPARK_HOME,            value: "/opt/spark"}
         - {name: ZEPPELIN_NOTEBOOK_DIR, value: "/zeppelin/notebook"}
-        - {name: SPARK_CONF_DIR,        value: {{ if $sandbox }}"/spark-conf-rendered"{{ else }}"/spark-conf"{{ end }}}
+        - {name: SPARK_CONF_DIR,        value: {{ if or $sandbox $nessieOAuth }}"/spark-conf-rendered"{{ else }}"/spark-conf"{{ end }}}
         - {name: ZEPPELIN_SHIRO_CONF,   value: "/zeppelin/conf/shiro.ini"}
         - {name: AD_BIND_DN,          valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-dn}}}
         - {name: AD_BIND_PASSWORD,    valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-password}}}
@@ -451,7 +483,7 @@ spec:
         - {name: {{ $name }}-notebooks, mountPath: /zeppelin/notebook}
         - {name: spark-conf,         mountPath: /spark-conf}
         - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
-        {{- if $sandbox }}
+        {{- if or $sandbox $nessieOAuth }}
         - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
         {{- end }}
         {{- if and $ctx.Values.components.zeppelin $ctx.Values.auth.oidc.enabled }}
@@ -591,7 +623,7 @@ spec:
         configMap: {name: {{ $name }}-spark-defaults}
       - name: shiro-conf
         configMap: {name: {{ $name }}-shiro}
-      {{- if $sandbox }}
+      {{- if or $sandbox $nessieOAuth }}
       - name: spark-conf-rendered
         emptyDir: {medium: Memory}
       {{- end }}

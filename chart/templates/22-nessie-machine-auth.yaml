@@ -1,0 +1,87 @@
+{{- if .Values.auth.oidc.enabled }}
+# nessie-machine-auth-credentials — the ONE shared Secret holding all 4
+# `svc-<x>-nessie` machine-auth client secrets (Trino/Spark/Kafka Connect/
+# Zeppelin), single-sourced with the Keycloak clients of the SAME name
+# (chart/templates/10-keycloak.yaml `spec.realm.clients[].secret`, via
+# `.Values.nessie.machineAuth.<x>ClientSecret` — the two can never drift).
+#
+# Renders EXACTLY ONCE regardless of how many engines end up consuming it
+# (Task 2 created only the Keycloak clients; this task adds the Secret
+# itself). Later tasks (Trino Task 4, Spark/Connect Tasks 4-5, this
+# Zeppelin wiring Task 6, Task 7) all `secretKeyRef` this SAME Secret name
+# by their own key (`trino`/`spark`/`connect`/`zeppelin`) — none of them
+# render their own copy.
+#
+# Same dev-convenience-else-out-of-band contract as
+# `zeppelin-trino-oidc-credentials`/`ad-bind-credentials`
+# (chart/templates/_zeppelin.tpl): rendered ONLY when BOTH
+# `.Values.auth.oidc.enabled` is true (Nessie's OIDC validation is off
+# entirely when false — see chart/values.yaml `auth.oidc.enabled` comment —
+# so these credentials would be dead weight) AND at least one of the 4
+# `nessie.machineAuth.*ClientSecret` values is explicitly supplied
+# (dev/test convenience). Otherwise this Secret's name/keys must be
+# provisioned out-of-band (ExternalSecret/Vault or
+# `oc create secret generic nessie-machine-auth-credentials
+# --from-literal=...`) per `.Values.secrets.mode`, BEFORE install — same as
+# every other machine-auth credential in this chart. NEVER logged, NEVER
+# placed in a ConfigMap.
+#
+# NOTE: this comment header lives INSIDE the auth-enabled guard (final-
+# review fix) — it used to sit ABOVE the guard's opening action, so an
+# auth-off render emitted a comment-only document plus a stray `---` even
+# though the file has no actual manifest content when auth is off. Keeping
+# the header inside the guard makes an auth-off render emit ZERO bytes from
+# this file.
+{{- if or .Values.nessie.machineAuth.trinoClientSecret .Values.nessie.machineAuth.sparkClientSecret .Values.nessie.machineAuth.connectClientSecret .Values.nessie.machineAuth.zeppelinClientSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nessie-machine-auth-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  trino: {{ .Values.nessie.machineAuth.trinoClientSecret | quote }}
+  spark: {{ .Values.nessie.machineAuth.sparkClientSecret | quote }}
+  connect: {{ .Values.nessie.machineAuth.connectClientSecret | quote }}
+  zeppelin: {{ .Values.nessie.machineAuth.zeppelinClientSecret | quote }}
+{{- end }}
+{{- end }}
+{{- if .Values.auth.oidc.enabled }}
+---
+# spark-nessie-oauth-defaults (Task 5) — the `SPARK_CONF_DIR/spark-defaults.
+# conf` TEMPLATE consumed by every platform SparkApplication's driver-only
+# sed->tmpfs initContainer (chart/templates/_helpers.tpl
+# `lakehouse.spark.nessieOAuthInitContainer`, called from 05-spark-operator
+# .yaml's iceberg-maintenance/silver-merge and 14-nginx-ingest.yaml's
+# nginx-streaming). Holds ONLY the OAuth2 auth keys for the `lakehouse`/
+# `rawlake` Iceberg REST catalogs (the rest of the catalog config — uri/
+# warehouse/io-impl — stays in the UNCHANGED inline `sparkConf`
+# `lakehouse.spark.baseConf` helper; both apply, disjoint keys, no
+# conflict). `${OAUTH_CLIENT_SECRET}`/`${OIDC_ISSUER}` are LITERAL
+# placeholders — NEVER a resolved value — resolved only inside each
+# SparkApplication driver's tmpfs at pod start, never written back to any
+# ConfigMap/CR. Same property-name shape as the shared Zeppelin %spark
+# interpreter's OAuth2 block (chart/templates/_zeppelin.tpl, Task 6,
+# c2-confirmed) — one Nessie REST-catalog OAuth2 property surface, reused
+# verbatim, only the identity (`svc-spark-nessie`) differs.
+#
+# Gated `.Values.auth.oidc.enabled` ONLY (not `components.sparkOperator`/
+# `components.nginxIngest`) — same convention as `nessie-machine-auth-
+# credentials` above — so it renders exactly once regardless of which Spark
+# components are on, and stays absent (byte-identity) when auth is off.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-nessie-oauth-defaults
+  namespace: {{ include "lakehouse.namespace" . }}
+data:
+  spark-defaults.conf: |
+    spark.sql.catalog.lakehouse.authentication.type=OAUTH2
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-id=svc-spark-nessie
+    spark.sql.catalog.lakehouse.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.lakehouse.authentication.oauth2.issuer-url=${OIDC_ISSUER}
+    spark.sql.catalog.rawlake.authentication.type=OAUTH2
+    spark.sql.catalog.rawlake.authentication.oauth2.client-id=svc-spark-nessie
+    spark.sql.catalog.rawlake.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.rawlake.authentication.oauth2.issuer-url=${OIDC_ISSUER}
+{{- end }}

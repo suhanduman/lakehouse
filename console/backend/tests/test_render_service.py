@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import settings
 from app.models import SourceSpec
 from app.services import render_service as r
 
@@ -1164,3 +1165,75 @@ def test_render_signal_table_dml_mongo_is_not_relational_ddl():
     ddl = render_service.render_signal_table_dml(_spec("mongo", mongo_uri="mongodb://h:27017"))
     assert "CREATE TABLE" not in ddl
     assert "signal.data.collection" in ddl
+
+
+# --------------------------------------------------------------------------
+# Nessie machine-auth (2026-08-06-nessie-machine-auth Task 7): Connect
+# Iceberg sink -> svc-connect-nessie OAuth2, gated on settings.auth_oidc_enabled
+# (chart AUTH_OIDC_ENABLED env, from .Values.auth.oidc.enabled).
+# --------------------------------------------------------------------------
+
+def test_iceberg_catalog_io_no_oauth2_keys_when_auth_off(monkeypatch):
+    monkeypatch.setattr(settings, "auth_oidc_enabled", False)
+    c = r._iceberg_catalog_io()
+    assert "iceberg.catalog.credential" not in c
+    assert "iceberg.catalog.oauth2-server-uri" not in c
+    assert "iceberg.catalog.token-refresh-enabled" not in c
+    assert "iceberg.catalog.scope" not in c
+    # unchanged base keys still present
+    assert c["iceberg.catalog.type"] == "rest"
+    assert c["iceberg.catalog.uri"] == r.NESSIE_URI
+
+
+def test_iceberg_catalog_io_emits_oauth2_keys_when_auth_on(monkeypatch):
+    monkeypatch.setattr(settings, "auth_oidc_enabled", True)
+    monkeypatch.setattr(settings, "oidc_issuer", "http://keycloak.lakehouse.svc:8080/realms/lakehouse")
+    c = r._iceberg_catalog_io()
+    # credential is client:secret, secret half is a DirectoryConfigProvider
+    # reference -- NEVER a literal.
+    assert c["iceberg.catalog.credential"] == (
+        "svc-connect-nessie:${directory:/mnt/external-configuration/nessie-oauth:connect}"
+    )
+    assert c["iceberg.catalog.oauth2-server-uri"] == (
+        "http://keycloak.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token"
+    )
+    assert c["iceberg.catalog.token-refresh-enabled"] == "true"
+    assert c["iceberg.catalog.scope"] == "openid"
+    # base keys untouched
+    assert c["iceberg.catalog.type"] == "rest"
+    assert c["iceberg.catalog.warehouse"] == "rawdata"
+
+
+def test_iceberg_catalog_io_oauth2_server_uri_strips_trailing_slash(monkeypatch):
+    monkeypatch.setattr(settings, "auth_oidc_enabled", True)
+    monkeypatch.setattr(settings, "oidc_issuer", "http://keycloak.lakehouse.svc:8080/realms/lakehouse/")
+    c = r._iceberg_catalog_io()
+    assert c["iceberg.catalog.oauth2-server-uri"] == (
+        "http://keycloak.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token"
+    )
+
+
+def test_kafka_ingest_sink_carries_oauth2_keys_when_auth_on(monkeypatch):
+    # End-to-end: a rendered kafka-ingest dedicated sink connector (which
+    # spreads _iceberg_catalog_io() into its config) carries the OAuth2 keys
+    # too, not just the pure helper.
+    monkeypatch.setattr(settings, "auth_oidc_enabled", True)
+    monkeypatch.setattr(settings, "oidc_issuer", "http://keycloak.lakehouse.svc:8080/realms/lakehouse")
+    c = r.render_connector(_kafka())["spec"]["config"]
+    assert c["iceberg.catalog.credential"] == (
+        "svc-connect-nessie:${directory:/mnt/external-configuration/nessie-oauth:connect}"
+    )
+    assert c["iceberg.catalog.oauth2-server-uri"] == (
+        "http://keycloak.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token"
+    )
+    assert c["iceberg.catalog.token-refresh-enabled"] == "true"
+    assert c["iceberg.catalog.scope"] == "openid"
+
+
+def test_kafka_ingest_sink_no_oauth2_keys_when_auth_off(monkeypatch):
+    monkeypatch.setattr(settings, "auth_oidc_enabled", False)
+    c = r.render_connector(_kafka())["spec"]["config"]
+    assert not any(k.startswith("iceberg.catalog.credential")
+                   or k in ("iceberg.catalog.oauth2-server-uri", "iceberg.catalog.token-refresh-enabled",
+                            "iceberg.catalog.scope")
+                   for k in c)

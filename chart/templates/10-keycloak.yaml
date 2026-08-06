@@ -345,6 +345,55 @@ spec:
           "included.client.audience": "trino"
           "id.token.claim": "false"
           "access.token.claim": "true"
+    {{- if .Values.auth.oidc.enabled }}
+    # Nessie machine-auth: one confidential service-account client per
+    # engine/service that talks to Nessie's Iceberg REST catalog directly
+    # with its own identity (Trino, Spark, Kafka Connect's Iceberg sink,
+    # Zeppelin's %spark interpreter) — mirrors the svc-dbt-trino/
+    # svc-zeppelin-trino pattern above (serviceAccountsEnabled,
+    # standardFlowEnabled: false, publicClient: false, single-sourced
+    # `secret`). Single source with `.Values.nessie.machineAuth.
+    # <name>ClientSecret`, so client and any dev-convenience Secret can
+    # never drift.
+    #
+    # Gated `auth.oidc.enabled` (unlike the trino service-account clients
+    # above, which aren't gated on this flag): when auth.oidc.enabled is
+    # false, Nessie (04-nessie-ha.yaml) runs fully unauthenticated, so these
+    # service accounts would be dead weight.
+    #
+    # CRITICAL DIFFERENCE from the trino service-account clients above: NO
+    # `aud-trino` (or any) audience mapper here — Nessie validates the token
+    # by ISSUER only (not audience), same as the c2 svc-sandbox-<dept>
+    # clients.
+    - clientId: svc-trino-nessie
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      secret: {{ .Values.nessie.machineAuth.trinoClientSecret | quote }}
+    - clientId: svc-spark-nessie
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      secret: {{ .Values.nessie.machineAuth.sparkClientSecret | quote }}
+    - clientId: svc-connect-nessie
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      secret: {{ .Values.nessie.machineAuth.connectClientSecret | quote }}
+    - clientId: svc-zeppelin-nessie
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      secret: {{ .Values.nessie.machineAuth.zeppelinClientSecret | quote }}
+    {{- end }}
     {{- if .Values.sandbox.enabled }}
     # Per-department analyst sandbox service accounts (Consumption slice c2).
     # One confidential client per `sandbox.departments[].name`, mirroring the

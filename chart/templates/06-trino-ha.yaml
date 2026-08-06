@@ -191,6 +191,22 @@ data:
     iceberg.catalog.type=rest
     iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
     iceberg.rest-catalog.warehouse={{ .Values.nessie.catalog.warehouse.location }}
+{{- if .Values.auth.oidc.enabled }}
+    # Nessie machine-auth (Trino >= 465 only — see versions.trinoImage's
+    # comment in values.yaml for the 439 blocker this upgrade fixes).
+    # `svc-trino-nessie` client-credentials, auto-refreshing (Podman-spike
+    # confirmed: docs/superpowers/spikes/
+    # 2026-08-06-nessie-machine-auth-config.md §1). Secret NEVER a literal —
+    # sourced via `${ENV:NESSIE_OAUTH_SECRET}` (secretKeyRef, see the
+    # coordinator/worker env below). Server-uri reuses the SAME
+    # `OIDC_ISSUER` env var (from `oidc.secretName`/`issuer-url`) Trino's own
+    # http-server.authentication.oauth2/jwt lines above already consume —
+    # single issuer source, no hardcoded DNS.
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=svc-trino-nessie:${ENV:NESSIE_OAUTH_SECRET}
+    iceberg.rest-catalog.oauth2.server-uri=${ENV:OIDC_ISSUER}/protocol/openid-connect/token
+    iceberg.rest-catalog.oauth2.scope=openid
+{{- end }}
     iceberg.register-table-procedure.enabled=false
     fs.native-s3.enabled=true
     s3.endpoint=${ENV:S3_ENDPOINT}
@@ -203,6 +219,15 @@ data:
     iceberg.catalog.type=rest
     iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
     iceberg.rest-catalog.warehouse=rawdata
+{{- if .Values.auth.oidc.enabled }}
+    # Nessie machine-auth — see lakehouse.properties above for the full
+    # explanation; identical block, same `svc-trino-nessie` identity (one
+    # Trino engine, one Nessie service-account, both catalogs).
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=svc-trino-nessie:${ENV:NESSIE_OAUTH_SECRET}
+    iceberg.rest-catalog.oauth2.server-uri=${ENV:OIDC_ISSUER}/protocol/openid-connect/token
+    iceberg.rest-catalog.oauth2.scope=openid
+{{- end }}
     iceberg.register-table-procedure.enabled=true
     fs.native-s3.enabled=true
     s3.endpoint=${ENV:S3_ENDPOINT}
@@ -283,6 +308,11 @@ spec:
         - {name: OIDC_ISSUER,        valueFrom: {secretKeyRef: {name: {{ required "auth.oidc.enabled=true but oidc.secretName is empty — provision the OIDC credentials secret (issuer-url/client-id/...) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         - {name: OIDC_CLIENT_ID,     valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: trino-client-id}}}
         - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: trino-client-secret}}}
+        # Nessie machine-auth (`svc-trino-nessie` client-credentials, see
+        # lakehouse.properties/rawlake.properties above) — the shared
+        # cross-engine Secret from chart/templates/22-nessie-machine-auth.yaml
+        # (Task 6), keyed `trino`. NEVER a literal.
+        - {name: NESSIE_OAUTH_SECRET, valueFrom: {secretKeyRef: {name: nessie-machine-auth-credentials, key: trino}}}
 {{- end }}
         # Coordinator↔worker internal-communication auth (see
         # coordinator.config.properties' `internal-communication.shared-
@@ -371,6 +401,15 @@ spec:
         - {name: S3_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
         - {name: S3_SECRET_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
         - {name: TRINO_INTERNAL_SECRET, valueFrom: {secretKeyRef: {name: trino-internal-secret, key: shared-secret}}}
+{{- if .Values.auth.oidc.enabled }}
+        # Nessie machine-auth (`svc-trino-nessie` client-credentials, see
+        # lakehouse.properties/rawlake.properties above) — workers mount the
+        # SAME catalog properties files as the coordinator and talk to
+        # Nessie directly, so they need the same OIDC_ISSUER (server-uri)
+        # and NESSIE_OAUTH_SECRET (credential) env. NEVER a literal.
+        - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
+        - {name: NESSIE_OAUTH_SECRET, valueFrom: {secretKeyRef: {name: nessie-machine-auth-credentials, key: trino}}}
+{{- end }}
         resources:
           requests:
             memory: {{ .Values.trino.worker.resources.requests.memory | quote }}

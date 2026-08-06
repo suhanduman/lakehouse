@@ -79,6 +79,17 @@ superset:
   trino:
     authMode: jwt
 
+# Nessie machine-auth: with the chart default `auth.oidc.enabled: true`
+# (Keycloak present at this tier), Nessie's own authn/authz turns on too
+# (04-nessie-ha.yaml) — this FIXES the latent prod 401 (committers were
+# never actually authenticating against it) and requires the 4
+# `svc-<x>-nessie` client secrets (`nessie.machineAuth.{trino,spark,connect,
+# zeppelin}ClientSecret`, chart/values.yaml). All 4 stay empty-string here
+# (out-of-band per `.Values.secrets.mode`, same contract as every other
+# credential in this file) — never put real secrets in a sizing overlay. See
+# the README's "Nessie machine-auth" section for the full 5-identity CEL
+# policy + operator checklist before install.
+
 postgres:
   nessie:
     instances: 3   # chart default — CNPG 3-instance HA cluster
