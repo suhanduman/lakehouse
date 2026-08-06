@@ -39,3 +39,22 @@ def test_spark_conf_has_catalogs(monkeypatch):
 def test_trino_connect_args(monkeypatch):
     a = _load(monkeypatch)._trino_connect_args(token="JWT")
     assert a["http_scheme"] == "https" and a["host"].startswith("trino-coordinator") and a["verify"] == "/etc/trino-ca/ca.crt"
+
+
+def test_iceberg_props_write_capability_invariant(monkeypatch):
+    p = _load(monkeypatch)._iceberg_props()
+    # Task-1 spike: PyIceberg 0.10.0 REST + OAuth2 client-credentials is
+    # write-capable -- credential/oauth2-server-uri must stay; scope must
+    # stay OMITTED (an explicit scope="" was accepted today but a future
+    # Keycloak may need a real scope, so don't lock one in).
+    assert "credential" in p
+    assert "oauth2-server-uri" in p
+    assert "scope" not in p
+
+
+def test_spark_conf_catalog_invariant(monkeypatch):
+    c = _load(monkeypatch)._spark_conf()
+    assert "spark.sql.catalog.lakehouse" in c
+    assert "spark.sql.catalog.rawlake" in c
+    assert c["spark.sql.catalog.lakehouse.rest.auth.type"] == "oauth2"
+    assert "spark.sql.catalog.lakehouse.rest.credential" in c
