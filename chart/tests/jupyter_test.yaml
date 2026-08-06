@@ -1066,3 +1066,72 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # --- final-review fix wave: adGroup-CN "sandbox-" prefix coherence guard
+  # + deterministic multi-group dept selection (pre_spawn_hook sorts
+  # group_names before iterating) ---
+
+  - it: "final-review: a sandbox dept whose adGroup CN does NOT start with sandbox- FAILS the render loudly (login gate would admit the group, but pre_spawn_hook could never match it)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: "dev-svc-sandbox-veri"
+    asserts:
+      - failedTemplate:
+          errorMessage: "sandbox department veri adGroup CN must start with 'sandbox-' for JupyterHub group→dept mapping (got: notsandbox-veri)"
+
+  - it: "final-review: a sandbox dept whose adGroup CN DOES start with sandbox- renders cleanly — guard does NOT fire"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+          oidcClientSecret: "dev-svc-sandbox-veri"
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: jupyterhub-config
+          any: true
+
+  - it: "final-review: components.jupyter=false with a non-sandbox- adGroup CN renders fine — the CN-prefix guard only evaluates under components.jupyter AND auth.oidc.enabled (the c2 Zeppelin-only sandbox path has no such constraint)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "final-review: pre_spawn_hook iterates a sorted(group_names) — deterministic first-match dept selection when a user belongs to multiple sandbox-* groups"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'for g in sorted\(group_names\):'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config

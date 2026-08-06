@@ -31,6 +31,29 @@
 {{- if and .Values.components.jupyter (not .Values.auth.oidc.enabled) }}
 {{- fail "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)" }}
 {{- end }}
+# --- Coherence guard (final-review fix wave): every sandbox dept's
+# `adGroup` CN must start with "sandbox-". `pre_spawn_hook` below (and the
+# `DEPTS` dict it reads) hard-require that prefix to derive the dept's short
+# code (`trimPrefix "sandbox-" $cn`) — but the login gate (`allowed_groups`,
+# just below) and `DEPTS`'s own dict key are built from the CN WITHOUT
+# requiring the prefix. Without this guard, a dept configured with a
+# non-"sandbox-"-prefixed adGroup CN would let its users LOG IN (the login
+# gate admits any CN) but `pre_spawn_hook` could never match that group ->
+# every spawn attempt fails with "user has no configured sandbox-<dept>
+# group" (fail-closed, but a confusing broken data path instead of a clear
+# render-time error). Only evaluated under this file's own gate
+# (`components.jupyter` AND `auth.oidc.enabled`) — the c2 Zeppelin sandbox
+# path (chart/templates/09c-zeppelin-sandbox.yaml) has no such constraint,
+# so a Zeppelin-only install (sandbox.enabled without components.jupyter)
+# must NOT be broken by this check.
+{{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
+{{- range .Values.sandbox.departments }}
+{{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
+{{- if not (hasPrefix "sandbox-" $cn) }}
+{{- fail (printf "sandbox department %s adGroup CN must start with 'sandbox-' for JupyterHub group→dept mapping (got: %s)" .name $cn) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
 {{- if .Values.jupyter.oidcClientSecret }}
 # Single source with the Keycloak `jupyter` client secret
@@ -216,7 +239,13 @@ data:
         # pre_spawn_hook ever runs. No await, no get_auth_state() needed.
         group_names = [g.name for g in spawner.user.groups]
         dept = None
-        for g in group_names:
+        # sorted(): spawner.user.groups (hence group_names) is an unordered
+        # collection -- if a user somehow belongs to two sandbox-* groups,
+        # first-match-over-an-unordered-list would make the chosen dept
+        # unstable across spawns. Depts are meant to be mutually exclusive
+        # (one group per user), so this is defensive: still first-match,
+        # but now over a deterministic (sorted) order.
+        for g in sorted(group_names):
             if g.startswith("sandbox-"):
                 code = g[len("sandbox-"):]
                 if code in DEPTS:
