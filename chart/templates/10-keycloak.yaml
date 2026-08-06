@@ -345,6 +345,27 @@ spec:
           "included.client.audience": "trino"
           "id.token.claim": "false"
           "access.token.claim": "true"
+    - clientId: svc-jupyter-trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: false
+      serviceAccountsEnabled: true
+      # Read-only SA for Jupyter notebook turn-key Trino reads.
+      secret: {{ .Values.jupyter.trino.oidc.clientSecret | quote }}
+      attributes:
+        # 900 — the Jupyter helper fetches a fresh token per call, so a short
+        # lifespan is enough (unlike svc-zeppelin-trino's 3600: each rotation
+        # recycles the Zeppelin interpreter, so recycles must stay infrequent).
+        access.token.lifespan: "900"
+      protocolMappers:
+      - name: aud-trino
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config:
+          "included.client.audience": "trino"
+          "id.token.claim": "false"
+          "access.token.claim": "true"
     {{- if .Values.auth.oidc.enabled }}
     # Nessie machine-auth: one confidential service-account client per
     # engine/service that talks to Nessie's Iceberg REST catalog directly

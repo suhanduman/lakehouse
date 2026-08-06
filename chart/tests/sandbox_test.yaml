@@ -16,8 +16,10 @@
 # pin a stable index against. (clients[4] below shifted to clients[8] when
 # the 4 `svc-*-nessie` machine-auth clients were inserted right after
 # `svc-zeppelin-trino` — auth.oidc.enabled default true renders them ahead of
-# the sandbox block; the equal-on-clientId assertion at that index guards
-# against silently pinning the wrong client if the order shifts again.)
+# the sandbox block; shifted again to clients[9] when `svc-jupyter-trino`
+# was inserted right after `svc-zeppelin-trino`, jupyter-turnkey-notebook
+# plan Task 2; the equal-on-clientId assertion at that index guards against
+# silently pinning the wrong client if the order shifts again.)
 suite: sandbox.* values + Keycloak svc-sandbox-<dept> clients + per-dept OIDC secret
 templates:
   - 10-keycloak.yaml
@@ -40,43 +42,43 @@ tests:
           oidcClientSecret: devz
     asserts:
       - equal:
-          path: spec.realm.clients[8].clientId
+          path: spec.realm.clients[9].clientId
           value: svc-sandbox-veri
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[8].enabled
+          path: spec.realm.clients[9].enabled
           value: true
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[8].serviceAccountsEnabled
+          path: spec.realm.clients[9].serviceAccountsEnabled
           value: true
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[8].standardFlowEnabled
+          path: spec.realm.clients[9].standardFlowEnabled
           value: false
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[8].publicClient
+          path: spec.realm.clients[9].publicClient
           value: false
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - equal:
-          path: spec.realm.clients[8].secret
+          path: spec.realm.clients[9].secret
           value: "devz"
         documentSelector:
           path: kind
           value: KeycloakRealmImport
       - notExists:
-          path: spec.realm.clients[8].protocolMappers
+          path: spec.realm.clients[9].protocolMappers
         documentSelector:
           path: kind
           value: KeycloakRealmImport

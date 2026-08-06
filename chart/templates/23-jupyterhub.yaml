@@ -90,6 +90,25 @@ type: Opaque
 stringData:
   proxy-token: {{ .Values.jupyter.proxyToken | quote }}
 {{- end }}
+{{- if .Values.jupyter.trino.oidc.clientSecret }}
+---
+# Read-only svc-jupyter-trino service-account client secret (turn-key
+# notebook helper's Trino access) via `.Values.jupyter.trino.oidc.
+# clientSecret`. SAME dev-convenience-else-out-of-band contract as the two
+# Secrets above: rendered ONLY when a value is supplied; otherwise provision
+# this Secret's name/key out-of-band per `.Values.secrets.mode`. Single
+# source with the Keycloak `svc-jupyter-trino` client's `secret`
+# (chart/templates/10-keycloak.yaml) — the two can never drift. NEVER
+# logged, NEVER placed in a ConfigMap.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jupyter-trino-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.jupyter.trino.oidc.clientSecret | quote }}
+{{- end }}
 ---
 # jupyterhub_config.py ConfigMap (Task 4, jupyterhub-per-user-sandbox) —
 # GenericOAuthenticator(Keycloak `jupyter`) + KubeSpawner + the load-bearing
