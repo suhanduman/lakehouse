@@ -90,6 +90,25 @@ type: Opaque
 stringData:
   proxy-token: {{ .Values.jupyter.proxyToken | quote }}
 {{- end }}
+{{- if .Values.jupyter.trino.oidc.clientSecret }}
+---
+# Read-only svc-jupyter-trino service-account client secret (turn-key
+# notebook helper's Trino access) via `.Values.jupyter.trino.oidc.
+# clientSecret`. SAME dev-convenience-else-out-of-band contract as the two
+# Secrets above: rendered ONLY when a value is supplied; otherwise provision
+# this Secret's name/key out-of-band per `.Values.secrets.mode`. Single
+# source with the Keycloak `svc-jupyter-trino` client's `secret`
+# (chart/templates/10-keycloak.yaml) — the two can never drift. NEVER
+# logged, NEVER placed in a ConfigMap.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jupyter-trino-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.jupyter.trino.oidc.clientSecret | quote }}
+{{- end }}
 ---
 # jupyterhub_config.py ConfigMap (Task 4, jupyterhub-per-user-sandbox) —
 # GenericOAuthenticator(Keycloak `jupyter`) + KubeSpawner + the load-bearing
@@ -210,6 +229,20 @@ data:
     c.KubeSpawner.volumes = [{"name": "home", "persistentVolumeClaim": {"claimName": "claim-{user_server}"}}]
     c.KubeSpawner.volume_mounts = [{"name": "home", "mountPath": "/home/jovyan"}]
 
+    # Task 5 (turnkey notebook): copy the baked starter notebook into $HOME
+    # at pod start -- the per-user PVC mount at $HOME (above) shadows
+    # anything baked into the image there, which is exactly why
+    # images/jupyter/Dockerfile bakes starter.ipynb at /opt/lakehouse
+    # instead of $HOME. `-n` = never overwrite -- a returning user's own
+    # edited copy in $HOME is never clobbered by a later pod restart.
+    c.KubeSpawner.lifecycle_hooks = {
+        "postStart": {
+            "exec": {
+                "command": ["/bin/sh", "-c", "cp -n /opt/lakehouse/starter.ipynb \"$HOME/\" || true"],
+            }
+        }
+    }
+
     # --- Per-department config, rendered from .Values.sandbox.departments.
     # Keyed by the SHORT code embedded in the Keycloak/AD group name (the CN
     # of `adGroup`, stripped of its "sandbox-" prefix) -- INDEPENDENT of
@@ -271,6 +304,30 @@ data:
         spawner.environment["DEPT"] = dept
         spawner.environment["NESSIE_SANDBOX_CATALOG"] = d["catalog"]
 
+        # Task 5 (turnkey notebook): plain env consumed by images/jupyter/
+        # lakehouse_nb.py's spark()/trino()/iceberg() helpers -- the Nessie
+        # REST catalog endpoint/warehouse location, this dept's Nessie OAuth
+        # client_id (already in DEPTS, above), and the Trino coordinator's
+        # internal host/port. No hardcoded endpoints: all three come from
+        # the SAME chart helpers/values every other consumer in this chart
+        # reads (lakehouse.svc.nessie/lakehouse.svc.trino/lakehouse.fqdn),
+        # never a literal dev-storage hostname.
+        #
+        # Final-review fix wave: NESSIE_WAREHOUSE carries the FULL warehouse
+        # location (`.Values.nessie.catalog.warehouse.location`, e.g.
+        # "s3://depo/warehouse"), NOT the bucket-only `s3BucketFromUri` form
+        # -- this must match the Zeppelin reference's own
+        # `spark.sql.catalog.lakehouse.warehouse` value byte-for-byte
+        # (chart/templates/_zeppelin.tpl) since lakehouse_nb.py's
+        # `_spark_conf()` builds the SAME Iceberg RESTCatalog config for the
+        # SAME Nessie warehouse; a bucket-only value silently mis-scopes
+        # every table this helper creates.
+        spawner.environment["NESSIE_URI"] = {{ printf "http://%s:19120/iceberg/" (include "lakehouse.svc.nessie" .) | quote }}
+        spawner.environment["NESSIE_WAREHOUSE"] = {{ .Values.nessie.catalog.warehouse.location | quote }}
+        spawner.environment["NESSIE_CLIENT_ID"] = d["nessie_client_id"]
+        spawner.environment["TRINO_HOST"] = {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) | quote }}
+        spawner.environment["TRINO_PORT"] = "8443"
+
         # --- Spark-on-k8s-from-notebook conf (spike §2): the notebook
         # process itself IS the driver (client mode) -- executors are always
         # spawned by Spark via the k8s API regardless of deploy mode, so
@@ -320,8 +377,44 @@ data:
             _secret_env("AWS_ACCESS_KEY_ID", d["s3_secret"], "access-key-id"),
             _secret_env("AWS_SECRET_ACCESS_KEY", d["s3_secret"], "secret-access-key"),
             _secret_env("NESSIE_OAUTH_SECRET", d["nessie_secret"], "client-secret"),
+            # Task 5 (turnkey notebook): platform-wide (not per-dept) secrets
+            # the lakehouse_nb.py helper also needs. S3 endpoint/region come
+            # from the SAME storage.s3 secret every other S3 consumer in this
+            # chart reads (never a literal dev-storage endpoint); the
+            # Trino service-account secret from its own dev-convenience-else-
+            # out-of-band Secret (Task 2, jupyter-trino-oidc-credentials);
+            # OIDC_ISSUER from the SAME oidc.secretName every other OIDC
+            # client here reads.
+            _secret_env("AWS_ENDPOINT_URL_S3", {{ .Values.storage.s3.secretName | quote }}, "endpoint"),
+            _secret_env("AWS_REGION", {{ .Values.storage.s3.secretName | quote }}, "region"),
+            _secret_env("SVC_JUPYTER_TRINO_SECRET", "jupyter-trino-oidc-credentials", "client-secret"),
+            _secret_env("OIDC_ISSUER", {{ .Values.oidc.secretName | quote }}, "issuer-url"),
         ]
         pod.spec.containers[0].env = (pod.spec.containers[0].env or []) + extra_env
+
+        # Trino :8443 internal CA (trino-internal-tls Secret's ca.crt) --
+        # lakehouse_nb.py's trino() verifies against this exact path. Same
+        # single-file subPath mount convention as Superset's own trino-ca
+        # mount (chart/templates/19-superset.yaml, b1 slice) -- mount_path
+        # is the FULL file path (not just the directory), subPath picks the
+        # one key out of the Secret's items list.
+        pod.spec.volumes = (pod.spec.volumes or []) + [
+            k8s_client.V1Volume(
+                name="trino-ca",
+                secret=k8s_client.V1SecretVolumeSource(
+                    secret_name="trino-internal-tls",
+                    items=[k8s_client.V1KeyToPath(key="ca.crt", path="ca.crt")],
+                ),
+            )
+        ]
+        pod.spec.containers[0].volume_mounts = (pod.spec.containers[0].volume_mounts or []) + [
+            k8s_client.V1VolumeMount(
+                name="trino-ca",
+                mount_path="/etc/trino-ca/ca.crt",
+                sub_path="ca.crt",
+                read_only=True,
+            )
+        ]
         return pod
 
 

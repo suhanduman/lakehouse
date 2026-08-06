@@ -68,3 +68,11 @@ RUN set -eux; \
 # is authoritative, not baked-image ownership.
 USER ${NB_UID}
 WORKDIR ${HOME}
+
+# Lakehouse helper module + starter notebook, baked at a fixed path (NOT
+# $HOME -- a per-user PVC mount at $HOME shadows anything baked there, see
+# Task-5 postStart hook which copies starter.ipynb into $HOME at pod start).
+# PYTHONPATH makes `import lakehouse_nb` work from any notebook/kernel.
+COPY lakehouse_nb.py /opt/lakehouse/lakehouse_nb.py
+COPY starter.ipynb   /opt/lakehouse/starter.ipynb
+ENV PYTHONPATH=/opt/lakehouse:${PYTHONPATH}

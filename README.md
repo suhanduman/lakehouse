@@ -783,6 +783,53 @@ test cluster'ında koşulamaz):
   çalışan bir notebook kernel'inden gerçek bir `SparkSession` kurulumuna
   karşı DEĞİL.
 
+### Turn-key kullanım
+
+Bir analist için akış: `jupyter.<domain>` adresine gidilir → Keycloak (`jupyter`
+client'ı, GenericOAuthenticator) ile login olunur → Hub, kullanıcının SENKRON
+gelen `groups` claim'inden `sandbox-` önekli grubu bulup KENDİ notebook
+pod'unu spawn eder (yukarıdaki `pre_spawn_hook`/`modify_pod_hook` mekanizmasıyla)
+→ pod ilk açılışta (`postStart` lifecycle hook, `cp -n ... || true`)
+`images/jupyter` imajına BAKE EDİLMİŞ `starter.ipynb`'yi kullanıcının
+`$HOME`'una kopyalar (kişi-başına PVC'yi asla ezmez) → analist bu defteri açıp
+`import lakehouse_nb as lh` sonrası üç turn-key motoru kullanır: `lh.iceberg()`
+(PyIceberg REST katalog, OAuth2 client-credentials, YAZILABİLİR), `lh.spark()`
+(Spark-on-k8s, `lakehouse`/`rawlake`/kendi `sandbox_<DEPT>` katalogları
+önceden tanımlı), `lh.trino()` (salt-okuma SQL cursor'ı).
+
+- **Enjekte edilen env (`chart/templates/23-jupyterhub.yaml`,
+  `pre_spawn_hook`/`modify_pod_hook`):** `NESSIE_URI`, `NESSIE_WAREHOUSE`,
+  `NESSIE_CLIENT_ID`, `TRINO_HOST`, `TRINO_PORT` (düz env) + `AWS_ENDPOINT_URL_S3`,
+  `AWS_REGION`, `SVC_JUPYTER_TRINO_SECRET`, `OIDC_ISSUER` (Secret'lardan
+  `secretKeyRef` ile) — departmanın ZATEN var olan `AWS_ACCESS_KEY_ID`/
+  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET`/`DEPT`/`NESSIE_SANDBOX_CATALOG`
+  enjeksiyonlarına (c2, değişmeden) EKLENİR.
+- **Endpoint'ler `storage.s3` secret'ten (FlashBlade'de gerçek), hardcode
+  YOK:** `AWS_ENDPOINT_URL_S3`/`AWS_REGION`, chart'ın herhangi bir yerinde S3
+  endpoint'inin tek doğruluk kaynağı olan `storage.s3` Secret'ından
+  (`endpoint`/`region` anahtarları) gelir — `lakehouse_nb.py` hiçbir zaman bir
+  endpoint literal'i içermez.
+- **Trino salt-okuma, `svc-jupyter-trino` üzerinden:** `lh.trino()`,
+  Keycloak'ın confidential `svc-jupyter-trino` client'ından (client_credentials,
+  `aud: trino` mapper'lı, 900s ömürlü) her çağrıda TAZE bir JWT alır; bu client
+  PAYLAŞIMLIDIR (tüm Jupyter kullanıcıları aynı salt-okuma kimliğini kullanır)
+  — Trino üzerinden YAZMA yoktur.
+- **Yazım yolu PyIceberg/Spark iledir, Trino ile DEĞİL:** sandbox'a yazım
+  `lh.iceberg()` (PyIceberg REST + OAuth2, write-capable) veya `lh.spark()`
+  (`sandbox_<DEPT>` katalogu, departmanın kendi scoped S3 kimlik bilgisiyle)
+  üzerinden yapılır — Trino bağlantısı SADECE okuma/keşif (`SHOW SCHEMAS`/
+  `SELECT`) içindir.
+- **Trino internal CA mount'u:** `trino-internal-tls` Secret'ının `ca.crt`'si
+  pod'a `/etc/trino-ca/ca.crt` altında (read-only, subPath) mount edilir —
+  `lh.trino()` bu path'e karşı doğrular, Superset'in b1'de kurduğu (yukarıdaki
+  Trino machine-auth bölümü) aynı desen.
+
+**Bilinen sınırlama:** *"Jupyter turn-key helm-unittest + podman-image +
+PyIceberg-OAuth2 spike ile doğrulandı; tam Keycloak→JWT→Trino/Nessie E2E +
+gerçek FlashBlade endpoint'iyle sandbox yazımı = OpenShift UAT. Trino
+salt-okuma (svc-jupyter-trino, paylaşımlı); per-user Trino kimliği =
+Day-2/SIP-85."*
+
 ---
 
 ## İngest — bilinen tradeoff'lar ve gerekçeler

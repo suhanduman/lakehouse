@@ -1424,6 +1424,17 @@ jupyter:
   # out-of-band/generate at install time (same contract as oidcClientSecret
   # above) — the `jupyter-proxy-token` Secret is NOT rendered when empty.
   proxyToken: ""
+  # Turn-key notebook helper's read-only Trino access (Consumption slice,
+  # jupyter-turnkey-notebook). Mirrors `zeppelin.trino.oidc.*` above.
+  trino:
+    oidc:
+      # Confidential client secret for svc-jupyter-trino (10-keycloak.yaml
+      # clients[].secret, single source — the two can never drift). Empty
+      # default => the `jupyter-trino-oidc-credentials` Secret is NOT
+      # rendered (same dev-convenience-else-out-of-band contract as
+      # `oidcClientSecret` above); provision out-of-band per
+      # `.Values.secrets.mode`.
+      clientSecret: ""
   # Hub Deployment replica count. JupyterHub's Hub is a singleton by design
   # (holds the proxy routing table + user database) — keep at 1 unless a
   # future task adds leader-election/HA.

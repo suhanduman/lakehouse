@@ -1067,6 +1067,164 @@ tests:
       - hasDocuments:
           count: 0
 
+  # --- Task 2 (jupyter-turnkey-notebook slice): read-only `svc-jupyter-trino`
+  # Keycloak service-account client + `.Values.jupyter.trino.oidc.clientSecret`
+  # + the `jupyter-trino-oidc-credentials` dev-convenience Secret. Mirrors the
+  # EXISTING `svc-zeppelin-trino` client (chart/templates/10-keycloak.yaml,
+  # auth-oidc_test.yaml's own test for it) byte-for-byte except clientId,
+  # comment, secret single-source, and a shorter 900s token lifespan (the
+  # Jupyter helper fetches a fresh token per call, so short is enough — unlike
+  # Zeppelin's 3600s, which must outlive an interpreter's paragraph runs).
+  # Trino's rules.json is UNCHANGED: the existing catch-all
+  # {"user":".*","catalog":"lakehouse","allow":"read-only"} already covers
+  # this new principal, same as svc-zeppelin-trino (no dedicated rule either).
+
+  - it: "turnkey: svc-jupyter-trino keycloak client renders (read-only, aud:trino, 900s lifespan) when jupyter.trino.oidc.clientSecret set"
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      jupyter.trino.oidc.clientSecret: "jt-secret"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-jupyter-trino
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "jt-secret"
+            attributes:
+              access.token.lifespan: "900"
+            protocolMappers:
+            - name: aud-trino
+              protocol: "openid-connect"
+              protocolMapper: "oidc-audience-mapper"
+              config:
+                "included.client.audience": "trino"
+                "id.token.claim": "false"
+                "access.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "turnkey: default (jupyter.trino.oidc.clientSecret unset) still renders svc-jupyter-trino with an empty-string secret (dev-convenience default)"
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-jupyter-trino
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: ""
+            attributes:
+              access.token.lifespan: "900"
+            protocolMappers:
+            - name: aud-trino
+              protocol: "openid-connect"
+              protocolMapper: "oidc-audience-mapper"
+              config:
+                "included.client.audience": "trino"
+                "id.token.claim": "false"
+                "access.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "turnkey: jupyter-trino-oidc-credentials Secret renders with the client-secret key when jupyter.trino.oidc.clientSecret set"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.trino.oidc.clientSecret: "jt-secret"
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: jupyter-trino-oidc-credentials
+          any: true
+      - equal:
+          path: stringData.client-secret
+          value: "jt-secret"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-trino-oidc-credentials
+
+  - it: "turnkey: jupyter-trino-oidc-credentials Secret NOT rendered when clientSecret empty"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "x"
+      jupyter.trino.oidc.clientSecret: ""
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: jupyter-trino-oidc-credentials
+          any: true
+        not: true
+
+  - it: "turnkey: leak check — SENTINEL jupyter.trino.oidc.clientSecret appears ONLY in the svc-jupyter-trino client's secret + the jupyter-trino-oidc-credentials Secret, nowhere else"
+    templates:
+      - 10-keycloak.yaml
+      - 23-jupyterhub.yaml
+    set:
+      components.keycloak: true
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.trino.oidc.clientSecret: "LEAKJT-SENTINEL"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-jupyter-trino
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "LEAKJT-SENTINEL"
+            attributes:
+              access.token.lifespan: "900"
+            protocolMappers:
+            - name: aud-trino
+              protocol: "openid-connect"
+              protocolMapper: "oidc-audience-mapper"
+              config:
+                "included.client.audience": "trino"
+                "id.token.claim": "false"
+                "access.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+        template: 10-keycloak.yaml
+      - equal:
+          path: stringData.client-secret
+          value: "LEAKJT-SENTINEL"
+        documentSelector:
+          path: metadata.name
+          value: jupyter-trino-oidc-credentials
+        template: 23-jupyterhub.yaml
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'LEAKJT-SENTINEL'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+        template: 23-jupyterhub.yaml
+
   # --- final-review fix wave: adGroup-CN "sandbox-" prefix coherence guard
   # + deterministic multi-group dept selection (pre_spawn_hook sorts
   # group_names before iterating) ---
@@ -1135,3 +1293,206 @@ tests:
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
+
+  # --- Task 5 (jupyter-turnkey-notebook slice): pre_spawn_hook/modify_pod_hook
+  # env injection for images/jupyter/lakehouse_nb.py's spark()/trino()/
+  # iceberg() helpers (Task 3), + the Trino internal-CA mount the helper's
+  # trino() verifies against, + the KubeSpawner postStart starter-notebook
+  # copy (Task 4 baked it at /opt/lakehouse, NOT $HOME — the per-user PVC
+  # mount at $HOME shadows anything baked into the image there).
+
+  - it: "turnkey: jupyterhub_config injects NESSIE_URI/TRINO_HOST/endpoint + trino-ca"
+    template: templates/23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      jupyter.oidcClientSecret: "x"
+      jupyter.trino.oidc.clientSecret: "jt"
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: "NESSIE_URI"
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: "AWS_ENDPOINT_URL_S3"
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: "SVC_JUPYTER_TRINO_SECRET"
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: "/etc/trino-ca/ca.crt"
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+
+  - it: "turnkey: components.jupyter=false renders nothing"
+    template: templates/23-jupyterhub.yaml
+    set: { components: { jupyter: false } }
+    asserts: [{ hasDocuments: { count: 0 } }]
+
+  - it: "turnkey: pre_spawn_hook sets the exact plain-env values NESSIE_URI/NESSIE_WAREHOUSE/NESSIE_CLIENT_ID/TRINO_HOST/TRINO_PORT the notebook helper consumes"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["NESSIE_URI"\] = "http://nessie:19120/iceberg/"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["NESSIE_WAREHOUSE"\] = "s3://depo/warehouse"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["NESSIE_CLIENT_ID"\] = d\["nessie_client_id"\]'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["TRINO_HOST"\] = "trino-coordinator\.NAMESPACE\.svc\.cluster\.local"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["TRINO_PORT"\] = "8443"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+
+  - it: "turnkey: modify_pod_hook injects the 4 new secretKeyRef envs (AWS_ENDPOINT_URL_S3/AWS_REGION from storage.s3.secretName, SVC_JUPYTER_TRINO_SECRET from jupyter-trino-oidc-credentials, OIDC_ISSUER from oidc.secretName) AND preserves the 3 pre-existing per-dept ones"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_ENDPOINT_URL_S3", "s3-credentials", "endpoint"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_REGION", "s3-credentials", "region"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("SVC_JUPYTER_TRINO_SECRET", "jupyter-trino-oidc-credentials", "client-secret"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("OIDC_ISSUER", "oidc-credentials", "issuer-url"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      # preserved (Task 4, must NOT be removed)
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_ACCESS_KEY_ID", d\["s3_secret"\], "access-key-id"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_SECRET_ACCESS_KEY", d\["s3_secret"\], "secret-access-key"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("NESSIE_OAUTH_SECRET", d\["nessie_secret"\], "client-secret"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["DEPT"\] = dept'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["NESSIE_SANDBOX_CATALOG"\] = d\["catalog"\]'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'PYSPARK_SUBMIT_ARGS'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+
+  - it: "turnkey: modify_pod_hook mounts the trino-internal-tls Secret's ca.crt at /etc/trino-ca/ca.crt, read-only, via k8s_client V1Volume/V1VolumeMount"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'secret_name="trino-internal-tls"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'k8s_client\.V1KeyToPath\(key="ca\.crt", path="ca\.crt"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'mount_path="/etc/trino-ca/ca\.crt"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'sub_path="ca\.crt"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'read_only=True'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+
+  - it: "turnkey: KubeSpawner lifecycle_hooks postStart copies the baked starter notebook into $HOME with cp -n (never overwrite a returning user's own copy)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'c\.KubeSpawner\.lifecycle_hooks = \{'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '"postStart"'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'cp -n /opt/lakehouse/starter\.ipynb \\"\$HOME/\\" \|\| true'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+
+  - it: "turnkey: no hardcoded S3/Nessie/Trino endpoints — AWS_ENDPOINT_URL_S3/AWS_REGION reference storage.s3.secretName by NAME only (secretKeyRef), never a literal host:port"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      storage.s3.secretName: "custom-s3-creds"
+      sandbox.departments:
+        - name: veri-bilimi
+          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
+          s3SecretName: s3-sandbox-veri-bilimi
+    asserts:
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_ENDPOINT_URL_S3", "custom-s3-creds", "endpoint"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: '_secret_env\("AWS_REGION", "custom-s3-creds", "region"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'minio:9000'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
