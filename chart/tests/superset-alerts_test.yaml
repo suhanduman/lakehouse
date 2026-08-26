@@ -226,3 +226,60 @@ tests:
           name: superset-worker
           any: true
         not: true
+
+  - it: renders beat with single replica, celery beat command, NO trino sidecar
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-beat
+          any: true
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "celery .* beat"
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+
+  - it: renders no beat when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # Brief's original assert used `notContains` on `metadata.name` (a scalar) —
+      # errors "expect to be an array" against this repo's installed helm-unittest
+      # (v1.1.1) validator, same issue documented above for the redis/worker
+      # off-tests. Use `containsDocument` + `not: true` + `any: true` instead
+      # (universal negation across every rendered document — a plain `not: true`
+      # without `any: true` short-circuits to PASS on the first non-matching doc
+      # and never inspects the rest, a vacuous false-green). Non-vacuity proven
+      # by the forced-leak probe in the task report (temporarily flipped the
+      # beat's gate to `{{- if true }}`, confirmed this exact assert FAILS, then
+      # reverted and confirmed PASS).
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-beat
+          any: true
+        not: true
