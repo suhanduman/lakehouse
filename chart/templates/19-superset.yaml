@@ -17,6 +17,9 @@
 {{- if and (eq .Values.superset.trino.authMode "jwt") (not (and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled)) }}
 {{- fail "superset.trino.authMode=jwt requires auth.oidc.enabled=true AND superset.trino.tls.enabled=true (jwt uses the Trino https:8443 listener + jwt authenticator, which those gate)" }}
 {{- end }}
+{{- if and .Values.superset.alertsReports.enabled (eq .Values.superset.smtp.host "") }}
+{{- fail "superset.alertsReports.enabled requires superset.smtp.host (customer SMTP server) — set it or disable alertsReports" }}
+{{- end }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -117,10 +120,39 @@ data:
     AUTH_ROLES_MAPPING = {"lakehouse-admins": ["Admin"], "lakehouse-analysts": ["Alpha"], "lakehouse-students": ["Gamma"]}
     AUTH_ROLES_SYNC_AT_LOGIN = True
 
-    # --- Minimal v1: synchronous SQL Lab, no Celery/Redis, thumbnails off ---
-    FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": False}
+    # --- Alerts & Reports: ALERT_REPORTS flag'i alertsReports.enabled ile şablonlanır.
+    #     (ternary "True"/"False" — Python bool literal'i; helm'in lowercase true/false'u
+    #     Python'da geçersizdir.) Celery/SMTP bloğu yalnız enabled iken eklenir.
+    #     Tarayıcı yok → THUMBNAILS her zaman False. ---
+    FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": {{ .Values.superset.alertsReports.enabled | ternary "True" "False" }}}
     SQLLAB_TIMEOUT = 60
     SUPERSET_WEBSERVER_TIMEOUT = 120
+{{- if .Values.superset.alertsReports.enabled }}
+    # --- Alerts & Reports async stack (Redis broker/results + Celery beat schedule) ---
+    from celery.schedules import crontab
+    _redis = "redis://:%s@%s:6379" % (os.environ.get("REDIS_PASSWORD", ""), os.environ["REDIS_HOST"])
+    class CeleryConfig:
+        broker_url = _redis + "/0"
+        result_backend = _redis + "/1"
+        imports = ("superset.sql_lab", "superset.tasks.scheduler")
+        worker_prefetch_multiplier = 1
+        task_acks_late = True
+        beat_schedule = {
+            "reports.scheduler": {"task": "reports.scheduler", "schedule": crontab(minute="*", hour="*")},
+            "reports.prune_log": {"task": "reports.prune_log", "schedule": crontab(minute=0, hour=0)},
+        }
+    CELERY_CONFIG = CeleryConfig
+    # --- SMTP: müşterinin dış sunucusu (values → env; şifre Secret'tan, opsiyonel) ---
+    SMTP_HOST = os.environ["SMTP_HOST"]
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").lower() == "true"
+    SMTP_SSL = os.environ.get("SMTP_SSL", "false").lower() == "true"
+    SMTP_USER = os.environ.get("SMTP_USER", "")
+    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+    SMTP_MAIL_FROM = os.environ["SMTP_MAIL_FROM"]
+    WEBDRIVER_BASEURL = os.environ.get("WEBDRIVER_BASEURL", "http://superset:8088/")  # e-posta linki; TARAYICI DEĞİL
+    EMAIL_REPORTS_SUBJECT_PREFIX = "[Lakehouse] "
+{{- end }}
 
     # --- Trino machine-auth (b1): inject a fresh JWT per connection ---
     # Signature VERIFIED against the 4.1.1 image (superset/models/core.py:531):
@@ -237,6 +269,9 @@ spec:
         - {name: SUPERSET_SECRET_KEY, valueFrom: {secretKeyRef: {name: superset, key: secret-key}}}
         - {name: OIDC_CLIENT_SECRET,  valueFrom: {secretKeyRef: {name: superset-oidc-credentials, key: client-secret}}}
         - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
+        {{- if .Values.superset.alertsReports.enabled }}
+        {{- include "lakehouse.superset.reportsEnv" . | nindent 8 }}
+        {{- end }}
         volumeMounts:
         - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
         {{- if eq .Values.superset.trino.authMode "jwt" }}
@@ -420,6 +455,9 @@ spec:
         - {name: OIDC_ISSUER,         valueFrom: {secretKeyRef: {name: {{ required "oidc.secretName is empty — provision the OIDC credentials secret (issuer-url for Superset login) or set auth.oidc.enabled=false" .Values.oidc.secretName }}, key: issuer-url}}}
         - {name: ADMIN_USER,     value: {{ .Values.superset.adminUser | quote }}}
         - {name: ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: superset, key: admin-password}}}
+        {{- if .Values.superset.alertsReports.enabled }}
+        {{- include "lakehouse.superset.reportsEnv" . | nindent 8 }}
+        {{- end }}
         volumeMounts:
         - {name: superset-config, mountPath: /app/pythonpath/superset_config.py, subPath: superset_config.py}
       volumes:

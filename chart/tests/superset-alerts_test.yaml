@@ -1,0 +1,59 @@
+# chart/tests/superset-alerts_test.yaml — proves the Alerts & Reports slice
+# (Redis + Celery worker/beat + SMTP) renders only when superset.alertsReports.enabled,
+# is byte-identical-off, and fails loud without an SMTP host. Negative asserts use
+# `any: true` (avoids the vacuous exact-DeepEqual false-green trap).
+suite: superset alerts & reports
+templates:
+  - 19-superset.yaml
+tests:
+  - it: config has ALERT_REPORTS False when alertsReports disabled
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: '"ALERT_REPORTS": False'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - notMatchRegex:
+          path: data["superset_config.py"]
+          pattern: "class CeleryConfig"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
+  - it: config enables ALERT_REPORTS + CeleryConfig + SMTP when on
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: '"ALERT_REPORTS": True'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "class CeleryConfig"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: 'SMTP_HOST = os.environ\["SMTP_HOST"\]'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
+  - it: fails loud when alertsReports on but no SMTP host
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.alertsReports.enabled requires superset.smtp.host (customer SMTP server) — set it or disable alertsReports"
