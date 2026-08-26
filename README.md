@@ -782,6 +782,129 @@ Day-2/SIP-85."*
 
 ---
 
+## Yerel/harici notebook bağlama (BYO) (şartname 3.6.1.2)
+
+`auth.oidc.enabled: true` VE `byoNotebook.enabled: true` iken (ikisi de
+varsayılan `false`; medium/large tier'larda OIDC zaten açık olduğundan
+pratikte eklenmesi gereken tek bayrak `byoNotebook.enabled: true`'dur)
+Keycloak'a **public bir device-flow client**, `lakehouse-token`, eklenir
+(`chart/templates/10-keycloak.yaml`) — bu, bir analistin KENDİ laptop'undaki
+KENDİ notebook/aracıyla, JupyterHub'a veya paylaşılan Zeppelin'e hiç
+girmeden, cluster'a bağlanmasını sağlar (`oc login`'e benzer bir akış; bkz.
+şartname 3.6.1.2 "yerel kurulan harici notebook'ların da sisteme
+erişebilmesi mümkün olmalı").
+
+- **Client — `lakehouse-token`:** `publicClient: true` (secret YOK — client
+  bir insanı KENDİ AD kimliğiyle authenticate eder, bir servis hesabı
+  DEĞİLDİR), `standardFlowEnabled: false` (tarayıcı-redirect yolu yok,
+  YALNIZCA OAuth2 device-authorization grant'ı,
+  `oauth2.device.authorization.grant.enabled`), `aud-trino` audience
+  mapper'ı (Trino'nun OAuth2 authenticator'ının kabul ettiği, b1/b2/c1 ile
+  AYNI `aud: trino` deseni) ve **6 saatlik** token ömrü
+  (`access.token.lifespan: 21600`) — bir notebook oturumu için
+  yeniden-auth'suz yeterli, ama süresiz DEĞİL.
+- **`tools/lakehouse-cli`:** bağımlılıksız (stdlib-only) tek-dosya bir
+  Python 3 CLI (`chmod +x`); `login` alt-komutu device flow'u yürütür:
+  Keycloak'a device-authorization POST'u atar, doğrulama URL'ini + kodu
+  **stderr**'e yazar (`eval` çıktısını bozmaz), kullanıcı tarayıcıda
+  onaylayana kadar token endpoint'ini polling eder, sonunda **stdout**'a
+  `export ...` satırları basar — token hiçbir zaman diske yazılmaz/loglanmaz.
+
+### Token al
+
+```bash
+eval "$(tools/lakehouse-cli login --domain <domain>)"
+```
+
+- Tarayıcı açılır — `https://auth.<domain>/realms/<realm>` (chart'ın gerçek
+  Keycloak host'u **`auth.<domain>`**'dir, `keycloak.<domain>` DEĞİL) —
+  kurumsal AD/LDAP ile SSO login olunur, ardından cihaz kodu onaylanır.
+- Ortam KENDİLİĞİNDEN dolar: `LAKEHOUSE_TOKEN` (kullanıcının KENDİ JWT'si,
+  bir servis hesabının DEĞİL), `TRINO_HOST=trino.<domain>`,
+  `TRINO_PORT=443`, `NESSIE_URI=https://nessie.<domain>/iceberg/`, ve
+  (`--s3-endpoint` verildiyse) `AWS_ENDPOINT_URL_S3`.
+- `--realm` (varsayılan `lakehouse`) ve `LAKEHOUSE_DOMAIN`/`LAKEHOUSE_REALM`/
+  `LAKEHOUSE_S3_ENDPOINT` ortam değişkenleri `--domain`/`--realm`/
+  `--s3-endpoint` bayraklarının yerini tutabilir.
+
+### Araç-başına bağlanma
+
+- **Python `trino` client:**
+  ```python
+  import os, trino
+  from trino.auth import JWTAuthentication
+  conn = trino.dbapi.connect(
+      host=os.environ["TRINO_HOST"], port=443, http_scheme="https",
+      auth=JWTAuthentication(os.environ["LAKEHOUSE_TOKEN"]),
+  )
+  ```
+- **DBeaver:** Trino sürücüsüyle yeni bağlantı; host `$TRINO_HOST`, port
+  `443`, TLS açık; bağlantının "external authentication"/bearer-JWT
+  ayarında (Trino sürücüsünün `accessToken` driver property'si)
+  `$LAKEHOUSE_TOKEN` değeri girilir — kullanıcı adı/parola YOKTUR.
+- **PyIceberg (REST katalog, OKUMA):**
+  ```python
+  from pyiceberg.catalog import load_catalog
+  cat = load_catalog("lakehouse", **{
+      "uri": os.environ["NESSIE_URI"], "token": os.environ["LAKEHOUSE_TOKEN"],
+  })
+  ```
+  (YAZMA için bkz. aşağıdaki **Sınırlar** — bu token Nessie'nin yazma-yetkili
+  kimliklerinden biri DEĞİLDİR.)
+- **Yerel Zeppelin `%trino` JDBC:** c1'in bake ettiği AYNI `trino-jdbc`
+  sürücüsü yerel bir Zeppelin/notebook kurulumuna eklenirse, JDBC URL
+  `jdbc:trino://$TRINO_HOST:443/lakehouse?SSL=true`, `accessToken` driver
+  property'si `$LAKEHOUSE_TOKEN` olarak set edilir.
+- **Endpoint'ler:** `trino.<domain>`, `nessie.<domain>`, `auth.<domain>`
+  (chart'ın TLS-terminasyonlu route/ingress'leri — sertifika kurum PKI'sinden
+  veya cert-manager'dan gelir). **Dış-ağ/kurumsal TLS notu:** laptop kurumsal
+  bir TLS-inceleyen proxy'nin ARDINDAYSA, yukarıdaki istemcilerin (trino
+  client/DBeaver/PyIceberg) kurumun kök CA'sını KENDİ truststore'larına
+  eklemesi gerekebilir — bu, chart'ın kapsamı DIŞINDA, laptop/kurum IT
+  politikasıdır.
+
+### Ne çalışır
+
+- Prod Silver/Gold'u OKUMA — `lakehouse`/`rawlake` katalogları, Trino'nun
+  `.*` read-only catch-all kuralı (b1/Nessie machine-auth bölümlerindeki
+  AYNI kural, `chart/templates/06-trino-ha.yaml` `rules.json`).
+- `CREATE TABLE sandbox.<kullanıcı>.t AS SELECT ...` — Trino CTAS
+  (`sandbox.enabled: true` GEREKTİRİR; sandbox v2'nin `sandbox` katalogu,
+  Trino ACL'inde `.*` kullanıcısına tam okuma-yazma verir, bkz. yukarıdaki
+  "Analist sandbox'ı" bölümü). Bu yol `svc-trino-nessie`'nin ZATEN
+  broad-write Nessie kimliğiyle commit olur — kullanıcının kendi
+  `lakehouse-token`'ı Nessie'ye hiçbir zaman doğrudan konuşmaz.
+
+### Sınırlar
+
+- Token ~6 saat yaşar ve OTOMATİK-YENİLENMEZ — süresi dolunca `login`'i
+  yeniden çalıştırın.
+- Doğrudan PyIceberg/Spark ile sandbox'a YAZMA kapsam DIŞINDADIR:
+  `lakehouse-token`, Nessie'nin CEL yetkilendirmesinde tanınan 5 kimlikten
+  (`svc-trino-nessie`/`svc-spark-nessie`/`svc-connect-nessie`/
+  `svc-zeppelin-nessie`/`svc-sandbox` — bkz. yukarıdaki "Nessie machine-auth"
+  bölümü) BİRİ DEĞİLDİR, dolayısıyla bu token'la yapılan bir Nessie
+  REST-katalog YAZMA isteği CEL tarafından reddedilir (veya hiç
+  authenticate olmaz). Sandbox'a yazımın TEK yolu yukarıdaki Trino CTAS'tır.
+- Laptop'tan cluster'ın Spark'ına bağlanma (Spark Connect) YOKTUR — yalnızca
+  laptop'un KENDİ yerel Spark'ı (yerel/örnek veri üzerinde) kullanılabilir.
+- Bu erişim yolu kişiye ÖZGÜ bir Trino kimliği verir (gerçek AD kullanıcısı,
+  paylaşılan bir servis hesabı DEĞİL) — ama bu sert bir kişi-başına
+  YAZMA-KİLİDİ anlamına GELMEZ: Trino'nun sandbox ACL'i `.*` (herhangi bir
+  authenticate kullanıcı) içindir, `sandbox.<kullanıcı>` şeması yine bir
+  İSTEMCİ konvansiyonudur (sandbox v2/JupyterHub bölümleriyle AYNI bilinen
+  sınırlama) — Trino sizi teknik olarak BAŞKA bir kullanıcının
+  `sandbox.<diğer-kullanıcı>` şemasına yazmaktan alıkoymaz. Sert per-user
+  izolasyon/kimlik ayrımı Day-2'dir.
+
+**Bilinen sınırlama:** *"BYO yerel-notebook erişimi helm-unittest +
+script-unit ile doğrulandı; canlı device-flow (Keycloak) + yerel-araç→Trino/Nessie
+E2E + token-audience kabulü = OpenShift UAT. Yazma yolu Trino CTAS
+(svc-trino-nessie commit'ler); doğrudan-Nessie kullanıcı-token yazma +
+auto-refresh + cluster-Spark-from-laptop (Spark Connect) = kapsam dışı/Day-2."*
+
+---
+
 ## İngest — bilinen tradeoff'lar ve gerekçeler
 
 Aşağıdaki üç nokta, mevcut ingest mimarisinin bilinçli tradeoff'ları ve
