@@ -102,6 +102,22 @@ spec:
           value: {{ .Values.nessie.catalog.warehouse.location | quote }}
         - name: NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION
           value: {{ .Values.nessie.catalog.rawdata.location | quote }}
+{{- if .Values.sandbox.enabled }}
+        # Sandbox v2 (Task 3 review fix, şartname 3.5.4.3 isolation) — a
+        # named `sandbox` warehouse, registered the SAME way as `warehouse`/
+        # `rawdata` above. Trino's sandbox.properties references this
+        # warehouse BY NAME (`iceberg.rest-catalog.warehouse=sandbox`), not
+        # by location string — Nessie's Iceberg-REST `warehouse` parameter
+        # is a lookup key into NESSIE_CATALOG_WAREHOUSES_<NAME>_LOCATION, not
+        # an arbitrary path (see docs/superpowers/spikes/
+        # 2026-08-06-nessie-machine-auth-config.md ~L120, and rawlake.
+        # properties' own `warehouse=rawdata` for the same pattern). Without
+        # this registration, `warehouse=sandbox` would fail to resolve (or
+        # silently fall through to the default warehouse's location),
+        # writing sandbox tables into the prod bucket.
+        - name: NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION
+          value: {{ printf "s3://%s/warehouse" .Values.sandbox.bucket | quote }}
+{{- end }}
 
         # --- S3 (credentials from Secret, resolved via Nessie URN) ---
         - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION

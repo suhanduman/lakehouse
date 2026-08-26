@@ -245,7 +245,13 @@ data:
     connector.name=iceberg
     iceberg.catalog.type=rest
     iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
-    iceberg.rest-catalog.warehouse=s3://{{ .Values.sandbox.bucket }}/warehouse
+    # `sandbox` is the WAREHOUSE NAME (Nessie Iceberg-REST `warehouse` looks
+    # up NESSIE_CATALOG_WAREHOUSES_<NAME>_LOCATION — a registry key, not an
+    # arbitrary path), same pattern as rawlake.properties' `warehouse=
+    # rawdata`. Registered in 04-nessie-ha.yaml as
+    # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION=s3://{{ .Values.sandbox.bucket }}/warehouse
+    # (gated the same `sandbox.enabled`, kept in lockstep by that comment).
+    iceberg.rest-catalog.warehouse=sandbox
 {{- if .Values.auth.oidc.enabled }}
     # Nessie machine-auth — identical block to lakehouse.properties/
     # rawlake.properties above, same `svc-trino-nessie` identity (one Trino

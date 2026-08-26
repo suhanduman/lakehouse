@@ -1522,7 +1522,7 @@ tests:
   # `svc-trino-nessie` identity — same OAuth2 block as lakehouse.properties,
   # copied verbatim. -----------------------------------------------------
 
-  - it: "sandbox v2 (Task 3): trino sandbox.properties catalog renders when sandbox.enabled, mirroring lakehouse.properties (iceberg/rest, sandbox bucket warehouse, same svc-trino-nessie OAuth2 block)"
+  - it: "sandbox v2 (Task 3 review fix): trino sandbox.properties catalog renders when sandbox.enabled, mirroring lakehouse.properties (iceberg/rest, warehouse=sandbox BY NAME -- not a location string, same svc-trino-nessie OAuth2 block)"
     templates:
       - 06-trino-ha.yaml
     documentSelector:
@@ -1543,9 +1543,21 @@ tests:
       - matchRegex:
           path: data["sandbox.properties"]
           pattern: "iceberg\\.rest-catalog\\.uri=http://.*:19120/iceberg/"
+      # Nessie's Iceberg-REST `warehouse` param is a lookup key into
+      # NESSIE_CATALOG_WAREHOUSES_<NAME>_LOCATION, NOT an arbitrary path --
+      # `warehouse=sandbox` is the registered NAME (see 04-nessie-ha.yaml's
+      # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION env below), mirroring
+      # rawlake.properties' `warehouse=rawdata` pattern exactly. A bare
+      # `s3://.../warehouse` location string here would either fail to
+      # resolve or silently fall through to the DEFAULT warehouse's
+      # location -- sandbox tables landing in the prod bucket (3.5.4.3
+      # isolation violation).
       - matchRegex:
           path: data["sandbox.properties"]
-          pattern: "iceberg\\.rest-catalog\\.warehouse=s3://sandbox/warehouse"
+          pattern: "(?m)^iceberg\\.rest-catalog\\.warehouse=sandbox$"
+      - notMatchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.warehouse=s3://"
       - matchRegex:
           path: data["sandbox.properties"]
           pattern: "iceberg\\.rest-catalog\\.security=OAUTH2"
@@ -1572,6 +1584,56 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].volumeMounts[?(@.subPath=="sandbox.properties")].mountPath
           pattern: "^/etc/trino/catalog/sandbox\\.properties$"
+
+  - it: "sandbox v2 (Task 3 review fix): 04-nessie-ha.yaml registers a NAMED `sandbox` warehouse (NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION) when sandbox.enabled -- required for Trino's sandbox.properties `warehouse=sandbox` lookup to resolve, alongside the existing WAREHOUSE/RAWDATA registrations"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+      sandbox.bucket: sandbox
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION
+            value: "s3://sandbox/warehouse"
+        documentIndex: 1
+      # existing warehouse/rawdata registrations stay intact (additive) --
+      # matchRegex against the env var's own value (not a partial-object
+      # `contains`, which requires an exact full-object match against
+      # entries that also carry a `value` field pinned to unrelated
+      # `nessie.catalog.*.location` defaults).
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION")].name
+          pattern: "NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION")].name
+          pattern: "NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION"
+        documentIndex: 1
+
+  - it: "sandbox v2 (Task 3 review fix): sandbox.enabled=false (default) -- NO NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION renders, existing WAREHOUSE/RAWDATA registrations unaffected"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION
+        documentIndex: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION")].name
+          pattern: "NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION"
+        documentIndex: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION")].name
+          pattern: "NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION"
+        documentIndex: 1
 
   - it: "sandbox v2 (Task 3): worker Deployment also mounts sandbox.properties when sandbox.enabled"
     templates:
