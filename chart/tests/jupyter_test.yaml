@@ -40,6 +40,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "dev-jupyter-oidc"
       jupyter.proxyToken: "dev-proxy-token"
@@ -86,6 +87,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "dev-jupyter-oidc"
     asserts:
@@ -114,6 +116,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       # the jupyterhub-config ConfigMap (Task 4) + Task 5's 8 always-on
@@ -145,12 +148,51 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: false
       jupyter.oidcClientSecret: "dev-jupyter-oidc"
       jupyter.proxyToken: "dev-proxy-token"
     asserts:
       - failedTemplate:
           errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
+
+  - it: "sandbox v2 (Task 4 review fix): components.jupyter=true + sandbox.enabled=false FAILS the render loudly instead of silently letting allowedGroups users spawn against nonexistent sandbox infra"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.enabled: false
+      sandbox.allowedGroups:
+        - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
+    asserts:
+      - failedTemplate:
+          errorMessage: "components.jupyter requires sandbox.enabled=true (JupyterHub kullanıcıları sandbox.<user> şemasına yazar; sandbox altyapısı sandbox.enabled ile gelir)"
+
+  - it: "sandbox v2 (Task 4 review fix): components.jupyter=false + sandbox.enabled=false renders cleanly — guard does NOT fire when jupyter is off"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: false
+      auth.oidc.enabled: true
+      sandbox.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "sandbox v2 (Task 4 review fix): components.jupyter=true + sandbox.enabled=true (both coherence guards satisfied) renders cleanly — neither guard fires"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: jupyterhub-config
+          any: true
 
   - it: components.jupyter=false AND auth.oidc.enabled=false renders NO Secrets (both gates off)
     templates:
@@ -265,6 +307,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "LEAKJ-SENTINEL"
     asserts:
@@ -288,6 +331,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.oidc.clientSecret: "dev-svc-sandbox"
     asserts:
@@ -308,6 +352,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.oidc.clientSecret: ""
     asserts:
@@ -323,6 +368,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.oidc.clientSecret: "LEAKSVCSANDBOX-SENTINEL"
     asserts:
@@ -356,6 +402,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.allowedGroups:
         - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
@@ -568,6 +615,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: false
       sandbox.departments:
         - name: veri-bilimi
@@ -582,6 +630,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       # any: true -- this file now renders many documents under the same
@@ -622,6 +671,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "LEAKJHUB-CLIENTSECRET"
       jupyter.proxyToken: "LEAKJHUB-PROXYTOKEN"
@@ -712,6 +762,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       # namespace folded into containsDocument (not a separate `equal` +
@@ -789,6 +840,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - containsDocument:
@@ -856,6 +908,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.departments:
         - name: veri-bilimi
@@ -922,6 +975,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - containsDocument:
@@ -950,6 +1004,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - equal:
@@ -1019,6 +1074,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - equal:
@@ -1061,6 +1117,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       # NOTE: `spec.selector.app` is NOT unique here — BOTH the public
@@ -1125,6 +1182,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - matchRegex:
@@ -1159,6 +1217,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: false
       sandbox.departments:
         - name: veri-bilimi
@@ -1186,6 +1245,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: false
     asserts:
       - failedTemplate:
@@ -1196,6 +1256,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - containsDocument:
@@ -1292,6 +1353,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.trino.oidc.clientSecret: "jt-secret"
     asserts:
@@ -1312,6 +1374,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "x"
       jupyter.trino.oidc.clientSecret: ""
@@ -1330,6 +1393,7 @@ tests:
     set:
       components.keycloak: true
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.trino.oidc.clientSecret: "LEAKJT-SENTINEL"
     asserts:
@@ -1384,6 +1448,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.allowedGroups:
         - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
@@ -1424,6 +1489,7 @@ tests:
     template: templates/23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "x"
       jupyter.trino.oidc.clientSecret: "jt"
@@ -1459,6 +1525,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - matchRegex:
@@ -1487,6 +1554,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - matchRegex:
@@ -1536,6 +1604,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       sandbox.departments:
         - name: veri-bilimi
@@ -1568,6 +1637,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
     asserts:
       - matchRegex:
@@ -1588,6 +1658,7 @@ tests:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       storage.s3.secretName: "custom-s3-creds"
       sandbox.departments:

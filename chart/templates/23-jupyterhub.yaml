@@ -31,6 +31,25 @@
 {{- if and .Values.components.jupyter (not .Values.auth.oidc.enabled) }}
 {{- fail "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)" }}
 {{- end }}
+# --- Coherence guard (Task 4 review fix, 2026-08-07-sandbox-v2): the
+# unified sandbox env injection below (pre_spawn_hook's
+# NESSIE_SANDBOX_CATALOG/NESSIE_SANDBOX_SCHEMA/NESSIE_CLIENT_ID=svc-sandbox,
+# the sa-sandbox ServiceAccount/RBAC, the sandbox-oidc-credentials Secret)
+# is gated only on components.jupyter + auth.oidc.enabled -- NOT on
+# sandbox.enabled. sandbox.allowedGroups looks like an innocuous "who may
+# log in" login-gate value, but every user it admits gets that unified
+# sandbox env whether or not the sandbox INFRASTRUCTURE it points at
+# (sandbox Nessie namespace/warehouse, Trino sandbox catalog, the
+# svc-sandbox Nessie CEL writer, the sandbox S3 bucket -- all gated on
+# sandbox.enabled elsewhere in this chart) actually exists. Without this
+# guard, components.jupyter=true + a non-empty sandbox.allowedGroups +
+# sandbox.enabled=false lets users log in and spawn, then fails at RUNTIME
+# on their first sandbox write instead of at render time. Same fail-loud
+# coherence-guard pattern/position as the auth.oidc.enabled guard directly
+# above.
+{{- if and .Values.components.jupyter (not .Values.sandbox.enabled) }}
+{{- fail "components.jupyter requires sandbox.enabled=true (JupyterHub kullanıcıları sandbox.<user> şemasına yazar; sandbox altyapısı sandbox.enabled ile gelir)" }}
+{{- end }}
 # --- Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the CN-prefix coherence
 # guard that used to live here (every sandbox dept's `adGroup` CN must start
 # with "sandbox-") existed ONLY to support the per-dept group->dept mapping

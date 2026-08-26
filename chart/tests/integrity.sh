@@ -99,18 +99,26 @@ NAMESPACES=(strayprobe lakehouse-test)
 # - jupyter-on-openshift   : JupyterHub per-user sandbox (chart/templates/
 #                            23-jupyterhub.yaml + the pre-existing `jupyter`
 #                            Route in 08-routes-tls.yaml) — `components.
-#                            jupyter=true` (values-prod.example.yaml's
-#                            `auth.oidc.enabled` is already `true` by
-#                            inherited default from chart/values.yaml, so no
-#                            override needed there — this is exactly the
-#                            coherent combo Task 6's render-time guard
-#                            requires). Proves the `jupyter` Route's
-#                            `spec.to.name: jupyterhub-proxy` resolves to the
-#                            Service this SAME render produces (no dangling
-#                            backend) — the follow-up-component exclusion
-#                            note above no longer applies to `components.
-#                            jupyter` now that its Route/Service can never
-#                            disagree (Task 6 coherence guard).
+#                            jupyter=true` + `sandbox.enabled=true`
+#                            (values-prod.example.yaml's `auth.oidc.enabled`
+#                            is already `true` by inherited default from
+#                            chart/values.yaml, so no override needed there
+#                            — this is exactly the coherent combo Task 6's
+#                            auth.oidc.enabled render-time guard requires).
+#                            `sandbox.enabled=true` is ALSO now required
+#                            (2026-08-07-sandbox-v2 Task 4 review fix): the
+#                            unified sandbox env JupyterHub injects
+#                            (svc-sandbox/sandbox Nessie namespace/Trino
+#                            catalog) only exists when `sandbox.enabled` is
+#                            true, and this file's own coherence guard fails
+#                            the render loudly otherwise. Proves the
+#                            `jupyter` Route's `spec.to.name:
+#                            jupyterhub-proxy` resolves to the Service this
+#                            SAME render produces (no dangling backend) —
+#                            the follow-up-component exclusion note above no
+#                            longer applies to `components.jupyter` now that
+#                            its Route/Service can never disagree (Task 6
+#                            coherence guard).
 SANDBOX_DEPT_JSON='[{"name":"veri","adGroup":"CN=sandbox-veri,OU=Groups,DC=example,DC=com","s3SecretName":"s3-sandbox-veri","oidcClientSecret":"devz"}]'
 TOGGLE_LABELS=(
   "defaults"
@@ -124,7 +132,7 @@ TOGGLE_ARGS=(
   "--set components.monitoring=true --set monitoring.grafana.oidc.enabled=true"
   "--set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
   "--set platform=vanilla --set sandbox.enabled=true --set-json sandbox.departments=${SANDBOX_DEPT_JSON}"
-  "--set components.jupyter=true --set jupyter.oidcClientSecret=devz --set jupyter.proxyToken=devz"
+  "--set components.jupyter=true --set sandbox.enabled=true --set jupyter.oidcClientSecret=devz --set jupyter.proxyToken=devz"
 )
 
 total=0
