@@ -29,7 +29,142 @@ templates:
   - 09-zeppelin.yaml
   - 08-routes-tls.yaml
   - 08b-ingress-tls.yaml
+  - 04-nessie-ha.yaml
 tests:
+  # --- Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): unified
+  # `svc-sandbox` Keycloak service-account client. ADDITIVE alongside the
+  # per-dept `svc-sandbox-<name>` clients above/below — both are gated on
+  # the SAME `sandbox.enabled` flag and coexist until the slice's final
+  # task retires the per-dept artifacts. Mirrors the `svc-zeppelin-nessie`
+  # client shape (serviceAccountsEnabled, standardFlowEnabled:false,
+  # publicClient:false, single-sourced secret, NO audience mapper — Nessie
+  # validates by issuer only).
+  - it: "sandbox v2: unified svc-sandbox service-account client renders when sandbox.enabled, with the right fields + secret, and NO aud-trino mapper"
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+      sandbox.oidc.clientSecret: "s"
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "s"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox-veri
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "sandbox v2: sandbox.enabled=false renders NO svc-sandbox client"
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      sandbox.enabled: false
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "sandbox v2: unified svc-sandbox AND per-dept svc-sandbox-veri coexist when both sandbox.enabled and departments are set (additive, not a replacement)"
+    templates:
+      - 10-keycloak.yaml
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+      sandbox.oidc.clientSecret: "s"
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          oidcClientSecret: devz
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: "s"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: svc-sandbox-veri
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: false
+            standardFlowEnabled: false
+            serviceAccountsEnabled: true
+            secret: devz
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  # --- Sandbox v2 Task 1: Nessie CEL writer `service-account-svc-sandbox`
+  # confined to the unified `sandbox` namespace. ADDITIVE alongside the
+  # per-dept `service-account-svc-sandbox-<name>` writers.
+  - it: "sandbox v2: service-account-svc-sandbox is added to the COMMIT_TO_MAIN writer OR-chain and gets its own ALLOW_SANDBOX_WRITE rule confined to the `sandbox` namespace, when sandbox.enabled (no departments)"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: "role=='service-account-svc-sandbox'"
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox' && path.startsWith('sandbox')"
+        documentIndex: 1
+
+  - it: "sandbox v2: sandbox.enabled=false renders NO service-account-svc-sandbox writer / ALLOW_SANDBOX_WRITE rule anywhere"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
+          pattern: "service-account-svc-sandbox'"
+        documentIndex: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
+        documentIndex: 1
+
   - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
     templates:
       - 10-keycloak.yaml

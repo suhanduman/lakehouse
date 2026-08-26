@@ -155,6 +155,11 @@ spec:
         {{- range .Values.sandbox.departments }}
         {{- $writerRoles = append $writerRoles (printf "service-account-svc-sandbox-%s" .name) }}
         {{- end }}
+        # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): the unified
+        # `service-account-svc-sandbox` writer is ADDITIVE alongside the
+        # per-dept writers above — both coexist until the slice's final
+        # task retires the per-dept ones.
+        {{- $writerRoles = append $writerRoles "service-account-svc-sandbox" }}
         {{- end }}
         {{- $roleExpr := "" }}
         {{- range $i, $r := $writerRoles }}
@@ -203,6 +208,17 @@ spec:
         - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_{{ .name | upper | replace "-" "_" }}_WRITE
           value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-%s' && path.startsWith('sandbox_%s')" .name .name | quote }}
         {{- end }}
+        {{- end }}
+        {{- if .Values.sandbox.enabled }}
+        # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): ONE unified
+        # writer (`service-account-svc-sandbox`) confined to the single
+        # shared `.Values.sandbox.namespace` Nessie namespace — ADDITIVE
+        # alongside the per-dept rules above (both coexist until the
+        # slice's final task retires the per-dept ones). Same gate
+        # rationale as above: `sandbox.enabled=false` must not leave this
+        # writer's access outliving every other sandbox artifact.
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
+          value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox' && path.startsWith('%s')" .Values.sandbox.namespace | quote }}
         {{- end }}
 {{- else }}
         - {name: QUARKUS_OIDC_ENABLED, value: "false"}
