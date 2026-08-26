@@ -1,10 +1,18 @@
 import importlib
 
+# Sandbox v2 (2026-08-07-sandbox-v2 Task 4): BASE now mirrors the UNIFIED
+# sandbox env contract chart/templates/23-jupyterhub.yaml's pre_spawn_hook
+# injects -- NESSIE_SANDBOX_CATALOG is the fixed "sandbox" literal
+# (.Values.sandbox.namespace) instead of a per-dept "sandbox_<dept>";
+# NESSIE_CLIENT_ID is the single "svc-sandbox" instead of
+# "svc-sandbox-<dept>"; NESSIE_SANDBOX_SCHEMA is the NEW per-user schema
+# ("sandbox.testuser", as if spawner.user.name == "testuser"). DEPT is no
+# longer set by the chart at all (dept concept retired) -- dropped here too.
 BASE = {
-    "DEPT": "veri",
     "NESSIE_URI": "http://nessie:19120/iceberg/",
-    "NESSIE_SANDBOX_CATALOG": "sandbox_veri",
-    "NESSIE_CLIENT_ID": "svc-sandbox-veri",
+    "NESSIE_SANDBOX_CATALOG": "sandbox",
+    "NESSIE_SANDBOX_SCHEMA": "sandbox.testuser",
+    "NESSIE_CLIENT_ID": "svc-sandbox",
     "NESSIE_OAUTH_SECRET": "sek",
     "AWS_ENDPOINT_URL_S3": "https://flashblade.kc:443",
     "AWS_REGION": "us-east-1",
@@ -28,11 +36,20 @@ def test_iceberg_props_use_env_endpoint(monkeypatch):
     p = _load(monkeypatch)._iceberg_props()
     assert p["s3.endpoint"] == "https://flashblade.kc:443" and p["uri"] == "http://nessie:19120/iceberg/"
     assert "minio" not in str(p).lower()               # HARDCODE YOK
+    assert "warehouse" not in p                        # plain iceberg() catalog: no warehouse key (spike-verified default)
+
+
+def test_iceberg_props_warehouse_param(monkeypatch):
+    # Sandbox v2 (Task 4): iceberg_sandbox() passes warehouse=<catalog> so
+    # the REST catalog protocol resolves the NAMED "sandbox" warehouse
+    # (same mechanism Trino's sandbox.properties uses).
+    p = _load(monkeypatch)._iceberg_props(warehouse="sandbox")
+    assert p["warehouse"] == "sandbox"
 
 
 def test_spark_conf_has_catalogs(monkeypatch):
     c = _load(monkeypatch)._spark_conf()
-    assert c["spark.sql.catalog.sandbox_veri.uri"] == "http://nessie:19120/iceberg/"
+    assert c["spark.sql.catalog.sandbox.uri"] == "http://nessie:19120/iceberg/"
     assert c["spark.hadoop.fs.s3a.endpoint"] == "https://flashblade.kc:443"
 
 
@@ -40,12 +57,16 @@ def test_spark_conf_warehouse_values_match_zeppelin_reference(monkeypatch):
     # Final-review fix wave: chart/templates/_zeppelin.tpl is the working
     # reference for these SAME Nessie REST catalogs -- `lakehouse` gets the
     # FULL warehouse location (NESSIE_WAREHOUSE, unmodified), `rawlake`
-    # stays the bare "rawdata" name, and the sandbox catalog gets the full
-    # "s3a://sandbox-<dept>/" form (never a bare bucket name).
+    # stays the bare "rawdata" name.
+    #
+    # Sandbox v2 (Task 4): the unified sandbox catalog's warehouse is the
+    # full "s3a://sandbox/" form -- the Nessie catalog name IS the S3
+    # bucket name now (no more per-dept "sandbox_<dept>" -> "sandbox-<dept>"
+    # underscore/dash translation).
     c = _load(monkeypatch)._spark_conf()
     assert c["spark.sql.catalog.lakehouse.warehouse"] == "s3://depo/warehouse"
     assert c["spark.sql.catalog.rawlake.warehouse"] == "rawdata"
-    assert c["spark.sql.catalog.sandbox_veri.warehouse"] == "s3a://sandbox-veri/"
+    assert c["spark.sql.catalog.sandbox.warehouse"] == "s3a://sandbox/"
 
 
 def test_trino_connect_args(monkeypatch):
@@ -70,3 +91,63 @@ def test_spark_conf_catalog_invariant(monkeypatch):
     assert "spark.sql.catalog.rawlake" in c
     assert c["spark.sql.catalog.lakehouse.rest.auth.type"] == "oauth2"
     assert "spark.sql.catalog.lakehouse.rest.credential" in c
+
+
+# --- Sandbox v2 (2026-08-07-sandbox-v2 Task 4): per-user sandbox schema ---
+
+
+def test_sandbox_schema_uses_nessie_sandbox_schema(monkeypatch):
+    nb = _load(monkeypatch)
+    assert nb.sandbox_schema() == "sandbox.testuser"
+
+
+def test_sandbox_schema_falls_back_to_sandbox_catalog_when_schema_unset(monkeypatch):
+    for k, v in BASE.items():
+        if k != "NESSIE_SANDBOX_SCHEMA":
+            monkeypatch.setenv(k, v)
+    monkeypatch.delenv("NESSIE_SANDBOX_SCHEMA", raising=False)
+    nb = importlib.reload(importlib.import_module("lakehouse_nb"))
+    assert nb.sandbox_schema() == "sandbox"           # falls back to NESSIE_SANDBOX_CATALOG
+
+
+def test_ensure_schema_sql_defaults_to_sandbox_schema(monkeypatch):
+    nb = _load(monkeypatch)
+    assert nb._ensure_schema_sql() == "CREATE SCHEMA IF NOT EXISTS sandbox.testuser"
+
+
+def test_ensure_schema_sql_explicit_schema_overrides_default(monkeypatch):
+    nb = _load(monkeypatch)
+    assert nb._ensure_schema_sql("lakehouse.gold") == "CREATE SCHEMA IF NOT EXISTS lakehouse.gold"
+
+
+class _FakeIcebergCatalog:
+    """Minimal PyIceberg-catalog double for _ensure_namespace() -- just
+    enough of list_namespaces()/create_namespace() to prove the
+    create-if-missing logic without a live Nessie REST catalog."""
+
+    def __init__(self, existing=()):
+        self._namespaces = list(existing)
+        self.created = []
+
+    def list_namespaces(self):
+        return list(self._namespaces)
+
+    def create_namespace(self, ns):
+        self._namespaces.append(ns)
+        self.created.append(ns)
+
+
+def test_ensure_namespace_creates_missing_sandbox_namespace(monkeypatch):
+    nb = _load(monkeypatch)
+    cat = _FakeIcebergCatalog(existing=[])
+    ns = nb._ensure_namespace(cat)
+    assert ns == ("sandbox", "testuser")
+    assert cat.created == [("sandbox", "testuser")]
+
+
+def test_ensure_namespace_is_a_noop_when_namespace_already_exists(monkeypatch):
+    nb = _load(monkeypatch)
+    cat = _FakeIcebergCatalog(existing=[("sandbox", "testuser")])
+    ns = nb._ensure_namespace(cat)
+    assert ns == ("sandbox", "testuser")
+    assert cat.created == []          # no duplicate create_namespace call

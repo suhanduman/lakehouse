@@ -13,12 +13,23 @@
 # Task 4 additions (below): the `jupyterhub-config` ConfigMap
 # (`jupyterhub_config.py` — GenericOAuthenticator + KubeSpawner +
 # pre_spawn_hook/modify_pod_hook) + the Keycloak `jupyter` client's `groups`
-# protocol mapper. Test fixture dept mirrors values.yaml's own
-# `sandbox.departments` example comment (name=veri-bilimi,
-# adGroup="CN=sandbox-veri,...", s3SecretName=s3-sandbox-veri-bilimi) —
-# deliberately using a case where the AD group's CN ("sandbox-veri") and the
-# DNS-safe `name` ("veri-bilimi") DIFFER, to prove the two identifiers are
-# never conflated.
+# protocol mapper.
+#
+# Sandbox v2 (2026-08-07-sandbox-v2 Task 4, later revision of this suite):
+# the JupyterHub sandbox injection was MIGRATED from the per-dept
+# `sandbox.departments[]`/`DEPTS` design to the UNIFIED sandbox — a single
+# `svc-sandbox` identity + `sandbox` Nessie namespace/Trino catalog for
+# every allowed user, isolated only by a per-user
+# `sandbox.<spawner.user.name>` schema convention. The login gate now reads
+# `.Values.sandbox.allowedGroups` (a flat list of AD group full DNs)
+# instead of `sandbox.departments[].adGroup`. `sandbox.departments[]` still
+# exists in values.yaml and still renders its own (now-legacy,
+# JupyterHub-unrelated) per-dept Keycloak client/Nessie CEL/Zeppelin
+# instance/executor-RBAC elsewhere in this chart — a few tests below still
+# set it purely to exercise THIS file's still-present legacy per-dept
+# Spark-executor RBAC block (kept additive for the shared Zeppelin path
+# until Task 5 of that slice retires it); it no longer affects the
+# jupyterhub-config ConfigMap's own content at all.
 suite: jupyter values + oidc/proxy-token Secrets + Keycloak jupyter client-secret single-source
 templates:
   - 23-jupyterhub.yaml
@@ -38,9 +49,13 @@ tests:
       # this test, so no per-dept executor Role/RoleBinding): the
       # `jupyterhub` SA, the KubeSpawner Role + RoleBinding, 3 Services
       # (jupyterhub-proxy/-api, jupyterhub-hub), 2 Deployments (Hub + proxy)
-      # = 3 + 1 + 1+1+1 + 3 + 2 = 11.
+      # + sandbox v2 (Task 4 of 2026-08-07-sandbox-v2): the unified
+      # `sa-sandbox` SA + `sandbox-spark-executor` Role + RoleBinding (no
+      # `sandbox.oidc.clientSecret` set in this test, so no
+      # `sandbox-oidc-credentials` Secret)
+      # = 3 + 1 + 1+1+1 + 3 + 2 + 3 = 14.
       - hasDocuments:
-          count: 11
+          count: 14
       - equal:
           path: metadata.name
           value: jupyter-oidc-credentials
@@ -77,9 +92,10 @@ tests:
       # the Secret + the jupyterhub-config ConfigMap (Task 4; proxy Secret
       # still correctly stays out-of-band) + Task 5's 8 always-on resources
       # (SA + Role + RoleBinding + 3 Services + 2 Deployments, see the
-      # previous test's comment) = 2 + 8 = 10.
+      # previous test's comment) + sandbox v2's 3 always-on unified
+      # sa-sandbox SA/Role/RoleBinding = 2 + 8 + 3 = 13.
       - hasDocuments:
-          count: 10
+          count: 13
       - equal:
           path: metadata.name
           value: jupyter-oidc-credentials
@@ -101,9 +117,10 @@ tests:
       auth.oidc.enabled: true
     asserts:
       # the jupyterhub-config ConfigMap (Task 4) + Task 5's 8 always-on
-      # resources (see the first test's comment) = 1 + 8 = 9.
+      # resources (see the first test's comment) + sandbox v2's 3 always-on
+      # unified sa-sandbox SA/Role/RoleBinding = 1 + 8 + 3 = 12.
       - hasDocuments:
-          count: 9
+          count: 12
       - equal:
           path: metadata.name
           value: jupyterhub-config
@@ -264,19 +281,84 @@ tests:
           path: metadata.name
           value: jupyter-oidc-credentials
 
-  # --- Task 4: jupyterhub-config ConfigMap ---
+  # --- Sandbox v2 (2026-08-07-sandbox-v2 Task 4): unified sandbox-oidc-credentials Secret ---
 
-  - it: components.jupyter=true + auth.oidc.enabled=true + a sandbox dept renders jupyterhub-config with the authenticator, login gate, KubeSpawner, DEPTS dict, and pre_spawn_hook/modify_pod_hook — and NO secret literal
+  - it: "sandbox v2: sandbox-oidc-credentials Secret renders with the client-secret key when sandbox.oidc.clientSecret set (single-sourced with the Keycloak svc-sandbox client)"
     templates:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
-          oidcClientSecret: "dev-svc-sandbox-veri"
+      sandbox.oidc.clientSecret: "dev-svc-sandbox"
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: sandbox-oidc-credentials
+          any: true
+      - equal:
+          path: stringData.client-secret
+          value: "dev-svc-sandbox"
+        documentSelector:
+          path: metadata.name
+          value: sandbox-oidc-credentials
+
+  - it: "sandbox v2: sandbox-oidc-credentials Secret NOT rendered when sandbox.oidc.clientSecret is empty (dev-convenience-else-out-of-band, same contract as the other Secrets in this file)"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.oidc.clientSecret: ""
+    asserts:
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: sandbox-oidc-credentials
+          any: true
+        not: true
+
+  - it: "sandbox v2: leak check — SENTINEL sandbox.oidc.clientSecret appears ONLY in the sandbox-oidc-credentials Secret's client-secret key, never in the jupyterhub-config ConfigMap"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.oidc.clientSecret: "LEAKSVCSANDBOX-SENTINEL"
+    asserts:
+      - equal:
+          path: stringData.client-secret
+          value: "LEAKSVCSANDBOX-SENTINEL"
+        documentSelector:
+          path: metadata.name
+          value: sandbox-oidc-credentials
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'LEAKSVCSANDBOX-SENTINEL'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+
+  # --- Task 4: jupyterhub-config ConfigMap ---
+  #
+  # Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the per-dept DEPTS-based
+  # injection was MIGRATED to the unified sandbox — every allowed_groups
+  # member now gets the SAME `svc-sandbox` identity + SAME `sandbox` Nessie
+  # namespace/Trino catalog, isolated only by a per-user
+  # `sandbox.<spawner.user.name>` Trino/Spark/PyIceberg SCHEMA convention
+  # (`NESSIE_SANDBOX_SCHEMA`). `.Values.sandbox.allowedGroups` (a list of AD
+  # group full DNs, same "CN=...,OU=...,DC=..." shape the old per-dept
+  # `adGroup` used to carry) now drives the login gate instead of
+  # `sandbox.departments[].adGroup`.
+
+  - it: components.jupyter=true + auth.oidc.enabled=true + an allowedGroup renders jupyterhub-config with the authenticator, unified login gate, KubeSpawner, and pre_spawn_hook/modify_pod_hook — and NO secret literal
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+      sandbox.allowedGroups:
+        - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
     asserts:
       # any: true -- Task 5 now renders many more documents under this same
       # gate; see the "no sandbox departments configured" test's comment.
@@ -342,9 +424,9 @@ tests:
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
-      # login gate: allow_all=False + allowed_groups includes the dept's Keycloak/AD group
-      # (the CN of adGroup, "sandbox-veri" — NOT "sandbox-veri-bilimi"; the AD group name
-      # and sandbox.departments[].name are independent identifiers, see file header comment)
+      # login gate: allow_all=False + allowed_groups includes the CN of the
+      # configured sandbox.allowedGroups entry ("lakehouse-analysts", from
+      # "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com")
       - matchRegex:
           path: data["jupyterhub_config.py"]
           pattern: 'c\.Authenticator\.allow_all = False'
@@ -353,7 +435,7 @@ tests:
           value: jupyterhub-config
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'c\.Authenticator\.allowed_groups\.add\("sandbox-veri"\)'
+          pattern: 'c\.Authenticator\.allowed_groups\.add\("lakehouse-analysts"\)'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
@@ -382,39 +464,21 @@ tests:
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
-      # DEPTS dict covers the dept, keyed by the AD group's short code ("veri", from
-      # "sandbox-veri"), values built from sandbox.departments[].name ("veri-bilimi")
-      - matchRegex:
+      # Sandbox v2: NO per-dept DEPTS dict at all anymore -- unified catalog +
+      # per-user schema, both derived from .Values.sandbox.namespace/
+      # spawner.user.name, and a fixed "sa-sandbox"/"svc-sandbox" identity.
+      - notMatchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'DEPTS\["veri"\] = \{'
+          pattern: 'DEPTS\[|DEPTS = '
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
-      - matchRegex:
+      - notMatchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: '"sa": "sa-sandbox-veri-bilimi"'
+          pattern: 'svc-sandbox-'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
-      - matchRegex:
-          path: data["jupyterhub_config.py"]
-          pattern: '"s3_secret": "s3-sandbox-veri-bilimi"'
-        documentSelector:
-          path: metadata.name
-          value: jupyterhub-config
-      - matchRegex:
-          path: data["jupyterhub_config.py"]
-          pattern: '"nessie_secret": "sandbox-veri-bilimi-oidc-credentials"'
-        documentSelector:
-          path: metadata.name
-          value: jupyterhub-config
-      - matchRegex:
-          path: data["jupyterhub_config.py"]
-          pattern: '"catalog": "sandbox_veri-bilimi"'
-        documentSelector:
-          path: metadata.name
-          value: jupyterhub-config
-      # pre_spawn_hook: gates on sandbox-<dept> group, sets sa-sandbox-, refuses spawn without it
       - matchRegex:
           path: data["jupyterhub_config.py"]
           pattern: 'def pre_spawn_hook\(spawner\):'
@@ -423,19 +487,25 @@ tests:
           value: jupyterhub-config
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'g\.startswith\("sandbox-"\)'
+          pattern: 'spawner\.service_account = "sa-sandbox"'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'spawner\.service_account = d\["sa"\]'
+          pattern: 'spawner\.environment\["NESSIE_SANDBOX_CATALOG"\] = "sandbox"'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'raise Exception\("user has no configured sandbox-<dept> group -- refusing to spawn"\)'
+          pattern: 'spawner\.environment\["NESSIE_SANDBOX_SCHEMA"\] = "%s\.%s" % \("sandbox", spawner\.user\.name\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - matchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["NESSIE_CLIENT_ID"\] = "svc-sandbox"'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
@@ -507,7 +577,7 @@ tests:
       - failedTemplate:
           errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
 
-  - it: no sandbox departments configured still renders jupyterhub-config, with an empty (fail-closed) DEPTS dict and allowed_groups set — nobody can log in, but nothing crashes
+  - it: no sandbox.allowedGroups configured still renders jupyterhub-config, with the unified sandbox env always injected but an empty (fail-closed) allowed_groups set — nobody can log in, but nothing crashes
     templates:
       - 23-jupyterhub.yaml
     set:
@@ -527,13 +597,22 @@ tests:
           any: true
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'DEPTS = \{\}'
+          pattern: 'c\.Authenticator\.allowed_groups = set\(\)'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
+      # unified sandbox env is unconditional (independent of allowedGroups/
+      # sandbox.enabled) -- it is the login gate (above) that fails closed
+      # when nobody is allowed to authenticate, not this injection.
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'c\.Authenticator\.allowed_groups = set\(\)'
+          pattern: 'spawner\.environment\["NESSIE_SANDBOX_CATALOG"\] = "sandbox"'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'DEPTS\[|DEPTS = '
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
@@ -635,17 +714,18 @@ tests:
       components.jupyter: true
       auth.oidc.enabled: true
     asserts:
+      # namespace folded into containsDocument (not a separate `equal` +
+      # documentSelector: {path: kind, value: ServiceAccount}) -- sandbox v2
+      # (Task 4) added a SECOND ServiceAccount (sa-sandbox) under this same
+      # gate, so a `kind`-only selector is now ambiguous ("multiple indexes
+      # found"), and `metadata.name: jupyterhub` collides with the
+      # Deployment of the same name (see this file's own header note above).
       - containsDocument:
           kind: ServiceAccount
           apiVersion: v1
           name: jupyterhub
+          namespace: NAMESPACE
           any: true
-      - equal:
-          path: metadata.namespace
-          value: NAMESPACE
-        documentSelector:
-          path: kind
-          value: ServiceAccount
       - equal:
           path: kind
           value: Role
@@ -703,6 +783,73 @@ tests:
         documentSelector:
           path: metadata.name
           value: jupyterhub-kubespawner-binding
+
+  - it: "sandbox v2: unified sa-sandbox ServiceAccount + sandbox-spark-executor Role/RoleBinding render UNCONDITIONALLY under this file's own gate (independent of sandbox.enabled/departments) — Role is namespace-scoped, NOT a ClusterRole"
+    templates:
+      - 23-jupyterhub.yaml
+    set:
+      components.jupyter: true
+      auth.oidc.enabled: true
+    asserts:
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: sa-sandbox
+          any: true
+      - equal:
+          path: kind
+          value: Role
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+            - apiGroups: [""]
+              resources: ["pods/log"]
+              verbs: ["get"]
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+            - apiGroups: [""]
+              resources: ["services"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+            - apiGroups: [""]
+              resources: ["persistentvolumeclaims"]
+              verbs: ["get", "list", "watch", "create", "delete"]
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor
+      - equal:
+          path: kind
+          value: RoleBinding
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor-binding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: sa-sandbox
+              namespace: NAMESPACE
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor-binding
+      - equal:
+          path: roleRef
+          value: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sandbox-spark-executor}
+        documentSelector:
+          path: metadata.name
+          value: sandbox-spark-executor-binding
 
   - it: "Task 5: a sandbox dept renders sa-sandbox-<dept>'s Spark-on-k8s executor Role/RoleBinding with the spike §2b/§2c verbs (incl. deletecollection) — Role is namespace-scoped, NOT a ClusterRole"
     templates:
@@ -1225,71 +1372,43 @@ tests:
           value: jupyterhub-config
         template: 23-jupyterhub.yaml
 
-  # --- final-review fix wave: adGroup-CN "sandbox-" prefix coherence guard
-  # + deterministic multi-group dept selection (pre_spawn_hook sorts
-  # group_names before iterating) ---
-
-  - it: "final-review: a sandbox dept whose adGroup CN does NOT start with sandbox- FAILS the render loudly (login gate would admit the group, but pre_spawn_hook could never match it)"
+  # --- Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the CN-prefix coherence
+  # guard AND the sorted(group_names)-based dept-selection logic the
+  # "final-review fix wave" tests below used to cover were BOTH removed --
+  # the unified sandbox has no group->dept mapping at all (pre_spawn_hook no
+  # longer inspects spawner.user.groups), so there is nothing left for
+  # either test to exercise. Replaced with the "no per-dept DEPTS/
+  # svc-sandbox-<dept>" assertions in the Task 4 ConfigMap test above.
+  - it: "sandbox v2: pre_spawn_hook no longer inspects spawner.user.groups or iterates a sorted(group_names) — that dept-selection logic was removed with DEPTS"
     templates:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: "dev-svc-sandbox-veri"
+      sandbox.allowedGroups:
+        - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
     asserts:
-      - failedTemplate:
-          errorMessage: "sandbox department veri adGroup CN must start with 'sandbox-' for JupyterHub group→dept mapping (got: notsandbox-veri)"
-
-  - it: "final-review: a sandbox dept whose adGroup CN DOES start with sandbox- renders cleanly — guard does NOT fire"
-    templates:
-      - 23-jupyterhub.yaml
-    set:
-      components.jupyter: true
-      auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: "dev-svc-sandbox-veri"
-    asserts:
-      - containsDocument:
-          kind: ConfigMap
-          apiVersion: v1
-          name: jupyterhub-config
-          any: true
-
-  - it: "final-review: components.jupyter=false with a non-sandbox- adGroup CN renders fine — the CN-prefix guard only evaluates under components.jupyter AND auth.oidc.enabled (the c2 Zeppelin-only sandbox path has no such constraint)"
-    templates:
-      - 23-jupyterhub.yaml
-    set:
-      components.jupyter: false
-      auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=notsandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: "final-review: pre_spawn_hook iterates a sorted(group_names) — deterministic first-match dept selection when a user belongs to multiple sandbox-* groups"
-    templates:
-      - 23-jupyterhub.yaml
-    set:
-      components.jupyter: true
-      auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
-    asserts:
-      - matchRegex:
+      - notMatchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'for g in sorted\(group_names\):'
+          pattern: 'sorted\(group_names\)'
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      # NOT a bare `spawner\.user\.groups` check -- that phrase legitimately
+      # still appears in an explanatory comment about
+      # GenericOAuthenticator.manage_groups (unrelated to pre_spawn_hook's
+      # OLD dept-selection logic, which is what's actually gone). The old
+      # dept-selection local variables (`group_names`/`spawner._dept`) are
+      # the precise thing that no longer exists.
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'group_names ='
+        documentSelector:
+          path: metadata.name
+          value: jupyterhub-config
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\._dept'
         documentSelector:
           path: metadata.name
           value: jupyterhub-config
@@ -1341,10 +1460,6 @@ tests:
     set:
       components.jupyter: true
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - matchRegex:
           path: data["jupyterhub_config.py"]
@@ -1356,7 +1471,7 @@ tests:
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'spawner\.environment\["NESSIE_CLIENT_ID"\] = d\["nessie_client_id"\]'
+          pattern: 'spawner\.environment\["NESSIE_CLIENT_ID"\] = "svc-sandbox"'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
@@ -1367,16 +1482,12 @@ tests:
           pattern: 'spawner\.environment\["TRINO_PORT"\] = "8443"'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
 
-  - it: "turnkey: modify_pod_hook injects the 4 new secretKeyRef envs (AWS_ENDPOINT_URL_S3/AWS_REGION from storage.s3.secretName, SVC_JUPYTER_TRINO_SECRET from jupyter-trino-oidc-credentials, OIDC_ISSUER from oidc.secretName) AND preserves the 3 pre-existing per-dept ones"
+  - it: "turnkey: modify_pod_hook injects the 4 pre-existing platform-wide secretKeyRef envs (AWS_ENDPOINT_URL_S3/AWS_REGION from storage.s3.secretName, SVC_JUPYTER_TRINO_SECRET from jupyter-trino-oidc-credentials, OIDC_ISSUER from oidc.secretName) AND the unified sandbox v2 ones (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY from s3-sandbox, NESSIE_OAUTH_SECRET from sandbox-oidc-credentials)"
     templates:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: true
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - matchRegex:
           path: data["jupyterhub_config.py"]
@@ -1394,26 +1505,26 @@ tests:
           path: data["jupyterhub_config.py"]
           pattern: '_secret_env\("OIDC_ISSUER", "oidc-credentials", "issuer-url"\)'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
-      # preserved (Task 4, must NOT be removed)
+      # sandbox v2 (unified — NOT d["s3_secret"]/d["nessie_secret"] anymore)
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: '_secret_env\("AWS_ACCESS_KEY_ID", d\["s3_secret"\], "access-key-id"\)'
+          pattern: '_secret_env\("AWS_ACCESS_KEY_ID", "s3-sandbox", "access-key-id"\)'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: '_secret_env\("AWS_SECRET_ACCESS_KEY", d\["s3_secret"\], "secret-access-key"\)'
+          pattern: '_secret_env\("AWS_SECRET_ACCESS_KEY", "s3-sandbox", "secret-access-key"\)'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: '_secret_env\("NESSIE_OAUTH_SECRET", d\["nessie_secret"\], "client-secret"\)'
+          pattern: '_secret_env\("NESSIE_OAUTH_SECRET", "sandbox-oidc-credentials", "client-secret"\)'
+        documentSelector: { path: metadata.name, value: jupyterhub-config }
+      - notMatchRegex:
+          path: data["jupyterhub_config.py"]
+          pattern: 'spawner\.environment\["DEPT"\]'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
-          pattern: 'spawner\.environment\["DEPT"\] = dept'
-        documentSelector: { path: metadata.name, value: jupyterhub-config }
-      - matchRegex:
-          path: data["jupyterhub_config.py"]
-          pattern: 'spawner\.environment\["NESSIE_SANDBOX_CATALOG"\] = d\["catalog"\]'
+          pattern: 'spawner\.environment\["NESSIE_SANDBOX_CATALOG"\] = "sandbox"'
         documentSelector: { path: metadata.name, value: jupyterhub-config }
       - matchRegex:
           path: data["jupyterhub_config.py"]
