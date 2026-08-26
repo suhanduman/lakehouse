@@ -150,3 +150,32 @@ tests:
         documentSelector:
           path: metadata.labels.app
           value: superset-redis
+
+  - it: superset Deployment keeps the trino-token-refresher sidecar (jwt mode)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      # documentSelector on metadata.name=superset is ambiguous (the Secret,
+      # Deployment, AND Service in this file are all named `superset` ->
+      # "multiple indexes found"); metadata.labels.app is unique to the
+      # Deployment (Secret/Service docs carry no top-level metadata.labels) —
+      # same convention as the superset-redis selector above.
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.labels.app
+          value: superset
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+          any: true
+        documentSelector:
+          path: metadata.labels.app
+          value: superset
