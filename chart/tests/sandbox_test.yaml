@@ -30,6 +30,7 @@ templates:
   - 08-routes-tls.yaml
   - 08b-ingress-tls.yaml
   - 04-nessie-ha.yaml
+  - 06-trino-ha.yaml
 tests:
   # --- Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): unified
   # `svc-sandbox` Keycloak service-account client. ADDITIVE alongside the
@@ -1511,3 +1512,177 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # --- Task 3 (KABUL AÇIĞI #2, şartname 3.5.4.2): Trino `sandbox` catalog +
+  # rules.json `.*` read-write. ADDITIVE alongside the existing lakehouse/
+  # rawlake read-only rules and every existing principal (admin, svc-dbt-
+  # trino, catch-all SELECT) — those must stay intact (the b2 lesson: a
+  # `tables` section, once defined, denies any principal not matched by ANY
+  # rule). Trino commits to Nessie as the existing broad-write
+  # `svc-trino-nessie` identity — same OAuth2 block as lakehouse.properties,
+  # copied verbatim. -----------------------------------------------------
+
+  - it: "sandbox v2 (Task 3): trino sandbox.properties catalog renders when sandbox.enabled, mirroring lakehouse.properties (iceberg/rest, sandbox bucket warehouse, same svc-trino-nessie OAuth2 block)"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino-config
+    set:
+      components.trino: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+      sandbox.bucket: sandbox
+    asserts:
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "connector\\.name=iceberg"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.catalog\\.type=rest"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.uri=http://.*:19120/iceberg/"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.warehouse=s3://sandbox/warehouse"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.security=OAUTH2"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.oauth2\\.credential=svc-trino-nessie:\\$\\{ENV:NESSIE_OAUTH_SECRET\\}"
+      - matchRegex:
+          path: data["sandbox.properties"]
+          pattern: "iceberg\\.rest-catalog\\.oauth2\\.server-uri=\\$\\{ENV:OIDC_ISSUER\\}/protocol/openid-connect/token"
+  - it: "sandbox v2 (Task 3): coordinator Deployment mounts sandbox.properties into /etc/trino/catalog when sandbox.enabled -- a catalog ConfigMap key with no matching volumeMount is inert at runtime"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      # trino-coordinator names BOTH the Service and the Deployment; only
+      # the Deployment has `spec.selector.matchLabels` (the Service's own
+      # `spec.selector` is a flat map with no `matchLabels` wrapper).
+      path: spec.selector.matchLabels.role
+      value: coordinator
+    set:
+      components.trino: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.subPath=="sandbox.properties")].mountPath
+          pattern: "^/etc/trino/catalog/sandbox\\.properties$"
+
+  - it: "sandbox v2 (Task 3): worker Deployment also mounts sandbox.properties when sandbox.enabled"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      # trino-worker names BOTH the Deployment and the HPA's scaleTargetRef;
+      # only the Deployment has `spec.selector.matchLabels`.
+      path: spec.selector.matchLabels.role
+      value: worker
+    set:
+      components.trino: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.subPath=="sandbox.properties")].mountPath
+          pattern: "^/etc/trino/catalog/sandbox\\.properties$"
+
+  - it: "sandbox v2 (Task 3): sandbox.enabled=false (default) -- NO sandbox.properties catalog renders (byte-identical dev default otherwise)"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino-config
+    set:
+      components.trino: true
+      auth.oidc.enabled: true
+    asserts:
+      - notExists:
+          path: data["sandbox.properties"]
+
+  - it: "sandbox v2 (Task 3): rules.json grants .* read-write on the sandbox catalog (catalogs/schemas/tables), while keeping lakehouse/rawlake read-only + the existing service-account-svc-dbt-trino + admin catch-alls intact"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino-config
+    set:
+      components.trino: true
+      components.dbt: true
+      auth.oidc.enabled: true
+      sandbox.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      # sandbox catalog: full allow, placed ahead of the lakehouse/rawlake
+      # read-only catch-alls (specificity/order).
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "\.\*", "catalog": "sandbox", "allow": "all"\}'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"catalog": "sandbox", "allow": "all"\},\s*\{"user": "\.\*", "catalog": "lakehouse", "allow": "read-only"\}'
+      # sandbox schema-owner + table read-write rules
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "\.\*", "catalog": "sandbox", "schema": "\.\*", "owner": true\}'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "\.\*", "catalog": "sandbox", "privileges": \["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"\]\}'
+      # existing principals/rules MUST remain intact (the b2 lesson)
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"catalog": "lakehouse", "allow": "read-only"'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"catalog": "rawlake",   "allow": "read-only"'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "alice\|admin-group", "catalog": "\.\*", "allow": "all"\}'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '\{"user": "\.\*", "privileges": \["SELECT"\]\}'
+
+  - it: "sandbox v2 (Task 3): sandbox.enabled=false (default) -- rules.json has NO sandbox catalog rule, existing lakehouse/rawlake read-only + dbt rules unaffected"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino-config
+    set:
+      components.trino: true
+      components.dbt: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"catalog": "sandbox"'
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"catalog": "lakehouse", "allow": "read-only"'
+
+  - it: "sandbox v2 (Task 3): rules.json still valid JSON + has NO sandbox/dbt schemas/tables sections when BOTH sandbox.enabled and components.dbt are false (dev default byte-identical)"
+    templates:
+      - 06-trino-ha.yaml
+    documentSelector:
+      path: metadata.name
+      value: trino-config
+    set:
+      components.trino: true
+      auth.oidc.enabled: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"schemas"'
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"tables"'

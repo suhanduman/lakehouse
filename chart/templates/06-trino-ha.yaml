@@ -235,6 +235,34 @@ data:
     s3.region=${ENV:S3_REGION}
     s3.aws-access-key=${ENV:S3_ACCESS_KEY}
     s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+{{- if .Values.sandbox.enabled }}
+  # Sandbox v2 (Task 3, şartname 3.5.4.2 — analyst CTAS/view/temp via Trino).
+  # Own S3 bucket + Nessie namespace (Tasks 1-2); Trino still commits to
+  # Nessie as the SAME broad-write `svc-trino-nessie` identity lakehouse/
+  # rawlake use above — per-catalog write scope is enforced purely by
+  # rules.json below, not by a separate Nessie principal.
+  sandbox.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://{{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.nessie" .) "context" .) }}:19120/iceberg/
+    iceberg.rest-catalog.warehouse=s3://{{ .Values.sandbox.bucket }}/warehouse
+{{- if .Values.auth.oidc.enabled }}
+    # Nessie machine-auth — identical block to lakehouse.properties/
+    # rawlake.properties above, same `svc-trino-nessie` identity (one Trino
+    # engine, one Nessie service-account, all three catalogs).
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=svc-trino-nessie:${ENV:NESSIE_OAUTH_SECRET}
+    iceberg.rest-catalog.oauth2.server-uri=${ENV:OIDC_ISSUER}/protocol/openid-connect/token
+    iceberg.rest-catalog.oauth2.scope=openid
+{{- end }}
+    iceberg.register-table-procedure.enabled=false
+    fs.native-s3.enabled=true
+    s3.endpoint=${ENV:S3_ENDPOINT}
+    s3.path-style-access=true
+    s3.region=${ENV:S3_REGION}
+    s3.aws-access-key=${ENV:S3_ACCESS_KEY}
+    s3.aws-secret-key=${ENV:S3_SECRET_KEY}
+{{- end }}
   access-control.properties: |
     access-control.name=file
     security.config-file=etc/rules.json
@@ -245,17 +273,22 @@ data:
 {{- if .Values.components.dbt }}
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "allow": "all"},
 {{- end }}
+{{- if .Values.sandbox.enabled }}
+        {"user": ".*", "catalog": "sandbox", "allow": "all"},
+{{- end }}
         {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
         {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
-      ]{{- if .Values.components.dbt }},
+      ]{{- if or .Values.components.dbt .Values.sandbox.enabled }},
       "schemas": [
-        {"user": "alice|admin-group", "schema": ".*", "owner": true},
-        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}
+        {"user": "alice|admin-group", "schema": ".*", "owner": true}{{- if .Values.components.dbt }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "schema": ".*", "owner": true}{{- end }}
       ],
       "tables": [
+        {"user": "alice|admin-group", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- if .Values.components.dbt }},
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
-        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]},
-        {"user": "alice|admin-group", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
         {"user": ".*", "privileges": ["SELECT"]}
       ]{{- end }}
     }
@@ -340,6 +373,9 @@ spec:
         - {name: config, mountPath: /etc/trino/rules.json,                subPath: rules.json}
         - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+{{- if .Values.sandbox.enabled }}
+        - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
+{{- end }}
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
         - {name: trino-certs, mountPath: /etc/trino/certs}
 {{- end }}
@@ -423,6 +459,9 @@ spec:
         - {name: config, mountPath: /etc/trino/node.properties,              subPath: node.properties}
         - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
+{{- if .Values.sandbox.enabled }}
+        - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
+{{- end }}
       volumes:
       {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
       - name: config
