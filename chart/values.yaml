@@ -630,6 +630,11 @@ versions:
   # full-string-pin convention as `nessieImage`/`trinoImage` above (not built
   # via `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
   kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
+  # Superset Alerts & Reports için Celery broker/results-backend Redis'i.
+  # Üçüncü-parti → full-string-pin (kafkaUiImage/configurableHttpProxyImage gibi),
+  # global.imageRegistry+tag DEĞİL. `--save ""`+`--appendonly no` ile diske yazmaz
+  # → OpenShift arbitrary-UID uyumlu. Air-gapped'te mirror'lanmalı.
+  redisImage: "docker.io/library/redis:7.4-alpine"
   # chart/templates/19-superset.yaml: internally-built Superset image (same
   # `.Values.global.imageRegistry` + tag convention as `consoleBackendImageTag`
   # above). Custom-built (images/superset/Dockerfile) because the stock
@@ -1363,6 +1368,23 @@ superset:
     # works" proof; the dashboard bundle is authored/imported during UAT
     # (a committed Superset export is version-brittle — kept opt-in).
     enabled: false
+  alertsReports:
+    # Zamanlanmış rapor (chart→CSV) + SQL-koşullu alert e-postaları (şartname 3.6.2.1.5).
+    # Redis + Celery worker + Celery beat ekler. Default off — açmak için bunu true
+    # yapıp superset.smtp.host'u müşterinin SMTP sunucusuna ayarla (ikisi birlikte).
+    # Tüm sizing tier'larında off kalır (SMTP host müşteriye özgü). Tarayıcı YOK:
+    # dashboard/grafik PNG görseli kapsam dışı (Day-2); rapor formatı CSV/veri.
+    enabled: false
+  smtp:
+    host: ""                # müşteri SMTP sunucusu — alertsReports.enabled ise ZORUNLU (fail-loud)
+    port: 587
+    startTLS: true
+    ssl: false
+    user: ""
+    mailFrom: "lakehouse-reports@example.local"
+    password: ""            # dev-convenience inline Secret; prod out-of-band (secrets.mode)
+  redis:
+    password: ""            # dev-convenience inline Secret; prod out-of-band (secrets.mode)
 
 # dbt-trino Certified Gold (Consumption slice b2). CronJob-driven; gated by
 # components.dbt (default false; on in medium/large). Sole writer of

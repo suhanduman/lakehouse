@@ -1,0 +1,284 @@
+# chart/tests/superset-alerts_test.yaml — proves the Alerts & Reports slice
+# (Redis + Celery worker/beat + SMTP) renders only when superset.alertsReports.enabled,
+# is byte-identical-off, and fails loud without an SMTP host. Negative asserts use
+# `any: true` (avoids the vacuous exact-DeepEqual false-green trap).
+suite: superset alerts & reports
+templates:
+  - 19-superset.yaml
+tests:
+  - it: config has ALERT_REPORTS False when alertsReports disabled
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: '"ALERT_REPORTS": False'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - notMatchRegex:
+          path: data["superset_config.py"]
+          pattern: "class CeleryConfig"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
+  - it: config enables ALERT_REPORTS + CeleryConfig + SMTP when on
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+    asserts:
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: '"ALERT_REPORTS": True'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "class CeleryConfig"
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: 'SMTP_HOST = os.environ\["SMTP_HOST"\]'
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "_urlparse\\.quote\\(os\\.environ\\.get\\(\"REDIS_PASSWORD\""
+        documentSelector:
+          path: metadata.name
+          value: superset-config
+
+  - it: fails loud when alertsReports on but no SMTP host
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "superset.alertsReports.enabled requires superset.smtp.host (customer SMTP server) — set it or disable alertsReports"
+
+  - it: renders no redis/secrets when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # (superset-redis Deployment/Service ve superset-redis-auth/superset-smtp Secret
+      # hiç render olmaz.) `containsDocument` + `not: true` used instead of
+      # `notContains`/`metadata.name`: `notContains` requires the target path to be
+      # an ARRAY field (it errors "expect to be an array" on a scalar like
+      # metadata.name — verified against this repo's installed helm-unittest
+      # (v1.1.1) validator source), and `containsDocument` tolerates a genuine
+      # zero-match render (same convention as console_test.yaml's absence checks).
+      # `any: true` is REQUIRED here even though this is a negative (`not: true`)
+      # assert: per contains_document_validator.go's Validate(), a negative
+      # containsDocument with Any=false short-circuits to PASS on the very FIRST
+      # document that doesn't match and never inspects the rest — a false-green
+      # trap (vacuously passes even if a LATER document does match). `any: true`
+      # flips the loop into true universal negation: every document must fail to
+      # match before the assert passes. Proven non-vacuous by fix-round-1 (see
+      # report): forcing the block to render under `{{- if true }}` makes this
+      # exact assert FAIL, confirming it actually inspects all documents.
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-redis
+          any: true
+        not: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: superset-redis
+          any: true
+        not: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-redis-auth
+          any: true
+        not: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-smtp
+          any: true
+        not: true
+
+  - it: renders redis Deployment+Service with requirepass + pinned image when on
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.redis.password: "devredis"
+      superset.smtp.password: "devsmtp"
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-redis
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: superset-redis
+          any: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-redis-auth
+          any: true
+      # documentSelector on metadata.name=superset-redis is ambiguous (the
+      # Deployment AND the Service are both named `superset-redis` ->
+      # "multiple indexes found"); metadata.labels.app is unique to the
+      # Deployment (Service/Secret docs carry no top-level metadata.labels).
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "redis:7.4-alpine"
+        documentSelector:
+          path: metadata.labels.app
+          value: superset-redis
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "--requirepass"
+        documentSelector:
+          path: metadata.labels.app
+          value: superset-redis
+
+  - it: superset Deployment keeps the trino-token-refresher sidecar (jwt mode)
+    set:
+      components.superset: true
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      # documentSelector on metadata.name=superset is ambiguous (the Secret,
+      # Deployment, AND Service in this file are all named `superset` ->
+      # "multiple indexes found"); metadata.labels.app is unique to the
+      # Deployment (Secret/Service docs carry no top-level metadata.labels) —
+      # same convention as the superset-redis selector above.
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.labels.app
+          value: superset
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: trino-token
+          any: true
+        documentSelector:
+          path: metadata.labels.app
+          value: superset
+
+  - it: renders worker with celery command + trino sidecar when on (jwt)
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-worker
+          any: true
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "celery .* worker"
+        documentSelector:
+          path: metadata.name
+          value: superset-worker
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.name
+          value: superset-worker
+
+  - it: renders no worker when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # notContains on metadata.name (a scalar) errors "expect to be an array"
+      # against this repo's installed helm-unittest (v1.1.1) validator — same
+      # issue documented above for the redis-off test. Use containsDocument +
+      # `not: true` + `any: true` instead (universal negation across every
+      # rendered document; non-vacuity proven by the forced-leak probe in the
+      # task report).
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-worker
+          any: true
+        not: true
+
+  - it: renders beat with single replica, celery beat command, NO trino sidecar
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-beat
+          any: true
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "celery .* beat"
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+      - notContains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.name
+          value: superset-beat
+
+  - it: renders no beat when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # Brief's original assert used `notContains` on `metadata.name` (a scalar) —
+      # errors "expect to be an array" against this repo's installed helm-unittest
+      # (v1.1.1) validator, same issue documented above for the redis/worker
+      # off-tests. Use `containsDocument` + `not: true` + `any: true` instead
+      # (universal negation across every rendered document — a plain `not: true`
+      # without `any: true` short-circuits to PASS on the first non-matching doc
+      # and never inspects the rest, a vacuous false-green). Non-vacuity proven
+      # by the forced-leak probe in the task report (temporarily flipped the
+      # beat's gate to `{{- if true }}`, confirmed this exact assert FAILS, then
+      # reverted and confirmed PASS).
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-beat
+          any: true
+        not: true
