@@ -76,25 +76,38 @@ tests:
       # metadata.name — verified against this repo's installed helm-unittest
       # (v1.1.1) validator source), and `containsDocument` tolerates a genuine
       # zero-match render (same convention as console_test.yaml's absence checks).
+      # `any: true` is REQUIRED here even though this is a negative (`not: true`)
+      # assert: per contains_document_validator.go's Validate(), a negative
+      # containsDocument with Any=false short-circuits to PASS on the very FIRST
+      # document that doesn't match and never inspects the rest — a false-green
+      # trap (vacuously passes even if a LATER document does match). `any: true`
+      # flips the loop into true universal negation: every document must fail to
+      # match before the assert passes. Proven non-vacuous by fix-round-1 (see
+      # report): forcing the block to render under `{{- if true }}` makes this
+      # exact assert FAIL, confirming it actually inspects all documents.
       - containsDocument:
           kind: Deployment
           apiVersion: apps/v1
           name: superset-redis
+          any: true
         not: true
       - containsDocument:
           kind: Service
           apiVersion: v1
           name: superset-redis
+          any: true
         not: true
       - containsDocument:
           kind: Secret
           apiVersion: v1
           name: superset-redis-auth
+          any: true
         not: true
       - containsDocument:
           kind: Secret
           apiVersion: v1
           name: superset-smtp
+          any: true
         not: true
 
   - it: renders redis Deployment+Service with requirepass + pinned image when on
