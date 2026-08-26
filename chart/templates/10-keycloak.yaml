@@ -573,6 +573,37 @@ spec:
       # provisioned out-of-band; a real value is quoted verbatim here.
       secret: {{ .Values.monitoring.grafana.oidc.clientSecret | quote }}
     {{- end }}
+    {{- if and .Values.auth.oidc.enabled .Values.byoNotebook.enabled }}
+    # BYO/yerel notebook erişimi (2026-08-07-byo-notebook-access design,
+    # Task 1; şartname 3.6.1.2). PUBLIC device-flow client — NO secret
+    # (oc-login style): the user's local `tools/lakehouse-cli login`
+    # (Task 2) does an OIDC device-authorization-grant flow against this
+    # client to mint their OWN token (their AD identity/roles, not a
+    # service account) for direct Trino/PyIceberg access from outside the
+    # cluster. `standardFlowEnabled: false` — no browser redirect flow, only
+    # the device grant. `aud-trino` mirrors the confidential
+    # svc-*-trino clients' mapper above so the minted token is directly
+    # usable against Trino's OAuth2 authenticator without a separate
+    # audience. 6h token lifespan (21600s) — long enough for a notebook
+    # session without re-auth. Gated on BOTH `auth.oidc.enabled` AND
+    # `byoNotebook.enabled` (dev default false/false → not rendered).
+    - clientId: lakehouse-token
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: true
+      standardFlowEnabled: false
+      attributes:
+        "oauth2.device.authorization.grant.enabled": "true"
+        access.token.lifespan: "21600"
+      protocolMappers:
+      - name: aud-trino
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config:
+          "included.client.audience": "trino"
+          "id.token.claim": "false"
+          "access.token.claim": "true"
+    {{- end }}
 
     # Realm roller — AD grup üyeliğine göre runtime'da atanır
     roles:

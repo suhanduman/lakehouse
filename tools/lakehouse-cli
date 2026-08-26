@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""lakehouse-cli — KÇ lakehouse için Keycloak token al (oc-login tarzı, yerel/BYO notebook erişimi)."""
+import argparse, json, os, sys, time, urllib.parse, urllib.request, urllib.error
+
+
+def _post(url, data):
+    req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode(), method="POST")
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+
+def device_login(issuer, client_id="lakehouse-token"):
+    base = issuer.rstrip("/")
+    dev = _post(base + "/protocol/openid-connect/auth/device", {"client_id": client_id, "scope": "openid"})
+    uri = dev.get("verification_uri_complete") or dev["verification_uri"]
+    sys.stderr.write("Tarayıcıda aç: %s\nKod: %s\n" % (uri, dev["user_code"]))
+    interval = dev.get("interval", 5)
+    deadline = time.time() + dev.get("expires_in", 600)
+    while time.time() < deadline:
+        time.sleep(interval)
+        try:
+            return _post(base + "/protocol/openid-connect/token",
+                {"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": dev["device_code"], "client_id": client_id})["access_token"]
+        except urllib.error.HTTPError as e:
+            err = (json.load(e) if e.fp else {}).get("error")
+            if err == "authorization_pending":
+                continue
+            if err == "slow_down":
+                interval += 5
+                continue
+            raise
+    raise SystemExit("device onayı zaman aşımı")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["login"])
+    ap.add_argument("--domain", default=os.environ.get("LAKEHOUSE_DOMAIN"))
+    ap.add_argument("--realm", default=os.environ.get("LAKEHOUSE_REALM", "lakehouse"))
+    ap.add_argument("--s3-endpoint", default=os.environ.get("LAKEHOUSE_S3_ENDPOINT", ""))
+    a = ap.parse_args()
+    if not a.domain:
+        sys.exit("--domain gerekli (ör. lakehouse.kurum.edu.tr)")
+    token = device_login("https://auth.%s/realms/%s" % (a.domain, a.realm))
+    print("export LAKEHOUSE_TOKEN=%s" % token)
+    print("export TRINO_HOST=trino.%s" % a.domain)
+    print("export TRINO_PORT=443")
+    print("export NESSIE_URI=https://nessie.%s/iceberg/" % a.domain)
+    if a.s3_endpoint:
+        print("export AWS_ENDPOINT_URL_S3=%s" % a.s3_endpoint)
+
+
+if __name__ == "__main__":
+    main()

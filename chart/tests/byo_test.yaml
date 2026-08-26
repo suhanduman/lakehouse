@@ -1,0 +1,79 @@
+# chart/tests/byo_test.yaml — helm-unittest suite for the BYO/yerel notebook
+# access slice's Task 1 (2026-08-07-byo-notebook-access design): the
+# Keycloak `lakehouse-token` PUBLIC device-flow client (chart/templates/
+# 10-keycloak.yaml clients[]), gated `auth.oidc.enabled` AND
+# `byoNotebook.enabled` (values.yaml). Task 2's `lakehouse-cli login` uses
+# this client's OIDC device-authorization-grant flow to mint the user's own
+# token (no client secret — public client) with an `aud-trino` audience
+# mapper so the resulting token is directly usable against Trino.
+#
+# NOTE: the task brief's Step 1 draft asserted on a ConfigMap key
+# `data['realm.json']` (JSON string). The actual template renders a
+# `KeycloakRealmImport` CR with `spec.realm.clients[]` as structured YAML
+# (same shape every sibling client test in this dir — e.g. sandbox_test.yaml
+# — asserts against), so assertions here use `documentSelector`/`contains`
+# on `spec.realm.clients` instead. Same intent as the brief: device-flow
+# attr + aud:trino + lifespan 21600 present when enabled; client absent
+# when byoNotebook is disabled.
+suite: byo notebook access
+templates:
+  - 10-keycloak.yaml
+tests:
+  - it: "lakehouse-token public device-flow client renders when byoNotebook.enabled + oidc, with device-flow attrs + aud-trino mapper + 6h lifespan"
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      byoNotebook.enabled: true
+    asserts:
+      - contains:
+          path: spec.realm.clients
+          content:
+            clientId: lakehouse-token
+            enabled: true
+            protocol: "openid-connect"
+            publicClient: true
+            standardFlowEnabled: false
+            attributes:
+              "oauth2.device.authorization.grant.enabled": "true"
+              access.token.lifespan: "21600"
+            protocolMappers:
+            - name: aud-trino
+              protocol: "openid-connect"
+              protocolMapper: "oidc-audience-mapper"
+              config:
+                "included.client.audience": "trino"
+                "id.token.claim": "false"
+                "access.token.claim": "true"
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "no lakehouse-token client when byoNotebook disabled (dev default)"
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: true
+      byoNotebook.enabled: false
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: lakehouse-token
+          any: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport
+
+  - it: "no lakehouse-token client when auth.oidc.enabled is false, even if byoNotebook.enabled (double gate)"
+    set:
+      components.keycloak: true
+      auth.oidc.enabled: false
+      byoNotebook.enabled: true
+    asserts:
+      - notContains:
+          path: spec.realm.clients
+          content:
+            clientId: lakehouse-token
+          any: true
+        documentSelector:
+          path: kind
+          value: KeycloakRealmImport

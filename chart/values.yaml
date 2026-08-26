@@ -1458,6 +1458,11 @@ jupyter:
       requests: {cpu: "100m", memory: "128Mi"}
       limits:   {cpu: "500m", memory: "256Mi"}
 
+# Yerel/harici (BYO) notebook erişimi (şartname 3.6.1.2). Keycloak public device-flow
+# client `lakehouse-token` render eder; kullanıcı `tools/lakehouse-cli login` ile token alır.
+byoNotebook:
+  enabled: false
+
 # Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport
 # `components["org.keycloak.storage.UserStorageProvider"]` + its
