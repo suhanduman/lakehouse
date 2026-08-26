@@ -40,7 +40,7 @@ def main():
     a = ap.parse_args()
     if not a.domain:
         sys.exit("--domain gerekli (ör. lakehouse.kurum.edu.tr)")
-    token = device_login("https://keycloak.%s/realms/%s" % (a.domain, a.realm))
+    token = device_login("https://auth.%s/realms/%s" % (a.domain, a.realm))
     print("export LAKEHOUSE_TOKEN=%s" % token)
     print("export TRINO_HOST=trino.%s" % a.domain)
     print("export TRINO_PORT=443")
