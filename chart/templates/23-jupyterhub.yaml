@@ -59,10 +59,10 @@
 # Trino catalog, isolated only by a per-user Trino/Spark/PyIceberg SCHEMA
 # convention (`sandbox.<user>`, derived from `spawner.user.name` -- see
 # `pre_spawn_hook` below) -- so this guard is removed outright rather than
-# reworded; there is no CN-derived lookup key left to protect.
-# `.Values.sandbox.departments`/the per-dept `svc-sandbox-<name>` identities
-# remain live for the shared Zeppelin path
-# (chart/templates/09c-zeppelin-sandbox.yaml) until Task 5 retires them.
+# reworded; there is no CN-derived lookup key left to protect. The per-dept
+# the per-department analyst-sandbox identities were retired entirely in
+# Task 5 (2026-08-07-sandbox-v2) -- the shared Zeppelin now also writes the
+# SAME unified sandbox this file's JupyterHub users do.
 {{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
 {{- if .Values.jupyter.oidcClientSecret }}
 # Single source with the Keycloak `jupyter` client secret
@@ -164,11 +164,11 @@ stringData:
 #
 # Login gate: `allow_all=False` + `allowed_groups` restricted to the
 # Keycloak groups listed in `.Values.sandbox.allowedGroups` (a list of AD
-# group full DNs, same "CN=...,OU=...,DC=..." shape `sandbox.departments[].
-# adGroup` used to carry -- see 10-keycloak.yaml's `group-ldap-mapper`,
-# `group.name.ldap.attribute: cn`, `full.path: false` on the `jupyter`
-# client's groups mapper above) — a user with none of these groups cannot
-# log in at all, not merely fail later in `pre_spawn_hook`.
+# group full DNs, "CN=...,OU=...,DC=..." shape -- see 10-keycloak.yaml's
+# `group-ldap-mapper`, `group.name.ldap.attribute: cn`, `full.path: false`
+# on the `jupyter` client's groups mapper above) — a user with none of
+# these groups cannot log in at all, not merely fail later in
+# `pre_spawn_hook`.
 #
 # Sandbox v2 (2026-08-07-sandbox-v2 Task 4): UNIFIED sandbox identity — every
 # `allowed_groups` member shares the SAME `svc-sandbox` Nessie/S3 identity
@@ -423,15 +423,14 @@ data:
     c.KubeSpawner.modify_pod_hook = modify_pod_hook
 {{- end }}
 
-# --- Task 5: Hub SA + KubeSpawner RBAC + per-dept Spark-executor RBAC +
-# the Hub/proxy Deployments + Services. Same file-wide gate
+# --- Task 5: Hub SA + KubeSpawner RBAC + the unified sandbox Spark-executor
+# RBAC + the Hub/proxy Deployments + Services. Same file-wide gate
 # (`components.jupyter` AND `auth.oidc.enabled`) as everything above. ---
 
 # The Hub's OWN ServiceAccount — KubeSpawner (running inside the Hub pod)
 # uses THIS identity's in-cluster token to talk to the k8s API and spawn/
-# manage per-user notebook Pods/PVCs. Distinct from `sa-sandbox-<dept>`
-# (chart/templates/09c-zeppelin-sandbox.yaml) below, which is the identity
-# the SPAWNED notebook/Spark-driver Pod itself runs as.
+# manage per-user notebook Pods/PVCs. Distinct from `sa-sandbox` below,
+# which is the identity the SPAWNED notebook/Spark-driver Pod itself runs as.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -490,14 +489,13 @@ roleRef:
 
 # Sandbox v2 (unified, 2026-08-07-sandbox-v2 Task 4) — the notebook pod's
 # OWN identity (`pre_spawn_hook` above sets `spawner.service_account =
-# "sa-sandbox"` for every user, unified — no more per-dept `sa-sandbox-
-# <name>`) plus the Spark-on-k8s executor RBAC it needs (spike §2b/§2c,
-# same doc as the per-dept block below), granted ONCE instead of per
-# department. Same verbs/rationale as the per-dept Role this replaces for
-# the JupyterHub path (`services`/`persistentvolumeclaims` granted despite
-# not being exercised by client-mode-in-pod — spike-confirmed Spark's
-# unconditional teardown sweep otherwise throws non-fatal but alarming
-# ERROR-level `Forbidden` stack traces). Namespace-scoped Role (NOT a
+# "sa-sandbox"` for every user, unified) plus the Spark-on-k8s executor
+# RBAC it needs (spike §2b/§2c), granted ONCE for every user rather than
+# per department (the per-department shape this replaced was retired in
+# Task 5). `services`/`persistentvolumeclaims` granted despite not being
+# exercised by client-mode-in-pod — spike-confirmed Spark's unconditional
+# teardown sweep otherwise throws non-fatal but alarming ERROR-level
+# `Forbidden` stack traces. Namespace-scoped Role (NOT a
 # ClusterRole). Rendered under this file's own gate only (components.jupyter
 # AND auth.oidc.enabled) — independent of `sandbox.enabled`/departments,
 # same as the rest of the unified sandbox env injection above.
@@ -547,65 +545,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: sandbox-spark-executor
-
-# Per-dept Spark-on-k8s executor RBAC (LEGACY — retired by Task 5 of this
-# same slice; still additive/coexisting per the slice's additive-then-
-# contract ruling, kept alive here ONLY for the shared Zeppelin sandbox
-# path, chart/templates/09c-zeppelin-sandbox.yaml — JupyterHub itself no
-# longer uses these per-dept identities as of the unified `sa-sandbox`
-# above) — spike §2b/§2c (same doc). Binds
-# EACH department's `sa-sandbox-<name>` SA (chart/templates/
-# 09c-zeppelin-sandbox.yaml, created when `sandbox.enabled` is true — this
-# RoleBinding is harmless if that SA does not yet exist, it simply has no
-# effect until it does) to the verbs Spark's own driver-side k8s-client
-# needs to create/watch/tear-down its OWN executor Pods (spawned from
-# inside the notebook, which itself runs AS this SA per `pre_spawn_hook`
-# above). `services`/`persistentvolumeclaims` are not exercised by
-# client-mode-in-pod but are granted anyway — spike-confirmed: without
-# them, Spark's unconditional teardown sweep throws non-fatal but
-# alarming ERROR-level `Forbidden` stack traces on every job. Namespace-
-# scoped Role per dept (NOT a ClusterRole) — one dept's executors can
-# never touch another dept's Pods/ConfigMaps.
-{{- range .Values.sandbox.departments }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: sandbox-{{ .name }}-spark-executor
-  namespace: {{ include "lakehouse.namespace" $ }}
-rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
-- apiGroups: [""]
-  resources: ["pods/log"]
-  verbs: ["get"]
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["get", "list", "watch", "create", "delete"]
-- apiGroups: [""]
-  resources: ["services"]
-  verbs: ["get", "list", "watch", "create", "delete"]
-- apiGroups: [""]
-  resources: ["persistentvolumeclaims"]
-  verbs: ["get", "list", "watch", "create", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  # Distinct name from the Role above (see the KubeSpawner RoleBinding's
-  # comment, same rationale/convention, per-dept here).
-  name: sandbox-{{ .name }}-spark-executor-binding
-  namespace: {{ include "lakehouse.namespace" $ }}
-subjects:
-- kind: ServiceAccount
-  name: sa-sandbox-{{ .name }}
-  namespace: {{ include "lakehouse.namespace" $ }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: sandbox-{{ .name }}-spark-executor
-{{- end }}
 
 # configurable-http-proxy — a SEPARATE Deployment from the Hub (see
 # `.Values.versions.configurableHttpProxyImage`'s comment). Fronts the Hub

@@ -17,15 +17,12 @@
 # "backups") — see the `lakehouse.s3BucketFromUri` helper (_helpers.tpl).
 # ONE extraction so this list and those `s3://...` values can never
 # silently drift apart. Also appended: `sparkHistory.eventsBucket` when
-# `components.sparkHistory` is on, one `sandbox-<name>` bucket per
-# department when `.Values.sandbox.enabled` (Consumption slice c2), AND
-# the single unified `.Values.sandbox.bucket` (default "sandbox") when
-# `.Values.sandbox.enabled` (sandbox v2, 2026-08-07-sandbox-v2 Task 2) —
-# ADDITIVE alongside the per-dept buckets, both gated on the same flag,
-# until the per-dept artifacts are retired in a later task of that slice.
-# The ROOT `s3-credentials` cred used here can always create these; the
-# scoped RW/RO policy narrowing (per-dept AND unified) happens separately
-# (dev-only, see `18b-sandbox-minio-policy.yaml`).
+# `components.sparkHistory` is on, AND the single unified
+# `.Values.sandbox.bucket` (default "sandbox") when `.Values.sandbox.
+# enabled` (sandbox v2, 2026-08-07-sandbox-v2 Task 2). The ROOT
+# `s3-credentials` cred used here can always create these; the scoped RW/RO
+# policy narrowing happens separately (dev-only, see
+# `18b-sandbox-minio-policy.yaml`).
 #
 # Runs on BOTH install paths so first ingest always has somewhere to
 # land: plain `helm install/upgrade` (`helm.sh/hook`
@@ -48,11 +45,6 @@
 {{- $buckets = append $buckets .Values.sparkHistory.eventsBucket }}
 {{- end }}
 {{- if .Values.sandbox.enabled }}
-{{- range .Values.sandbox.departments }}
-{{- $buckets = append $buckets (printf "sandbox-%s" .name) }}
-{{- end }}
-{{- /* sandbox v2 (Task 2): single unified sandbox bucket, additive
-       alongside the per-dept ones above. */}}
 {{- $buckets = append $buckets .Values.sandbox.bucket }}
 {{- end }}
 apiVersion: batch/v1

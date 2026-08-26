@@ -15,21 +15,16 @@
 # pre_spawn_hook/modify_pod_hook) + the Keycloak `jupyter` client's `groups`
 # protocol mapper.
 #
-# Sandbox v2 (2026-08-07-sandbox-v2 Task 4, later revision of this suite):
-# the JupyterHub sandbox injection was MIGRATED from the per-dept
-# `sandbox.departments[]`/`DEPTS` design to the UNIFIED sandbox — a single
-# `svc-sandbox` identity + `sandbox` Nessie namespace/Trino catalog for
-# every allowed user, isolated only by a per-user
-# `sandbox.<spawner.user.name>` schema convention. The login gate now reads
-# `.Values.sandbox.allowedGroups` (a flat list of AD group full DNs)
-# instead of `sandbox.departments[].adGroup`. `sandbox.departments[]` still
-# exists in values.yaml and still renders its own (now-legacy,
-# JupyterHub-unrelated) per-dept Keycloak client/Nessie CEL/Zeppelin
-# instance/executor-RBAC elsewhere in this chart — a few tests below still
-# set it purely to exercise THIS file's still-present legacy per-dept
-# Spark-executor RBAC block (kept additive for the shared Zeppelin path
-# until Task 5 of that slice retires it); it no longer affects the
-# jupyterhub-config ConfigMap's own content at all.
+# Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the JupyterHub sandbox
+# injection was MIGRATED from the per-dept design to the UNIFIED sandbox —
+# a single `svc-sandbox` identity + `sandbox` Nessie namespace/Trino
+# catalog for every allowed user, isolated only by a per-user
+# `sandbox.<spawner.user.name>` schema convention. The login gate reads
+# `.Values.sandbox.allowedGroups` (a flat list of AD group full DNs). The
+# per-department design (`sandbox.departments[]`/`DEPTS`, plus this file's
+# legacy per-dept Spark-executor RBAC block) was retired ENTIRELY in Task 5
+# of that slice — no test in this file may `set: sandbox.departments`
+# anymore.
 suite: jupyter values + oidc/proxy-token Secrets + Keycloak jupyter client-secret single-source
 templates:
   - 23-jupyterhub.yaml
@@ -394,8 +389,7 @@ tests:
   # `sandbox.<spawner.user.name>` Trino/Spark/PyIceberg SCHEMA convention
   # (`NESSIE_SANDBOX_SCHEMA`). `.Values.sandbox.allowedGroups` (a list of AD
   # group full DNs, same "CN=...,OU=...,DC=..." shape the old per-dept
-  # `adGroup` used to carry) now drives the login gate instead of
-  # `sandbox.departments[].adGroup`.
+  # `adGroup` used to carry) now drives the login gate.
 
   - it: components.jupyter=true + auth.oidc.enabled=true + an allowedGroup renders jupyterhub-config with the authenticator, unified login gate, KubeSpawner, and pre_spawn_hook/modify_pod_hook — and NO secret literal
     templates:
@@ -407,8 +401,9 @@ tests:
       sandbox.allowedGroups:
         - "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
     asserts:
-      # any: true -- Task 5 now renders many more documents under this same
-      # gate; see the "no sandbox departments configured" test's comment.
+      # any: true -- Task 5 renders many documents under this same gate
+      # (SA/RBAC/Deployments/Services), so containsDocument must scan all
+      # of them rather than requiring every document to match.
       - containsDocument:
           kind: ConfigMap
           apiVersion: v1
@@ -596,16 +591,13 @@ tests:
           path: metadata.name
           value: jupyterhub-config
 
-  - it: components.jupyter=false renders NO jupyterhub-config ConfigMap even with a sandbox dept configured
+  - it: components.jupyter=false renders NO jupyterhub-config ConfigMap even with sandbox.enabled true
     templates:
       - 23-jupyterhub.yaml
     set:
       components.jupyter: false
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
+      sandbox.enabled: true
     asserts:
       - hasDocuments:
           count: 0
@@ -617,10 +609,6 @@ tests:
       components.jupyter: true
       sandbox.enabled: true
       auth.oidc.enabled: false
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - failedTemplate:
           errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
@@ -675,10 +663,6 @@ tests:
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "LEAKJHUB-CLIENTSECRET"
       jupyter.proxyToken: "LEAKJHUB-PROXYTOKEN"
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - notMatchRegex:
           path: data["jupyterhub_config.py"]
@@ -903,74 +887,7 @@ tests:
           path: metadata.name
           value: sandbox-spark-executor-binding
 
-  - it: "Task 5: a sandbox dept renders sa-sandbox-<dept>'s Spark-on-k8s executor Role/RoleBinding with the spike §2b/§2c verbs (incl. deletecollection) — Role is namespace-scoped, NOT a ClusterRole"
-    templates:
-      - 23-jupyterhub.yaml
-    set:
-      components.jupyter: true
-      sandbox.enabled: true
-      auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
-    asserts:
-      - equal:
-          path: kind
-          value: Role
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor
-      - equal:
-          path: metadata.namespace
-          value: NAMESPACE
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor
-      - equal:
-          path: rules
-          value:
-            - apiGroups: [""]
-              resources: ["pods"]
-              verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
-            - apiGroups: [""]
-              resources: ["pods/log"]
-              verbs: ["get"]
-            - apiGroups: [""]
-              resources: ["configmaps"]
-              verbs: ["get", "list", "watch", "create", "delete"]
-            - apiGroups: [""]
-              resources: ["services"]
-              verbs: ["get", "list", "watch", "create", "delete"]
-            - apiGroups: [""]
-              resources: ["persistentvolumeclaims"]
-              verbs: ["get", "list", "watch", "create", "delete"]
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor
-      - equal:
-          path: kind
-          value: RoleBinding
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor-binding
-      - equal:
-          path: subjects
-          value:
-            - kind: ServiceAccount
-              name: sa-sandbox-veri-bilimi
-              namespace: NAMESPACE
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor-binding
-      - equal:
-          path: roleRef
-          value: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sandbox-veri-bilimi-spark-executor}
-        documentSelector:
-          path: metadata.name
-          value: sandbox-veri-bilimi-spark-executor-binding
-
-  - it: "Task 5: no sandbox departments configured -> NO per-dept executor Role/RoleBinding renders (the KubeSpawner Role/RoleBinding + SA still do — independent gates)"
+  - it: "Task 5 (per-dept retired in Task 5 of sandbox-v2): NO per-department executor Role/RoleBinding ever renders (the unified KubeSpawner Role/RoleBinding + SA still do — independent gates)"
     templates:
       - 23-jupyterhub.yaml
     set:
@@ -1204,10 +1121,7 @@ tests:
     set:
       components.jupyter: false
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
+      sandbox.enabled: true
     asserts:
       - hasDocuments:
           count: 0
@@ -1219,10 +1133,6 @@ tests:
       components.jupyter: true
       sandbox.enabled: true
       auth.oidc.enabled: false
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - failedTemplate:
           errorMessage: "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)"
@@ -1493,10 +1403,6 @@ tests:
       auth.oidc.enabled: true
       jupyter.oidcClientSecret: "x"
       jupyter.trino.oidc.clientSecret: "jt"
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri
     asserts:
       - matchRegex:
           path: data["jupyterhub_config.py"]
@@ -1606,10 +1512,6 @@ tests:
       components.jupyter: true
       sandbox.enabled: true
       auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - matchRegex:
           path: data["jupyterhub_config.py"]
@@ -1661,10 +1563,6 @@ tests:
       sandbox.enabled: true
       auth.oidc.enabled: true
       storage.s3.secretName: "custom-s3-creds"
-      sandbox.departments:
-        - name: veri-bilimi
-          adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"
-          s3SecretName: s3-sandbox-veri-bilimi
     asserts:
       - matchRegex:
           path: data["jupyterhub_config.py"]

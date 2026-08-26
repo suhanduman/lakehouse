@@ -1,29 +1,30 @@
-# chart/tests/sandbox_test.yaml — helm-unittest suite for per-department
-# analyst sandboxes (Consumption slice c2, Task 2): `sandbox.*` values, the
-# Keycloak `svc-sandbox-<dept>` service-account clients
-# (chart/templates/10-keycloak.yaml), and the per-dept OIDC credentials
-# Secret (chart/templates/09c-zeppelin-sandbox.yaml).
+# chart/tests/sandbox_test.yaml — helm-unittest suite for the UNIFIED
+# sandbox v2 (2026-08-07-sandbox-v2 design): `sandbox.*` values (enabled|
+# bucket|namespace|allowedGroups|oidc — Task 1/2), the Keycloak `svc-sandbox`
+# service-account client (chart/templates/10-keycloak.yaml), the unified
+# Nessie CEL writer + registered `sandbox` warehouse (chart/templates/
+# 04-nessie-ha.yaml), the unified `sandbox` S3 bucket + `sandbox-minio-
+# policy` Job (chart/templates/18-bucket-init.yaml /
+# 18b-sandbox-minio-policy.yaml), the Trino `sandbox` catalog + rules.json
+# (chart/templates/06-trino-ha.yaml), and the shared Zeppelin's unified
+# sandbox write catalog (chart/templates/09-zeppelin.yaml /
+# _zeppelin.tpl).
 #
-# Everything here is gated `.Values.sandbox.enabled` AND a non-empty
-# `.Values.sandbox.departments` — dev default (both empty/false) renders
-# nothing, asserted below as the control case.
+# Task 5 (this slice's contract task) retired EVERY per-department artifact
+# that used to coexist here: the per-dept `svc-sandbox-<name>` Keycloak
+# clients, the per-dept Nessie CEL writer/write-rules, the per-dept
+# `sandbox-<name>` S3 buckets/MinIO-policy Jobs, the per-dept
+# `zeppelin-sandbox-<name>` Zeppelin instances (chart/templates/09c-
+# zeppelin-sandbox.yaml, now deleted) and their Routes/Ingresses, and
+# `.Values.sandbox.departments` itself. This suite now covers ONLY the
+# unified shape — no test here may `set: sandbox.departments`.
 #
-# IMPORTANT: the sandbox client is asserted by `clientId`-equality (find the
-# client whose clientId == `svc-sandbox-veri`), NOT by a positional index —
-# unlike the trino/dbt/zeppelin service-account clients in
-# auth-oidc_test.yaml, this client only exists when `sandbox.enabled` is
-# true, so a "control case" render (sandbox off) has no such client at all to
-# pin a stable index against. (clients[4] below shifted to clients[8] when
-# the 4 `svc-*-nessie` machine-auth clients were inserted right after
-# `svc-zeppelin-trino` — auth.oidc.enabled default true renders them ahead of
-# the sandbox block; shifted again to clients[9] when `svc-jupyter-trino`
-# was inserted right after `svc-zeppelin-trino`, jupyter-turnkey-notebook
-# plan Task 2; the equal-on-clientId assertion at that index guards against
-# silently pinning the wrong client if the order shifts again.)
-suite: sandbox.* values + Keycloak svc-sandbox-<dept> clients + per-dept OIDC secret
+# Everything is gated `.Values.sandbox.enabled` — dev default (false)
+# renders nothing sandbox-specific, asserted below as the control case in
+# each section.
+suite: sandbox v2 (unified) — values + Keycloak svc-sandbox client + Nessie CEL + S3 bucket/policy + shared Zeppelin write catalog
 templates:
   - 10-keycloak.yaml
-  - 09c-zeppelin-sandbox.yaml
   - 18-bucket-init.yaml
   - 18b-sandbox-minio-policy.yaml
   - 09-zeppelin.yaml
@@ -32,14 +33,7 @@ templates:
   - 04-nessie-ha.yaml
   - 06-trino-ha.yaml
 tests:
-  # --- Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): unified
-  # `svc-sandbox` Keycloak service-account client. ADDITIVE alongside the
-  # per-dept `svc-sandbox-<name>` clients above/below — both are gated on
-  # the SAME `sandbox.enabled` flag and coexist until the slice's final
-  # task retires the per-dept artifacts. Mirrors the `svc-zeppelin-nessie`
-  # client shape (serviceAccountsEnabled, standardFlowEnabled:false,
-  # publicClient:false, single-sourced secret, NO audience mapper — Nessie
-  # validates by issuer only).
+  # --- Keycloak: unified svc-sandbox service-account client -------------
   - it: "sandbox v2: unified svc-sandbox service-account client renders when sandbox.enabled, with the right fields + secret, and NO aud-trino mapper"
     templates:
       - 10-keycloak.yaml
@@ -62,13 +56,6 @@ tests:
         documentSelector:
           path: kind
           value: KeycloakRealmImport
-      - notContains:
-          path: spec.realm.clients
-          content:
-            clientId: svc-sandbox-veri
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
 
   - it: "sandbox v2: sandbox.enabled=false renders NO svc-sandbox client"
     templates:
@@ -86,50 +73,9 @@ tests:
           path: kind
           value: KeycloakRealmImport
 
-  - it: "sandbox v2: unified svc-sandbox AND per-dept svc-sandbox-veri coexist when both sandbox.enabled and departments are set (additive, not a replacement)"
-    templates:
-      - 10-keycloak.yaml
-    set:
-      components.keycloak: true
-      auth.oidc.enabled: true
-      sandbox.enabled: true
-      sandbox.oidc.clientSecret: "s"
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          oidcClientSecret: devz
-    asserts:
-      - contains:
-          path: spec.realm.clients
-          content:
-            clientId: svc-sandbox
-            enabled: true
-            protocol: "openid-connect"
-            publicClient: false
-            standardFlowEnabled: false
-            serviceAccountsEnabled: true
-            secret: "s"
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - contains:
-          path: spec.realm.clients
-          content:
-            clientId: svc-sandbox-veri
-            enabled: true
-            protocol: "openid-connect"
-            publicClient: false
-            standardFlowEnabled: false
-            serviceAccountsEnabled: true
-            secret: devz
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-
-  # --- Sandbox v2 Task 1: Nessie CEL writer `service-account-svc-sandbox`
-  # confined to the unified `sandbox` namespace. ADDITIVE alongside the
-  # per-dept `service-account-svc-sandbox-<name>` writers.
-  - it: "sandbox v2: service-account-svc-sandbox is added to the COMMIT_TO_MAIN writer OR-chain and gets its own ALLOW_SANDBOX_WRITE rule confined to the `sandbox` namespace, when sandbox.enabled (no departments)"
+  # --- Nessie CEL writer `service-account-svc-sandbox` confined to the
+  # unified `sandbox` namespace. -----------------------------------------
+  - it: "sandbox v2: service-account-svc-sandbox is added to the COMMIT_TO_MAIN writer OR-chain and gets its own ALLOW_SANDBOX_WRITE rule confined to the `sandbox` namespace, when sandbox.enabled"
     templates:
       - 04-nessie-ha.yaml
     set:
@@ -166,321 +112,10 @@ tests:
             name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
         documentIndex: 1
 
-  - it: sandbox.enabled + one department renders the svc-sandbox-veri service-account client with the right fields + secret, and NO aud-trino mapper
-    templates:
-      - 10-keycloak.yaml
-    set:
-      components.keycloak: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          oidcClientSecret: devz
-    asserts:
-      - equal:
-          path: spec.realm.clients[9].clientId
-          value: svc-sandbox-veri
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - equal:
-          path: spec.realm.clients[9].enabled
-          value: true
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - equal:
-          path: spec.realm.clients[9].serviceAccountsEnabled
-          value: true
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - equal:
-          path: spec.realm.clients[9].standardFlowEnabled
-          value: false
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - equal:
-          path: spec.realm.clients[9].publicClient
-          value: false
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - equal:
-          path: spec.realm.clients[9].secret
-          value: "devz"
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-      - notExists:
-          path: spec.realm.clients[9].protocolMappers
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-
-  - it: sandbox.enabled=false (default) renders NO svc-sandbox-* client at all
-    templates:
-      - 10-keycloak.yaml
-    set:
-      components.keycloak: true
-    asserts:
-      - notContains:
-          path: spec.realm.clients
-          content:
-            clientId: svc-sandbox-veri
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-
-  - it: sandbox.enabled=true but departments empty (default) renders NO svc-sandbox-* client either (both gates required)
-    templates:
-      - 10-keycloak.yaml
-    set:
-      components.keycloak: true
-      sandbox.enabled: true
-    asserts:
-      - notContains:
-          path: spec.realm.clients
-          content:
-            clientId: svc-sandbox-veri
-        documentSelector:
-          path: kind
-          value: KeycloakRealmImport
-
-  - it: sandbox.departments[].oidcClientSecret renders the sandbox-veri-oidc-credentials Secret with the client-secret key
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Secret
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          oidcClientSecret: devz
-    asserts:
-      - hasDocuments:
-          count: 1
-          filterAware: true
-      - equal:
-          path: metadata.name
-          value: sandbox-veri-oidc-credentials
-      - equal:
-          path: stringData.client-secret
-          value: "devz"
-
-  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when oidcClientSecret is empty, even with sandbox enabled (the sa-sandbox-veri ServiceAccount + the sandbox Zeppelin instance still do)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          oidcClientSecret: ""
-    asserts:
-      # The dev-convenience Secret specifically is gated on oidcClientSecret
-      # (out-of-band provisioning contract); everything else the sandbox
-      # instance renders (SA + the full `lakehouse.zeppelin.instance`: PDB,
-      # 3x ConfigMap, PVC, Service, Deployment — 8 documents total) is
-      # NOT — those reference the Secret by name regardless of who
-      # provisioned it. `skipEmptyTemplates` lets the Secret-kind selector
-      # legitimately match zero documents instead of erroring.
-      - hasDocuments:
-          count: 8
-      - hasDocuments:
-          count: 0
-          filterAware: true
-        documentSelector:
-          path: kind
-          value: Secret
-          skipEmptyTemplates: true
-      - containsDocument:
-          kind: ServiceAccount
-          apiVersion: v1
-          name: sa-sandbox-veri
-          any: true
-      - containsDocument:
-          kind: Deployment
-          apiVersion: apps/v1
-          name: zeppelin-sandbox-veri
-          any: true
-
-  - it: sandbox-<dept>-oidc-credentials Secret does NOT render when sandbox.enabled is false, even if oidcClientSecret is supplied
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          oidcClientSecret: devz
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: no departments (default) renders nothing from 09c-zeppelin-sandbox.yaml at all
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: sandbox.enabled + one department renders the sa-sandbox-veri ServiceAccount
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - containsDocument:
-          kind: ServiceAccount
-          apiVersion: v1
-          name: sa-sandbox-veri
-          any: true
-
-  - it: sandbox.enabled=false (default) renders NO sa-sandbox-* ServiceAccount (nothing at all from 09c)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: sandbox.enabled + storage.createBuckets -- bucket-init Job's args include sandbox-veri
-    templates:
-      - 18-bucket-init.yaml
-    documentSelector:
-      path: kind
-      value: Job
-    set:
-      storage.createBuckets: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "mc mb --ignore-existing s3/sandbox-veri"
-
-  - it: sandbox.enabled=false (default) bucket-init Job's args do NOT include any sandbox-* bucket
-    templates:
-      - 18-bucket-init.yaml
-    documentSelector:
-      path: kind
-      value: Job
-    set:
-      storage.createBuckets: true
-    asserts:
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "sandbox-"
-
-  - it: sandbox.enabled + components.minio=true renders the 18b sandbox-veri-minio-policy Job granting RW sandbox-veri + RO depo/ham-veri, with the user secret via secretKeyRef (selected by name — additive alongside the unified sandbox-minio-policy Job added in sandbox v2 Task 2, see below)
-    templates:
-      - 18b-sandbox-minio-policy.yaml
-    documentSelector:
-      path: metadata.name
-      value: sandbox-veri-minio-policy
-    set:
-      sandbox.enabled: true
-      components.minio: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - hasDocuments:
-          count: 1
-          filterAware: true
-      - equal:
-          path: metadata.name
-          value: sandbox-veri-minio-policy
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'arn:aws:s3:::sandbox-veri'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: '"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'arn:aws:s3:::depo'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'arn:aws:s3:::ham-veri'
-      # Regression-insurance negative assertion: the prod depo/ham-veri
-      # statement's Action array (the one immediately followed by a
-      # Resource list starting with the depo ARN — i.e. THIS SAME JSON
-      # statement, not the sandbox-veri RW statement above, which is
-      # followed by the sandbox-veri ARN instead) must never carry
-      # s3:PutObject, s3:DeleteObject, or a wildcard "*" action. Today the
-      # rendered RO statement is `["s3:GetObject", "s3:ListBucket"]` only —
-      # this pins that against a future accidental widening of prod access.
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: '"Action": \[[^\]]*(?:PutObject|DeleteObject|"\*")[^\]]*\],\s*"Resource": \[\s*"arn:aws:s3:::depo"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'mc admin policy create s3 sandbox-veri-policy'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'mc admin user add s3 "\$SANDBOX_ACCESS_KEY" "\$SANDBOX_SECRET_KEY"'
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'mc admin policy attach s3 sandbox-veri-policy --user "\$SANDBOX_ACCESS_KEY"'
-      - equal:
-          path: spec.template.spec.containers[0].env[3].name
-          value: SANDBOX_ACCESS_KEY
-      - equal:
-          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.name
-          value: s3-sandbox-veri
-      - equal:
-          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.key
-          value: access-key-id
-      - equal:
-          path: spec.template.spec.containers[0].env[4].name
-          value: SANDBOX_SECRET_KEY
-      - equal:
-          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.name
-          value: s3-sandbox-veri
-      - equal:
-          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.key
-          value: secret-access-key
-
-  - it: sandbox.enabled but components.minio=false (default) renders NO 18b policy Job
-    templates:
-      - 18b-sandbox-minio-policy.yaml
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: dev default (sandbox.enabled=false, components.minio=false) renders NO 18b policy Job
-    templates:
-      - 18b-sandbox-minio-policy.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  # --- Sandbox v2 (2026-08-07 sandbox-v2-design, Task 2): STORAGE layer —
-  # single unified `sandbox` S3 bucket (18-bucket-init.yaml) + single
-  # `s3-sandbox` scoped MinIO cred/policy (18b-sandbox-minio-policy.yaml).
-  # ADDITIVE alongside the per-dept `sandbox-<name>` bucket loop /
-  # `sandbox-<name>-minio-policy` Jobs above — both are gated on the SAME
-  # `sandbox.enabled` (+ `components.minio` for 18b) flag and coexist until
-  # this slice's final task retires the per-dept artifacts.
-
-  - it: "sandbox v2: sandbox.enabled renders the single unified `sandbox` bucket in the bucket-init Job args (no departments needed)"
+  # --- Storage layer: single unified `sandbox` S3 bucket (18-bucket-init.
+  # yaml) + single `s3-sandbox` scoped MinIO cred/policy (18b-sandbox-
+  # minio-policy.yaml). ----------------------------------------------------
+  - it: "sandbox v2: sandbox.enabled renders the single unified `sandbox` bucket in the bucket-init Job args"
     templates:
       - 18-bucket-init.yaml
     documentSelector:
@@ -507,28 +142,7 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "s3/sandbox\\b"
 
-  - it: "sandbox v2: unified `sandbox` bucket AND per-dept `sandbox-veri` bucket coexist in the bucket-init Job args (additive, not a replacement)"
-    templates:
-      - 18-bucket-init.yaml
-    documentSelector:
-      path: kind
-      value: Job
-    set:
-      storage.createBuckets: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "mc mb --ignore-existing s3/sandbox\\b"
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "mc mb --ignore-existing s3/sandbox-veri\\b"
-
-  - it: "sandbox v2: sandbox.enabled + components.minio=true renders a single sandbox-minio-policy Job granting RW `sandbox` + RO depo/ham-veri via the fixed s3-sandbox secretKeyRef, with NO per-dept -<dept> naming (no departments set)"
+  - it: "sandbox v2: sandbox.enabled + components.minio=true renders a single sandbox-minio-policy Job granting RW `sandbox` + RO depo/ham-veri via the fixed s3-sandbox secretKeyRef, with NO per-dept -<dept> naming"
     templates:
       - 18b-sandbox-minio-policy.yaml
     documentSelector:
@@ -589,6 +203,21 @@ tests:
           path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.key
           value: secret-access-key
 
+  - it: "sandbox v2 (Task 5 regression guard): 18b-sandbox-minio-policy.yaml renders EXACTLY ONE Job total — the per-department Job block this file used to also render is retired"
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    set:
+      sandbox.enabled: true
+      components.minio: true
+    asserts:
+      - hasDocuments:
+          count: 1
+          filterAware: true
+
   - it: "sandbox v2: sandbox.enabled=false renders NO sandbox-minio-policy Job (even with components.minio=true)"
     templates:
       - 18b-sandbox-minio-policy.yaml
@@ -607,706 +236,203 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "sandbox v2: unified sandbox-minio-policy AND per-dept sandbox-veri-minio-policy Jobs coexist when sandbox.enabled + components.minio + departments set (additive, not a replacement)"
+  - it: "dev default (sandbox.enabled=false, components.minio=false) renders NO 18b policy Job"
     templates:
       - 18b-sandbox-minio-policy.yaml
-    documentSelector:
-      path: kind
-      value: Job
-      matchMany: true
-    set:
-      sandbox.enabled: true
-      components.minio: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
     asserts:
       - hasDocuments:
-          count: 2
-          filterAware: true
-      - containsDocument:
-          kind: Job
-          apiVersion: batch/v1
-          name: sandbox-minio-policy
-          any: true
-      - containsDocument:
-          kind: Job
-          apiVersion: batch/v1
-          name: sandbox-veri-minio-policy
-          any: true
+          count: 0
 
-  # --- Task 4: sandbox Spark interpreter config — sandbox_<dept> catalog +
-  # Nessie OAuth2 (all 3 catalogs) + envsubst/sed secret-injection ---------
+  # --- Shared Zeppelin (chart/templates/09-zeppelin.yaml / _zeppelin.tpl,
+  # Task 5): the SAME (only) Zeppelin instance now ALSO carries the unified
+  # sandbox WRITE catalog in its %pyspark interpreter when sandbox.enabled,
+  # alongside the pre-existing read-only lakehouse/rawlake OAuth2 blocks
+  # (Nessie machine-auth, Task 6). The per-department sandbox Zeppelin
+  # instances that used to render from chart/templates/09c-zeppelin-
+  # sandbox.yaml are retired — that file is deleted, so it can no longer be
+  # exercised by helm-unittest at all. --------------------------------------
 
-  - it: sandbox instance spark-defaults ConfigMap — sandbox_veri write catalog (warehouse s3a://sandbox-veri/) + OAuth2 block (literal placeholders) on ALL THREE catalogs, no resolved secret literal
+  - it: "sandbox v2 (Task 5): shared Zeppelin's spark-defaults ConfigMap gains the unified sandbox WRITE catalog (svc-sandbox OAuth2, warehouse s3a://sandbox/) when sandbox.enabled, alongside the existing read-only lakehouse/rawlake OAuth2 blocks"
     templates:
-      - 09c-zeppelin-sandbox.yaml
+      - 09-zeppelin.yaml
     documentSelector:
       path: metadata.name
-      value: zeppelin-sandbox-veri-spark-defaults
+      value: zeppelin-spark-defaults
     set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
       sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz
     asserts:
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri-spark-defaults
-      # sandbox_veri write catalog
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri=org\.apache\.iceberg\.spark\.SparkCatalog'
+          pattern: 'spark\.sql\.catalog\.sandbox=org\.apache\.iceberg\.spark\.SparkCatalog'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.warehouse=s3a://sandbox-veri/'
-      # OAuth2 block on lakehouse (prod read)
+          pattern: 'spark\.sql\.catalog\.sandbox\.catalog-impl=org\.apache\.iceberg\.rest\.RESTCatalog'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.type=OAUTH2'
+          pattern: 'spark\.sql\.catalog\.sandbox\.uri=http://.*:19120/iceberg/'
+      # warehouse mirrors images/jupyter/lakehouse_nb.py's _spark_conf()
+      # byte-for-byte: the FULL s3a://<bucket>/ location, not the bare
+      # registered warehouse NAME (see _zeppelin.tpl's define-header
+      # comment for why: Spark's Iceberg RESTCatalog client does not
+      # reliably resolve a bare server-side-registered name).
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-sandbox-veri'
+          pattern: 'spark\.sql\.catalog\.sandbox\.warehouse=s3a://sandbox/'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+          pattern: 'spark\.sql\.catalog\.sandbox\.io-impl=org\.apache\.iceberg\.aws\.s3\.S3FileIO'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
-      # OAuth2 block on rawlake (prod read)
+          pattern: 'spark\.sql\.catalog\.sandbox\.authentication\.type=OAUTH2'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.type=OAUTH2'
+          pattern: 'spark\.sql\.catalog\.sandbox\.authentication\.oauth2\.client-id=svc-sandbox'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-id=svc-sandbox-veri'
+          pattern: 'spark\.sql\.catalog\.sandbox\.authentication\.oauth2\.client-secret=\$\{SANDBOX_OAUTH_CLIENT_SECRET\}'
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
+          pattern: 'spark\.sql\.catalog\.sandbox\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
+      # the read-only lakehouse/rawlake OAuth2 blocks (svc-zeppelin-nessie,
+      # Task 6) are UNCHANGED alongside the new sandbox catalog.
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
-      # OAuth2 block on sandbox_veri (write)
-      - matchRegex:
-          path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.type=OAUTH2'
-      - matchRegex:
-          path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.client-id=svc-sandbox-veri'
-      - matchRegex:
-          path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.client-secret=\$\{OAUTH_CLIENT_SECRET\}'
-      - matchRegex:
-          path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
-      # the client-secret value supplied via values (`devz`, dev-convenience
-      # path) must NEVER appear resolved in this ConfigMap — only the
-      # literal `${OAUTH_CLIENT_SECRET}` placeholder above.
+          pattern: 'spark\.sql\.catalog\.lakehouse\.authentication\.oauth2\.client-id=svc-zeppelin-nessie'
+      # no per-department catalog naming (sandbox_<dept>/sandbox-<dept>)
+      # survives anywhere in this ConfigMap's actual catalog properties.
       - notMatchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'client-secret=devz'
+          pattern: 'spark\.sql\.catalog\.sandbox[-_]\w'
 
-  - it: sandbox instance Deployment — tmpfs spark-conf-rendered emptyDir{medium:Memory} + sed-based placeholder-resolution initContainer (envsubst absent from the Zeppelin image) with OAUTH_CLIENT_SECRET via secretKeyRef, SPARK_CONF_DIR pointed at the rendered dir
+  - it: "sandbox v2 (Task 5): shared Zeppelin's Deployment gets a SECOND OAuth2 secret injected (SANDBOX_OAUTH_CLIENT_SECRET from sandbox-oidc-credentials) via the SAME sed->tmpfs initContainer, when sandbox.enabled — no serviceAccountName override"
     templates:
-      - 09c-zeppelin-sandbox.yaml
+      - 09-zeppelin.yaml
     documentSelector:
       path: kind
       value: Deployment
     set:
+      components.zeppelin: true
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
       sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz
     asserts:
       - equal:
           path: metadata.name
-          value: zeppelin-sandbox-veri
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: spark-conf-rendered
-            emptyDir: {medium: Memory}
-      - equal:
-          path: spec.template.spec.initContainers[0].name
-          value: spark-conf-render
-      # envsubst is NOT shipped in the Zeppelin image (verified against
-      # apache/zeppelin:0.11.2) — a POSIX `sed` substitution is used instead,
-      # no new package added to the image.
-      - matchRegex:
-          path: spec.template.spec.initContainers[0].args[0]
-          pattern: 'sed '
-      - notMatchRegex:
-          path: spec.template.spec.initContainers[0].args[0]
-          pattern: 'envsubst'
+          value: zeppelin
       - contains:
           path: spec.template.spec.initContainers[0].env
           content:
-            name: OAUTH_CLIENT_SECRET
+            name: SANDBOX_OAUTH_CLIENT_SECRET
             valueFrom:
               secretKeyRef:
-                name: sandbox-veri-oidc-credentials
+                name: sandbox-oidc-credentials
                 key: client-secret
-      - contains:
-          path: spec.template.spec.initContainers[0].volumeMounts
-          content:
-            name: spark-conf-rendered
-            mountPath: /spark-conf-rendered
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: spark-conf-rendered
-            mountPath: /spark-conf-rendered
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SPARK_CONF_DIR
-            value: /spark-conf-rendered
-
-  # --- Task 5: per-dept sandbox Zeppelin instance (range calling
-  # `lakehouse.zeppelin.instance` with sandbox params) — full end-to-end
-  # Deployment/Service/Shiro correctness, plus two-department isolation ------
-
-  - it: sandbox instance Deployment (dept veri, auth+tls on) — serviceAccountName sa-sandbox-veri, AWS_* from s3-sandbox-veri, c1 %trino interpreter volume/mount present
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Deployment
-    set:
-      components.zeppelin: true
-      auth.oidc.enabled: true
-      superset.trino.tls.enabled: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz
-    asserts:
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      # serviceAccountName wired from `saName` (Task 5), gated `sandbox: true`
-      # only — see chart/templates/_zeppelin.tpl.
-      - equal:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: 'SANDBOX_OAUTH_CLIENT_SECRET'
+      # the shared instance never runs as a dedicated ServiceAccount — that
+      # was a per-department-only concept, now retired entirely.
+      - notExists:
           path: spec.template.spec.serviceAccountName
-          value: sa-sandbox-veri
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ACCESS_KEY_ID
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_SECRET_ACCESS_KEY
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: secret-access-key}}
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ENDPOINT_URL_S3
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: endpoint}}
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_REGION
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: region}}
-      # the c1 %trino read interpreter (chart/templates/_zeppelin.tpl) is
-      # carried by the sandbox instance too — same seed ConfigMap + TLS
-      # mount, but its OWN per-instance ConfigMap name (Task 5 duplicate-
-      # name fix — NOT the shared literal `zeppelin-trino-interpreter`,
-      # which would collide with the shared c1 instance's own copy).
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: trino-interp
-            configMap: {name: zeppelin-sandbox-veri-trino-interpreter}
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: trino-interp
-            mountPath: /seed
-            readOnly: true
 
-  - it: sandbox instance Shiro ConfigMap (dept veri) — groupRolesMap maps the dept adGroup -> sandbox AND the shared admin AD group -> sandbox,admin (so the c1 refresher sidecar keeps roles[admin]); [urls] /** gated roles[sandbox]
+  - it: "sandbox v2 (Task 5): shared Zeppelin has NO sandbox catalog / SANDBOX_OAUTH_CLIENT_SECRET when sandbox.enabled=false (dev default) — byte-identity control"
     templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-veri-shiro
-    set:
-      zeppelin.ad.groups.admin: "CN=test-admins"
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'CN=veri-grp:sandbox,'
-      # Task 5 fix: the shared `zeppelin.ad.groups.admin` AD group is ALSO
-      # mapped, to BOTH `sandbox` and `admin` roles — without this the c1
-      # %trino refresher sidecar's admin REST-login account has no role in
-      # a sandbox instance and its PUT /api/interpreter/setting/trino 403s
-      # forever, so the seeded %trino interpreter's placeholder access
-      # token is never replaced (Finding 2).
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'CN=test-admins:sandbox,admin"'
-      # no OTHER shared AD group (analyst/student) leaks into a sandbox
-      # instance's groupRolesMap — only the dept group + the admin group.
-      - notMatchRegex:
-          path: data["shiro.ini"]
-          pattern: ':analyst,'
-      - notMatchRegex:
-          path: data["shiro.ini"]
-          pattern: ':student"'
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: '/\*\* = authc, roles\[sandbox\]'
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: '/api/interpreter/\*\* = authc, roles\[admin\]'
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'sandbox = \*'
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'admin = \*'
-
-  - it: sandbox instance Service (dept veri) — zeppelin-sandbox-veri, http:8080
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Service
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      - equal:
-          path: spec.selector
-          value: {app: zeppelin-sandbox-veri}
-      - equal:
-          path: spec.ports[0]
-          value: {name: http, port: 8080, targetPort: 8080}
-
-  - it: TWO departments (veri + finans) render TWO independent Deployments and Services
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Deployment
-      matchMany: true
+      - 09-zeppelin.yaml
     set:
       components.zeppelin: true
       auth.oidc.enabled: true
       superset.trino.tls.enabled: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz1
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-          oidcClientSecret: devz2
     asserts:
-      - hasDocuments:
-          count: 2
-          filterAware: true
-      - matchRegex:
-          path: metadata.name
-          pattern: '^zeppelin-sandbox-(veri|finans)$'
-
-  - it: TWO departments — veri's Deployment references ONLY its own SA/S3-secret (never finans')
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    # spec.template.spec.serviceAccountName is unique to this ONE Deployment
-    # among all rendered documents (Service/PDB/ConfigMap/PVC don't have it,
-    # and the OTHER department's Deployment has a different value) — a
-    # precise, unambiguous selector without relying on the (non-unique
-    # across kinds) `metadata.name`.
-    documentSelector:
-      path: spec.template.spec.serviceAccountName
-      value: sa-sandbox-veri
-    set:
-      components.zeppelin: true
-      auth.oidc.enabled: true
-      superset.trino.tls.enabled: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz1
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-          oidcClientSecret: devz2
-    asserts:
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ACCESS_KEY_ID
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ACCESS_KEY_ID
-            valueFrom: {secretKeyRef: {name: s3-sandbox-finans, key: access-key-id}}
-
-  - it: TWO departments — finans' Deployment references ONLY its own SA/S3-secret (never veri's)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: spec.template.spec.serviceAccountName
-      value: sa-sandbox-finans
-    set:
-      components.zeppelin: true
-      auth.oidc.enabled: true
-      superset.trino.tls.enabled: true
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-          oidcClientSecret: devz1
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-          oidcClientSecret: devz2
-    asserts:
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-finans
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ACCESS_KEY_ID
-            valueFrom: {secretKeyRef: {name: s3-sandbox-finans, key: access-key-id}}
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AWS_ACCESS_KEY_ID
-            valueFrom: {secretKeyRef: {name: s3-sandbox-veri, key: access-key-id}}
-
-  - it: TWO departments — veri's Shiro ConfigMap maps ONLY CN=veri-grp (never finans' group), and vice versa
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-veri-shiro
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-    asserts:
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'CN=veri-grp:sandbox,'
-      - notMatchRegex:
-          path: data["shiro.ini"]
-          pattern: 'finans'
-
-  - it: TWO departments — finans' Shiro ConfigMap maps ONLY CN=finans-grp (never veri's group)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-finans-shiro
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-    asserts:
-      - matchRegex:
-          path: data["shiro.ini"]
-          pattern: 'CN=finans-grp:sandbox,'
-      - notMatchRegex:
-          path: data["shiro.ini"]
-          pattern: 'veri'
-
-  - it: TWO departments — veri's sandbox_<dept> catalog config never references finans' bucket/catalog, and vice versa
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-veri-spark-defaults
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-    asserts:
-      - matchRegex:
-          path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox_veri\.warehouse=s3a://sandbox-veri/'
       - notMatchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'finans'
+          pattern: 'spark\.sql\.catalog\.sandbox='
+        documentSelector:
+          path: metadata.name
+          value: zeppelin-spark-defaults
+      - notContains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: SANDBOX_OAUTH_CLIENT_SECRET
+        documentSelector:
+          path: kind
+          value: Deployment
 
-  - it: dev default (sandbox.enabled=false, no departments) renders NO sandbox Deployment/Service at all — full 09c file is a no-op
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: kind
-      value: Deployment
-      matchMany: true
-      skipEmptyTemplates: true
-    asserts:
-      - hasDocuments:
-          count: 0
-          filterAware: true
+  # --- Coherence guard (moved from the retired 09c-zeppelin-sandbox.yaml
+  # onto the shared instance in Task 5): components.zeppelin + sandbox.
+  # enabled requires auth.oidc.enabled — the shared Zeppelin's sandbox
+  # catalog authenticates to Nessie via OAuth2 (svc-sandbox), which depends
+  # on the same tmpfs/OIDC-issuer mechanism as the read-only catalogs.
+  # Without this guard, sandbox.enabled=true + auth.oidc.enabled=false would
+  # render a Zeppelin that crash-loops at runtime on a missing Secret. -----
 
-  # --- Task 5 review fix (Finding 1, install-breaking duplicate resource
-  # names): the trino-interpreter ConfigMap and trino-oidc-credentials
-  # Secret were hardcoded (not `{{ $name }}`-prefixed) inside
-  # `lakehouse.zeppelin.instance`, so the shared c1 instance + N sandbox
-  # departments rendered N+1 documents with the SAME kind/name — `helm
-  # install` fails on duplicate resources. Both are now per-instance-named;
-  # `ad-bind-credentials` instead stays a fixed shared name but is
-  # shared-gated (`sandbox: false`-only emission) since it's ONE shared
-  # corporate AD bind credential, not per-instance. These tests render the
-  # shared instance (09-zeppelin.yaml) TOGETHER WITH two sandbox departments
-  # (09c-zeppelin-sandbox.yaml) and assert each of the three resources
-  # renders with a UNIQUE per-instance name (or shared-only, for
-  # ad-bind-credentials) — a regression guard for the exact collision the
-  # review found. ------------------------------------------------------
-
-  - it: shared instance + TWO sandbox departments — the c1 %trino interpreter ConfigMap renders with THREE distinct per-instance names (no collision)
-    # NOTE: `containsDocument`/`hasDocuments` without an explicit per-assert
-    # `template:` apply to EVERY template listed at suite/test level and
-    # must pass in ALL of them (AND semantics, not "exists in at least
-    # one") — per helm-unittest's own doc: "the first assertion... asserts
-    # for BOTH deployment.yaml and service.yaml by default". Since the
-    # shared instance's copy lives ONLY in 09-zeppelin.yaml's render and
-    # each dept's ONLY in 09c-zeppelin-sandbox.yaml's, each assert below
-    # pins its own `template:` explicitly.
+  - it: "sandbox v2 (Task 5): components.zeppelin + sandbox.enabled + auth.oidc.enabled=false FAILS the render loudly (coherence guard)"
     templates:
       - 09-zeppelin.yaml
-      - 09c-zeppelin-sandbox.yaml
     set:
       components.zeppelin: true
-      auth.oidc.enabled: true
-      superset.trino.tls.enabled: true
       sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
+      auth.oidc.enabled: false
     asserts:
-      - containsDocument:
-          kind: ConfigMap
-          apiVersion: v1
-          name: zeppelin-trino-interpreter
-          any: true
-        template: 09-zeppelin.yaml
-      - containsDocument:
-          kind: ConfigMap
-          apiVersion: v1
-          name: zeppelin-sandbox-veri-trino-interpreter
-          any: true
-        template: 09c-zeppelin-sandbox.yaml
-      - containsDocument:
-          kind: ConfigMap
-          apiVersion: v1
-          name: zeppelin-sandbox-finans-trino-interpreter
-          any: true
-        template: 09c-zeppelin-sandbox.yaml
+      - failedTemplate:
+          errorMessage: "components.zeppelin + sandbox.enabled requires auth.oidc.enabled — the shared Zeppelin's unified sandbox catalog authenticates to Nessie via OAuth2 (svc-sandbox)"
 
-  - it: shared instance + TWO sandbox departments — the c1 %trino svc-zeppelin-trino oidc-credentials Secret renders with THREE distinct per-instance names (no collision)
+  - it: "sandbox v2 (Task 5): components.zeppelin + sandbox.enabled + auth.oidc.enabled=true (chart default) renders cleanly — guard does NOT fire"
     templates:
       - 09-zeppelin.yaml
-      - 09c-zeppelin-sandbox.yaml
     set:
       components.zeppelin: true
+      sandbox.enabled: true
       auth.oidc.enabled: true
       superset.trino.tls.enabled: true
-      zeppelin.trino.oidc.clientSecret: devsecret
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
     asserts:
       - containsDocument:
-          kind: Secret
-          apiVersion: v1
-          name: zeppelin-trino-oidc-credentials
+          kind: Deployment
+          apiVersion: apps/v1
+          name: zeppelin
           any: true
-        template: 09-zeppelin.yaml
-      - containsDocument:
-          kind: Secret
-          apiVersion: v1
-          name: zeppelin-sandbox-veri-trino-oidc-credentials
-          any: true
-        template: 09c-zeppelin-sandbox.yaml
-      - containsDocument:
-          kind: Secret
-          apiVersion: v1
-          name: zeppelin-sandbox-finans-trino-oidc-credentials
-          any: true
-        template: 09c-zeppelin-sandbox.yaml
 
-  - it: shared instance + TWO sandbox departments — ad-bind-credentials renders EXACTLY ONCE from the shared instance and ZERO times from either sandbox department (shared-gated, NOT per-instance/renamed — one shared corporate AD bind credential)
+  - it: "sandbox v2 (Task 5): components.zeppelin + sandbox.enabled=false + auth.oidc.enabled=false does NOT trigger the guard (sandbox not meaningfully enabled — nothing to guard)"
     templates:
       - 09-zeppelin.yaml
-      - 09c-zeppelin-sandbox.yaml
-    documentSelector:
-      path: metadata.name
-      value: ad-bind-credentials
-      matchMany: true
-      skipEmptyTemplates: true
     set:
       components.zeppelin: true
-      auth.oidc.enabled: true
-      superset.trino.tls.enabled: true
-      zeppelin.ad.bindPassword: devpw
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
+      sandbox.enabled: false
+      auth.oidc.enabled: false
     asserts:
-      - hasDocuments:
-          count: 1
-          filterAware: true
-        template: 09-zeppelin.yaml
-      - hasDocuments:
-          count: 0
-          filterAware: true
-        template: 09c-zeppelin-sandbox.yaml
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: zeppelin
+          any: true
 
-  # --- Task 6: per-dept sandbox Zeppelin Route (OpenShift, 08-routes-tls.
-  # yaml) + mirrored Ingress (vanilla, 08b-ingress-tls.yaml) — one per
-  # department, gated `sandbox.enabled` + non-empty `sandbox.departments`
-  # ONLY (independent of `components.zeppelin`, matching
-  # 09c-zeppelin-sandbox.yaml's own gate), host via `lakehouse.routeHost`
-  # (same helper the existing `zeppelin` Route/Ingress entries use), backend
-  # the `zeppelin-sandbox-<dept>` Service (Task 5) port `http`. -----------
+  # --- Routes/Ingress (chart/templates/08-routes-tls.yaml /
+  # 08b-ingress-tls.yaml): the per-department `zeppelin-sandbox-<name>`
+  # Route/Ingress `range` blocks are retired in Task 5 — only the shared
+  # `zeppelin` Route/Ingress remains (gated `components.zeppelin`, entirely
+  # independent of `sandbox.enabled`). -------------------------------------
 
-  - it: "platform: openshift + sandbox.enabled + dept veri — zeppelin-sandbox-veri Route, host via lakehouse.routeHost, targets Service zeppelin-sandbox-veri port http, edge TLS"
+  - it: "platform: openshift + sandbox.enabled=true (dev default otherwise) — NO zeppelin-sandbox-* Route renders (the shared zeppelin Route still does, Route count stays at 3)"
     templates:
       - 08-routes-tls.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-veri
     set:
       platform: openshift
       sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
     asserts:
-      - equal:
+      - hasDocuments:
+          count: 3
+          filterAware: true
+        documentSelector:
           path: kind
           value: Route
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      - equal:
-          path: spec.host
-          value: zeppelin-sandbox-veri.apps.example.com
-      - equal:
-          path: spec.to.kind
-          value: Service
-      - equal:
-          path: spec.to.name
-          value: zeppelin-sandbox-veri
-      - equal:
-          path: spec.port.targetPort
-          value: http
-      - equal:
-          path: spec.tls.termination
-          value: edge
-      - equal:
-          path: spec.tls.insecureEdgeTerminationPolicy
-          value: Redirect
-      - equal:
-          path: metadata.annotations["cert-manager.io/cluster-issuer"]
-          value: letsencrypt-prod
-
-  - it: "platform: vanilla (default) + sandbox.enabled + dept veri — zeppelin-sandbox-veri Ingress, SAME host as the Route above, targets Service zeppelin-sandbox-veri port http, edge TLS via cert-manager"
-    templates:
-      - 08b-ingress-tls.yaml
-    documentSelector:
-      path: metadata.name
-      value: zeppelin-sandbox-veri
-    set:
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=x"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - equal:
-          path: kind
-          value: Ingress
-      - equal:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      - equal:
-          path: spec.ingressClassName
-          value: nginx
-      - equal:
-          path: spec.rules[0].host
-          value: zeppelin-sandbox-veri.apps.example.com
-      - equal:
-          path: spec.tls[0].hosts[0]
-          value: zeppelin-sandbox-veri.apps.example.com
-      - equal:
-          path: spec.tls[0].secretName
-          value: zeppelin-sandbox-veri-tls
-      - equal:
-          path: spec.rules[0].http.paths[0].backend.service.name
-          value: zeppelin-sandbox-veri
-      - equal:
-          path: spec.rules[0].http.paths[0].backend.service.port.name
-          value: http
-      - equal:
-          path: metadata.annotations["cert-manager.io/cluster-issuer"]
-          value: letsencrypt-prod
+          matchMany: true
+      - containsDocument:
+          kind: Route
+          apiVersion: route.openshift.io/v1
+          name: zeppelin
+          any: true
 
   - it: "platform: openshift + sandbox.enabled=false (dev default) — NO zeppelin-sandbox-* Route renders (the shared zeppelin Route still does, Route count stays at 3)"
     templates:
@@ -1344,183 +470,28 @@ tests:
           name: zeppelin
           any: true
 
-  - it: "platform: openshift + sandbox.enabled but departments empty (both gates required) — NO zeppelin-sandbox-* Route renders (Route count stays at 3)"
-    templates:
-      - 08-routes-tls.yaml
-    set:
-      platform: openshift
-      sandbox.enabled: true
-    asserts:
-      - hasDocuments:
-          count: 3
-          filterAware: true
-        documentSelector:
-          path: kind
-          value: Route
-          matchMany: true
-
-  - it: "TWO departments (veri + finans) — TWO independent zeppelin-sandbox-* Routes render (OpenShift, total Route count 5), each targeting its own Service"
-    templates:
-      - 08-routes-tls.yaml
-    set:
-      platform: openshift
-      sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
-    asserts:
-      - hasDocuments:
-          count: 5
-          filterAware: true
-        documentSelector:
-          path: kind
-          value: Route
-          matchMany: true
-      - containsDocument:
-          kind: Route
-          apiVersion: route.openshift.io/v1
-          name: zeppelin-sandbox-veri
-          any: true
-      - containsDocument:
-          kind: Route
-          apiVersion: route.openshift.io/v1
-          name: zeppelin-sandbox-finans
-          any: true
-      # veri's Route targets ONLY its own Service (never finans')
-      - equal:
-          path: spec.to.name
-          value: zeppelin-sandbox-veri
-        documentSelector:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      # finans' Route targets ONLY its own Service (never veri's)
-      - equal:
-          path: spec.to.name
-          value: zeppelin-sandbox-finans
-        documentSelector:
-          path: metadata.name
-          value: zeppelin-sandbox-finans
-
-  - it: "TWO departments (veri + finans) — TWO independent zeppelin-sandbox-* Ingresses render (vanilla, total Ingress count 9), each targeting its own Service"
+  - it: "platform: vanilla + sandbox.enabled=true — NO zeppelin-sandbox-* Ingress renders (Ingress count stays at 7)"
     templates:
       - 08b-ingress-tls.yaml
     set:
       sandbox.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-        - name: finans
-          adGroup: "CN=finans-grp"
-          s3SecretName: s3-sandbox-finans
     asserts:
       - hasDocuments:
-          count: 9
+          count: 7
           filterAware: true
         documentSelector:
           path: kind
           value: Ingress
           matchMany: true
-      - containsDocument:
-          kind: Ingress
-          apiVersion: networking.k8s.io/v1
-          name: zeppelin-sandbox-veri
-          any: true
-      - containsDocument:
-          kind: Ingress
-          apiVersion: networking.k8s.io/v1
-          name: zeppelin-sandbox-finans
-          any: true
-      # veri's Ingress targets ONLY its own Service (never finans')
-      - equal:
-          path: spec.rules[0].http.paths[0].backend.service.name
-          value: zeppelin-sandbox-veri
-        documentSelector:
-          path: metadata.name
-          value: zeppelin-sandbox-veri
-      # finans' Ingress targets ONLY its own Service (never veri's)
-      - equal:
-          path: spec.rules[0].http.paths[0].backend.service.name
-          value: zeppelin-sandbox-finans
-        documentSelector:
-          path: metadata.name
-          value: zeppelin-sandbox-finans
 
-  # --- Task 7 (review-routed from Task 4): coherence guard — sandbox
-  # requires auth.oidc.enabled. The sandbox Zeppelin's Spark interpreter
-  # initContainer (`spark-conf-render`, chart/templates/_zeppelin.tpl)
-  # unconditionally reads the `oidc-credentials` Secret (`.Values.oidc.
-  # secretName`) for the OIDC issuer-url, but that Secret is only
-  # guaranteed to exist when `auth.oidc.enabled` is true (chart/values.yaml
-  # `oidc:` block comment) — `sandbox.enabled` alone does not require it.
-  # Without this guard, `sandbox.enabled=true` + `auth.oidc.enabled=false`
-  # would render a sandbox Zeppelin that crash-loops at runtime on a
-  # Secret the chart otherwise says isn't needed. -----------------------
-
-  - it: sandbox.enabled + non-empty departments + auth.oidc.enabled=false FAILS the render loudly (coherence guard)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: true
-      auth.oidc.enabled: false
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - failedTemplate:
-          errorMessage: "sandbox requires auth.oidc.enabled — the sandbox Zeppelin authenticates to Nessie via OAuth2"
-
-  - it: sandbox.enabled + non-empty departments + auth.oidc.enabled=true (chart default) renders cleanly (guard does NOT fire)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: true
-      auth.oidc.enabled: true
-      sandbox.departments:
-        - name: veri
-          adGroup: "CN=veri-grp"
-          s3SecretName: s3-sandbox-veri
-    asserts:
-      - containsDocument:
-          kind: Deployment
-          apiVersion: apps/v1
-          name: zeppelin-sandbox-veri
-          any: true
-
-  - it: sandbox.enabled=false + auth.oidc.enabled=false does NOT trigger the guard (sandbox not meaningfully enabled — nothing to guard)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: false
-      auth.oidc.enabled: false
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  - it: sandbox.enabled=true but departments empty + auth.oidc.enabled=false does NOT trigger the guard (both gates required before the guard is even relevant)
-    templates:
-      - 09c-zeppelin-sandbox.yaml
-    set:
-      sandbox.enabled: true
-      auth.oidc.enabled: false
-      sandbox.departments: []
-    asserts:
-      - hasDocuments:
-          count: 0
-
-  # --- Task 3 (KABUL AÇIĞI #2, şartname 3.5.4.2): Trino `sandbox` catalog +
-  # rules.json `.*` read-write. ADDITIVE alongside the existing lakehouse/
-  # rawlake read-only rules and every existing principal (admin, svc-dbt-
-  # trino, catch-all SELECT) — those must stay intact (the b2 lesson: a
-  # `tables` section, once defined, denies any principal not matched by ANY
-  # rule). Trino commits to Nessie as the existing broad-write
-  # `svc-trino-nessie` identity — same OAuth2 block as lakehouse.properties,
-  # copied verbatim. -----------------------------------------------------
+  # --- Trino `sandbox` catalog + rules.json `.*` read-write (Task 3,
+  # KABUL AÇIĞI #2, şartname 3.5.4.2). ADDITIVE alongside the existing
+  # lakehouse/rawlake read-only rules and every existing principal (admin,
+  # svc-dbt-trino, catch-all SELECT) — those must stay intact (the b2
+  # lesson: a `tables` section, once defined, denies any principal not
+  # matched by ANY rule). Trino commits to Nessie as the existing broad-
+  # write `svc-trino-nessie` identity — same OAuth2 block as lakehouse.
+  # properties, copied verbatim. -------------------------------------------
 
   - it: "sandbox v2 (Task 3 review fix): trino sandbox.properties catalog renders when sandbox.enabled, mirroring lakehouse.properties (iceberg/rest, warehouse=sandbox BY NAME -- not a location string, same svc-trino-nessie OAuth2 block)"
     templates:

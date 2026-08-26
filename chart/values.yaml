@@ -1389,30 +1389,18 @@ dbt:
     requests: {cpu: "250m", memory: "512Mi"}
     limits:   {cpu: "1",    memory: "1Gi"}
 
-# Sandbox: BOTH the legacy per-department analyst sandboxes (Consumption
-# slice c2) AND the new unified sandbox v2 (single Nessie namespace + S3
-# bucket + `svc-sandbox` identity; 2026-08-07 sandbox-v2 design) currently
-# coexist here, gated on the SAME `sandbox.enabled` flag — this is
-# deliberately ADDITIVE (sandbox-v2 Task 1): the per-dept fields/artifacts
-# stay until the final task of that slice retires them, so the chart and its
-# test suite remain green at every intermediate step.
-#
-# Legacy per-dept fields (DEPRECATED — removed in the sandbox-v2 slice's
-# final task): each dept => its own bucket, catalog, scoped S3 Secret,
-# Keycloak service account, K8s SA, and AD-group-gated Zeppelin. Empty =>
-# nothing per-dept renders. See chart/templates/09c-zeppelin-sandbox.yaml.
+# Sandbox v2 (2026-08-07 sandbox-v2 design): unified sandbox — a single
+# shared S3 bucket + Nessie namespace/Trino catalog + `svc-sandbox` Keycloak
+# service-account identity for ALL analysts, isolated only by a per-user
+# Trino/Spark/PyIceberg SCHEMA convention (`sandbox.<user>`), NOT by
+# per-department buckets/catalogs/identities — the earlier per-department
+# design (each dept with its own bucket/catalog/Secret/Keycloak client/K8s
+# SA/AD-group-gated Zeppelin) was retired in the slice's final task (Task 5)
+# in favor of this single unified shape. Prod data stays untouched — a
+# separate bucket + Nessie namespace from `lakehouse`/`rawlake` (şartname
+# 3.5.4.3).
 sandbox:
   enabled: false
-  departments: []
-  # - name: veri-bilimi                        # DNS-safe; used in resource names + sandbox_<name> catalog
-  #   adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"  # Shiro group -> role `sandbox`
-  #   s3SecretName: s3-sandbox-veri-bilimi      # scoped cred (RW sandbox-<name>, RO prod); out-of-band else MinIO Job
-  #   oidcClientSecret: ""                      # dev-convenience single-source for svc-sandbox-<name>; else out-of-band
-  # Sandbox v2 (single unified sandbox): one shared bucket + Nessie
-  # namespace for ALL analysts, replacing per-dept isolation with
-  # per-schema isolation inside Trino (later task in this slice). Prod data
-  # stays untouched — a separate bucket + Nessie namespace from `lakehouse`/
-  # `rawlake` (şartname 3.5.4.3).
   bucket: "sandbox"            # S3 bucket + warehouse location kökü
   namespace: "sandbox"         # Nessie namespace + Trino katalog adı
   # Notebook (Jupyter/Zeppelin) erişimine izinli AD grupları (login gate). Rol modeli = Slice B.

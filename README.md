@@ -450,126 +450,35 @@ slice (c2)'dir.
 
 ---
 
-## Per-departman analist sandbox'ı (Consumption slice c2)
+## Analist sandbox'ı (sandbox v2 — unified, Consumption slice c2 halefi)
 
-`sandbox.enabled: true` + en az bir `sandbox.departments[]` girdisi iken
-(dev/medium/large tier'larda VARSAYILAN KAPALI — `chart/values.yaml`,
-`values-medium.yaml`/`values-large.yaml`; boş `departments` = hiçbir şey
-render edilmez) chart, her departman için İZOLE bir yazma alanı ekler:
-kendi S3 bucket'ı, kendi Nessie/Iceberg katalogu (`sandbox_<dept>`) ve kendi
-Zeppelin instance'ı — c1'in salt-okunur `%trino` interpreter'ı ile birlikte,
-AMA departmana özel `%spark`/`%pyspark` YAZMA erişimiyle
-(`chart/templates/09c-zeppelin-sandbox.yaml`, `lakehouse.zeppelin.instance`
-`sandbox: true` kolu, `chart/templates/_zeppelin.tpl`).
+Bu bölümün eski hali, her departman için AYRI bir S3 bucket'ı + Nessie
+katalogu + Zeppelin instance'ı + Keycloak client'ı üreten bir
+per-departman tasarımı (`sandbox.departments[]`) belgeliyordu
+(`chart/templates/09c-zeppelin-sandbox.yaml`). **2026-08-07-sandbox-v2**
+slice'ının son görevinde (Task 5) bu tasarım TAMAMEN kaldırılmış ve tek,
+BİRLEŞİK bir sandbox ile değiştirilmiştir:
 
-- **Model:** her `sandbox.departments[]` girdisi (`name`, `adGroup`,
-  `s3SecretName`, `oidcClientSecret`) şunları üretir — `zeppelin-sandbox-
-  <name>` Deployment/Service/Route-veya-Ingress (dev tier'da render
-  edilmez), `sa-sandbox-<name>` K8s ServiceAccount, `sandbox-<name>`
-  bucket (`18-bucket-init.yaml` + dev-only MinIO scoped-policy Job
-  `18b-sandbox-minio-policy.yaml`), Keycloak `svc-sandbox-<name>`
-  service-account client'ı (`10-keycloak.yaml`, `aud-trino` mapper'ı YOK —
-  Nessie token'ı yalnızca issuer'a göre doğrular), ve
-  `sandbox_<name>` Spark/Iceberg katalogu (`s3a://sandbox-<name>/`).
-- **Shiro AD-grubu gating:** her instance'ın `shiro.ini`'si YALNIZCA o
-  departmanın AD grubunu (`adGroup`) `sandbox` rolüne + paylaşılan
-  `zeppelin.ad.groups.admin` grubunu `sandbox,admin` rolüne map eder
-  (`/**` yolu `roles[sandbox]` gerektirir) — bir departmanın instance'ına
-  BAŞKA bir departmanın AD grubu asla erişemez (iki-departman izolasyon
-  regresyon testleriyle doğrulanmıştır, `chart/tests/sandbox_test.yaml`).
-- **AKTİF v1 bariyeri — departmana-özel scoped S3 kimlik bilgisi:**
-  gerçek veri KORUMASI bugün Nessie katmanında DEĞİL, S3/MinIO IAM
-  katmanındadır. Her departmanın `s3-sandbox-<name>` Secret'ı yalnızca
-  KENDİ `sandbox-<name>` bucket'ında RW, prod `depo`/`ham-veri`
-  bucket'larında (bunlar sabit, PAYLAŞILAN bucket'lardır — departmana-özel
-  DEĞİL) ise yalnızca RO yetkisi taşır (`18b-sandbox-minio-
-  policy.yaml`, dev-cluster MinIO Job'ı; gerçek kurulumda operatörün
-  kendi S3 IAM'i üzerinden AYNI en-az-yetki policy'siyle out-of-band
-  sağlanması gerekir). Yani bir departman Spark job'u prod bucket'ına
-  YENİ bir S3 nesnesi asla yazamaz — bu bugünün gerçek, uygulanan
-  sınırıdır.
-- **Nessie OAuth2 kablolaması — İLERİ-UYUMLULUK (forward-compat), BUGÜN
-  ATIL:** her sandbox instance'ının Spark/Iceberg konfigürasyonu
-  (`lakehouse`/`rawlake`/`sandbox_<dept>` — ÜÇ katalogun tümü) tam bir
-  OAuth2 client_credentials zincirini taşır (`svc-sandbox-<dept>` client'ı,
-  gerçek bir Keycloak JWT'si `spark-conf-render` initContainer'ı
-  tarafından her pod başlangıcında çözülür — bkz. yukarıdaki c1 %trino
-  refresher ile aynı "asla ConfigMap'te düz metin değil" ilkesi, spike
-  doğrulanmıştır: `docs/superpowers/spikes/2026-08-05-c2-nessie-authz-
-  oauth2-config.md`). AMA bu token bugün MİNTLENİP GÖRMEZDEN GELİNİR:
-  `04-nessie-ha.yaml` Nessie'nin genel OIDC KİMLİK DOĞRULAMASINI
-  (`auth.oidc.enabled`) uygular (anonim reddedilir), fakat departmana-özre
-  YETKİLENDİRME'yi (hangi principal'ın hangi Nessie yoluna/isim-alanına
-  yazabileceğini ayrıştıran CEL kuralları, spike'ta doğrulanmış — Q2)
-  chart HENÜZ TEL ÖRMEZ (`NESSIE_SERVER_AUTHORIZATION_*` şu an chart'ta
-  yok). Bu kablolama, gelecekteki Nessie-machine-auth slice'ı (bu CEL
-  authz kuralları chart'a eklendiğinde) geldiğinde OTOMATİK OLARAK
-  KİLİTLENİR — hiçbir sandbox template'i değişmeden, yalnızca Nessie'nin
-  kendisi token'ın principal'ını gerçekten kontrol etmeye başlar.
-- **METADATA-GAP BİLİNEN SINIRLAMA (yukarıdaki OAuth2 durumunun doğrudan
-  sonucu):** Nessie henüz principal-bazlı yazma-yetkilendirmesi
-  yapmadığından, bir departman kullanıcısı kendi `sandbox_<dept>`
-  katalogunun DIŞINA — örn. `lakehouse`/`depo` şemasındaki prod bir
-  tabloya — bir Nessie commit'i (DROP/ALTER, yani tablonun METADATA
-  POINTER'ını) gönderebilir ve Nessie bunu bugün REDDETMEZ. Bu, S3
-  düzeyinde bir veri kaybı DEĞİLDİR — yukarıdaki scoped S3 kimlik bilgisi
-  gerçek Parquet/Iceberg dosyalarını prod bucket'ında bozulmaz bırakır;
-  bozulan yalnızca Nessie'nin git-benzeri commit geçmişindeki işaretçidir
-  ve Nessie'nin kendi `assign`/referans-sıfırlama (git-benzeri revert)
-  mekanizmasıyla KURTARILABİLİR. Kalıcı veri kaybı değil, operasyonel bir
-  müdahale gerektiren bir GAP'tir — üstteki forward-compat OAuth2/CEL
-  slice'ı bunu kapatacak asıl mekanizmadır.
-- **Coherence guard — `sandbox.enabled` `auth.oidc.enabled` gerektirir:**
-  yukarıdaki initContainer, OIDC issuer-url'ini HER ZAMAN
-  `.Values.oidc.secretName` Secret'ından okur — ama bu Secret yalnızca
-  `auth.oidc.enabled: true` iken var olması garanti edilir
-  (`chart/values.yaml`'ın `oidc:` blok yorumu). Bu yüzden
-  `chart/templates/09c-zeppelin-sandbox.yaml`'ın başında, `superset.trino.
-  authMode=jwt`/`components.dbt` guard'larıyla (`19-superset.yaml`/
-  `20-dbt.yaml`) AYNI desende bir fail-loud guard'ı vardır: `sandbox.
-  enabled: true` + dolu `departments` + `auth.oidc.enabled: false`
-  render'ı GÜRÜLTÜLÜ ŞEKİLDE BAŞARISIZ kılar (`helm-unittest`
-  `failedTemplate` testiyle regresyona karşı korunur,
-  `chart/tests/sandbox_test.yaml`) — aksi halde runtime'da eksik bir
-  Secret'a karşı crash-loop atan, sessizce bozuk bir sandbox render
-  edilirdi.
-- **Operatör gereksinimleri (her `sandbox.departments[]` girdisi için):**
-  scoped S3 kimlik bilgisini (`s3-sandbox-<name>` Secret — access-key/
-  secret-key/endpoint/region) kendi S3 IAM'iniz üzerinden OUT-OF-BAND
-  sağlayın (dev MinIO Job yalnızca in-cluster PoC içindir); departmanın
-  KENDİ AD grubunu (`adGroup`) VE Zeppelin admin AD grubunu
-  (`zeppelin.ad.groups.admin` — c1 %trino refresher sidecar'ının
-  PUT/REST login'i için gereklidir, aksi halde her sandbox instance'ında
-  interpreter token rotasyonu 403'lenir) kurumsal AD'nizde sağlayın;
-  `svc-sandbox-<name>` Keycloak client secret'ını (`oidcClientSecret`,
-  `secrets.mode`'a göre — dev-convenience inline değilse out-of-band)
-  sağlayın; `auth.oidc.enabled: true`'yu (guard'ın gerektirdiği gibi) ve
-  `superset.trino.tls.enabled: true`'yu açık tutun (medium/large'da zaten
-  varsayılan).
-- **Köşe-durum — `components.zeppelin: false` + `sandbox.enabled: true`:**
-  bu alışılmadık kombinasyonda (paylaşılan Zeppelin'in c1 `%trino`
-  parçaları kapalıyken sandbox açık), per-departman sandbox instance'ları
-  `%trino` salt-okunur interpreter'ı OLMADAN render edilir (yalnızca c2'nin
-  asıl amacı olan `%spark`/`%pyspark` YAZMA yolunu korurlar) — varsayılan
-  `components.zeppelin: true` ise sandbox'lara `%trino` okuma erişimini de
-  verir.
+- **Model:** tek bir S3 bucket'ı + Nessie namespace/Trino katalogu
+  (`sandbox.bucket`/`sandbox.namespace`, varsayılan `"sandbox"`) VE tek bir
+  Keycloak service-account client'ı (`svc-sandbox`) — her izinli kullanıcı
+  (`sandbox.allowedGroups`) AYNI kimliği paylaşır, izolasyon yalnızca
+  kullanıcı-başına bir Trino/Spark/PyIceberg ŞEMA konvansiyonuyla sağlanır
+  (`sandbox.<kullanıcı>`).
+- **Paylaşılan Zeppelin de yazar:** `chart/templates/09-zeppelin.yaml` +
+  `chart/templates/_zeppelin.tpl` — chart'ın TEK Zeppelin instance'ı,
+  `sandbox.enabled: true` iken `%pyspark` interpreter'ında `svc-sandbox`
+  OAuth2 kimliğiyle birleşik `sandbox` katalogunu da taşır (c1'in
+  salt-okunur `lakehouse`/`rawlake` katalogları YANINDA, ADDITIVE).
+- **JupyterHub** (aşağıdaki bölüm) AYNI birleşik kimliği/namespace'i
+  kullanır — bkz. o bölüm.
+- **Coherence guard:** `sandbox.enabled: true` + `auth.oidc.enabled: false`
+  render'ı GÜRÜLTÜLÜ ŞEKİLDE BAŞARISIZ kılar (`chart/tests/
+  sandbox_test.yaml`) — sandbox katalogunun OAuth2 kablolaması aynı OIDC
+  issuer mekanizmasına bağımlıdır.
 
-**Bilinen sınırlama:** c2, helm-unittest ile doğrulanmıştır (gating/
-izolasyon/coherence guard'ın tamamı — 40 test case, `chart/tests/
-sandbox_test.yaml`) VE iki bağımsız docker/canlı spike ile
-(`docs/superpowers/spikes/2026-08-05-c2-sandbox-isolation.md`,
-`…-c2-nessie-authz-oauth2-config.md` — Nessie OIDC authn, Spark→Nessie
-OAuth2 auto-refresh, ve `envsubst`-benzeri secret-injection mekanizması
-gerçek Keycloak/Nessie/Spark konteynerlerine karşı canlı doğrulanmıştır).
-Tam Keycloak → per-departman-Zeppelin → Nessie (OAuth2, bugün atıl) → S3
-(scoped kimlik bilgisi) round trip'i VE departman-AD-grubu login gate'i
-bir **OpenShift UAT** teslimatıdır (Keycloak yok + Trino scaled-0 olan
-mevcut test cluster'ında koşulamaz). UAT'ta netleşecek: gerçek AD
-gruplarının Keycloak'a federe edildiği kurulumda departman-izolasyonunun
-uçtan-uca doğrulanması. **Güncelleme:** yukarıdaki "atıl OAuth2/metadata-gap"
-notu artık TARİHSEL — aşağıdaki **Nessie machine-auth** bölümü tam olarak bu
-gap'i kapatan CEL yetkilendirme kurallarını ekliyor (`svc-sandbox-<dept>`
-dahil); UAT'ta netleşecek diğer madde de artık o bölümün kapsamında.
+Detaylı tasarım kararları için `.superpowers/sdd/2026-08-07-sandbox-v2/`
+altındaki plan/task dokümanlarına bakın.
 
 ---
 

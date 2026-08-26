@@ -384,8 +384,8 @@ spec:
     #
     # CRITICAL DIFFERENCE from the trino service-account clients above: NO
     # `aud-trino` (or any) audience mapper here — Nessie validates the token
-    # by ISSUER only (not audience), same as the c2 svc-sandbox-<dept>
-    # clients.
+    # by ISSUER only (not audience), same as the unified `svc-sandbox`
+    # client below.
     - clientId: svc-trino-nessie
       enabled: true
       protocol: "openid-connect"
@@ -416,40 +416,16 @@ spec:
       secret: {{ .Values.nessie.machineAuth.zeppelinClientSecret | quote }}
     {{- end }}
     {{- if .Values.sandbox.enabled }}
-    # Per-department analyst sandbox service accounts (Consumption slice c2).
-    # One confidential client per `sandbox.departments[].name`, mirroring the
-    # svc-dbt-trino/svc-zeppelin-trino pattern above (serviceAccountsEnabled,
-    # standardFlowEnabled: false, publicClient: false, single-sourced
-    # `secret`). Single source with each dept's `sandbox-<name>-oidc-
-    # credentials` Secret (chart/templates/09c-zeppelin-sandbox.yaml) via
-    # `.oidcClientSecret`, so they can never drift.
-    #
-    # CRITICAL DIFFERENCE from the trino service-account clients above: NO
-    # `aud-trino` audience mapper here. This client authenticates the
-    # per-dept sandbox Zeppelin's %trino interpreter AND its Nessie catalog
-    # access — Nessie validates the token by ISSUER only (not audience), so
-    # an `aud: trino` mapper would be wrong/unnecessary here.
-    {{- range .Values.sandbox.departments }}
-    - clientId: svc-sandbox-{{ .name }}
-      enabled: true
-      protocol: "openid-connect"
-      publicClient: false
-      standardFlowEnabled: false
-      serviceAccountsEnabled: true
-      secret: {{ .oidcClientSecret | quote }}
-    {{- end }}
-    # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1): ONE unified
-    # confidential client for the single shared sandbox (replaces the
-    # per-dept clients above in a later task of this slice — ADDITIVE for
-    # now, both coexist). Same shape as `svc-zeppelin-nessie`
+    # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1; per-dept clients
+    # retired in Task 5): ONE unified confidential client for the single
+    # shared sandbox. Same shape as `svc-zeppelin-nessie`
     # (serviceAccountsEnabled, standardFlowEnabled:false, publicClient:
     # false, single-sourced `secret`). Single source with
     # `.Values.sandbox.oidc.clientSecret`.
     #
     # CRITICAL DIFFERENCE from the trino service-account clients above: NO
     # `aud-trino` audience mapper here — Nessie validates the token by
-    # ISSUER only (not audience), same as the per-dept `svc-sandbox-<name>`
-    # clients above.
+    # ISSUER only (not audience).
     - clientId: svc-sandbox
       enabled: true
       protocol: "openid-connect"

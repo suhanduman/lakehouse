@@ -29,12 +29,19 @@
 # olan Service'leri kapsar); ad literal "zeppelin" kalır, ns yalnızca helper'dan.
 # Nessie catalog URI'si ise `lakehouse.svc.nessie` helper'ından — Trino/Spark
 # Operator'ın kullandığı AYNI helper (spec §3.1/§8).
+# Sandbox v2 (Task 5, 2026-08-07-sandbox-v2): this shared instance's %pyspark
+# interpreter also carries the UNIFIED sandbox WRITE catalog when
+# `.Values.sandbox.enabled` — see chart/templates/_zeppelin.tpl's define-
+# header comment for the full mechanism (svc-sandbox OAuth2, sandbox-oidc-
+# credentials Secret, warehouse convention). The per-department sandbox
+# Zeppelin instances that used to render from a separate file
+# (chart/templates/09c-zeppelin-sandbox.yaml) are retired — this is now the
+# ONLY Zeppelin instance the chart renders.
 {{- if .Values.components.zeppelin }}
 {{ include "lakehouse.zeppelin.instance" (dict
      "ctx" .
      "name" "zeppelin"
      "s3SecretName" .Values.storage.s3.secretName
-     "sandbox" false
      "oauth2ClientId" "svc-zeppelin-nessie"
      "oidcSecretName" "nessie-machine-auth-credentials"
      "oidcSecretKey" "zeppelin") }}

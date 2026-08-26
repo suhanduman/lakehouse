@@ -2,9 +2,13 @@
 lakehouse.zeppelin.instance — reusable Zeppelin instance body.
 
 Extracted from chart/templates/09-zeppelin.yaml (pure refactor, byte-identical
-for the shared c1 instance) so later Consumption-slice tasks can render
-per-department analyst sandboxes from the SAME template instead of a
-copy-pasted manifest set.
+for the shared instance) as a named template. Sandbox v2 (Task 5, 2026-08-07-
+sandbox-v2) retired the per-department sandbox Zeppelin instances that used
+to also call this define with a `sandbox: true` arm (chart/templates/09c-
+zeppelin-sandbox.yaml, now deleted) — there is only ONE Zeppelin instance
+left (the shared one, called from 09-zeppelin.yaml), and its %pyspark
+interpreter now carries the UNIFIED sandbox write catalog directly, gated on
+`.Values.sandbox.enabled`, instead of a per-instance sandbox arm.
 
 Call convention: `.` inside this define is the ARGUMENT DICT passed to
 `include`, NOT the chart root — every `.Values`/`.Release`/`.Chart` reference
@@ -16,90 +20,62 @@ Dict keys:
   name         - instance name; becomes the PVC/Deployment/Service/PDB/
                  spark-defaults/Shiro/trino-interpreter ConfigMap name prefix
                  AND the trino-oidc-credentials Secret name prefix (the
-                 shared c1 instance passes "zeppelin", preserving today's
-                 literal names). Every resource this template renders on
-                 EVERY call (i.e. not gated on `sandbox`) MUST be prefixed by
-                 `name` — otherwise N sandbox departments + the shared
-                 instance render N+1 documents with the SAME kind/name,
-                 which fails `helm install` (Task 5 fix; the trino-
-                 interpreter ConfigMap and trino-oidc-credentials Secret were
-                 the two hardcoded-name offenders found in review). The ONE
-                 exception is `ad-bind-credentials` (see `sandbox` below) —
-                 it's a single shared corporate AD bind credential, not
-                 per-instance, so it's shared-gated instead of renamed.
+                 shared instance passes "zeppelin", preserving today's
+                 literal names).
   s3SecretName - name of the Secret holding S3 access-key-id/secret-access-
                  key/endpoint/region (today: .Values.storage.s3.secretName)
-  sandbox      - bool; false for the shared c1 instance. When true (per-dept
-                 sandbox, Consumption slice c2):
-                 - Shiro groupRolesMap maps BOTH the dept `adGroup` -> role
-                   `sandbox` AND the shared `zeppelin.ad.groups.admin` group
-                   -> roles `sandbox,admin` (Task 5 fix — without this the
-                   c1 %trino refresher sidecar's admin REST-login account
-                   has no role in a sandbox instance and its interpreter-
-                   settings PUT 403s forever, so the seeded %trino
-                   interpreter's placeholder access token is never
-                   replaced). `[roles]` adds `admin = *` alongside
-                   `sandbox = *` to match. `[urls]` gates `/**` on
-                   `roles[sandbox]` (dept members + the now-also-sandboxed
-                   admin group) while `/api/interpreter/**` stays
-                   `roles[admin]`-only (refresher/admins, never dept
-                   members) — same for both branches.
-                 - the pod runs as `saName` (see below) instead of the
-                   namespace default.
-                 - the `ad-bind-credentials` dev-convenience Secret is NOT
-                   rendered (see `name` above) — sandbox instances only ever
-                   REFERENCE that fixed name via `secretKeyRef`, provisioned
-                   out-of-band or by the shared instance's own render.
-  saName       - K8s ServiceAccount name for the pod (`sandbox: true` only;
-                 e.g. sa-sandbox-<dept>, chart/templates/09c-zeppelin-
-                 sandbox.yaml). The shared c1 instance passes none — its
-                 Deployment carries NO `serviceAccountName` field at all, to
-                 stay byte-identical to before this template was extracted.
-  adGroup      - single AD group DN mapped to the `sandbox` Shiro role
-                 (`sandbox: true` only).
-  oauth2ClientId, oidcSecretName, sandboxCatalog - sandbox-only Nessie/Spark
-                 OAuth2 + sandbox_<dept> catalog wiring (Task 4).
+  oauth2ClientId, oidcSecretName - the READ-ONLY Nessie machine-auth identity
+                 (Task 6) for the `lakehouse`/`rawlake` catalogs: the shared
+                 instance passes `"svc-zeppelin-nessie"` /
+                 `"nessie-machine-auth-credentials"`.
   oidcSecretKey - key inside `oidcSecretName` holding the OAuth2 client
-                 secret. Defaults to `client-secret` (the sandbox path's
-                 per-dept `sandbox-<name>-oidc-credentials` Secret key) via
-                 `default` below when omitted, so the c2 sandbox call site
-                 (chart/templates/09c-zeppelin-sandbox.yaml) doesn't need to
-                 change. The shared instance (Nessie machine-auth, Task 6)
-                 passes `"zeppelin"` — its secret material lives in the
-                 shared `nessie-machine-auth-credentials` Secret
-                 (chart/templates/22-nessie-machine-auth.yaml), which keys
-                 all 4 machine-auth identities by engine name, not by the
-                 literal `client-secret`.
+                 secret. Defaults to `client-secret` when omitted; the
+                 shared instance passes `"zeppelin"` — its secret material
+                 lives in the shared `nessie-machine-auth-credentials`
+                 Secret (chart/templates/22-nessie-machine-auth.yaml), which
+                 keys all 4 machine-auth identities by engine name, not by
+                 the literal `client-secret`.
 
-  Nessie machine-auth for the SHARED (`sandbox: false`) instance (Task 6):
-  when `$ctx.Values.auth.oidc.enabled` is true, the shared instance ALSO
-  gets the OAuth2 block on its `lakehouse`/`rawlake` catalogs — same sed→
-  tmpfs initContainer mechanism as the sandbox path — but with the READ-ONLY
-  `svc-zeppelin-nessie` identity (passed as `oauth2ClientId`) instead of a
-  per-dept sandbox client, and NO write catalog (no `sandboxCatalog` — that
-  stays sandbox-only). Read-only-ness itself is enforced server-side by
+  Nessie machine-auth (Task 6): when `$ctx.Values.auth.oidc.enabled` is true,
+  the instance gets an OAuth2 block on its `lakehouse`/`rawlake` catalogs —
+  a sed→tmpfs initContainer resolves the OAuth2 client-secret + OIDC
+  issuer-url placeholders at pod start into a tmpfs that `SPARK_CONF_DIR`
+  points at — with the READ-ONLY `svc-zeppelin-nessie` identity (passed as
+  `oauth2ClientId`). Read-only-ness itself is enforced server-side by
   Nessie's CEL authorization rule (Task 3); this wiring only makes the
-  shared Zeppelin's %spark interpreter AUTHENTICATE for reads. Internally
-  this is `$nessieOAuth := and (not $sandbox) $ctx.Values.auth.oidc.enabled`
-  — computed from the ALREADY-available `auth.oidc.enabled` flag rather than
-  a separate passed bool, so callers don't need a new dict key just to
-  toggle it; when false (auth off, or `$sandbox` true — the sandbox path has
-  its own always-on OAuth2 block below) the shared instance's render is
-  UNCHANGED from before this task (byte-identity requirement).
+  Zeppelin's %spark interpreter AUTHENTICATE for reads.
+
+  Sandbox v2 (Task 5): when `$ctx.Values.sandbox.enabled` is ALSO true, the
+  SAME sed→tmpfs initContainer additionally resolves a second OAuth2
+  client-secret placeholder and the rendered spark-defaults.conf gets a
+  THIRD catalog (`.Values.sandbox.namespace`, e.g. "sandbox") — a WRITE
+  catalog, unified `svc-sandbox` identity, unified `sandbox-oidc-
+  credentials` Secret (chart/templates/23-jupyterhub.yaml). This requires
+  `auth.oidc.enabled` (the sandbox catalog's OAuth2 wiring depends on the
+  SAME tmpfs mechanism/OIDC issuer as the read-only catalogs above) — a
+  render-time `fail` guard below enforces this instead of letting a
+  `sandbox.enabled=true` + `auth.oidc.enabled=false` install crash-loop at
+  runtime on a missing Secret.
+
+  Warehouse value: the sandbox catalog's `warehouse` is the FULL
+  `s3a://<sandbox-bucket>/` location (`.Values.sandbox.bucket`), mirroring
+  images/jupyter/lakehouse_nb.py's `_spark_conf()` byte-for-byte for the
+  SAME reason (commit 73704c4: Spark's Iceberg RESTCatalog client does not
+  reliably resolve a bare server-side-registered warehouse NAME the way
+  Trino/PyIceberg's REST clients do — a bare name there silently mis-scopes
+  every table Spark creates).
 */}}
 {{- define "lakehouse.zeppelin.instance" -}}
 {{- $ctx := .ctx -}}
 {{- $name := .name -}}
 {{- $s3SecretName := .s3SecretName -}}
-{{- $sandbox := .sandbox -}}
-{{- $nessieOAuth := and (not $sandbox) $ctx.Values.auth.oidc.enabled -}}
+{{- $nessieOAuth := $ctx.Values.auth.oidc.enabled -}}
+{{- $sandboxWrite := $ctx.Values.sandbox.enabled -}}
+{{- if and $sandboxWrite (not $ctx.Values.auth.oidc.enabled) }}
+{{- fail "components.zeppelin + sandbox.enabled requires auth.oidc.enabled — the shared Zeppelin's unified sandbox catalog authenticates to Nessie via OAuth2 (svc-sandbox)" }}
+{{- end }}
 {{- $oidcSecretKey := default "client-secret" .oidcSecretKey -}}
-{{- $groupRolesMap := "" -}}
-{{- if $sandbox -}}
-{{- $groupRolesMap = printf "%s:sandbox,\\\n      %s:sandbox,admin\"" .adGroup $ctx.Values.zeppelin.ad.groups.admin -}}
-{{- else -}}
-{{- $groupRolesMap = printf "%s:admin,\\\n      %s:analyst,\\\n      %s:student\"" $ctx.Values.zeppelin.ad.groups.admin $ctx.Values.zeppelin.ad.groups.analyst $ctx.Values.zeppelin.ad.groups.student -}}
-{{- end -}}
+{{- $groupRolesMap := printf "%s:admin,\\\n      %s:analyst,\\\n      %s:student\"" $ctx.Values.zeppelin.ad.groups.admin $ctx.Values.zeppelin.ad.groups.analyst $ctx.Values.zeppelin.ad.groups.student -}}
 # Spark binary image içinde geldiği için ayrı bir cache PVC gerekmez.
 # Notebook'ların paylaşımlı home'u — birden fazla replica için RWX.
 apiVersion: v1
@@ -119,20 +95,7 @@ spec:
   storageClassName: {{ . }}
 {{- end }}
 ---
-{{- /*
-Task 5 fix: `ad-bind-credentials` is deliberately NOT renamed per-instance
-like the trino-interpreter/trino-oidc-credentials resources below — it's
-ONE shared corporate AD bind credential (not sandbox-specific), so every
-instance (shared AND every per-dept sandbox) keeps REFERENCING the SAME
-fixed name via `secretKeyRef` below; only the shared instance (`sandbox:
-false`) ever emits the dev-convenience inline copy (`and (not $sandbox)
-...` below, was just `...bindPassword` before this fix), avoiding
-duplicate-name collisions if this chart renders N sandbox instances + the
-shared one in one install. This comment is a Go-template comment (stripped
-before render) so it can document the fix without touching the shared
-instance's rendered bytes.
-*/}}
-{{- if and (not $sandbox) $ctx.Values.zeppelin.ad.bindPassword }}
+{{- if $ctx.Values.zeppelin.ad.bindPassword }}
 # AD bind (service account) secret şablonu -- rendered ONLY when a real
 # `zeppelin.ad.bindPassword` is explicitly supplied (dev/test convenience).
 # Default is empty: in that case this Secret is NOT rendered at all, and the
@@ -281,30 +244,16 @@ data:
     shiro.loginUrl = /api/login
 
     [roles]
-{{- if $sandbox }}
-    sandbox = *
-    # admin also granted here — the AD `zeppelin.ad.groups.admin` group is
-    # ALSO mapped to `sandbox,admin` above (Task 5 fix), so the c1 %trino
-    # refresher sidecar's REST-login account (a member of that admin group)
-    # can still PUT /api/interpreter/setting/trino in a sandbox instance,
-    # which only ever maps the dept `adGroup` otherwise.
-    admin = *
-{{- else }}
     admin = *
     analyst = *
     student = *
-{{- end }}
 
     [urls]
     /api/version = anon
     /api/interpreter/** = authc, roles[admin]
     /api/configurations/** = authc, roles[admin]
     /api/credential/** = authc
-{{- if $sandbox }}
-    /** = authc, roles[sandbox]
-{{- else }}
     /** = authc
-{{- end }}
 ---
 # Spark interpreter config — spark.yaml ile aynı iki catalog + hadoop-aws.
 # 05-spark-operator.yaml'daki paylaşılan `spark-defaults` ConfigMap ile KASITLI
@@ -329,7 +278,7 @@ data:
     spark.sql.catalog.lakehouse.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.lakehouse.warehouse={{ $ctx.Values.nessie.catalog.warehouse.location }}
     spark.sql.catalog.lakehouse.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-{{- if or $sandbox $nessieOAuth }}
+{{- if $nessieOAuth }}
     spark.sql.catalog.lakehouse.authentication.type=OAUTH2
     spark.sql.catalog.lakehouse.authentication.oauth2.client-id={{ .oauth2ClientId }}
     spark.sql.catalog.lakehouse.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
@@ -341,29 +290,33 @@ data:
     spark.sql.catalog.rawlake.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
     spark.sql.catalog.rawlake.warehouse=rawdata
     spark.sql.catalog.rawlake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-{{- if or $sandbox $nessieOAuth }}
+{{- if $nessieOAuth }}
     spark.sql.catalog.rawlake.authentication.type=OAUTH2
     spark.sql.catalog.rawlake.authentication.oauth2.client-id={{ .oauth2ClientId }}
     spark.sql.catalog.rawlake.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
     spark.sql.catalog.rawlake.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
 {{- end }}
-{{- if $sandbox }}
+{{- if $sandboxWrite }}
 
-    # sandbox_<dept> write catalog (c2) — same Nessie REST endpoint, dept-
-    # private warehouse prefix (bucket provisioned by 18b-sandbox-minio-
-    # policy.yaml / operator out-of-band). OAuth2 wiring is forward-compat
-    # (token minted+sent; Nessie authn stays OFF platform-wide in c2 — see
-    # plan Global Constraints) — inert until a later Nessie-machine-auth
-    # slice turns Nessie-side validation on.
-    spark.sql.catalog.{{ .sandboxCatalog }}=org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.{{ .sandboxCatalog }}.catalog-impl=org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.{{ .sandboxCatalog }}.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
-    spark.sql.catalog.{{ .sandboxCatalog }}.warehouse=s3a://sandbox-{{ trimPrefix "sandbox_" .sandboxCatalog }}/
-    spark.sql.catalog.{{ .sandboxCatalog }}.io-impl=org.apache.iceberg.aws.s3.S3FileIO
-    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.type=OAUTH2
-    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.client-id={{ .oauth2ClientId }}
-    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.client-secret=${OAUTH_CLIENT_SECRET}
-    spark.sql.catalog.{{ .sandboxCatalog }}.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
+    # Sandbox v2 (Task 5) — unified WRITE catalog. Same Nessie REST
+    # endpoint, single shared `.Values.sandbox.namespace` Nessie namespace/
+    # Trino catalog name + `.Values.sandbox.bucket` S3 bucket, unified
+    # `svc-sandbox` Keycloak service-account identity (chart/templates/
+    # 10-keycloak.yaml) whose secret lives in the unified `sandbox-oidc-
+    # credentials` Secret (chart/templates/23-jupyterhub.yaml) — the SAME
+    # identity/Secret images/jupyter/lakehouse_nb.py's spark()/iceberg_
+    # sandbox() helpers and Trino's sandbox.properties (chart/templates/
+    # 06-trino-ha.yaml) authenticate as. `warehouse` mirrors lakehouse_nb.py's
+    # `_spark_conf()` byte-for-byte (see this define's header comment).
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}=org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.catalog-impl=org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.warehouse=s3a://{{ $ctx.Values.sandbox.bucket }}/
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.type=OAUTH2
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.oauth2.client-id=svc-sandbox
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.oauth2.client-secret=${SANDBOX_OAUTH_CLIENT_SECRET}
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.oauth2.issuer-url=${OIDC_ISSUER_URL}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -381,29 +334,22 @@ spec:
     metadata:
       labels: {app: {{ $name }}}
     spec:
-      {{- if $sandbox }}
-      # Sandbox instance ONLY: run as the dept's own K8s ServiceAccount
-      # (sa-sandbox-<dept>, chart/templates/09c-zeppelin-sandbox.yaml) instead
-      # of the namespace default — the shared c1 instance passes no `saName`
-      # and MUST keep no `serviceAccountName` at all (its render stays
-      # byte-identical to before this template was made reusable).
-      serviceAccountName: {{ .saName }}
-      {{- end }}
       {{- $psc := include "lakehouse.podSecurityContext" $ctx | trim }}
       {{- if $psc }}
       securityContext:
         {{- $psc | nindent 8 }}
       {{- end }}
       # Spark image'a gömülü olduğu için initContainers yok.
-{{- if or $sandbox $nessieOAuth }}
-      # Sandbox instance OR shared instance with Nessie machine-auth on
-      # (Task 6): the spark-defaults ConfigMap above holds a TEMPLATE — the
-      # OAuth2 client-secret and OIDC issuer-url can only be literal `${...}`
+{{- if $nessieOAuth }}
+      # Shared instance with Nessie machine-auth on (Task 6; ALSO carries the
+      # unified sandbox catalog's OAuth2 secret when `sandboxWrite`, Task 5):
+      # the spark-defaults ConfigMap above holds a TEMPLATE — the OAuth2
+      # client-secret(s) and OIDC issuer-url can only be literal `${...}`
       # placeholders there (never a resolved value in a ConfigMap; the
       # issuer-url itself also only ever lives in the `oidc.secretName`
       # Secret, never in a plain Helm value — see `_zeppelin.tpl`'s c1
       # refresher sidecar / chart-wide OIDC_ISSUER convention). This
-      # initContainer resolves both placeholders at pod start into a tmpfs
+      # initContainer resolves the placeholder(s) at pod start into a tmpfs
       # (`emptyDir{medium: Memory}` — never disk, never logged) that the
       # Spark interpreter's `SPARK_CONF_DIR` points at below. Substitution
       # mechanism: `envsubst` is NOT present in the Zeppelin image (verified:
@@ -426,11 +372,17 @@ spec:
             set -eu
             esc_secret=$(printf '%s' "$OAUTH_CLIENT_SECRET" | sed -e 's/[\\&|]/\\&/g')
             esc_issuer=$(printf '%s' "$OIDC_ISSUER_URL" | sed -e 's/[\\&|]/\\&/g')
-            sed -e "s|\${OAUTH_CLIENT_SECRET}|$esc_secret|g" -e "s|\${OIDC_ISSUER_URL}|$esc_issuer|g" \
+            {{- if $sandboxWrite }}
+            esc_sandbox_secret=$(printf '%s' "$SANDBOX_OAUTH_CLIENT_SECRET" | sed -e 's/[\\&|]/\\&/g')
+            {{- end }}
+            sed -e "s|\${OAUTH_CLIENT_SECRET}|$esc_secret|g" -e "s|\${OIDC_ISSUER_URL}|$esc_issuer|g"{{ if $sandboxWrite }} -e "s|\${SANDBOX_OAUTH_CLIENT_SECRET}|$esc_sandbox_secret|g"{{ end }} \
               /conf-tpl/spark-defaults.conf > /spark-conf-rendered/spark-defaults.conf
         env:
         - {name: OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .oidcSecretName }}, key: {{ $oidcSecretKey }}}}}
         - {name: OIDC_ISSUER_URL,     valueFrom: {secretKeyRef: {name: {{ $ctx.Values.oidc.secretName }}, key: issuer-url}}}
+        {{- if $sandboxWrite }}
+        - {name: SANDBOX_OAUTH_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: sandbox-oidc-credentials, key: client-secret}}}
+        {{- end }}
         volumeMounts:
         - {name: spark-conf,          mountPath: /conf-tpl,           readOnly: true}
         - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
@@ -469,7 +421,7 @@ spec:
         env:
         - {name: SPARK_HOME,            value: "/opt/spark"}
         - {name: ZEPPELIN_NOTEBOOK_DIR, value: "/zeppelin/notebook"}
-        - {name: SPARK_CONF_DIR,        value: {{ if or $sandbox $nessieOAuth }}"/spark-conf-rendered"{{ else }}"/spark-conf"{{ end }}}
+        - {name: SPARK_CONF_DIR,        value: {{ if $nessieOAuth }}"/spark-conf-rendered"{{ else }}"/spark-conf"{{ end }}}
         - {name: ZEPPELIN_SHIRO_CONF,   value: "/zeppelin/conf/shiro.ini"}
         - {name: AD_BIND_DN,          valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-dn}}}
         - {name: AD_BIND_PASSWORD,    valueFrom: {secretKeyRef: {name: ad-bind-credentials, key: bind-password}}}
@@ -483,7 +435,7 @@ spec:
         - {name: {{ $name }}-notebooks, mountPath: /zeppelin/notebook}
         - {name: spark-conf,         mountPath: /spark-conf}
         - {name: shiro-conf,         mountPath: /zeppelin/conf/shiro.ini,   subPath: shiro.ini}
-        {{- if or $sandbox $nessieOAuth }}
+        {{- if $nessieOAuth }}
         - {name: spark-conf-rendered, mountPath: /spark-conf-rendered}
         {{- end }}
         {{- if and $ctx.Values.components.zeppelin $ctx.Values.auth.oidc.enabled }}
@@ -623,7 +575,7 @@ spec:
         configMap: {name: {{ $name }}-spark-defaults}
       - name: shiro-conf
         configMap: {name: {{ $name }}-shiro}
-      {{- if or $sandbox $nessieOAuth }}
+      {{- if $nessieOAuth }}
       - name: spark-conf-rendered
         emptyDir: {medium: Memory}
       {{- end }}

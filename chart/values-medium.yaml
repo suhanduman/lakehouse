@@ -44,27 +44,26 @@ components:
   # and per-user notebook Pods do NOT render regardless of this file (see
   # the coherence guard in chart/templates/23-jupyterhub.yaml:
   # `components.jupyter` ALSO requires `auth.oidc.enabled`, already the
-  # default at this tier). The operator turns this on PER INSTALL by
-  # flipping this to `true` — it reuses the SAME `sandbox.departments` list
-  # as c2 below (each dept needs a `sandbox-<dept>` AD/Keycloak group whose
-  # CN drives the per-user dept mapping) plus the `jupyter` Keycloak client
-  # secret (`jupyter.oidcClientSecret`) and the Hub<->proxy shared token
-  # (`jupyter.proxyToken`). See the README's "JupyterHub per-user sandbox"
-  # section for the full operator checklist before enabling.
+  # default at this tier, AND `sandbox.enabled`). The operator turns this on
+  # PER INSTALL by flipping this to `true` plus the unified sandbox below
+  # (`sandbox.enabled: true`, `sandbox.allowedGroups`) — each allowed AD
+  # group logs every member into the SAME unified sandbox, isolated only by
+  # a per-user Trino/Spark/PyIceberg schema — plus the `jupyter` Keycloak
+  # client secret (`jupyter.oidcClientSecret`) and the Hub<->proxy shared
+  # token (`jupyter.proxyToken`). See the README's "JupyterHub per-user
+  # sandbox" section for the full operator checklist before enabling.
   jupyter: false
 
-# c2 (per-dept analyst sandbox): OFF by default even at this tier, restating
-# the chart default — an empty `departments` list means nothing renders
-# regardless of `enabled` (see chart/values.yaml's `sandbox:` block comment
-# and the coherence guard in chart/templates/09c-zeppelin-sandbox.yaml). The
-# operator turns this on PER INSTALL by flipping `enabled: true` and filling
-# in `departments` (each needs a scoped S3 credential provisioned
-# out-of-band, a dept AD group, and — per the coherence guard — `auth.oidc.
-# enabled: true`, already the default at this tier). See the README's "c2"
-# section for the full operator checklist before enabling.
+# Sandbox v2 (unified analyst sandbox): OFF by default even at this tier,
+# restating the chart default (see chart/values.yaml's `sandbox:` block
+# comment). The operator turns this on PER INSTALL by flipping
+# `enabled: true`, setting `allowedGroups` (AD groups permitted to log in),
+# and provisioning the `svc-sandbox` Keycloak client secret
+# (`sandbox.oidc.clientSecret`) plus the scoped `s3-sandbox` S3 credential
+# out-of-band. See the README's sandbox section for the full operator
+# checklist before enabling.
 sandbox:
   enabled: false
-  departments: []
 
 # Consumption slice d (Spark History Server): non-empty S3 endpoint keeps the
 # jobs' eventLog conf valid AND is what the History Server itself reads from.
