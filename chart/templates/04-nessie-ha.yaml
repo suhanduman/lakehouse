@@ -103,6 +103,22 @@ spec:
         - name: NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION
           value: {{ .Values.nessie.catalog.rawdata.location | quote }}
 {{- if .Values.sandbox.enabled }}
+{{- if or (ne .Values.sandbox.namespace "sandbox") (ne .Values.sandbox.bucket "sandbox") }}
+{{- fail "sandbox.namespace and sandbox.bucket must both be 'sandbox' in this release — the Trino catalog and Nessie warehouse registration are keyed on that literal; per-name configurability is future work" }}
+{{- end }}
+        # Whole-branch review I1 fix (2026-08-07-sandbox-v2 final review):
+        # several places hardcode the literal "sandbox" (Trino's
+        # sandbox.properties catalog name + `warehouse=sandbox`,
+        # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION below, rules.json's
+        # `"catalog":"sandbox"`, 06-trino-ha.yaml), while others read
+        # `.Values.sandbox.namespace`/`.Values.sandbox.bucket` (this file's
+        # own warehouse-location value below, _zeppelin.tpl, 18-bucket-
+        # init.yaml, 18b-sandbox-minio-policy.yaml). If an operator ever set
+        # `namespace`/`bucket` to something other than "sandbox", engines
+        # would silently misroute (Jupyter vs Zeppelin diverge; Trino
+        # catalog name mismatch) — the guard above fails the render loudly
+        # instead, before any of that can happen at runtime.
+        #
         # Sandbox v2 (Task 3 review fix, şartname 3.5.4.3 isolation) — a
         # named `sandbox` warehouse, registered the SAME way as `warehouse`/
         # `rawdata` above. Trino's sandbox.properties references this

@@ -57,13 +57,21 @@ Dict keys:
   `sandbox.enabled=true` + `auth.oidc.enabled=false` install crash-loop at
   runtime on a missing Secret.
 
-  Warehouse value: the sandbox catalog's `warehouse` is the FULL
-  `s3a://<sandbox-bucket>/` location (`.Values.sandbox.bucket`), mirroring
-  images/jupyter/lakehouse_nb.py's `_spark_conf()` byte-for-byte for the
-  SAME reason (commit 73704c4: Spark's Iceberg RESTCatalog client does not
-  reliably resolve a bare server-side-registered warehouse NAME the way
-  Trino/PyIceberg's REST clients do — a bare name there silently mis-scopes
-  every table Spark creates).
+  Warehouse value (whole-branch review C1 fix, 2026-08-07-sandbox-v2 final
+  review — supersedes commit 73704c4's `s3a://<bucket>/` choice): the
+  sandbox catalog's `warehouse` is the REGISTERED NAME
+  (`.Values.sandbox.namespace`, e.g. "sandbox" — the Nessie
+  NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION registry key,
+  chart/templates/04-nessie-ha.yaml), the SAME NAME Trino's sandbox.
+  properties (`iceberg.rest-catalog.warehouse=sandbox`, 06-trino-ha.yaml)
+  and the PyIceberg helper (images/jupyter/lakehouse_nb.py, `warehouse=
+  NESSIE_SANDBOX_CATALOG`) already use — mirrored byte-for-byte in that same
+  file's `_spark_conf()`. An `s3a://<bucket>/` LOCATION string here matches
+  neither the registered NAME nor the exact registered LOCATION
+  (`s3://sandbox/warehouse`, note the extra `/warehouse` suffix and
+  `s3://` vs `s3a://` scheme), so Nessie's REST catalog falls back to the
+  DEFAULT warehouse (`s3://depo/warehouse`) — Spark sandbox writes would
+  silently land in the PROD `depo` bucket (isolation breach).
 */}}
 {{- define "lakehouse.zeppelin.instance" -}}
 {{- $ctx := .ctx -}}
@@ -306,12 +314,13 @@ data:
     # credentials` Secret (chart/templates/23-jupyterhub.yaml) — the SAME
     # identity/Secret images/jupyter/lakehouse_nb.py's spark()/iceberg_
     # sandbox() helpers and Trino's sandbox.properties (chart/templates/
-    # 06-trino-ha.yaml) authenticate as. `warehouse` mirrors lakehouse_nb.py's
-    # `_spark_conf()` byte-for-byte (see this define's header comment).
+    # 06-trino-ha.yaml) authenticate as. `warehouse` is the REGISTERED NAME
+    # (see this define's header comment) -- mirrors lakehouse_nb.py's
+    # `_spark_conf()` byte-for-byte.
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}=org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.catalog-impl=org.apache.iceberg.rest.RESTCatalog
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.uri=http://{{ include "lakehouse.svc.nessie" $ctx }}:19120/iceberg/
-    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.warehouse=s3a://{{ $ctx.Values.sandbox.bucket }}/
+    spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.warehouse={{ $ctx.Values.sandbox.namespace }}
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.io-impl=org.apache.iceberg.aws.s3.S3FileIO
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.type=OAUTH2
     spark.sql.catalog.{{ $ctx.Values.sandbox.namespace }}.authentication.oauth2.client-id=svc-sandbox

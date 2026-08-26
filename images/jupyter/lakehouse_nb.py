@@ -87,24 +87,31 @@ def iceberg_sandbox():
 
 
 def _spark_conf():
-    # Final-review fix wave: both warehouse values below now mirror the
-    # working Zeppelin reference (chart/templates/_zeppelin.tpl) byte-for-
-    # byte for the SAME Nessie REST catalogs -- `lakehouse.warehouse` is the
-    # FULL warehouse location (NESSIE_WAREHOUSE carries e.g.
-    # "s3://depo/warehouse", set by chart/templates/23-jupyterhub.yaml's
-    # `pre_spawn_hook` from `.Values.nessie.catalog.warehouse.location`, NOT
-    # a bucket-only name).
+    # Final-review fix wave: `lakehouse.warehouse` mirrors the working
+    # Zeppelin reference (chart/templates/_zeppelin.tpl) byte-for-byte for
+    # the SAME Nessie REST catalog -- it is the FULL warehouse location
+    # (NESSIE_WAREHOUSE carries e.g. "s3://depo/warehouse", set by
+    # chart/templates/23-jupyterhub.yaml's `pre_spawn_hook` from
+    # `.Values.nessie.catalog.warehouse.location`, NOT a bucket-only name).
+    # `rawlake.warehouse` stays the bare registered NAME "rawdata" (same
+    # pattern the REST catalog resolves that warehouse by everywhere else).
     #
-    # Sandbox v2 (Task 4): the sandbox catalog's warehouse is the full
-    # `s3a://<sandbox-bucket>/` form -- a bare bucket name silently
-    # mis-scopes every table this helper creates. Unified sandbox: the
-    # Nessie catalog name (NESSIE_SANDBOX_CATALOG, e.g. "sandbox") IS the S3
-    # bucket name (`.Values.sandbox.bucket`/`.Values.sandbox.namespace` are
-    # the SAME literal, chart/values.yaml) -- no more per-dept
-    # "sandbox_<dept>" -> "sandbox-<dept>" underscore/dash translation.
+    # Whole-branch review C1 fix (2026-08-07-sandbox-v2 final review): the
+    # sandbox catalog's `warehouse` must be the REGISTERED NAME
+    # (NESSIE_SANDBOX_CATALOG, e.g. "sandbox" -- the Nessie
+    # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION registry key,
+    # chart/templates/04-nessie-ha.yaml), NOT an `s3a://<bucket>/` location
+    # string -- the SAME NAME Trino's `iceberg.rest-catalog.warehouse=
+    # sandbox` (chart/templates/06-trino-ha.yaml) and this file's own
+    # `iceberg_sandbox()`/`_iceberg_props(warehouse=...)` already use. A
+    # location-string `warehouse` value matches neither the registered NAME
+    # nor the exact registered LOCATION (`s3://sandbox/warehouse`, note the
+    # extra `/warehouse` suffix and `s3://` vs `s3a://` scheme), so Nessie
+    # falls back to the DEFAULT warehouse (`s3://depo/warehouse`) -- Spark
+    # sandbox writes would silently land in the PROD `depo` bucket.
     nu = _e("NESSIE_URI"); sb = _e("NESSIE_SANDBOX_CATALOG")
     wh = os.environ.get("NESSIE_WAREHOUSE", "s3://depo/warehouse")
-    sb_warehouse = "s3a://%s/" % sb
+    sb_warehouse = sb
 
     def cat(name, warehouse):
         return {f"spark.sql.catalog.{name}": "org.apache.iceberg.spark.SparkCatalog",

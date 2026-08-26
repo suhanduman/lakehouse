@@ -274,13 +274,15 @@ tests:
           path: data["spark-defaults.conf"]
           pattern: 'spark\.sql\.catalog\.sandbox\.uri=http://.*:19120/iceberg/'
       # warehouse mirrors images/jupyter/lakehouse_nb.py's _spark_conf()
-      # byte-for-byte: the FULL s3a://<bucket>/ location, not the bare
-      # registered warehouse NAME (see _zeppelin.tpl's define-header
-      # comment for why: Spark's Iceberg RESTCatalog client does not
-      # reliably resolve a bare server-side-registered name).
+      # byte-for-byte: the bare REGISTERED WAREHOUSE NAME ("sandbox"), not
+      # an s3a://<bucket>/ location string -- see _zeppelin.tpl's
+      # define-header comment (whole-branch review C1 fix, 2026-08-07-
+      # sandbox-v2 final review): a location string matches neither the
+      # registered NAME nor the exact registered LOCATION, so Nessie falls
+      # back to the DEFAULT warehouse (prod `depo` bucket).
       - matchRegex:
           path: data["spark-defaults.conf"]
-          pattern: 'spark\.sql\.catalog\.sandbox\.warehouse=s3a://sandbox/'
+          pattern: '(?m)^\s*spark\.sql\.catalog\.sandbox\.warehouse=sandbox$'
       - matchRegex:
           path: data["spark-defaults.conf"]
           pattern: 'spark\.sql\.catalog\.sandbox\.io-impl=org\.apache\.iceberg\.aws\.s3\.S3FileIO'
@@ -584,6 +586,66 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION")].name
           pattern: "NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION"
         documentIndex: 1
+
+  # --- Coherence guard (whole-branch review I1 fix): several places
+  # hardcode the literal "sandbox" (Trino catalog name/warehouse, Nessie
+  # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION env NAME, rules.json's
+  # "catalog":"sandbox") while others read `.Values.sandbox.namespace`/
+  # `.Values.sandbox.bucket` -- a mismatched operator override would
+  # silently misroute engines. The render must fail loudly instead. --------
+
+  - it: "sandbox v2 (I1 coherence guard): sandbox.enabled + sandbox.namespace != 'sandbox' FAILS the render loudly"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+      sandbox.namespace: "kum-havuzu"
+    asserts:
+      - failedTemplate:
+          errorMessage: "sandbox.namespace and sandbox.bucket must both be 'sandbox' in this release — the Trino catalog and Nessie warehouse registration are keyed on that literal; per-name configurability is future work"
+
+  - it: "sandbox v2 (I1 coherence guard): sandbox.enabled + sandbox.bucket != 'sandbox' FAILS the render loudly"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+      sandbox.bucket: "kum-havuzu"
+    asserts:
+      - failedTemplate:
+          errorMessage: "sandbox.namespace and sandbox.bucket must both be 'sandbox' in this release — the Trino catalog and Nessie warehouse registration are keyed on that literal; per-name configurability is future work"
+
+  - it: "sandbox v2 (I1 coherence guard): sandbox.enabled=false + sandbox.namespace != 'sandbox' does NOT trigger the guard (sandbox not meaningfully enabled)"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: false
+      sandbox.namespace: "kum-havuzu"
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: nessie
+          any: true
+
+  - it: "sandbox v2 (I1 coherence guard): sandbox.enabled + default namespace/bucket ('sandbox') renders cleanly -- guard does NOT fire"
+    templates:
+      - 04-nessie-ha.yaml
+    set:
+      auth.oidc.enabled: true
+      oidc.secretName: oidc-credentials
+      sandbox.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: nessie
+          any: true
 
   - it: "sandbox v2 (Task 3 review fix): sandbox.enabled=false (default) -- NO NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION renders, existing WAREHOUSE/RAWDATA registrations unaffected"
     templates:

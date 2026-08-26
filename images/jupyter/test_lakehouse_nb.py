@@ -59,14 +59,19 @@ def test_spark_conf_warehouse_values_match_zeppelin_reference(monkeypatch):
     # FULL warehouse location (NESSIE_WAREHOUSE, unmodified), `rawlake`
     # stays the bare "rawdata" name.
     #
-    # Sandbox v2 (Task 4): the unified sandbox catalog's warehouse is the
-    # full "s3a://sandbox/" form -- the Nessie catalog name IS the S3
-    # bucket name now (no more per-dept "sandbox_<dept>" -> "sandbox-<dept>"
-    # underscore/dash translation).
+    # Whole-branch review C1 fix (2026-08-07-sandbox-v2 final review): the
+    # unified sandbox catalog's warehouse must be the REGISTERED NAME
+    # ("sandbox", i.e. NESSIE_SANDBOX_CATALOG's value) -- the SAME NAME
+    # Trino's sandbox.properties (`iceberg.rest-catalog.warehouse=sandbox`)
+    # and this module's own iceberg_sandbox()/_iceberg_props(warehouse=...)
+    # already use -- NOT an "s3a://sandbox/" location string, which matches
+    # neither the registered NAME nor the exact registered LOCATION
+    # ("s3://sandbox/warehouse") and would silently fall back to the
+    # DEFAULT warehouse (prod `depo` bucket).
     c = _load(monkeypatch)._spark_conf()
     assert c["spark.sql.catalog.lakehouse.warehouse"] == "s3://depo/warehouse"
     assert c["spark.sql.catalog.rawlake.warehouse"] == "rawdata"
-    assert c["spark.sql.catalog.sandbox.warehouse"] == "s3a://sandbox/"
+    assert c["spark.sql.catalog.sandbox.warehouse"] == "sandbox"
 
 
 def test_trino_connect_args(monkeypatch):
