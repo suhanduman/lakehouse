@@ -347,8 +347,20 @@ spec:
         securityContext:
           {{- $csc | nindent 10 }}
         {{- end }}
-        command: ["redis-server"]
-        args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+        # Conditional requirepass: server and client must agree. When a password
+        # IS supplied (inline or out-of-band Secret), enforce it. When none is
+        # supplied, run no-auth instead of leaving the literal "$(REDIS_PASSWORD)"
+        # string as the password (client sends empty password → AUTH mismatch).
+        # Passwordless is still protected by the namespace's default-deny +
+        # intra-namespace-only NetworkPolicy.
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          if [ -n "$REDIS_PASSWORD" ]; then
+            exec redis-server --requirepass "$REDIS_PASSWORD" --save "" --appendonly no
+          else
+            exec redis-server --save "" --appendonly no
+          fi
         env:
         - {name: REDIS_PASSWORD, valueFrom: {secretKeyRef: {name: superset-redis-auth, key: password, optional: true}}}
         ports: [{containerPort: 6379, name: redis}]

@@ -143,10 +143,9 @@ tests:
         documentSelector:
           path: metadata.labels.app
           value: superset-redis
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--requirepass"
-          any: true
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "--requirepass"
         documentSelector:
           path: metadata.labels.app
           value: superset-redis
