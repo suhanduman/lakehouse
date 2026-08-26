@@ -857,6 +857,18 @@ eval "$(tools/lakehouse-cli login --domain <domain>)"
   sürücüsü yerel bir Zeppelin/notebook kurulumuna eklenirse, JDBC URL
   `jdbc:trino://$TRINO_HOST:443/lakehouse?SSL=true`, `accessToken` driver
   property'si `$LAKEHOUSE_TOKEN` olarak set edilir.
+- **BI/analiz araçları — JDBC ve ODBC (şartname 3.5.2.5):** Trino, istemci
+  tarafında hem **JDBC** hem **ODBC** ile bağlanılabilir. Java-temelli araçlar
+  (DBeaver, Superset, Zeppelin, JetBrains) yukarıdaki **JDBC** yolunu kullanır.
+  Yalnızca **ODBC** konuşan iş-zekâsı araçları (Excel/Power Query, Power BI,
+  Tableau/Qlik gibi Windows masaüstü BI'ları) için **Trino ODBC sürücüsü**
+  (açık-kaynak Trino'ya karşı çalışan Starburst ODBC sürücüsü) kurulur; DSN
+  host `$TRINO_HOST`, port `443`, TLS açık, kimlik = aynı **JWT/bearer**
+  (`$LAKEHOUSE_TOKEN`) — chart'ın Trino oauth2/jwt authenticator'ıyla uyumlu,
+  kullanıcı adı/parola YOKTUR. **Not (yön ayrımı):** ODBC burada *istemci →
+  Trino* içindir; Trino'nun bir kaynağa (MSSQL/PG) *dışa* federe bağlanması
+  ayrı bir yoldur ve **JDBC** kullanır (bkz. `sqlserver`/`postgresql` Trino
+  connector'ları), ODBC değil. Canlı Excel↔ODBC↔Trino testi = OpenShift UAT.
 - **Endpoint'ler:** `trino.<domain>`, `nessie.<domain>`, `auth.<domain>`
   (chart'ın TLS-terminasyonlu route/ingress'leri — sertifika kurum PKI'sinden
   veya cert-manager'dan gelir). **Dış-ağ/kurumsal TLS notu:** laptop kurumsal
@@ -904,6 +916,36 @@ script-unit ile doğrulandı; canlı device-flow (Keycloak) + yerel-araç→Trin
 E2E + token-audience kabulü = OpenShift UAT. Yazma yolu Trino CTAS
 (svc-trino-nessie commit'ler); doğrudan-Nessie kullanıcı-token yazma +
 auto-refresh + cluster-Spark-from-laptop (Spark Connect) = kapsam dışı/Day-2."*
+
+---
+
+## Açık tablo formatları — Hudi/Delta okuma (şartname 3.8.4)
+
+Şartname 3.8.4, farklı açık tablo formatlarının (Apache Hudi, Delta Lake vb.)
+MPP SQL motoru (Trino) ve dağıtık işlem motoru (Spark) tarafından açık
+spesifikasyonları üzerinden **"okuyabilecek biçimde konumlandırılmış"**
+olmasını ister — yani okuma **kapasitesi** mimaride bulunmalıdır.
+
+- **Trino:** `delta_lake` ve `hudi` connector'ları Trino dağıtımında
+  **yerleşiktir** — ayrıca bir eklenti kurulumu gerektirmez. Bu platformun
+  varsayılan katalogları (`lakehouse`/`rawlake`/`sandbox`) **Iceberg +
+  Nessie** üzerine kuruludur; Trino'nun delta/hudi connector'ları ise bir
+  **Hive Metastore/Glue** kataloğu bekler. Bir müşteride gerçekten Delta/Hudi
+  veri kümesi olduğunda, o metastore + S3 bucket'ına yönelen bir
+  `catalog/<ad>.properties` (`connector.name=delta_lake` veya `hudi`) eklenerek
+  okuma etkinleşir — mevcut federe-sorgu mimarisi bunu doğrudan destekler.
+- **Spark:** Delta'yı (`delta-spark`) ve Hudi'yi (`hudi-spark-bundle`) standart
+  paketlerle (`--packages` / notebook `pip`) okur; on-cluster Jupyter/Zeppelin
+  ve yerel Spark bu paketleri ekleyerek aynı S3 verisini okuyabilir.
+
+**Konumlandırma:** Bu kurulumun kendi katalogları Iceberg'dir (müşteri verisi
+Iceberg/Nessie); Delta/Hudi için **çalışan bir katalog varsayılan olarak
+kurulmaz** — çünkü bu, sağlanmayan bir Hive Metastore'a bağımlı yanıltıcı bir
+iskele olurdu. Bunun yerine, her iki motorun da bu formatları açık
+spesifikasyonları üzerinden okuma yeteneği yerinde ve etkinleştirilebilir
+durumdadır; böyle veri geldiğinde yukarıdaki adımlarla açılır. Canlı
+Delta/Hudi okuma doğrulaması (müşteri metastore + veri kümesi ile) =
+OpenShift UAT.
 
 ---
 
