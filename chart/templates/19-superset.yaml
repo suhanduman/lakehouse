@@ -130,7 +130,8 @@ data:
 {{- if .Values.superset.alertsReports.enabled }}
     # --- Alerts & Reports async stack (Redis broker/results + Celery beat schedule) ---
     from celery.schedules import crontab
-    _redis = "redis://:%s@%s:6379" % (os.environ.get("REDIS_PASSWORD", ""), os.environ["REDIS_HOST"])
+    import urllib.parse as _urlparse
+    _redis = "redis://:%s@%s:6379" % (_urlparse.quote(os.environ.get("REDIS_PASSWORD", ""), safe=""), os.environ["REDIS_HOST"])
     class CeleryConfig:
         broker_url = _redis + "/0"
         result_backend = _redis + "/1"

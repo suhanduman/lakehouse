@@ -48,6 +48,12 @@ tests:
         documentSelector:
           path: metadata.name
           value: superset-config
+      - matchRegex:
+          path: data["superset_config.py"]
+          pattern: "_urlparse\\.quote\\(os\\.environ\\.get\\(\"REDIS_PASSWORD\""
+        documentSelector:
+          path: metadata.name
+          value: superset-config
 
   - it: fails loud when alertsReports on but no SMTP host
     set:
