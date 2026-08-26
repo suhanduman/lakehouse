@@ -179,3 +179,50 @@ tests:
         documentSelector:
           path: metadata.labels.app
           value: superset
+
+  - it: renders worker with celery command + trino sidecar when on (jwt)
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.trino.authMode: jwt
+      auth.oidc.enabled: true
+      superset.trino.tls.enabled: true
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-worker
+          any: true
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "celery .* worker"
+        documentSelector:
+          path: metadata.name
+          value: superset-worker
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: trino-token-refresher
+          any: true
+        documentSelector:
+          path: metadata.name
+          value: superset-worker
+
+  - it: renders no worker when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # notContains on metadata.name (a scalar) errors "expect to be an array"
+      # against this repo's installed helm-unittest (v1.1.1) validator — same
+      # issue documented above for the redis-off test. Use containsDocument +
+      # `not: true` + `any: true` instead (universal negation across every
+      # rendered document; non-vacuity proven by the forced-leak probe in the
+      # task report).
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-worker
+          any: true
+        not: true
