@@ -445,26 +445,54 @@ içermediği (thin-layer her iki durumda güvenli — üzerine yazar); GET/PUT R
 zarfının tam şekli; ve platform Zeppelin'inin chart'ın shiro'sunu (OIDC ile
 override etmeyip) kullandığının doğrulanması. Interpreter identity SALT-OKUNUR;
 per-user Trino kimliği (Zeppelin Shiro/AD ile auth eder, OIDC değil) Day-2
-per-user-identity slice'ıdır; sandbox WRITE (`%pyspark` → `sandbox_<dept>`)
-slice (c2)'dir.
+per-user-identity slice'ıdır; sandbox WRITE (`%pyspark` → unified `sandbox`
+katalogu, kişi-başına şema `sandbox.<user>`) sandbox v2 (c2 halefi) slice'ıdır.
 
 ---
 
 ## Analist sandbox'ı (sandbox v2 — unified, Consumption slice c2 halefi)
 
 Bu bölümün eski hali, her departman için AYRI bir S3 bucket'ı + Nessie
-katalogu + Zeppelin instance'ı + Keycloak client'ı üreten bir
-per-departman tasarımı (`sandbox.departments[]`) belgeliyordu
-(`chart/templates/09c-zeppelin-sandbox.yaml`). **2026-08-07-sandbox-v2**
-slice'ının son görevinde (Task 5) bu tasarım TAMAMEN kaldırılmış ve tek,
-BİRLEŞİK bir sandbox ile değiştirilmiştir:
+katalogu + Zeppelin instance'ı + Keycloak client'ı üreten bir per-departman
+tasarımı (`sandbox.departments[]`) belgeliyordu. **2026-08-07-sandbox-v2**
+slice'ı (Task 1-5) bu tasarımı TAMAMEN kaldırıp tek, BİRLEŞİK bir sandbox ile
+değiştirdi:
 
-- **Model:** tek bir S3 bucket'ı + Nessie namespace/Trino katalogu
-  (`sandbox.bucket`/`sandbox.namespace`, varsayılan `"sandbox"`) VE tek bir
-  Keycloak service-account client'ı (`svc-sandbox`) — her izinli kullanıcı
-  (`sandbox.allowedGroups`) AYNI kimliği paylaşır, izolasyon yalnızca
-  kullanıcı-başına bir Trino/Spark/PyIceberg ŞEMA konvansiyonuyla sağlanır
-  (`sandbox.<kullanıcı>`).
+- **Model — bir bucket, bir namespace, bir kimlik, kişi-başına şema:** tek
+  bir S3 bucket'ı (`sandbox.bucket`, varsayılan `"sandbox"`) + tek bir Nessie
+  namespace'i/warehouse'u + tek bir Trino katalogu (`sandbox`) + tek bir
+  Keycloak service-account client'ı (`svc-sandbox`). `sandbox.allowedGroups`
+  listesindeki bir AD grubunun üyesi olan HERKES AYNI `svc-sandbox`
+  Nessie/S3 kimliğini VE aynı `sandbox` Nessie namespace'ini/Trino katalogunu
+  paylaşır — analistler arası izolasyon Nessie/Trino yetkilendirmesiyle
+  DEĞİL, kişi-başına bir Trino/Spark/PyIceberg ŞEMA konvansiyonuyla sağlanır
+  (`sandbox.<kullanıcı>`, kullanıcının OIDC `preferred_username`'inden
+  türetilir).
+- **Erişim yolları:** (1) **Trino CTAS/view/temp** — `sandbox.allowedGroups`
+  üyesi herkes `sandbox` katalogunda tam okuma-yazmaya sahiptir (`rules.json`:
+  `.*` kullanıcısı için `sandbox` katalogunda `allow: all` + şema-owner +
+  `SELECT/INSERT/DELETE/UPDATE/OWNERSHIP` tablo yetkisi — şartname 3.5.4.2).
+  (2) **PyIceberg/Spark** — JupyterHub'ın kişi-başına notebook pod'u
+  (aşağıdaki bölüm) VEYA paylaşılan Zeppelin'in `%pyspark` interpreter'ı,
+  `svc-sandbox` OAuth2 kimliğiyle Nessie REST katalogunu doğrudan yazar.
+- **Prod (Silver/Gold) salt-okunur kalır (şartname 3.5.4.1):** sandbox
+  katalogunun eklenmesi `lakehouse`/`rawlake` katalogları için mevcut
+  `rules.json` satırlarını DEĞİŞTİRMEZ — sandbox kuralları ADDITIVE'dir,
+  prod'un read-only catch-all'ı byte-birebir aynı kalır.
+- **Sandbox↔prod izolasyonu (şartname 3.5.4.3):** sandbox kendi S3
+  bucket'ında + kendi, adıyla-kayıtlı Nessie warehouse'unda yaşar
+  (`chart/templates/04-nessie-ha.yaml`'ın
+  `NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION`) — prod'un `warehouse`/
+  `rawdata` warehouse'larından ayrı bir S3 path'i VE ayrı bir Nessie kayıt
+  anahtarı; prod verisiyle asla karışmaz.
+- **Config:** `sandbox.enabled` (varsayılan `false`) + `sandbox.bucket`/
+  `sandbox.namespace` (varsayılan `"sandbox"`) + `sandbox.allowedGroups`
+  (login-gate AD grup DN listesi; boşsa hiçbir kullanıcı giremez) +
+  `sandbox.oidc.clientSecret` (`svc-sandbox` service-account secret'ı).
+- **`components.jupyter` artık `sandbox.enabled: true` GEREKTİRİR**
+  (fail-loud coherence guard, `chart/templates/23-jupyterhub.yaml`) —
+  JupyterHub kullanıcıları `sandbox.<user>` şemasına yazar, bu altyapı
+  `sandbox.enabled` ile gelir.
 - **Paylaşılan Zeppelin de yazar:** `chart/templates/09-zeppelin.yaml` +
   `chart/templates/_zeppelin.tpl` — chart'ın TEK Zeppelin instance'ı,
   `sandbox.enabled: true` iken `%pyspark` interpreter'ında `svc-sandbox`
@@ -472,10 +500,18 @@ BİRLEŞİK bir sandbox ile değiştirilmiştir:
   salt-okunur `lakehouse`/`rawlake` katalogları YANINDA, ADDITIVE).
 - **JupyterHub** (aşağıdaki bölüm) AYNI birleşik kimliği/namespace'i
   kullanır — bkz. o bölüm.
-- **Coherence guard:** `sandbox.enabled: true` + `auth.oidc.enabled: false`
-  render'ı GÜRÜLTÜLÜ ŞEKİLDE BAŞARISIZ kılar (`chart/tests/
-  sandbox_test.yaml`) — sandbox katalogunun OAuth2 kablolaması aynı OIDC
-  issuer mekanizmasına bağımlıdır.
+- **Coherence guard:** `components.zeppelin`/`components.jupyter` +
+  `sandbox.enabled: true` + `auth.oidc.enabled: false` render'ı GÜRÜLTÜLÜ
+  ŞEKİLDE BAŞARISIZ kılar (`chart/templates/_zeppelin.tpl` ve
+  `23-jupyterhub.yaml`, `chart/tests/sandbox_test.yaml`/`jupyter_test.yaml`)
+  — sandbox katalogunun OAuth2 kablolaması aynı OIDC issuer mekanizmasına
+  bağımlıdır.
+
+**Bilinen sınırlama:** *"Sandbox v2 helm-unittest + podman-spike ile
+doğrulandı; tam Keycloak→per-user CTAS E2E + iki-kullanıcı-ayrı-şema +
+Superset-SQL-Lab ortak-şema sınırı = OpenShift UAT. Kişisel şema İSTEMCİ
+konvansiyonu (Trino-principal enforce etmez); sert kişi-yazma-kilidi + prod
+satır/kolon = Day-2. Rol modeli (admin/analyst/user) = Slice B."*
 
 Detaylı tasarım kararları için `.superpowers/sdd/2026-08-07-sandbox-v2/`
 altındaki plan/task dokümanlarına bakın.
@@ -487,18 +523,18 @@ altındaki plan/task dokümanlarına bakın.
 `auth.oidc.enabled: true` iken (medium/large tier'larda varsayılan; dev'de
 kapalı) Nessie'nin kendi kimlik doğrulaması VE yetkilendirmesi devreye girer
 (`chart/templates/04-nessie-ha.yaml`) — bu, gizli kalmış bir prod hatasını
-DÜZELTİR ve c2'nin metadata-gap sınırlamasını KAPATIR.
+DÜZELTİR ve sandbox'ın metadata-gap sınırlamasını KAPATIR.
 
-- **NEDEN — gizli 401 + c2 metadata-gap:** Nessie'nin Quarkus OIDC eklentisi
+- **NEDEN — gizli 401 + metadata-gap:** Nessie'nin Quarkus OIDC eklentisi
   LAZY discovery yapar: `auth.oidc.enabled` zaten AÇIKTI (medium/large'da,
-  b1/b2/c1/c2'den beri), Nessie pod'u `Running` kalıyordu, ama HİÇBİR
-  committer (Trino, Spark, Connect, Zeppelin, sandbox instance'ları) gerçekte
-  kendi kimliğiyle authenticate OLMUYORDU — yani her REST çağrısı sessizce
-  401/500 alıyordu ya da (authorization henüz yokken) sınırsız/kimliksiz
-  yazma mümkündü. Bu slice her committer'a GERÇEK bir Keycloak
-  service-account kimliği verir VE Nessie CEL authz kurallarını ekler — c2
-  bölümünün yukarıda işaretlediği "metadata-gap" (bir departman kullanıcısı
-  kendi `sandbox_<dept>` katalogunun dışına commit gönderebiliyordu) bu CEL
+  b1/b2/c1/sandbox'tan beri), Nessie pod'u `Running` kalıyordu, ama HİÇBİR
+  committer (Trino, Spark, Connect, Zeppelin, sandbox yazarı) gerçekte kendi
+  kimliğiyle authenticate OLMUYORDU — yani her REST çağrısı sessizce 401/500
+  alıyordu ya da (authorization henüz yokken) sınırsız/kimliksiz yazma
+  mümkündü. Bu slice her committer'a GERÇEK bir Keycloak service-account
+  kimliği verir VE Nessie CEL authz kurallarını ekler — sandbox'ın
+  yukarıda işaretlediği "metadata-gap" (bir kullanıcı kendi
+  `sandbox.<user>` şemasının dışına commit gönderebiliyordu) bu CEL
   kurallarıyla artık REDDEDİLİR.
 - **5 kimlik + CEL kapsamı (`NESSIE_SERVER_AUTHORIZATION_RULES_*`,
   `04-nessie-ha.yaml`):** herkes authenticate olduğunda READ tüm depoya
@@ -508,8 +544,9 @@ DÜZELTİR ve c2'nin metadata-gap sınırlamasını KAPATIR.
   `svc-connect-nessie` (Kafka Connect Iceberg sink) YALNIZCA `rawlake`/Bronze
   path'ine yazar; `svc-zeppelin-nessie` (paylaşılan c1 Zeppelin) HİÇBİR yazma
   kuralında yer almaz — default-deny onu salt-okunur bırakır (canlı
-  doğrulanmıştır); `svc-sandbox-<dept>` (c2, her departman için bir tane)
-  YALNIZCA kendi `sandbox_<dept>` path'ine yazar. Her yazan kimlik ayrıca
+  doğrulanmıştır); `svc-sandbox` (sandbox v2, UNIFIED — tek kimlik, her
+  izinli analist onu paylaşır) YALNIZCA `.Values.sandbox.namespace`
+  path-önekine yazar. Her yazan kimlik ayrıca
   ref-seviyesinde bir `COMMIT_TO_MAIN` kuralına dahildir (path bağlanamayan,
   commit-başına bir kez değerlendirilen ayrı bir kural sınıfı) —
   `svc-zeppelin-nessie` bu OR-zincirinden de bilinçli olarak dışarıdadır.
@@ -541,24 +578,23 @@ DÜZELTİR ve c2'nin metadata-gap sınırlamasını KAPATIR.
   (`nessie.machineAuth.{trino,spark,connect,zeppelin}ClientSecret` —
   `chart/values.yaml`) ilk kurulumdan ÖNCE `secrets.mode`'a göre out-of-band
   sağlayın (dev-convenience boş string varsayılanı yalnızca dev/smoke-test
-  içindir); `svc-sandbox-<dept>` kimlikleri zaten c2'nin kendi operatör
-  checklist'inin parçasıdır (yukarıya bakın).
+  içindir); `svc-sandbox` kimliğinin secret'ı (`sandbox.oidc.clientSecret`)
+  zaten sandbox v2'nin kendi operatör checklist'inin parçasıdır (yukarıya
+  bakın).
 
-**Sandbox path-confinement — UAT-onay gereken bilinen sınırlama:** c2'den
-devralınan `svc-sandbox-<dept>` CEL kuralı (`path.startsWith('sandbox_<dept>')`,
-`04-nessie-ha.yaml`) `svc-connect-nessie`'nin Bronze rotasıyla AYNI
-catalog-adı-vs-Nessie-namespace inceliğini taşır: c2 sandbox Spark
-**katalogunun** adı `sandbox_<dept>`'tir, ama bir analistin gerçekte
-yazdığı Nessie content-key namespace'i, tabloyu NASIL nitelediğine bağlıdır
-— `sandbox_<dept>` namespace'i altında yazmadıkça CEL prefix'i eşleşmez.
-Bu, connect-write kuralının aksine, GÜVENLİ tarafta bir belirsizlik: yanlış
-namespace REDDEDİLİR (fail-closed), fazla-izin verilmez. Kural varsayılan
-olarak KAPALI da gelir (`sandbox.enabled: false`). Kural olduğu gibi
-bırakılmıştır (fail-closed) — tam namespace prefix eşleşmesinin analistlerin
-gerçek yazma alışkanlığıyla (sandbox_<dept> altında nitelenmiş tablolar)
-uyuştuğunun doğrulanması bir **OpenShift UAT** teslimatıdır; c2'nin
-metadata-gap'ini bu noktada tam kapatmak sandbox-hardening'in bir
-UAT-sonrası takip maddesidir.
+**Sandbox path-confinement — UAT-onay gereken bilinen sınırlama:** unified
+`svc-sandbox` CEL kuralı (`path.startsWith(.Values.sandbox.namespace)`,
+`04-nessie-ha.yaml`) YALNIZCA PyIceberg/Spark'ın DOĞRUDAN Nessie REST-katalog
+yazımlarını (JupyterHub'ın kişi-başına notebook pod'u + paylaşılan Zeppelin)
+kapsar — Trino'nun sandbox CTAS yazımları `svc-trino-nessie`'nin ZATEN
+broad-write kimliğiyle committer olur ve bu CEL kuralına hiç düşmez (Trino
+tarafında izolasyonu `rules.json`'ın kendi katalog-ACL'i sağlar, Nessie CEL
+değil). PyIceberg/Spark tarafında ise her yazım `sandbox.<user>` şema/
+namespace'i ALTINDA nitelenmiş olduğu SÜRECE CEL prefix'i eşleşir (fail-closed
+— yanlış/eksik nitelenmiş bir yazım REDDEDİLİR, fazla-izin verilmez). Bu iki
+farklı yazım yolunun (Trino ACL vs Nessie CEL) birlikte GERÇEKTEN kişi-başı
+şema disiplinini uyguladığının, gerçek bir analistin yazma alışkanlığına karşı
+uçtan-uca doğrulanması bir **OpenShift UAT** teslimatıdır.
 
 **Bilinen sınırlama:** Nessie machine-auth helm-unittest ile doğrulanmıştır
 (gating, 5-kimlik CEL politikası, secret-injection mekanizmalarının her
@@ -573,7 +609,7 @@ Strimzi Kafka Connect stand-up'ı koşulmamıştır; SparkApplication
 secret-injection mekanizması spark-operator KAYNAK KODUNDAN — `internal/
 webhook/sparkpod_defaulter.go` — okunarak doğrulanmıştır, çalışan bir
 spark-operator'a karşı DEĞİL). Tam authenticated Keycloak→her-5-kimlik→
-Nessie E2E'si (özellikle `svc-sandbox-<dept>` write-confinement'ının CEL
+Nessie E2E'si (özellikle unified `svc-sandbox` write-confinement'ının CEL
 üzerinden GERÇEKTEN reddedildiğinin doğrulanması), b1'in Superset→Trino
 JWT auth-zincirinin VE b2'nin dbt-Gold'unun Trino 476 üzerinde hâlâ
 çalıştığının yeniden-doğrulanması, VE **spark-operator'ın mutating admission
@@ -588,66 +624,70 @@ test cluster'ında koşulamaz).
 ## JupyterHub kişi-başına notebook sandbox'ı (per-user sandbox)
 
 `components.jupyter: true` iken (dev/medium/large tier'larda VARSAYILAN
-KAPALI — `chart/values.yaml`, `values-medium.yaml`/`values-large.yaml`)
-chart, elle-örülmüş (hand-rolled) bir JupyterHub kurar
-(`chart/templates/23-jupyterhub.yaml`): her analist KENDİ notebook pod'unu
-alır — c2'nin PAYLAŞILAN, departman-başına-bir-instance Zeppelin'inin
-aksine, gerçek bir kişi-başına izolasyon modeli.
+KAPALI — `chart/values.yaml`, `values-medium.yaml`/`values-large.yaml`;
+sandbox v2'nin coherence guard'ı yüzünden `sandbox.enabled: true` da
+GEREKTİRİR, yukarıya bakın) chart, elle-örülmüş (hand-rolled) bir JupyterHub
+kurar (`chart/templates/23-jupyterhub.yaml`): her analist KENDİ notebook
+pod'unu alır — paylaşılan, tek-instance Zeppelin'in aksine, gerçek bir
+kişi-başına POD izolasyonu (ama BİRLEŞİK sandbox KİMLİĞİ — aşağıya bakın).
 
-- **Model — KubeSpawner + `pre_spawn_hook`:** Hub, kullanıcıyı Keycloak'ın
-  `jupyter` client'ı üzerinden (GenericOAuthenticator) authenticate eder;
-  `manage_groups=True` + `claim_groups_key=groups` sayesinde
-  `spawner.user.groups` login anında SENKRON olarak doldurulur (await
-  gerekmez). `pre_spawn_hook` bu grup listesinden `sandbox-` önekli olanı
-  bulur, önekten sonraki kısmı (`dept` kodu) c2'nin
-  `sandbox.departments[]` listesinden türetilen `DEPTS` sözlüğünde arar ve
-  BULUNURSA o departmanın c2 kaynaklarını (`sa-sandbox-<name>` K8s SA,
-  `s3-sandbox-<name>` scoped S3 Secret, `svc-sandbox-<name>` Nessie OAuth2
-  client'ı, `sandbox_<name>` katalogu) pod'a enjekte eder — YENİ kaynaklar
-  üretmez, c2'nin ZATEN var olan per-dept kaynaklarını YENİDEN KULLANIR. AD
-  grubunun CN'i (`sandbox.departments[].adGroup`'un CN kısmı, ör.
-  `sandbox-veri`) ile K8s kaynak adlarının türediği DNS-safe `name` alanı
-  (ör. `veri-bilimi`) BİLİNÇLİ OLARAK bağımsız iki alandır — `pre_spawn_hook`
-  ikisini asla karıştırmaz (bkz. `23-jupyterhub.yaml`'ın kendi başlık
-  yorumu).
-- **c2'yi TAMAMLAR, onun yerini almaz:** bir departmanın analistleri artık
-  İKİ notebook seçeneğine sahiptir — c2'nin paylaşılan, AD-grup-gated
-  Zeppelin instance'ı (`%spark`/`%pyspark`/`%trino`, çoklu-kullanıcı tek
-  pod) VE bu slice'ın kişi-başına JupyterHub pod'u (tam Python/PySpark
-  esnekliği, kendi $HOME'u, kendi paket kurulumu). İkisi AYNI departman
-  kaynaklarını (SA/S3-secret/Nessie-client/katalog) paylaşır — birinin
-  izolasyon garantisi diğerini de kapsar.
+- **Model — KubeSpawner + `pre_spawn_hook`, DEPT LOOKUP'SUZ:** Hub, kullanıcıyı
+  Keycloak'ın `jupyter` client'ı üzerinden (GenericOAuthenticator)
+  authenticate eder; `manage_groups=True` + `claim_groups_key=groups`
+  sayesinde `spawner.user.groups` login anında SENKRON olarak doldurulur
+  (await gerekmez). Login gate'i `sandbox.allowedGroups`'taki AD grup CN'leri
+  ile sınırlıdır (`allow_all=False`) — eski `DEPTS` sözlüğü/grup-adı-parse
+  mantığı YOKTUR, bu gate'ten geçen HERKES aynı yola girer. `pre_spawn_hook`
+  bu kullanıcıya sabit, unified sandbox kaynaklarını enjekte eder: SA
+  `sa-sandbox`, Nessie kimliği `svc-sandbox` (`NESSIE_CLIENT_ID`), katalog/
+  namespace `.Values.sandbox.namespace` (`NESSIE_SANDBOX_CATALOG`) — ve
+  kullanıcıya ÖZGÜ tek değer, `NESSIE_SANDBOX_SCHEMA = "<namespace>.<kullanıcı
+  adı>"` (`spawner.user.name`, Hub'ı authenticate eden `preferred_username`
+  claim'inden, dolayısıyla bir kullanıcının kendi spawn'ları arasında SABİT,
+  analistler arasında FARKLI).
+- **Paylaşılan Zeppelin'i TAMAMLAR, onun yerini almaz:** bir analistin artık
+  İKİ notebook seçeneği vardır — paylaşılan, AD-grup-gated Zeppelin
+  instance'ı (`%spark`/`%pyspark`/`%trino`, çoklu-kullanıcı tek pod) VE bu
+  slice'ın kişi-başına JupyterHub pod'u (tam Python/PySpark esnekliği, kendi
+  $HOME'u, kendi paket kurulumu). İkisi AYNI unified sandbox kimliğini/
+  katalogunu paylaşır — birinin altyapı/coherence garantisi diğerini de
+  kapsar; aralarındaki fark izolasyon MODELİ değil (her ikisi de aynı
+  `svc-sandbox` kimliğiyle yazar), çalışma zamanı İZOLASYONUDUR (kişi-başına
+  pod vs. çoklu-kullanıcı tek pod).
 - **İki hesaplama yolu:** (1) **PyIceberg direkt** — notebook pod'una
   `modify_pod_hook` ile doğrudan enjekte edilen `AWS_ACCESS_KEY_ID`/
-  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET` env değişkenleriyle,
-  ayrı bir driver/executor topolojisi olmadan REST-katalog + S3'e doğrudan
-  konuşur (hafif, hızlı, tek-pod). (2) **Spark-on-k8s** — notebook
-  process'inin KENDİSİ Spark driver'ıdır (client mode); executor pod'ları
-  `d["sa"]` (departmanın `sa-sandbox-<name>` SA'sı) ALTINDA, Spark'ın kendi
+  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET` env değişkenleriyle
+  (sabit `s3-sandbox`/`sandbox-oidc-credentials` Secret'larından, HER
+  kullanıcı için AYNI), ayrı bir driver/executor topolojisi olmadan
+  REST-katalog + S3'e doğrudan konuşur (hafif, hızlı, tek-pod). (2)
+  **Spark-on-k8s** — notebook process'inin KENDİSİ Spark driver'ıdır (client
+  mode); executor pod'ları sabit `sa-sandbox` SA'sı ALTINDA, Spark'ın kendi
   k8s-client'ı tarafından spawn edilir — `pre_spawn_hook`, bu konfigürasyonu
   `PYSPARK_SUBMIT_ARGS` ortam değişkeni olarak render eder (`--conf
   spark.kubernetes.*=... pyspark-shell`), böylece kernel içindeki düz bir
   `SparkSession.builder.getOrCreate()` notebook tarafında hiçbir ek kod
   gerektirmeden bu conf'ları otomatik alır (bu, pyspark'ın `spark-submit`'i
   arka planda başlatırken okuduğu belgelenmiş mekanizmadır).
-- **İzolasyon — S3 veri bariyeri + Nessie CEL metadata bariyeri:** c2 ile
-  AYNI iki katman — bir departman analistinin scoped S3 kimlik bilgisi
-  yalnızca KENDİ `sandbox-<name>` bucket'ında RW'dir (prod bucket'larında
-  yalnızca RO), VE Nessie machine-auth'un `svc-sandbox-<dept>` CEL kuralı
-  yalnızca `sandbox_<dept>` path-önekine yazmaya izin verir. Yani bir
-  `dept=veri` kullanıcısı SADECE `sandbox_veri` katalogunu okuyup/yazabilir
-  — başka bir departmanın katalogu/bucket'ı, aynı Hub'da çalışan başka bir
-  pod'un kaynaklarıdır ve bu kullanıcının kimlik bilgileriyle asla
-  erişilemez.
-- **Coherence guard — `components.jupyter` `auth.oidc.enabled` gerektirir:**
-  JupyterHub'ın authenticator'ı GenericOAuthenticator'dır, kimliksiz bir
-  fallback'i YOKTUR — bu yüzden `23-jupyterhub.yaml`'ın başında, c2/b1/b2 ile
-  AYNI desende bir fail-loud guard vardır: `components.jupyter: true` +
-  `auth.oidc.enabled: false` render'ı GÜRÜLTÜLÜ ŞEKİLDE BAŞARISIZ kılar
-  (`helm-unittest` `failedTemplate` testiyle regresyona karşı korunur,
-  `chart/tests/jupyter_test.yaml`) — aksi halde Hub'ın (backing Service'i
-  olmayan) `jupyter` Route/Ingress'i dangling kalır, hiçbir zaman
-  çalışamayacak bir Hub için.
+- **İzolasyon — kişi-başı ŞEMA konvansiyonu, kimlik DEĞİL:** her analistin
+  Nessie/S3 kimliği (`svc-sandbox`) AYNIDIR — sandbox v2'nin yukarıda
+  işaretlediği bilinen sınırlamayla tutarlı olarak, analistler arası
+  izolasyon Nessie/Trino yetkilendirmesiyle SAĞLANMAZ, yalnızca
+  `NESSIE_SANDBOX_SCHEMA`/`sandbox.<user>` İSTEMCİ konvansiyonuyla sağlanır
+  (`lakehouse_nb.py`'nin `spark()`/`iceberg()`/`trino()` yardımcıları bu
+  şemayı varsayılan hedef olarak kullanır). Sert bir kişi-başına yazma-kilidi
+  (Nessie/Trino'nun BİR kullanıcının başka bir kullanıcının şemasına yazmasını
+  gerçekten REDDETMESİ) Day-2'dir.
+- **Coherence guard'lar — `components.jupyter` hem `auth.oidc.enabled` HEM
+  `sandbox.enabled` gerektirir:** JupyterHub'ın authenticator'ı
+  GenericOAuthenticator'dır, kimliksiz bir fallback'i YOKTUR — bu yüzden
+  `23-jupyterhub.yaml`'ın başında, b1/b2/c1 ile AYNI desende iki fail-loud
+  guard vardır: `components.jupyter: true` + `auth.oidc.enabled: false` VE
+  `components.jupyter: true` + `sandbox.enabled: false` render'ı GÜRÜLTÜLÜ
+  ŞEKİLDE BAŞARISIZ kılar (`helm-unittest` `failedTemplate` testleriyle
+  regresyona karşı korunur, `chart/tests/jupyter_test.yaml`) — aksi halde
+  Hub'ın (backing Service'i olmayan) `jupyter` Route/Ingress'i dangling kalır,
+  veya kullanıcılar spawn edip henüz var olmayan sandbox altyapısına
+  çalışma-zamanında başarısız yazma denerdi.
 - **Paket esnekliği:** `images/jupyter` imajı KAPSAMLIdır —
   `quay.io/jupyter/pyspark-notebook` tabanı (pandas/numpy/scipy/
   scikit-learn/matplotlib/PySpark hazır) + `pyiceberg[s3fs,pyarrow]` +
@@ -660,32 +700,32 @@ aksine, gerçek bir kişi-başına izolasyon modeli.
   kümede İNTERNETE erişemeyeceğinden başarısız olur — bu bugün ÇÖZÜLMEMİŞ
   bir gelecek notudur; bir iç PyPI mirror'ı (ör. devpi/Nexus) sağlamak bu
   slice'ın kapsamı DIŞINDADIR.
-- **Operatör gereksinimleri:** c2'nin `sandbox.departments[]` listesini
-  TANIMLAYIN (boşsa `DEPTS` boş kalır, hiçbir kullanıcı spawn edemez); her
-  departman için gerçek AD/Keycloak grubunu sağlayın — CN'i `sandbox-`
-  ÖNEKİYLE BAŞLAMALIDIR (aşağıdaki UAT maddesine bakın); Keycloak `jupyter`
-  client'ının secret'ını (`jupyter.oidcClientSecret`, `secrets.mode`'a göre)
-  VE Hub<->proxy paylaşımlı token'ı (`jupyter.proxyToken`) sağlayın;
-  `images/jupyterhub` + `images/jupyter`'i build edip `global.imageRegistry`'ye
-  push edin (`versions.jupyterhubImageTag`/`versions.jupyterImageTag`).
+- **Operatör gereksinimleri:** `sandbox.enabled: true` + `sandbox.allowedGroups`
+  listesini TANIMLAYIN (boşsa hiçbir kullanıcı giriş yapamaz) ve
+  `sandbox.oidc.clientSecret`'i sağlayın (yukarıdaki sandbox v2 bölümü);
+  Keycloak `jupyter` client'ının secret'ını (`jupyter.oidcClientSecret`,
+  `secrets.mode`'a göre) VE Hub<->proxy paylaşımlı token'ı
+  (`jupyter.proxyToken`) sağlayın; `images/jupyterhub` + `images/jupyter`'i
+  build edip `global.imageRegistry`'ye push edin
+  (`versions.jupyterhubImageTag`/`versions.jupyterImageTag`).
 
 **Bilinen sınırlama / UAT:** bu slice helm-unittest ile doğrulanmıştır
-(gating, coherence guard, `pre_spawn_hook`'un departman türetme mantığı VE
-hiçbir sandbox grubu OLMAYAN bir kullanıcının spawn EDEMEDİĞİ —
-`chart/tests/jupyter_test.yaml`). Aşağıdakiler bir **OpenShift UAT**
-teslimatıdır (Keycloak yok + spark-operator/gerçek k8s-Spark yok olan mevcut
-test cluster'ında koşulamaz):
+(gating, iki coherence guard, `pre_spawn_hook`'un unified sandbox env
+enjeksiyonu VE `sandbox.allowedGroups` dışında kalan bir kullanıcının login
+gate'inde REDDEDİLDİĞİ — `chart/tests/jupyter_test.yaml`). Aşağıdakiler bir
+**OpenShift UAT** teslimatıdır (Keycloak yok + spark-operator/gerçek
+k8s-Spark yok olan mevcut test cluster'ında koşulamaz):
 - Tam Keycloak → Hub → kişi-başına-pod → Spark-on-k8s E2E'si (gerçek bir
   Keycloak login'inden gerçek bir notebook pod spawn'ına VE oradan gerçek
   executor pod'larının ayağa kalkmasına kadar).
-- spark-operator/executor RBAC'ının (`sandbox-<name>-spark-executor` Role/
+- spark-operator/executor RBAC'ının (unified `sandbox-spark-executor` Role/
   RoleBinding, spike'ın minimum-verb analiziyle türetilmiş) hedef cluster'da
   GERÇEKTEN yeterli olduğunun doğrulanması.
-- AD grubunun CN'inin `sandbox-` ile BAŞLAMASI gerektiği — `pre_spawn_hook`
-  bu önekle eşleşmeyen (veya `DEPTS` sözlüğünde karşılığı olmayan) bir
-  kullanıcıyı FAIL-CLOSED reddeder (`raise Exception`, spawn gerçekleşmez);
-  operatörün gerçek AD grup adlandırmasının bu varsayımla uyuştuğunun UAT'ta
-  doğrulanması gerekir.
+- İki farklı kullanıcının GERÇEKTEN ayrı `sandbox.<user>` şemalarına yazdığının
+  VE birbirinin şemasını (isteyerek/istemeyerek) EZMEDİĞİNİN canlı
+  doğrulanması — bugüne kadar yalnızca `pre_spawn_hook`'un env enjeksiyon
+  mantığı üzerinden helm-unittest ile doğrulandı, çalışan iki notebook
+  pod'una karşı DEĞİL (sandbox v2'nin known-limitation'ı).
 - `PYSPARK_SUBMIT_ARGS` mekanizmasının (yukarıdaki Spark-on-k8s yolu) gerçek
   bir spark-operator/k8s kümesine karşı canlı doğrulanması — bugüne kadar
   yalnızca spike'ın kaynak-kodu/dokümantasyon analiziyle doğrulanmıştır,
@@ -695,24 +735,25 @@ test cluster'ında koşulamaz):
 ### Turn-key kullanım
 
 Bir analist için akış: `jupyter.<domain>` adresine gidilir → Keycloak (`jupyter`
-client'ı, GenericOAuthenticator) ile login olunur → Hub, kullanıcının SENKRON
-gelen `groups` claim'inden `sandbox-` önekli grubu bulup KENDİ notebook
-pod'unu spawn eder (yukarıdaki `pre_spawn_hook`/`modify_pod_hook` mekanizmasıyla)
+client'ı, GenericOAuthenticator) ile login olunur → Hub, kullanıcının
+`sandbox.allowedGroups` login gate'inden geçtiğini doğrulayıp KENDİ notebook
+pod'unu spawn eder (yukarıdaki `pre_spawn_hook`/`modify_pod_hook` mekanizmasıyla,
+unified `svc-sandbox` kimliği + kişiye özgü `sandbox.<user>` şemasıyla)
 → pod ilk açılışta (`postStart` lifecycle hook, `cp -n ... || true`)
 `images/jupyter` imajına BAKE EDİLMİŞ `starter.ipynb`'yi kullanıcının
 `$HOME`'una kopyalar (kişi-başına PVC'yi asla ezmez) → analist bu defteri açıp
 `import lakehouse_nb as lh` sonrası üç turn-key motoru kullanır: `lh.iceberg()`
 (PyIceberg REST katalog, OAuth2 client-credentials, YAZILABİLİR), `lh.spark()`
-(Spark-on-k8s, `lakehouse`/`rawlake`/kendi `sandbox_<DEPT>` katalogları
-önceden tanımlı), `lh.trino()` (salt-okuma SQL cursor'ı).
+(Spark-on-k8s, `lakehouse`/`rawlake`/unified `sandbox` katalogları önceden
+tanımlı), `lh.trino()` (salt-okuma SQL cursor'ı).
 
 - **Enjekte edilen env (`chart/templates/23-jupyterhub.yaml`,
   `pre_spawn_hook`/`modify_pod_hook`):** `NESSIE_URI`, `NESSIE_WAREHOUSE`,
   `NESSIE_CLIENT_ID`, `TRINO_HOST`, `TRINO_PORT` (düz env) + `AWS_ENDPOINT_URL_S3`,
   `AWS_REGION`, `SVC_JUPYTER_TRINO_SECRET`, `OIDC_ISSUER` (Secret'lardan
-  `secretKeyRef` ile) — departmanın ZATEN var olan `AWS_ACCESS_KEY_ID`/
-  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET`/`DEPT`/`NESSIE_SANDBOX_CATALOG`
-  enjeksiyonlarına (c2, değişmeden) EKLENİR.
+  `secretKeyRef` ile) — unified sandbox'ın ZATEN var olan `AWS_ACCESS_KEY_ID`/
+  `AWS_SECRET_ACCESS_KEY`/`NESSIE_OAUTH_SECRET`/`NESSIE_SANDBOX_CATALOG`/
+  `NESSIE_SANDBOX_SCHEMA` enjeksiyonlarına EKLENİR.
 - **Endpoint'ler `storage.s3` secret'ten (FlashBlade'de gerçek), hardcode
   YOK:** `AWS_ENDPOINT_URL_S3`/`AWS_REGION`, chart'ın herhangi bir yerinde S3
   endpoint'inin tek doğruluk kaynağı olan `storage.s3` Secret'ından
@@ -725,9 +766,9 @@ pod'unu spawn eder (yukarıdaki `pre_spawn_hook`/`modify_pod_hook` mekanizmasıy
   — Trino üzerinden YAZMA yoktur.
 - **Yazım yolu PyIceberg/Spark iledir, Trino ile DEĞİL:** sandbox'a yazım
   `lh.iceberg()` (PyIceberg REST + OAuth2, write-capable) veya `lh.spark()`
-  (`sandbox_<DEPT>` katalogu, departmanın kendi scoped S3 kimlik bilgisiyle)
-  üzerinden yapılır — Trino bağlantısı SADECE okuma/keşif (`SHOW SCHEMAS`/
-  `SELECT`) içindir.
+  (unified `sandbox` katalogu, `svc-sandbox`'ın scoped S3 kimlik bilgisiyle,
+  kullanıcının kendi `sandbox.<user>` şemasına) üzerinden yapılır — Trino
+  bağlantısı SADECE okuma/keşif (`SHOW SCHEMAS`/`SELECT`) içindir.
 - **Trino internal CA mount'u:** `trino-internal-tls` Secret'ının `ca.crt`'si
   pod'a `/etc/trino-ca/ca.crt` altında (read-only, subPath) mount edilir —
   `lh.trino()` bu path'e karşı doğrular, Superset'in b1'de kurduğu (yukarıdaki

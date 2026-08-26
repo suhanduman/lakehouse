@@ -22,8 +22,9 @@
 # here IS Keycloak GenericOAuthenticator (OAuthenticator has no
 # unauthenticated fallback, per the comment above). Fail loudly at render
 # time instead — same fail-loud coherence-guard pattern as
-# `sandbox.enabled`+`auth.oidc.enabled` (chart/templates/
-# 09c-zeppelin-sandbox.yaml) and `superset.trino.authMode=jwt`
+# `components.zeppelin`+`sandbox.enabled`+`auth.oidc.enabled` (chart/
+# templates/_zeppelin.tpl, moved there in Task 5 when the per-dept
+# `09c-zeppelin-sandbox.yaml` was deleted) and `superset.trino.authMode=jwt`
 # (chart/templates/19-superset.yaml). Placed here, BEFORE the file-wide gate
 # below, so it evaluates even when `auth.oidc.enabled` is false (the file-
 # wide `if` would otherwise skip the whole file, including this check, in
@@ -59,8 +60,8 @@
 # Trino catalog, isolated only by a per-user Trino/Spark/PyIceberg SCHEMA
 # convention (`sandbox.<user>`, derived from `spawner.user.name` -- see
 # `pre_spawn_hook` below) -- so this guard is removed outright rather than
-# reworded; there is no CN-derived lookup key left to protect. The per-dept
-# the per-department analyst-sandbox identities were retired entirely in
+# reworded; there is no CN-derived lookup key left to protect. The
+# per-department analyst-sandbox identities were retired entirely in
 # Task 5 (2026-08-07-sandbox-v2) -- the shared Zeppelin now also writes the
 # SAME unified sandbox this file's JupyterHub users do.
 {{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
