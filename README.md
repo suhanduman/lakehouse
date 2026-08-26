@@ -784,10 +784,12 @@ Day-2/SIP-85."*
 
 ## Yerel/harici notebook bağlama (BYO) (şartname 3.6.1.2)
 
-`auth.oidc.enabled: true` VE `byoNotebook.enabled: true` iken (ikisi de
-varsayılan `false`; medium/large tier'larda OIDC zaten açık olduğundan
-pratikte eklenmesi gereken tek bayrak `byoNotebook.enabled: true`'dur)
-Keycloak'a **public bir device-flow client**, `lakehouse-token`, eklenir
+`auth.oidc.enabled: true` VE `byoNotebook.enabled: true` iken
+(`auth.oidc.enabled` ZATEN `true` — chart varsayılanı, `chart/values.yaml`;
+yalnız dev tier'ı onu `false`'a çeker; `byoNotebook.enabled` ise varsayılan
+`false`'tur — dolayısıyla gerçek (medium/large) bir kurulumda tek yapılması
+gereken `byoNotebook.enabled: true` eklemektir) Keycloak'a **public bir
+device-flow client**, `lakehouse-token`, eklenir
 (`chart/templates/10-keycloak.yaml`) — bu, bir analistin KENDİ laptop'undaki
 KENDİ notebook/aracıyla, JupyterHub'a veya paylaşılan Zeppelin'e hiç
 girmeden, cluster'a bağlanmasını sağlar (`oc login`'e benzer bir akış; bkz.
