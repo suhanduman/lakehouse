@@ -63,3 +63,77 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "superset.alertsReports.enabled requires superset.smtp.host (customer SMTP server) — set it or disable alertsReports"
+
+  - it: renders no redis/secrets when alertsReports off
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: false
+    asserts:
+      # (superset-redis Deployment/Service ve superset-redis-auth/superset-smtp Secret
+      # hiç render olmaz.) `containsDocument` + `not: true` used instead of
+      # `notContains`/`metadata.name`: `notContains` requires the target path to be
+      # an ARRAY field (it errors "expect to be an array" on a scalar like
+      # metadata.name — verified against this repo's installed helm-unittest
+      # (v1.1.1) validator source), and `containsDocument` tolerates a genuine
+      # zero-match render (same convention as console_test.yaml's absence checks).
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-redis
+        not: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: superset-redis
+        not: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-redis-auth
+        not: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-smtp
+        not: true
+
+  - it: renders redis Deployment+Service with requirepass + pinned image when on
+    set:
+      components.superset: true
+      superset.alertsReports.enabled: true
+      superset.smtp.host: "smtp.example.org"
+      superset.redis.password: "devredis"
+      superset.smtp.password: "devsmtp"
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: superset-redis
+          any: true
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: superset-redis
+          any: true
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: superset-redis-auth
+          any: true
+      # documentSelector on metadata.name=superset-redis is ambiguous (the
+      # Deployment AND the Service are both named `superset-redis` ->
+      # "multiple indexes found"); metadata.labels.app is unique to the
+      # Deployment (Service/Secret docs carry no top-level metadata.labels).
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "redis:7.4-alpine"
+        documentSelector:
+          path: metadata.labels.app
+          value: superset-redis
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--requirepass"
+          any: true
+        documentSelector:
+          path: metadata.labels.app
+          value: superset-redis

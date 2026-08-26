@@ -365,6 +365,89 @@ metadata:
 spec:
   selector: {app: superset}
   ports: [{name: http, port: 8088, targetPort: 8088}]
+{{- if .Values.superset.alertsReports.enabled }}
+---
+# Alerts & Reports Celery broker/results backend. Single, ephemeral (emptyDir):
+# a report scheduler is not a data-critical path — a broker restart misses at
+# most one tick, the next tick recovers. requirepass from Secret (results
+# backend transiently holds query/report data). --save ""/--appendonly no →
+# no disk writes → OpenShift arbitrary-UID safe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset-redis
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: superset-redis}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: superset-redis}
+  template:
+    metadata:
+      labels: {app: superset-redis}
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: redis
+        image: {{ .Values.versions.redisImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["redis-server"]
+        args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+        env:
+        - {name: REDIS_PASSWORD, valueFrom: {secretKeyRef: {name: superset-redis-auth, key: password, optional: true}}}
+        ports: [{containerPort: 6379, name: redis}]
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:   {cpu: "200m", memory: "256Mi"}
+        readinessProbe:
+          tcpSocket: {port: 6379}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset-redis
+  namespace: {{ include "lakehouse.namespace" . }}
+spec:
+  selector: {app: superset-redis}
+  ports: [{name: redis, port: 6379, targetPort: 6379}]
+{{- if .Values.superset.redis.password }}
+---
+# Dev-convenience inline Secret — rendered ONLY when redis.password supplied.
+# Empty default => NOT rendered; provision out-of-band under the SAME name/key
+# per `.Values.secrets.mode`. NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-redis-auth
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  password: {{ .Values.superset.redis.password | quote }}
+{{- end }}
+{{- if .Values.superset.smtp.password }}
+---
+# Dev-convenience inline Secret for the external SMTP password — same contract.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-smtp
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  password: {{ .Values.superset.smtp.password | quote }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
