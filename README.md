@@ -267,6 +267,32 @@ ilk boot'tan ÖNCE `secrets.mode`'a göre out-of-band provision edilmelidir
 (keycloak-admin-credentials ile AYNI konvansiyon); aksi halde superset ve
 superset-init pod'ları `CreateContainerConfigError`'da kalır.
 
+### Zamanlanmış rapor & alert (Alerts & Reports — şartname 3.6.2.1.5)
+
+`superset.alertsReports.enabled: true` iken Superset'e zamanlanmış rapor + alert
+altyapısı eklenir: tek **Redis** (Celery broker/results, ephemeral, requirepass) +
+**Celery worker** (rapor sorgusunu Trino'ya çalıştırır) + **Celery beat**
+(zamanlayıcı, tek replica). E-posta **müşterinin dış SMTP sunucusundan** gider —
+biz mail sunucusu kurmayız.
+
+**Açmak için** (ikisi birlikte gerekir):
+```bash
+helm upgrade ... \
+  --set superset.alertsReports.enabled=true \
+  --set superset.smtp.host=<müşteri-smtp-host>
+# opsiyonel: superset.smtp.{port,startTLS,ssl,user,mailFrom}; şifreler out-of-band
+# Secret (superset-smtp/key=password, superset-redis-auth/key=password) veya dev'de
+# --set superset.smtp.password=... / superset.redis.password=...
+```
+`alertsReports.enabled=true` ama `smtp.host` boşsa `helm` **fail-loud** verir.
+Tüm sizing tier'larında **kapalı** gelir (SMTP host müşteriye özgü).
+
+**Çalışan:** UI → Alerts & Reports'tan zamanlanmış **chart→CSV** raporları ve
+**SQL-koşullu alert** e-postaları. **Kapsam dışı:** dashboard/grafik **PNG görseli**
+e-postada (headless tarayıcı gerektirir — Day-2/opsiyonel; şartname 3.6.2.1.5 görsel
+istemez). **Doğrulama:** helm-unittest + `helm template`; canlı beat→worker→Trino→CSV
+→müşteri-SMTP teslimi = **OpenShift UAT** (gerçek SMTP + AD kullanıcısı).
+
 ---
 
 ## dbt-trino Certified Gold (b2)
