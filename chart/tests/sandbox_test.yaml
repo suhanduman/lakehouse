@@ -380,12 +380,12 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: "sandbox-"
 
-  - it: sandbox.enabled + components.minio=true renders the 18b sandbox-veri-minio-policy Job granting RW sandbox-veri + RO depo/ham-veri, with the user secret via secretKeyRef
+  - it: sandbox.enabled + components.minio=true renders the 18b sandbox-veri-minio-policy Job granting RW sandbox-veri + RO depo/ham-veri, with the user secret via secretKeyRef (selected by name — additive alongside the unified sandbox-minio-policy Job added in sandbox v2 Task 2, see below)
     templates:
       - 18b-sandbox-minio-policy.yaml
     documentSelector:
-      path: kind
-      value: Job
+      path: metadata.name
+      value: sandbox-veri-minio-policy
     set:
       sandbox.enabled: true
       components.minio: true
@@ -396,6 +396,7 @@ tests:
     asserts:
       - hasDocuments:
           count: 1
+          filterAware: true
       - equal:
           path: metadata.name
           value: sandbox-veri-minio-policy
@@ -469,6 +470,170 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # --- Sandbox v2 (2026-08-07 sandbox-v2-design, Task 2): STORAGE layer —
+  # single unified `sandbox` S3 bucket (18-bucket-init.yaml) + single
+  # `s3-sandbox` scoped MinIO cred/policy (18b-sandbox-minio-policy.yaml).
+  # ADDITIVE alongside the per-dept `sandbox-<name>` bucket loop /
+  # `sandbox-<name>-minio-policy` Jobs above — both are gated on the SAME
+  # `sandbox.enabled` (+ `components.minio` for 18b) flag and coexist until
+  # this slice's final task retires the per-dept artifacts.
+
+  - it: "sandbox v2: sandbox.enabled renders the single unified `sandbox` bucket in the bucket-init Job args (no departments needed)"
+    templates:
+      - 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      storage.createBuckets: true
+      sandbox.enabled: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/sandbox\\b"
+
+  - it: "sandbox v2: sandbox.enabled=false (default) — bucket-init Job args do NOT include the unified sandbox bucket"
+    templates:
+      - 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      storage.createBuckets: true
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "s3/sandbox\\b"
+
+  - it: "sandbox v2: unified `sandbox` bucket AND per-dept `sandbox-veri` bucket coexist in the bucket-init Job args (additive, not a replacement)"
+    templates:
+      - 18-bucket-init.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      storage.createBuckets: true
+      sandbox.enabled: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/sandbox\\b"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "mc mb --ignore-existing s3/sandbox-veri\\b"
+
+  - it: "sandbox v2: sandbox.enabled + components.minio=true renders a single sandbox-minio-policy Job granting RW `sandbox` + RO depo/ham-veri via the fixed s3-sandbox secretKeyRef, with NO per-dept -<dept> naming (no departments set)"
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    documentSelector:
+      path: metadata.name
+      value: sandbox-minio-policy
+    set:
+      sandbox.enabled: true
+      components.minio: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: sandbox-minio-policy
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::sandbox"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::depo'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'arn:aws:s3:::ham-veri'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '"Action": \[[^\]]*(?:PutObject|DeleteObject|"\*")[^\]]*\],\s*"Resource": \[\s*"arn:aws:s3:::depo"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin policy create s3 sandbox-policy'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin user add s3 "\$SANDBOX_ACCESS_KEY" "\$SANDBOX_SECRET_KEY"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'mc admin policy attach s3 sandbox-policy --user "\$SANDBOX_ACCESS_KEY"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'sandbox-\w+-policy'
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: SANDBOX_ACCESS_KEY
+      - equal:
+          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.name
+          value: s3-sandbox
+      - equal:
+          path: spec.template.spec.containers[0].env[3].valueFrom.secretKeyRef.key
+          value: access-key-id
+      - equal:
+          path: spec.template.spec.containers[0].env[4].name
+          value: SANDBOX_SECRET_KEY
+      - equal:
+          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.name
+          value: s3-sandbox
+      - equal:
+          path: spec.template.spec.containers[0].env[4].valueFrom.secretKeyRef.key
+          value: secret-access-key
+
+  - it: "sandbox v2: sandbox.enabled=false renders NO sandbox-minio-policy Job (even with components.minio=true)"
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    set:
+      components.minio: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "sandbox v2: components.minio=false (default) renders NO sandbox-minio-policy Job (even with sandbox.enabled=true)"
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    set:
+      sandbox.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "sandbox v2: unified sandbox-minio-policy AND per-dept sandbox-veri-minio-policy Jobs coexist when sandbox.enabled + components.minio + departments set (additive, not a replacement)"
+    templates:
+      - 18b-sandbox-minio-policy.yaml
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    set:
+      sandbox.enabled: true
+      components.minio: true
+      sandbox.departments:
+        - name: veri
+          adGroup: "CN=x"
+          s3SecretName: s3-sandbox-veri
+    asserts:
+      - hasDocuments:
+          count: 2
+          filterAware: true
+      - containsDocument:
+          kind: Job
+          apiVersion: batch/v1
+          name: sandbox-minio-policy
+          any: true
+      - containsDocument:
+          kind: Job
+          apiVersion: batch/v1
+          name: sandbox-veri-minio-policy
+          any: true
 
   # --- Task 4: sandbox Spark interpreter config — sandbox_<dept> catalog +
   # Nessie OAuth2 (all 3 catalogs) + envsubst/sed secret-injection ---------

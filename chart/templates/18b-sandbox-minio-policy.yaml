@@ -12,6 +12,20 @@
 # purely the dev-cluster convenience path so `sandbox.enabled` + MinIO
 # together still work end-to-end with zero manual `mc` steps.
 #
+# sandbox v2 (2026-08-07-sandbox-v2 Task 2) ADDS, right below, a single
+# `sandbox-minio-policy` Job that mirrors this exact per-dept shape but for
+# the ONE unified `.Values.sandbox.bucket` (default "sandbox") instead of a
+# per-department bucket — i.e. everywhere the per-dept block below reads
+# `.name`/`$dept` to build a bucket/policy/resource name, the unified block
+# uses the fixed literal `sandbox` instead. It grants RW on
+# `.Values.sandbox.bucket` + RO on the same prod depo/ham-veri buckets, via
+# a single `s3-sandbox` scoped access-key/secret-key Secret (same
+# out-of-band-else-dev-MinIO-convenience contract as `s3-sandbox-<name>`
+# above) so notebook Spark/PyIceberg can write the unified sandbox. This is
+# ADDITIVE: both blocks are gated on the same `and sandbox.enabled
+# components.minio` and coexist until the per-dept artifacts are retired in
+# a later task of that slice.
+#
 # One Job per department (`range .Values.sandbox.departments`), each:
 #   1. `mc alias set` against the SAME root `storage.s3.secretName` Secret
 #      every other MinIO consumer in this chart uses (17-minio.yaml,
@@ -34,6 +48,84 @@
 #      and NEVER echoed. `set -eu`, deliberately no `set -x`, which would
 #      otherwise print expanded env values — including these — into Job
 #      logs) + `mc admin policy attach`.
+{{- if and .Values.sandbox.enabled .Values.components.minio }}
+{{- $warehouseBucket := include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.warehouse.location }}
+{{- $rawBucket := include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.rawdata.location }}
+{{- $bucket := .Values.sandbox.bucket }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sandbox-minio-policy
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/hook-delete-policy": HookSucceeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "lakehouse.labels" . | nindent 8 }}
+        app: sandbox-minio-policy
+    spec:
+      {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
+      {{- if $psc }}
+      securityContext:
+        {{- $psc | nindent 8 }}
+      {{- end }}
+      restartPolicy: Never
+      containers:
+      - name: sandbox-minio-policy
+        image: {{ .Values.versions.mcImage | quote }}
+        {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
+        {{- if $csc }}
+        securityContext:
+          {{- $csc | nindent 10 }}
+        {{- end }}
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          mc mb --ignore-existing s3/{{ $bucket }}
+          cat > /tmp/sandbox-policy.json <<'POLICY_JSON'
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+                "Resource": ["arn:aws:s3:::{{ $bucket }}", "arn:aws:s3:::{{ $bucket }}/*"]
+              },
+              {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:ListBucket"],
+                "Resource": [
+                  "arn:aws:s3:::{{ $warehouseBucket }}", "arn:aws:s3:::{{ $warehouseBucket }}/*",
+                  "arn:aws:s3:::{{ $rawBucket }}", "arn:aws:s3:::{{ $rawBucket }}/*"
+                ]
+              }
+            ]
+          }
+          POLICY_JSON
+          mc admin policy create s3 sandbox-policy /tmp/sandbox-policy.json
+          mc admin user add s3 "$SANDBOX_ACCESS_KEY" "$SANDBOX_SECRET_KEY"
+          mc admin policy attach s3 sandbox-policy --user "$SANDBOX_ACCESS_KEY"
+        env:
+        - {name: S3_ENDPOINT,          valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
+        - {name: S3_ACCESS_KEY,        valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
+        - {name: S3_SECRET_KEY,        valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
+        - {name: SANDBOX_ACCESS_KEY,   valueFrom: {secretKeyRef: {name: s3-sandbox, key: access-key-id}}}
+        - {name: SANDBOX_SECRET_KEY,   valueFrom: {secretKeyRef: {name: s3-sandbox, key: secret-access-key}}}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+{{- end }}
 {{- if and .Values.sandbox.enabled .Values.components.minio }}
 {{- $warehouseBucket := include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.warehouse.location }}
 {{- $rawBucket := include "lakehouse.s3BucketFromUri" .Values.nessie.catalog.rawdata.location }}
