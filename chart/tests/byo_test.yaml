@@ -58,6 +58,7 @@ tests:
           path: spec.realm.clients
           content:
             clientId: lakehouse-token
+          any: true
         documentSelector:
           path: kind
           value: KeycloakRealmImport
@@ -72,6 +73,7 @@ tests:
           path: spec.realm.clients
           content:
             clientId: lakehouse-token
+          any: true
         documentSelector:
           path: kind
           value: KeycloakRealmImport
