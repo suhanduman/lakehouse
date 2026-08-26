@@ -7,8 +7,8 @@
 # wiring to authenticate against Nessie with these identities) extend it
 # rather than adding a parallel file.
 #
-# Gated `.Values.auth.oidc.enabled` (default true, UNLIKE the c2
-# `svc-sandbox-<dept>` clients which gate on `sandbox.enabled`): when
+# Gated `.Values.auth.oidc.enabled` (default true, UNLIKE the unified
+# `svc-sandbox` client which gates on `sandbox.enabled`): when
 # auth.oidc.enabled is false, Nessie (04-nessie-ha.yaml) runs fully
 # unauthenticated, so these service accounts must not render at all — that
 # is the "auth off" control case below.
@@ -22,7 +22,7 @@
 # inserted between them. The full-content `contains` naturally also proves
 # NO `protocolMappers` key is present (an aud mapper would show up as an
 # extra key and break the exact-content match) — Nessie validates the token
-# by ISSUER only, same as the c2 `svc-sandbox-<dept>` clients.
+# by ISSUER only, same as the unified `svc-sandbox` client.
 suite: nessie.machineAuth values + Keycloak svc-<x>-nessie clients
 templates:
   - 10-keycloak.yaml
@@ -48,14 +48,13 @@ tests:
   # accidentally granting zeppelin write access breaks its read-only
   # guarantee. Exact CEL text asserted verbatim (not just presence) so a
   # future edit that subtly narrows/widens a rule fails loudly.
-  - it: auth.oidc.enabled=true + a sandbox dept renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 5-identity CEL policy (trino/spark/connect all role-only, sandbox dept-only, zeppelin absent from every write/commit rule)
+  - it: auth.oidc.enabled=true + sandbox.enabled=true renders NESSIE_SERVER_AUTHORIZATION_ENABLED=true and the full 4-identity CEL policy (trino/spark/connect all role-only, unified sandbox-v2 writer namespace-only, zeppelin absent from every write/commit rule)
     templates:
       - 04-nessie-ha.yaml
     set:
       auth.oidc.enabled: true
       oidc.secretName: oidc-credentials
       sandbox.enabled: true
-      sandbox.departments[0].name: veri
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -69,12 +68,15 @@ tests:
             name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_READ_ALL
             value: "op in ['VIEW_REFERENCE','READ_ENTRIES','LIST_COMMIT_LOG','READ_CONTENT_KEY','READ_ENTITY_VALUE','READ_REPOSITORY_CONFIG']"
         documentIndex: 1
-      # Ref-level COMMIT_TO_MAIN: trino + spark + connect + the sandbox dept
-      # all present (every writer that must be able to commit at all);
-      # zeppelin absent (read-only — denied at this ref-level gate already).
+      # Ref-level COMMIT_TO_MAIN: trino + spark + connect + the unified
+      # sandbox-v2 writer (Task 1, 2026-08-07 sandbox-v2-design; the
+      # per-dept writer that used to also appear here was retired in
+      # Task 5) all present (every writer that must be able to commit at
+      # all); zeppelin absent (read-only — denied at this ref-level gate
+      # already).
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
-          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie' || role=='service-account-svc-sandbox-veri')"
+          value: "op=='COMMIT_CHANGE_AGAINST_REFERENCE' && ref=='main' && (role=='service-account-svc-trino-nessie' || role=='service-account-svc-spark-nessie' || role=='service-account-svc-connect-nessie' || role=='service-account-svc-sandbox')"
         documentIndex: 1
       - notMatchRegex:
           path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
@@ -83,8 +85,8 @@ tests:
       # Per-key writes: trino (all paths), spark (all paths), connect
       # (role-only — the Console-rendered Iceberg sink ALWAYS routes to
       # Bronze `<ns>_raw`, which does NOT start with `rawlake`; see
-      # 04-nessie-ha.yaml's ALLOW_CONNECT_WRITE comment), sandbox-veri
-      # (sandbox_veri only).
+      # 04-nessie-ha.yaml's ALLOW_CONNECT_WRITE comment), unified
+      # svc-sandbox (sandbox namespace only).
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -106,8 +108,8 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
-            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-veri' && path.startsWith('sandbox_veri')"
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
+            value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox' && path.startsWith('sandbox')"
         documentIndex: 1
       # svc-zeppelin-nessie must appear in NO write/commit rule at all —
       # a defensive guard against the naming convention every other write
@@ -121,14 +123,13 @@ tests:
             name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_ZEPPELIN_WRITE
         documentIndex: 1
 
-  - it: auth.oidc.enabled=true + sandbox.enabled=false with a populated sandbox department renders NO svc-sandbox-* CEL rule anywhere (routed fix — Task-3 review; the sandbox CEL rules must gate on sandbox.enabled too, matching the chart's two-gate sandbox contract used by every other sandbox artifact)
+  - it: auth.oidc.enabled=true + sandbox.enabled=false renders NO svc-sandbox CEL rule anywhere (the sandbox CEL rules gate on sandbox.enabled, matching the chart's sandbox contract used by every other sandbox artifact)
     templates:
       - 04-nessie-ha.yaml
     set:
       auth.oidc.enabled: true
       oidc.secretName: oidc-credentials
       sandbox.enabled: false
-      sandbox.departments[0].name: veri
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_COMMIT_TO_MAIN")].value
@@ -141,7 +142,7 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_VERI_WRITE
+            name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
         documentIndex: 1
 
   - it: auth.oidc.enabled=true with NO sandbox departments still covers trino/spark/connect (commit-to-main + per-key) with zeppelin absent
@@ -423,9 +424,10 @@ tests:
       - matchRegex:
           path: data["spark-defaults.conf"]
           pattern: 'spark\.sql\.catalog\.rawlake\.authentication\.oauth2\.issuer-url=\$\{OIDC_ISSUER_URL\}'
-      # read-only identity: no write catalog — the sandbox_<dept> write
-      # catalog block (chart/templates/_zeppelin.tpl `$sandbox` arm) must
-      # NEVER appear on the shared instance.
+      # read-only identity: no write catalog when sandbox.enabled is false
+      # (default here) — the unified sandbox write catalog (chart/
+      # templates/_zeppelin.tpl `$sandboxWrite` gate, Task 5) must NEVER
+      # appear on the shared instance unless sandbox.enabled is set.
       - notMatchRegex:
           path: data["spark-defaults.conf"]
           pattern: 'spark\.sql\.catalog\.sandbox'

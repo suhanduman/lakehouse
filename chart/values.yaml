@@ -1389,23 +1389,24 @@ dbt:
     requests: {cpu: "250m", memory: "512Mi"}
     limits:   {cpu: "1",    memory: "1Gi"}
 
-# Per-department analyst sandboxes (Consumption slice c2). Gated by
-# `sandbox.enabled` AND a non-empty `sandbox.departments` list — empty
-# (default) renders nothing at all. Each department entry gets its own
-# bucket, catalog, scoped S3 Secret, Keycloak service-account client, K8s SA,
-# and AD-group-gated Zeppelin instance (later tasks in this slice wire the
-# rest of that list into chart/templates/09c-zeppelin-sandbox.yaml; this task
-# only lands the values block, the Keycloak `svc-sandbox-<name>` client, and
-# the per-dept OIDC Secret).
+# Sandbox v2 (2026-08-07 sandbox-v2 design): unified sandbox — a single
+# shared S3 bucket + Nessie namespace/Trino catalog + `svc-sandbox` Keycloak
+# service-account identity for ALL analysts, isolated only by a per-user
+# Trino/Spark/PyIceberg SCHEMA convention (`sandbox.<user>`), NOT by
+# per-department buckets/catalogs/identities — the earlier per-department
+# design (each dept with its own bucket/catalog/Secret/Keycloak client/K8s
+# SA/AD-group-gated Zeppelin) was retired in the slice's final task (Task 5)
+# in favor of this single unified shape. Prod data stays untouched — a
+# separate bucket + Nessie namespace from `lakehouse`/`rawlake` (şartname
+# 3.5.4.3).
 sandbox:
   enabled: false
-  # Each dept => its own bucket, catalog, scoped S3 Secret, Keycloak service
-  # account, K8s SA, and AD-group-gated Zeppelin. Empty => nothing renders.
-  departments: []
-  # - name: veri-bilimi                        # DNS-safe; used in resource names + sandbox_<name> catalog
-  #   adGroup: "CN=sandbox-veri,OU=Groups,DC=example,DC=com"  # Shiro group -> role `sandbox`
-  #   s3SecretName: s3-sandbox-veri-bilimi      # scoped cred (RW sandbox-<name>, RO prod); out-of-band else MinIO Job
-  #   oidcClientSecret: ""                      # dev-convenience single-source for svc-sandbox-<name>; else out-of-band
+  bucket: "sandbox"            # S3 bucket + warehouse location kökü
+  namespace: "sandbox"         # Nessie namespace + Trino katalog adı
+  # Notebook (Jupyter/Zeppelin) erişimine izinli AD grupları (login gate). Rol modeli = Slice B.
+  allowedGroups: []            # ör. ["CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"]
+  oidc:
+    clientSecret: ""           # svc-sandbox service-account client secret (single-source; boş => Secret render edilmez)
 
 # Hand-rolled JupyterHub (per-user notebook sandbox). Gated by
 # `components.jupyter` (default false) AND `auth.oidc.enabled` (the Hub's

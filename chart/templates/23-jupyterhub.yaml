@@ -22,8 +22,9 @@
 # here IS Keycloak GenericOAuthenticator (OAuthenticator has no
 # unauthenticated fallback, per the comment above). Fail loudly at render
 # time instead — same fail-loud coherence-guard pattern as
-# `sandbox.enabled`+`auth.oidc.enabled` (chart/templates/
-# 09c-zeppelin-sandbox.yaml) and `superset.trino.authMode=jwt`
+# `components.zeppelin`+`sandbox.enabled`+`auth.oidc.enabled` (chart/
+# templates/_zeppelin.tpl, moved there in Task 5 when the per-dept
+# `09c-zeppelin-sandbox.yaml` was deleted) and `superset.trino.authMode=jwt`
 # (chart/templates/19-superset.yaml). Placed here, BEFORE the file-wide gate
 # below, so it evaluates even when `auth.oidc.enabled` is false (the file-
 # wide `if` would otherwise skip the whole file, including this check, in
@@ -31,29 +32,38 @@
 {{- if and .Values.components.jupyter (not .Values.auth.oidc.enabled) }}
 {{- fail "components.jupyter requires auth.oidc.enabled — JupyterHub authenticates users via Keycloak OIDC (GenericOAuthenticator)" }}
 {{- end }}
-# --- Coherence guard (final-review fix wave): every sandbox dept's
-# `adGroup` CN must start with "sandbox-". `pre_spawn_hook` below (and the
-# `DEPTS` dict it reads) hard-require that prefix to derive the dept's short
-# code (`trimPrefix "sandbox-" $cn`) — but the login gate (`allowed_groups`,
-# just below) and `DEPTS`'s own dict key are built from the CN WITHOUT
-# requiring the prefix. Without this guard, a dept configured with a
-# non-"sandbox-"-prefixed adGroup CN would let its users LOG IN (the login
-# gate admits any CN) but `pre_spawn_hook` could never match that group ->
-# every spawn attempt fails with "user has no configured sandbox-<dept>
-# group" (fail-closed, but a confusing broken data path instead of a clear
-# render-time error). Only evaluated under this file's own gate
-# (`components.jupyter` AND `auth.oidc.enabled`) — the c2 Zeppelin sandbox
-# path (chart/templates/09c-zeppelin-sandbox.yaml) has no such constraint,
-# so a Zeppelin-only install (sandbox.enabled without components.jupyter)
-# must NOT be broken by this check.
-{{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
-{{- range .Values.sandbox.departments }}
-{{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
-{{- if not (hasPrefix "sandbox-" $cn) }}
-{{- fail (printf "sandbox department %s adGroup CN must start with 'sandbox-' for JupyterHub group→dept mapping (got: %s)" .name $cn) }}
+# --- Coherence guard (Task 4 review fix, 2026-08-07-sandbox-v2): the
+# unified sandbox env injection below (pre_spawn_hook's
+# NESSIE_SANDBOX_CATALOG/NESSIE_SANDBOX_SCHEMA/NESSIE_CLIENT_ID=svc-sandbox,
+# the sa-sandbox ServiceAccount/RBAC, the sandbox-oidc-credentials Secret)
+# is gated only on components.jupyter + auth.oidc.enabled -- NOT on
+# sandbox.enabled. sandbox.allowedGroups looks like an innocuous "who may
+# log in" login-gate value, but every user it admits gets that unified
+# sandbox env whether or not the sandbox INFRASTRUCTURE it points at
+# (sandbox Nessie namespace/warehouse, Trino sandbox catalog, the
+# svc-sandbox Nessie CEL writer, the sandbox S3 bucket -- all gated on
+# sandbox.enabled elsewhere in this chart) actually exists. Without this
+# guard, components.jupyter=true + a non-empty sandbox.allowedGroups +
+# sandbox.enabled=false lets users log in and spawn, then fails at RUNTIME
+# on their first sandbox write instead of at render time. Same fail-loud
+# coherence-guard pattern/position as the auth.oidc.enabled guard directly
+# above.
+{{- if and .Values.components.jupyter (not .Values.sandbox.enabled) }}
+{{- fail "components.jupyter requires sandbox.enabled=true (JupyterHub kullanıcıları sandbox.<user> şemasına yazar; sandbox altyapısı sandbox.enabled ile gelir)" }}
 {{- end }}
-{{- end }}
-{{- end }}
+# --- Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the CN-prefix coherence
+# guard that used to live here (every sandbox dept's `adGroup` CN must start
+# with "sandbox-") existed ONLY to support the per-dept group->dept mapping
+# consumed by the old `DEPTS`-based `pre_spawn_hook` below. The unified
+# sandbox has no dept mapping at all -- every `allowed_groups` member gets
+# the SAME `svc-sandbox` identity + the SAME `sandbox` Nessie namespace/
+# Trino catalog, isolated only by a per-user Trino/Spark/PyIceberg SCHEMA
+# convention (`sandbox.<user>`, derived from `spawner.user.name` -- see
+# `pre_spawn_hook` below) -- so this guard is removed outright rather than
+# reworded; there is no CN-derived lookup key left to protect. The
+# per-department analyst-sandbox identities were retired entirely in
+# Task 5 (2026-08-07-sandbox-v2) -- the shared Zeppelin now also writes the
+# SAME unified sandbox this file's JupyterHub users do.
 {{- if and .Values.components.jupyter .Values.auth.oidc.enabled }}
 {{- if .Values.jupyter.oidcClientSecret }}
 # Single source with the Keycloak `jupyter` client secret
@@ -109,6 +119,31 @@ type: Opaque
 stringData:
   client-secret: {{ .Values.jupyter.trino.oidc.clientSecret | quote }}
 {{- end }}
+{{- if .Values.sandbox.oidc.clientSecret }}
+---
+# Sandbox v2 (2026-08-07-sandbox-v2 Task 4): the unified `svc-sandbox`
+# service-account client's secret, for THIS notebook pod's Nessie/PyIceberg/
+# Spark-executor writes into the shared `sandbox` namespace (`pre_spawn_hook`/
+# `modify_pod_hook` below read it via secretKeyRef, never a literal). Single
+# source with the Keycloak `svc-sandbox` client's `secret`
+# (chart/templates/10-keycloak.yaml, `.Values.sandbox.oidc.clientSecret`) —
+# the two can never drift. SAME dev-convenience-else-out-of-band contract as
+# the Secrets above: rendered ONLY when a value is supplied; otherwise
+# provision this Secret's name/key out-of-band per `.Values.secrets.mode`.
+# NEVER logged, NEVER placed in a ConfigMap. This is the FIRST chart
+# resource to materialize `svc-sandbox`'s secret as an in-cluster Secret
+# (Task 1 single-sourced the value into the Keycloak client only); Task 5
+# (Zeppelin) reuses this SAME Secret name for the shared Zeppelin's own
+# sandbox writes, rather than each consumer inventing its own.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-oidc-credentials
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.sandbox.oidc.clientSecret | quote }}
+{{- end }}
 ---
 # jupyterhub_config.py ConfigMap (Task 4, jupyterhub-per-user-sandbox) —
 # GenericOAuthenticator(Keycloak `jupyter`) + KubeSpawner + the load-bearing
@@ -129,22 +164,27 @@ stringData:
 # (superset_config.py, _zeppelin.tpl's spark-conf-render).
 #
 # Login gate: `allow_all=False` + `allowed_groups` restricted to the
-# Keycloak group each dept's `sandbox.departments[].adGroup` federates in as
-# (see 10-keycloak.yaml's `group-ldap-mapper`, `group.name.ldap.attribute:
-# cn`, `full.path: false` on the `jupyter` client's groups mapper above) — a
-# user with none of these groups cannot log in at all, not merely fail later
-# in `pre_spawn_hook`.
+# Keycloak groups listed in `.Values.sandbox.allowedGroups` (a list of AD
+# group full DNs, "CN=...,OU=...,DC=..." shape -- see 10-keycloak.yaml's
+# `group-ldap-mapper`, `group.name.ldap.attribute: cn`, `full.path: false`
+# on the `jupyter` client's groups mapper above) — a user with none of
+# these groups cannot log in at all, not merely fail later in
+# `pre_spawn_hook`.
 #
-# IMPORTANT naming subtlety: the Keycloak/AD group name is the CN portion of
-# `adGroup` (e.g. "sandbox-veri"), which is INDEPENDENT of
-# `sandbox.departments[].name` (e.g. "veri-bilimi", the long DNS-safe id used
-# for the K8s resource names below — see that field's comment in
-# values.yaml). `pre_spawn_hook` derives its `DEPTS` dict key the SAME way
-# (the short code after "sandbox-" in the CN), then looks up the actual
-# `name`-based resource names (SA/S3-secret/Nessie-secret/catalog) from that
-# key — the two identifiers never get conflated.
+# Sandbox v2 (2026-08-07-sandbox-v2 Task 4): UNIFIED sandbox identity — every
+# `allowed_groups` member shares the SAME `svc-sandbox` Nessie/S3 identity
+# and the SAME `sandbox` Nessie namespace/Trino catalog
+# (`.Values.sandbox.namespace`). There is no more per-dept `DEPTS` lookup —
+# isolation between analysts is a CLIENT convention only: a per-user Trino/
+# Spark/PyIceberg SCHEMA, `sandbox.<user>` (`NESSIE_SANDBOX_SCHEMA`, set in
+# `pre_spawn_hook` from `spawner.user.name` — the SAME `preferred_username`
+# claim the Hub authenticated the user with, so it is stable across a given
+# user's own spawns and distinct per analyst). This is a SOFT convention,
+# NOT enforced by Nessie/Trino authorization (both still see the shared
+# `svc-sandbox`/`svc-jupyter-trino` principal) — a hard per-user write lock
+# is Day-2 (see the sandbox-v2 design doc's "known limitation").
 #
-# Per-dept secret injection: KubeSpawner-only for the notebook/driver
+# Sandbox secret injection: KubeSpawner-only for the notebook/driver
 # (`modify_pod_hook`, native pod-spec `secretKeyRef` env) — spike-confirmed
 # `spark.kubernetes.driver.secretKeyRef.*` is a silent no-op in this
 # notebook-as-driver topology (no spark-submit-constructed driver pod to
@@ -194,12 +234,12 @@ data:
     c.GenericOAuthenticator.manage_groups = True
     c.GenericOAuthenticator.claim_groups_key = "groups"
 
-    # Login gate: only members of a configured sandbox-<dept> group may log
-    # in at all.
+    # Login gate: only members of a configured .Values.sandbox.allowedGroups
+    # group may log in at all (unified sandbox v2 — no more per-dept groups).
     c.Authenticator.allow_all = False
     c.Authenticator.allowed_groups = set()
-    {{- range .Values.sandbox.departments }}
-    {{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
+    {{- range .Values.sandbox.allowedGroups }}
+    {{- $cn := splitList "," . | first | trimPrefix "CN=" }}
     c.Authenticator.allowed_groups.add({{ $cn | quote }})
     {{- end }}
 
@@ -243,75 +283,38 @@ data:
         }
     }
 
-    # --- Per-department config, rendered from .Values.sandbox.departments.
-    # Keyed by the SHORT code embedded in the Keycloak/AD group name (the CN
-    # of `adGroup`, stripped of its "sandbox-" prefix) -- INDEPENDENT of
-    # `sandbox.departments[].name` (the long DNS-safe id the K8s resource
-    # names below are built from). See the file-header comment.
-    DEPTS = {}
-    {{- range .Values.sandbox.departments }}
-    {{- $cn := splitList "," .adGroup | first | trimPrefix "CN=" }}
-    {{- $code := trimPrefix "sandbox-" $cn }}
-    DEPTS[{{ $code | quote }}] = {
-        "sa": {{ printf "sa-sandbox-%s" .name | quote }},
-        "s3_secret": {{ .s3SecretName | quote }},
-        "nessie_secret": {{ printf "sandbox-%s-oidc-credentials" .name | quote }},
-        "nessie_client_id": {{ printf "svc-sandbox-%s" .name | quote }},
-        "catalog": {{ printf "sandbox_%s" .name | quote }},
-    }
-    {{- end }}
-
-
     def pre_spawn_hook(spawner):
-        # THE MECHANISM (spike-confirmed live, real Keycloak login -> real
-        # pre_spawn_hook received spawner.user.groups == ["sandbox-veri"]):
-        # spawner.user.groups is SYNCHRONOUS, non-async -- JupyterHub-core's
-        # User.__getattr__ delegates to orm_user.groups, already populated by
-        # Authenticator.manage_groups + user.sync_groups() at LOGIN time
-        # (auth_to_user() in jupyterhub/handlers/base.py), strictly BEFORE
-        # pre_spawn_hook ever runs. No await, no get_auth_state() needed.
-        group_names = [g.name for g in spawner.user.groups]
-        dept = None
-        # sorted(): spawner.user.groups (hence group_names) is an unordered
-        # collection -- if a user somehow belongs to two sandbox-* groups,
-        # first-match-over-an-unordered-list would make the chosen dept
-        # unstable across spawns. Depts are meant to be mutually exclusive
-        # (one group per user), so this is defensive: still first-match,
-        # but now over a deterministic (sorted) order.
-        for g in sorted(group_names):
-            if g.startswith("sandbox-"):
-                code = g[len("sandbox-"):]
-                if code in DEPTS:
-                    dept = code
-                    break
-        if dept is None:
-            raise Exception("user has no configured sandbox-<dept> group -- refusing to spawn")
-
-        d = DEPTS[dept]
-        # Stashed for modify_pod_hook below (same spawner instance for this
-        # spawn attempt) -- looked up ONLY through the fixed DEPTS dict built
-        # entirely from chart values, never from a user-influenced string
-        # used as a path/name directly, so there is no cross-department
-        # traversal even though `dept` originates from the user's own OIDC
-        # groups claim.
-        spawner._dept = dept
-
-        spawner.service_account = d["sa"]
+        # Sandbox v2 (unified, 2026-08-07-sandbox-v2 Task 4): no more
+        # per-dept DEPTS lookup / group->dept mapping. Every user who made it
+        # past the allowed_groups login gate above shares the SAME
+        # `svc-sandbox` Nessie/S3 identity and the SAME `sandbox` Nessie
+        # namespace/Trino catalog -- isolation between analysts is a CLIENT
+        # convention only: a per-user Trino/Spark/PyIceberg SCHEMA
+        # (`NESSIE_SANDBOX_SCHEMA`, below), never a separate identity/
+        # namespace per user (that would be a hard per-user write lock --
+        # Day-2, see the design doc's known limitation).
+        spawner.service_account = "sa-sandbox"
         # automount_service_account_token: KubeSpawner's own default (None)
         # already mounts the SA token when service_account is explicitly set
         # (spike-confirmed from source) -- no extra flag needed.
 
-        spawner.environment["DEPT"] = dept
-        spawner.environment["NESSIE_SANDBOX_CATALOG"] = d["catalog"]
+        spawner.environment["NESSIE_SANDBOX_CATALOG"] = {{ .Values.sandbox.namespace | quote }}
+        # Per-user schema (şartname 3.5.4.2/3.5.4.3): images/jupyter/
+        # lakehouse_nb.py's spark()/iceberg()/trino() helpers default their
+        # sandbox writes here. `spawner.user.name` is the SAME
+        # `preferred_username` OIDC claim (`username_claim`, above) the Hub
+        # authenticated this user with -- stable across a user's own spawns,
+        # distinct per analyst.
+        spawner.environment["NESSIE_SANDBOX_SCHEMA"] = "%s.%s" % ({{ .Values.sandbox.namespace | quote }}, spawner.user.name)
 
         # Task 5 (turnkey notebook): plain env consumed by images/jupyter/
         # lakehouse_nb.py's spark()/trino()/iceberg() helpers -- the Nessie
-        # REST catalog endpoint/warehouse location, this dept's Nessie OAuth
-        # client_id (already in DEPTS, above), and the Trino coordinator's
-        # internal host/port. No hardcoded endpoints: all three come from
-        # the SAME chart helpers/values every other consumer in this chart
-        # reads (lakehouse.svc.nessie/lakehouse.svc.trino/lakehouse.fqdn),
-        # never a literal dev-storage hostname.
+        # REST catalog endpoint/warehouse location, the unified sandbox's
+        # Nessie OAuth client_id, and the Trino coordinator's internal
+        # host/port. No hardcoded endpoints: all three come from the SAME
+        # chart helpers/values every other consumer in this chart reads
+        # (lakehouse.svc.nessie/lakehouse.svc.trino/lakehouse.fqdn), never a
+        # literal dev-storage hostname.
         #
         # Final-review fix wave: NESSIE_WAREHOUSE carries the FULL warehouse
         # location (`.Values.nessie.catalog.warehouse.location`, e.g.
@@ -324,7 +327,7 @@ data:
         # every table this helper creates.
         spawner.environment["NESSIE_URI"] = {{ printf "http://%s:19120/iceberg/" (include "lakehouse.svc.nessie" .) | quote }}
         spawner.environment["NESSIE_WAREHOUSE"] = {{ .Values.nessie.catalog.warehouse.location | quote }}
-        spawner.environment["NESSIE_CLIENT_ID"] = d["nessie_client_id"]
+        spawner.environment["NESSIE_CLIENT_ID"] = "svc-sandbox"
         spawner.environment["TRINO_HOST"] = {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.trino" .) "context" .) | quote }}
         spawner.environment["TRINO_PORT"] = "8443"
 
@@ -339,10 +342,10 @@ data:
             "spark.master": "k8s://https://kubernetes.default.svc",
             "spark.kubernetes.namespace": {{ include "lakehouse.namespace" . | quote }},
             "spark.kubernetes.container.image": {{ printf "%s/spark-py:%s" .Values.global.imageRegistry .Values.versions.sparkImageTag | quote }},
-            "spark.kubernetes.authenticate.driver.serviceAccountName": d["sa"],
-            "spark.kubernetes.executor.secretKeyRef.NESSIE_OAUTH_SECRET": d["nessie_secret"] + ":client-secret",
-            "spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID": d["s3_secret"] + ":access-key-id",
-            "spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY": d["s3_secret"] + ":secret-access-key",
+            "spark.kubernetes.authenticate.driver.serviceAccountName": "sa-sandbox",
+            "spark.kubernetes.executor.secretKeyRef.NESSIE_OAUTH_SECRET": "sandbox-oidc-credentials:client-secret",
+            "spark.kubernetes.executor.secretKeyRef.AWS_ACCESS_KEY_ID": "s3-sandbox:access-key-id",
+            "spark.kubernetes.executor.secretKeyRef.AWS_SECRET_ACCESS_KEY": "s3-sandbox:secret-access-key",
         }
         conf_args = " ".join('--conf "%s=%s"' % (k, v) for k, v in spark_confs.items())
         spawner.environment["PYSPARK_SUBMIT_ARGS"] = "%s pyspark-shell" % conf_args
@@ -358,11 +361,10 @@ data:
         # the driver's own S3/Nessie secrets (needed by PyIceberg AND by the
         # Spark driver process itself) must come through KubeSpawner's own
         # pod-spec construction instead -- native secretKeyRef env, injected
-        # here.
-        dept = getattr(spawner, "_dept", None)
-        if dept is None or dept not in DEPTS:
-            raise Exception("modify_pod_hook: no sandbox department resolved for this spawn -- refusing to inject credentials")
-        d = DEPTS[dept]
+        # here. Sandbox v2 (unified): no more per-dept DEPTS lookup -- the
+        # secret names below are the fixed unified `s3-sandbox`/
+        # `sandbox-oidc-credentials` Secrets (this file + Task 2), the SAME
+        # for every user.
         from kubernetes import client as k8s_client
 
         def _secret_env(name, secret_name, key):
@@ -374,9 +376,9 @@ data:
             )
 
         extra_env = [
-            _secret_env("AWS_ACCESS_KEY_ID", d["s3_secret"], "access-key-id"),
-            _secret_env("AWS_SECRET_ACCESS_KEY", d["s3_secret"], "secret-access-key"),
-            _secret_env("NESSIE_OAUTH_SECRET", d["nessie_secret"], "client-secret"),
+            _secret_env("AWS_ACCESS_KEY_ID", "s3-sandbox", "access-key-id"),
+            _secret_env("AWS_SECRET_ACCESS_KEY", "s3-sandbox", "secret-access-key"),
+            _secret_env("NESSIE_OAUTH_SECRET", "sandbox-oidc-credentials", "client-secret"),
             # Task 5 (turnkey notebook): platform-wide (not per-dept) secrets
             # the lakehouse_nb.py helper also needs. S3 endpoint/region come
             # from the SAME storage.s3 secret every other S3 consumer in this
@@ -422,15 +424,14 @@ data:
     c.KubeSpawner.modify_pod_hook = modify_pod_hook
 {{- end }}
 
-# --- Task 5: Hub SA + KubeSpawner RBAC + per-dept Spark-executor RBAC +
-# the Hub/proxy Deployments + Services. Same file-wide gate
+# --- Task 5: Hub SA + KubeSpawner RBAC + the unified sandbox Spark-executor
+# RBAC + the Hub/proxy Deployments + Services. Same file-wide gate
 # (`components.jupyter` AND `auth.oidc.enabled`) as everything above. ---
 
 # The Hub's OWN ServiceAccount — KubeSpawner (running inside the Hub pod)
 # uses THIS identity's in-cluster token to talk to the k8s API and spawn/
-# manage per-user notebook Pods/PVCs. Distinct from `sa-sandbox-<dept>`
-# (chart/templates/09c-zeppelin-sandbox.yaml) below, which is the identity
-# the SPAWNED notebook/Spark-driver Pod itself runs as.
+# manage per-user notebook Pods/PVCs. Distinct from `sa-sandbox` below,
+# which is the identity the SPAWNED notebook/Spark-driver Pod itself runs as.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -487,26 +488,32 @@ roleRef:
   kind: Role
   name: jupyterhub-kubespawner
 
-# Per-dept Spark-on-k8s executor RBAC — spike §2b/§2c (same doc). Binds
-# EACH department's `sa-sandbox-<name>` SA (chart/templates/
-# 09c-zeppelin-sandbox.yaml, created when `sandbox.enabled` is true — this
-# RoleBinding is harmless if that SA does not yet exist, it simply has no
-# effect until it does) to the verbs Spark's own driver-side k8s-client
-# needs to create/watch/tear-down its OWN executor Pods (spawned from
-# inside the notebook, which itself runs AS this SA per `pre_spawn_hook`
-# above). `services`/`persistentvolumeclaims` are not exercised by
-# client-mode-in-pod but are granted anyway — spike-confirmed: without
-# them, Spark's unconditional teardown sweep throws non-fatal but
-# alarming ERROR-level `Forbidden` stack traces on every job. Namespace-
-# scoped Role per dept (NOT a ClusterRole) — one dept's executors can
-# never touch another dept's Pods/ConfigMaps.
-{{- range .Values.sandbox.departments }}
+# Sandbox v2 (unified, 2026-08-07-sandbox-v2 Task 4) — the notebook pod's
+# OWN identity (`pre_spawn_hook` above sets `spawner.service_account =
+# "sa-sandbox"` for every user, unified) plus the Spark-on-k8s executor
+# RBAC it needs (spike §2b/§2c), granted ONCE for every user rather than
+# per department (the per-department shape this replaced was retired in
+# Task 5). `services`/`persistentvolumeclaims` granted despite not being
+# exercised by client-mode-in-pod — spike-confirmed Spark's unconditional
+# teardown sweep otherwise throws non-fatal but alarming ERROR-level
+# `Forbidden` stack traces. Namespace-scoped Role (NOT a
+# ClusterRole). Rendered under this file's own gate only (components.jupyter
+# AND auth.oidc.enabled) — independent of `sandbox.enabled`/departments,
+# same as the rest of the unified sandbox env injection above.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-sandbox
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels:
+    {{- include "lakehouse.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: sandbox-{{ .name }}-spark-executor
-  namespace: {{ include "lakehouse.namespace" $ }}
+  name: sandbox-spark-executor
+  namespace: {{ include "lakehouse.namespace" . }}
 rules:
 - apiGroups: [""]
   resources: ["pods"]
@@ -528,18 +535,17 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   # Distinct name from the Role above (see the KubeSpawner RoleBinding's
-  # comment, same rationale/convention, per-dept here).
-  name: sandbox-{{ .name }}-spark-executor-binding
-  namespace: {{ include "lakehouse.namespace" $ }}
+  # comment, same rationale/convention).
+  name: sandbox-spark-executor-binding
+  namespace: {{ include "lakehouse.namespace" . }}
 subjects:
 - kind: ServiceAccount
-  name: sa-sandbox-{{ .name }}
-  namespace: {{ include "lakehouse.namespace" $ }}
+  name: sa-sandbox
+  namespace: {{ include "lakehouse.namespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: sandbox-{{ .name }}-spark-executor
-{{- end }}
+  name: sandbox-spark-executor
 
 # configurable-http-proxy — a SEPARATE Deployment from the Hub (see
 # `.Values.versions.configurableHttpProxyImage`'s comment). Fronts the Hub

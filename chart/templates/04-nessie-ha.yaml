@@ -102,6 +102,38 @@ spec:
           value: {{ .Values.nessie.catalog.warehouse.location | quote }}
         - name: NESSIE_CATALOG_WAREHOUSES_RAWDATA_LOCATION
           value: {{ .Values.nessie.catalog.rawdata.location | quote }}
+{{- if .Values.sandbox.enabled }}
+{{- if or (ne .Values.sandbox.namespace "sandbox") (ne .Values.sandbox.bucket "sandbox") }}
+{{- fail "sandbox.namespace and sandbox.bucket must both be 'sandbox' in this release — the Trino catalog and Nessie warehouse registration are keyed on that literal; per-name configurability is future work" }}
+{{- end }}
+        # Whole-branch review I1 fix (2026-08-07-sandbox-v2 final review):
+        # several places hardcode the literal "sandbox" (Trino's
+        # sandbox.properties catalog name + `warehouse=sandbox`,
+        # NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION below, rules.json's
+        # `"catalog":"sandbox"`, 06-trino-ha.yaml), while others read
+        # `.Values.sandbox.namespace`/`.Values.sandbox.bucket` (this file's
+        # own warehouse-location value below, _zeppelin.tpl, 18-bucket-
+        # init.yaml, 18b-sandbox-minio-policy.yaml). If an operator ever set
+        # `namespace`/`bucket` to something other than "sandbox", engines
+        # would silently misroute (Jupyter vs Zeppelin diverge; Trino
+        # catalog name mismatch) — the guard above fails the render loudly
+        # instead, before any of that can happen at runtime.
+        #
+        # Sandbox v2 (Task 3 review fix, şartname 3.5.4.3 isolation) — a
+        # named `sandbox` warehouse, registered the SAME way as `warehouse`/
+        # `rawdata` above. Trino's sandbox.properties references this
+        # warehouse BY NAME (`iceberg.rest-catalog.warehouse=sandbox`), not
+        # by location string — Nessie's Iceberg-REST `warehouse` parameter
+        # is a lookup key into NESSIE_CATALOG_WAREHOUSES_<NAME>_LOCATION, not
+        # an arbitrary path (see docs/superpowers/spikes/
+        # 2026-08-06-nessie-machine-auth-config.md ~L120, and rawlake.
+        # properties' own `warehouse=rawdata` for the same pattern). Without
+        # this registration, `warehouse=sandbox` would fail to resolve (or
+        # silently fall through to the default warehouse's location),
+        # writing sandbox tables into the prod bucket.
+        - name: NESSIE_CATALOG_WAREHOUSES_SANDBOX_LOCATION
+          value: {{ printf "s3://%s/warehouse" .Values.sandbox.bucket | quote }}
+{{- end }}
 
         # --- S3 (credentials from Secret, resolved via Nessie URN) ---
         - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION
@@ -152,9 +184,10 @@ spec:
         # default-deny leaves it read-only, confirmed live in the spike.
         {{- $writerRoles := list "service-account-svc-trino-nessie" "service-account-svc-spark-nessie" "service-account-svc-connect-nessie" }}
         {{- if .Values.sandbox.enabled }}
-        {{- range .Values.sandbox.departments }}
-        {{- $writerRoles = append $writerRoles (printf "service-account-svc-sandbox-%s" .name) }}
-        {{- end }}
+        # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1; per-dept writers
+        # retired in Task 5): the unified `service-account-svc-sandbox`
+        # writer, confined to the single shared sandbox namespace.
+        {{- $writerRoles = append $writerRoles "service-account-svc-sandbox" }}
         {{- end }}
         {{- $roleExpr := "" }}
         {{- range $i, $r := $writerRoles }}
@@ -188,21 +221,15 @@ spec:
         # as `svc-trino-nessie`/`svc-spark-nessie` above.
         - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_CONNECT_WRITE
           value: "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-connect-nessie'"
-        # Sandbox per-dept write rules — gated on BOTH `sandbox.enabled` AND
-        # non-empty `sandbox.departments`, matching the chart's two-gate
-        # sandbox contract everywhere else (09c-zeppelin-sandbox.yaml,
-        # 08-routes-tls.yaml, 18-bucket-init.yaml, 18b-sandbox-minio-
-        # policy.yaml). Without this gate, setting `sandbox.enabled=false`
-        # while `departments` stays populated would still grant
-        # `svc-sandbox-<dept>` write access here even though every other
-        # sandbox artifact (Route, Zeppelin instance, MinIO policy) is torn
-        # down — a CEL rule outliving its own sandbox is a silent privilege
-        # leak, not a correctness fix like the rest of this file's gating.
         {{- if .Values.sandbox.enabled }}
-        {{- range .Values.sandbox.departments }}
-        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_{{ .name | upper | replace "-" "_" }}_WRITE
-          value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox-%s' && path.startsWith('sandbox_%s')" .name .name | quote }}
-        {{- end }}
+        # Sandbox v2 (2026-08-07 sandbox-v2-design, Task 1; per-dept rules
+        # retired in Task 5): ONE unified writer
+        # (`service-account-svc-sandbox`) confined to the single shared
+        # `.Values.sandbox.namespace` Nessie namespace. Gated so
+        # `sandbox.enabled=false` never leaves this writer's access
+        # outliving every other sandbox artifact.
+        - name: NESSIE_SERVER_AUTHORIZATION_RULES_ALLOW_SANDBOX_WRITE
+          value: {{ printf "op in ['CREATE_ENTITY','UPDATE_ENTITY','DELETE_ENTITY'] && role=='service-account-svc-sandbox' && path.startsWith('%s')" .Values.sandbox.namespace | quote }}
         {{- end }}
 {{- else }}
         - {name: QUARKUS_OIDC_ENABLED, value: "false"}
