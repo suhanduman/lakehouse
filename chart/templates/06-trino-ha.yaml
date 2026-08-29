@@ -342,7 +342,9 @@ data:
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
         {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
-{{/* TABLE-POLICIES-ANCHOR — Task 4 tablePolicies kuralları BU YORUM SATIRININ YERİNE render eder */}}
+{{- range .Values.trino.rbac.tablePolicies }}
+        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if .filter }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}},
+{{- end }}
         {"user": ".*", "privileges": ["SELECT"]}
       ]
     }

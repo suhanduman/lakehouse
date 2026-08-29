@@ -107,3 +107,43 @@ tests:
         documentSelector:
           path: metadata.name
           value: trino-config
+
+  - it: tablePolicies render one table rule with filter + column mask
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          filter: "department = current_user"
+          columns:
+            - {name: "tckn", mask: "'***'"}
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"filter": "department = current_user"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"columns": \[\{"name": "tckn", "mask": "''\*\*\*''"\}\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: no filter/columns keys when tablePolicies empty
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"filter":'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
