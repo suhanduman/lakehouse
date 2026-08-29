@@ -8,9 +8,11 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
 HTTP_422_UNPROCESSABLE = 422
+HTTP_409_CONFLICT = 409
 
 from app.routers import buckets, connectors, gitops, pipelines, schemas, sources, tables
 from app.routers import status as status_router
+from app.services.k8s_service import SecretNameConflict
 
 app = FastAPI(title="Lakehouse Console")
 app.include_router(sources.router)
@@ -64,6 +66,21 @@ async def _redacting_validation_handler(
     return JSONResponse(
         status_code=HTTP_422_UNPROCESSABLE,
         content={"detail": errors},
+    )
+
+
+@app.exception_handler(SecretNameConflict)
+async def _secret_name_conflict_handler(
+    request: Request, exc: SecretNameConflict
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=HTTP_409_CONFLICT,
+        content={
+            "detail": (
+                f"a resource named '{exc}' already exists and was not created "
+                "by the Console — choose a different name"
+            )
+        },
     )
 
 

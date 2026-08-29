@@ -41,7 +41,7 @@ from app.orchestrator import AddSourceOrchestrator
 from app.services import render_service
 from app.services.authz import Action
 from app.services.connect_service import ConnectService
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import CONSOLE_MANAGED_BY_LABEL, CONSOLE_MANAGED_BY_VALUE, K8sService
 from app.services.kafka_consumer_service import KafkaConsumerService
 from app.services.kafka_producer_service import KafkaProducerService
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX, _k8s_topic_name
@@ -780,7 +780,14 @@ def rotate_credentials(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="no credential secret for this source (in-cluster / no external creds)",
         )
-    k8s.create_secret(source, {"user": payload.user, "pass": payload.password})  # upsert
+    # SEC-1: labeled console-managed so this "upsert" can converge its own
+    # Secret on a 409 (fail-closed create_secret otherwise refuses to
+    # overwrite what it can't prove it created -- see k8s_service.py).
+    k8s.create_secret(
+        source,
+        {"user": payload.user, "pass": payload.password},
+        labels={CONSOLE_MANAGED_BY_LABEL: CONSOLE_MANAGED_BY_VALUE},
+    )
     restarted = True
     try:
         connect.restart_connector(name)  # reload creds via DirectoryConfigProvider

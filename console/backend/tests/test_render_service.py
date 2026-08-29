@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import zlib
+
 import pytest
 
 from app.config import settings
@@ -865,6 +867,61 @@ def test_topic_cr_name_valid_and_preserves_real_topic():
     clean = r.render_kafka_topic("cdc.src1.dbo.students")
     assert clean["metadata"]["name"] == "cdc.src1.dbo.students"
     assert "topicName" not in clean["spec"]
+
+
+# --------------------------------------------------------------------------
+# _k8s_name generalized crc32-on-truncation (Task 1, 2026-08-29
+# self-service-resource-safety): >63-char sanitized joins get a deterministic
+# 8-hex crc32 suffix of the full untruncated join so two distinct long inputs
+# never truncate-collide onto the same k8s object name. <=63 behavior (and
+# _pipeline_bucket, which now delegates to _k8s_name) must stay byte-identical.
+# --------------------------------------------------------------------------
+
+def test_k8s_name_short_is_byte_identical():
+    assert r._k8s_name("dbz", "mydb", "orders") == "dbz-mydb-orders"
+
+
+def test_k8s_name_long_gets_deterministic_crc32_suffix():
+    long = "x" * 80
+    out = r._k8s_name("dbz", long)
+    assert len(out) <= 63
+    joined = f"dbz-{long}"
+    suffix = format(zlib.crc32(joined.encode()) & 0xFFFFFFFF, "08x")
+    assert out.endswith("-" + suffix)
+    assert r._k8s_name("dbz", long) == out               # deterministic
+    assert r._k8s_name("dbz", "y" * 80) != out            # two distinct long names don't collide
+
+
+def test_pipeline_bucket_names_unchanged():
+    assert r._pipeline_bucket("ham-veri", "mydb") == "ham-veri-mydb"   # short: byte-identical
+    long = "z" * 80
+    b = r._pipeline_bucket("ham-veri", long)
+    assert len(b) <= 63
+    suffix = format(zlib.crc32(f"ham-veri-{long}".encode()) & 0xFFFFFFFF, "08x")
+    assert b.endswith("-" + suffix)
+
+
+def test_k8s_topic_name_mid_length_unchanged():
+    # 64-253 sanitized chars: below the real 253 subdomain cap, so no
+    # truncation-collision risk -- must be returned UNCHANGED (dots
+    # preserved, no crc32 suffix appended).
+    topic = "cdc." + "a" * 90 + ".orders"
+    out = r._k8s_topic_name(topic)
+    assert out == topic
+    assert len(out) <= 253
+    assert "." in out
+
+
+def test_k8s_topic_name_over_253_gets_deterministic_crc32_suffix():
+    topic_a = "cdc." + "a" * 300 + ".orders"
+    topic_b = "cdc." + "b" * 300 + ".orders"
+    out_a = r._k8s_topic_name(topic_a)
+    out_b = r._k8s_topic_name(topic_b)
+    assert len(out_a) <= 253
+    suffix_a = format(zlib.crc32(topic_a.encode()) & 0xFFFFFFFF, "08x")
+    assert out_a.endswith("-" + suffix_a)
+    assert r._k8s_topic_name(topic_a) == out_a          # deterministic
+    assert out_a != out_b                                # two distinct >253 topics don't collide
 
 
 def test_render_kafka_topic_parametrized():

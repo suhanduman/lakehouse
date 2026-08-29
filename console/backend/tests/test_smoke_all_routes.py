@@ -20,7 +20,7 @@ fails if a future router adds an endpoint that isn't represented here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,7 +110,7 @@ class FakeK8s:
     def delete_topic(self, name: str) -> None:
         pass
 
-    def create_secret(self, name: str, data: Dict[str, str]) -> Dict[str, Any]:
+    def create_secret(self, name: str, data: Dict[str, str], labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         return {"ok": True}
 
 

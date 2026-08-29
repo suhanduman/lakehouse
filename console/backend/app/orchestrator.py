@@ -109,6 +109,7 @@ from typing import Any, Callable, Dict, List, Optional
 from app import source_types
 from app.models import SourceCredentials, SourceSpec
 from app.services.gitops_render import render_pipeline_fileset
+from app.services.k8s_service import CONSOLE_MANAGED_BY_LABEL, CONSOLE_MANAGED_BY_VALUE, SecretNameConflict
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX
 
 VERIFY_PENDING_DETAIL = "PENDING — reconciliation ongoing"
@@ -311,7 +312,28 @@ class AddSourceOrchestrator:
             secret_name = spec.source
 
             def _create_secret() -> Optional[str]:
-                self.k8s.create_secret(secret_name, {"user": creds.user, "pass": creds.password})
+                # SEC-1: label this Secret as console-managed so a re-run of
+                # add_source on an already-provisioned source (idempotent
+                # retry) can converge its own Secret on a 409 instead of
+                # being fail-closed as a name collision with a foreign Secret.
+                try:
+                    self.k8s.create_secret(
+                        secret_name,
+                        {"user": creds.user, "pass": creds.password},
+                        labels={CONSOLE_MANAGED_BY_LABEL: CONSOLE_MANAGED_BY_VALUE},
+                    )
+                except SecretNameConflict as exc:
+                    # A genuine name collision with a Secret the Console did
+                    # NOT create -- re-raise with a source-name-specific
+                    # message so run()'s except-branch (which only treats a
+                    # RAISED exception as failure -- a returned string here
+                    # would be recorded as a successful step) records this as
+                    # ok=False with a clear detail, instead of str(exc) (just
+                    # the bare secret name) or silently "succeeding".
+                    raise RuntimeError(
+                        f"a resource named {secret_name!r} already exists and was not created "
+                        "by the Console — choose a different source name"
+                    ) from exc
                 return None
 
             if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):

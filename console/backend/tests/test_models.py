@@ -129,6 +129,41 @@ def test_cdc_pg_still_entity():
     assert s.effective_disposition() == "entity"
 
 
+# --------------------------------------------------------------------------
+# SEC-1 (Task 3, B) -- reserved source names: a self-service source must
+# never be nameable after a platform/infra Secret (s3-credentials,
+# trino-internal-secret, ...) -- early, clear rejection at the model layer,
+# with k8s_service's fail-closed create_secret as the airtight backstop.
+# --------------------------------------------------------------------------
+
+def test_reserved_source_name_rejected():
+    with pytest.raises(ValidationError, match="reserved"):
+        SourceSpec(**_base(source="s3-credentials"))
+
+
+def test_reserved_source_name_trino_secret_rejected():
+    with pytest.raises(ValidationError, match="reserved"):
+        SourceSpec(**_base(source="trino-internal-secret"))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "s3-credentials", "trino-internal-secret", "pg-nessie-app",
+        "nessie-machine-auth-credentials", "oidc-credentials", "connect",
+        "pg", "mssql", "mongo", "mongodb", "debezium-src",
+    ],
+)
+def test_all_reserved_source_names_rejected(name):
+    with pytest.raises(ValidationError, match="reserved"):
+        SourceSpec(**_base(source=name))
+
+
+def test_normal_source_name_ok():
+    s = SourceSpec(**_base(source="mydb"))
+    assert s.source == "mydb"
+
+
 def test_stream_non_kafka_type_is_unregistered():
     # Extending the `type` Literal to include "kafka" makes stream+mssql a
     # valid Literal combo, but it isn't registered -> registry KeyError path.

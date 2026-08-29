@@ -22,7 +22,7 @@ from kubernetes.client.exceptions import ApiException
 from app.models import ColumnSpec, SourceCredentials, SourceSpec
 from app.orchestrator import AddSourceOrchestrator
 from app.services import render_service
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import K8sService, SecretNameConflict
 from app.services.s3_service import S3Service
 from app.services.trino_service import TrinoService
 
@@ -100,9 +100,11 @@ class FakeK8s:
     def _wrap(state):
         return {"connector": {"state": state}} if state is not None else {}
 
-    def create_secret(self, name, data):
+    def create_secret(self, name, data, labels=None):
         if self.fail_on == "secret":
             raise RuntimeError("secret boom")
+        if self.fail_on == "secret_conflict":
+            raise SecretNameConflict(name)
         self.calls.append(("create_secret", name))
         self.created_secrets.append((name, data))
 
@@ -558,6 +560,27 @@ def test_rollback_on_secret_failure_has_nothing_to_undo():
     assert s3.created_buckets == []
 
 
+def test_orchestrator_secret_conflict_aborts_without_overwrite():
+    # SEC-1: a SecretNameConflict (name collides with a Secret the Console
+    # did not create -- fail-closed create_secret, see k8s_service.py) must
+    # abort add_source with a clear, source-name-specific message, not the
+    # generic run()-wrapper stringification of the exception.
+    orch, k8s, s3, trino = _orch(fail_on="secret_conflict")
+
+    res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
+
+    assert res.ok is False
+    assert [s.name for s in res.steps] == ["secret"]
+    detail = res.steps[0].detail
+    assert "mssql1" in detail
+    assert "already exists" in detail
+    assert "choose a different" in detail
+    assert k8s.deleted_secrets == []
+    assert k8s.deleted_topics == []
+    assert k8s.deleted_connectors == []
+    assert s3.created_buckets == []
+
+
 def test_rollback_on_bucket_failure_undoes_only_secret_no_bucket_undo():
     # bucket-step failure: only the secret (already applied) is rolled back;
     # the bucket step never pushed an undo (no-undo-for-bucket design), so
@@ -689,6 +712,24 @@ class _LowFakeCoreApi:
 
     def delete_namespaced_secret(self, name, namespace):
         return {}
+
+    def read_namespaced_secret(self, name, namespace):
+        # Metadata-only GET create_secret's 409 path uses to decide whether
+        # to replace (console-labeled) or raise SecretNameConflict.
+        body = self._secrets.get(name, {})
+        labels = body.get("metadata", {}).get("labels", {})
+
+        class _Meta:
+            pass
+
+        class _Secret:
+            pass
+
+        meta = _Meta()
+        meta.labels = labels
+        secret = _Secret()
+        secret.metadata = meta
+        return secret
 
 
 class _LowFakeS3Client:

@@ -1027,6 +1027,17 @@ gerekçeleridir:
   (Console formu → values.yaml/manifest repo'suna PR → ArgoCD/Flux senkronize
   eder) — çoklu-kullanıcı drift'ini ve config'in gerçek küme durumuyla
   split-brain olmasını önler.
+- **Self-service kaynak-secret'ları fail-closed yaratılır (SEC-1).** Console
+  yeni bir kaynak (source) eklerken oluşturduğu Secret'ı yalnızca kendi
+  `app.kubernetes.io/managed-by: lakehouse-console` label'ını taşıyan bir
+  secret'ın üzerine replace eder — adı çakışan bir platform/altyapı secret'ı
+  (ör. `s3-credentials`, `trino-internal-secret`) **ASLA ezilmez**; rezerve
+  adlar baştan reddedilir. RBAC'ta `create` isteği isimle scope'lanamadığından
+  (Role, kaynak adı üzerinde ayrım yapamaz) bu kontrol app-katmanındadır —
+  fail-closed conflict kontrolü, çakışan secret'ın yalnızca metadata/
+  label'ını okur (`get`; `chart/templates/console/console.yaml`'daki
+  `lakehouse-console-role` RBAC'ı), **secret DEĞERİ (`.data`) hiçbir zaman
+  okunmaz veya loglanmaz**. Admission-webhook ile defense-in-depth = gelecek.
 - **Kafka Connect imajı önceden-build'lidir** (`images/connect/Dockerfile`,
   `KafkaConnect.spec.image`) — Strimzi'nin in-cluster `spec.build`'i yerine.
   **Neden:** Apache Iceberg `kafka-connect-runtime`'ı Maven Central'da veya

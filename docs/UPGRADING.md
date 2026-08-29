@@ -170,6 +170,35 @@ roll back Postgres (Nessie catalog / Apicurio / Keycloak) state; if a bad
 upgrade wrote schema changes into those, restore from the CNPG barman
 backup instead of relying on chart rollback alone.
 
+### Console self-service source-credential Secrets (in-place upgrades only)
+
+As of this change, the Lakehouse Console creates self-service
+source-credential `Secret`s fail-closed: `create_secret` only replaces a
+`Secret` that already carries the label
+`app.kubernetes.io/managed-by: lakehouse-console`; otherwise it raises
+`SecretNameConflict`, surfaced as a clean HTTP 409, instead of silently
+overwriting a Secret it didn't create.
+
+**Breaking for in-place upgrades only.** Source-credential Secrets created
+by an older Console build are unlabeled. After upgrading, **rotating
+credentials or re-running add-source for one of these pre-existing
+sources will now return HTTP 409** (a name-collision error) instead of
+overwriting the Secret in place. Fresh installs are unaffected — every
+Secret the Console creates from this version onward is labeled correctly.
+
+**Remediation.** For each affected pre-existing source, either:
+
+- delete and recreate the source through the Console, or
+- one-time re-label its Secret so the Console recognizes it as its own:
+
+```bash
+kubectl label secret <source-name> -n <namespace> app.kubernetes.io/managed-by=lakehouse-console
+```
+
+No migration job ships for this — re-labeling (or delete+recreate) is a
+one-time, per-source action an operator runs once during the upgrade
+window.
+
 ## Stateful-upgrade strategy
 
 - **Iceberg format-version is pinned** (via `icebergSparkRuntime`/
