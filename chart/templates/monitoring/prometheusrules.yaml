@@ -1,6 +1,6 @@
 # chart/templates/monitoring/prometheusrules.yaml — D1 (İzleme/Monitoring).
 #
-# Single PrometheusRule (`lakehouse-alerts`) with 6 alert rules across the
+# Single PrometheusRule (`lakehouse-alerts`) with 7 alert rules across the
 # ingest / storage / query / platform surfaces. Thresholds come from
 # `.Values.monitoring.alerts.*` (chart/values.yaml).
 #
