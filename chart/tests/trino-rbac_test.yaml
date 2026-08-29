@@ -192,3 +192,56 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely"
+
+  - it: rbac on keeps the permissive .* floors when denyUnmatched false (default)
+    set:
+      components.trino: true
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "catalog": "lakehouse", "allow": "read-only"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+  - it: rbac on + denyUnmatched drops the .* floors but keeps svc + role groups
+    set:
+      components.trino: true
+      trino.rbac.enabled: true
+      trino.rbac.denyUnmatched: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      components.dbt: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "catalog": "lakehouse", "allow": "read-only"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"group": "lakehouse-admins"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config

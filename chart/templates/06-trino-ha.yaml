@@ -342,9 +342,9 @@ data:
         {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
         {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
         {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
-        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"}{{- if not .Values.trino.rbac.denyUnmatched }},
         {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
-        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
+        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}{{- end }}
       ],
       "schemas": [
         {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "schema": ".*", "owner": true}{{- if .Values.components.dbt }},
@@ -355,11 +355,13 @@ data:
         {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- if .Values.components.dbt }},
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
-        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
-{{- range .Values.trino.rbac.tablePolicies }}
-        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if hasKey . "filter" }}{{ if not .filter }}{{ fail "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely" }}{{ end }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{{ if not $c.name }}{{ fail "trino.rbac.tablePolicies: a column name is empty/null — quote the value (an unquoted YAML NULL/YES/NO becomes null/bool)" }}{{ end }}{{ if not $c.mask }}{{ fail "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")" }}{{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}},
+        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }}
+{{- range .Values.trino.rbac.tablePolicies }},
+        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if hasKey . "filter" }}{{ if not .filter }}{{ fail "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely" }}{{ end }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{{ if not $c.name }}{{ fail "trino.rbac.tablePolicies: a column name is empty/null — quote the value (an unquoted YAML NULL/YES/NO becomes null/bool)" }}{{ end }}{{ if not $c.mask }}{{ fail "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")" }}{{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}}
 {{- end }}
+{{- if not .Values.trino.rbac.denyUnmatched }},
         {"user": ".*", "privileges": ["SELECT"]}
+{{- end }}
       ]
     }
 {{- end }}
