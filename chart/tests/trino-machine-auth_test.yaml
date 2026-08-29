@@ -53,10 +53,6 @@ tests:
           path: data["rules.json"]
           pattern: '\{"user": "\.\*", "privileges": \["SELECT"\]\}'
         documentSelector: {path: metadata.name, value: trino-config}
-      - matchRegex:
-          path: data["rules.json"]
-          pattern: '\{"user": "alice\|admin-group", "privileges": \["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"\]\}'
-        documentSelector: {path: metadata.name, value: trino-config}
   - it: rules.json unchanged (no svc-dbt-trino rules) when components.dbt is false
     set:
       components.dbt: false

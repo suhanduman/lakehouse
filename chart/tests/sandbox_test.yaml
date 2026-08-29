@@ -738,9 +738,6 @@ tests:
           pattern: '"catalog": "rawlake",   "allow": "read-only"'
       - matchRegex:
           path: data["rules.json"]
-          pattern: '\{"user": "alice\|admin-group", "catalog": "\.\*", "allow": "all"\}'
-      - matchRegex:
-          path: data["rules.json"]
           pattern: '\{"user": "\.\*", "privileges": \["SELECT"\]\}'
 
   - it: "sandbox v2 (Task 3): sandbox.enabled=false (default) -- rules.json has NO sandbox catalog rule, existing lakehouse/rawlake read-only + dbt rules unaffected"

@@ -65,13 +65,26 @@ tests:
           name: trino-ldap-bind
           any: true
 
-  - it: rules.json keeps the alice placeholder when rbac off
+  - it: rbac off has NO hardcoded alice admin (offModeAdminUser empty by default)
     set:
+      components.trino: true
       trino.rbac.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: "alice"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+  - it: rbac off renders the offModeAdminUser admin rule when set
+    set:
+      components.trino: true
+      trino.rbac.enabled: false
+      trino.rbac.offModeAdminUser: "rootadmin"
     asserts:
       - matchRegex:
           path: data["rules.json"]
-          pattern: "alice\\|admin-group"
+          pattern: '"user": "rootadmin", "catalog": ".\*", "allow": "all"'
         documentSelector:
           path: metadata.name
           value: trino-config
@@ -179,3 +192,99 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely"
+
+  - it: rbac on keeps the permissive .* floors when denyUnmatched false (default)
+    set:
+      components.trino: true
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "catalog": "lakehouse", "allow": "read-only"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+  - it: rbac on + denyUnmatched drops the .* floors but keeps svc + role groups
+    set:
+      components.trino: true
+      trino.rbac.enabled: true
+      trino.rbac.denyUnmatched: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      components.dbt: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "catalog": "lakehouse", "allow": "read-only"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"group": "lakehouse-admins"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: rbac on + denyUnmatched still preserves BI/notebook svc accounts (finding I1 — they can't join AD groups)
+    set:
+      components.trino: true
+      trino.rbac.enabled: true
+      trino.rbac.denyUnmatched: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      components.superset: true
+      components.zeppelin: true
+      components.jupyter: true
+      sandbox.enabled: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "catalog": "lakehouse", "allow": "read-only"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-superset-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-zeppelin-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-jupyter-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
