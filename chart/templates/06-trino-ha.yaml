@@ -275,6 +275,16 @@ data:
     s3.aws-access-key=${ENV:S3_ACCESS_KEY}
     s3.aws-secret-key=${ENV:S3_SECRET_KEY}
 {{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+  group-provider.properties: |
+    group-provider.name=ldap
+    ldap.url={{ .Values.trino.ldapGroups.url }}
+    ldap.admin-user={{ .Values.trino.ldapGroups.bindDn }}
+    ldap.admin-password=${ENV:TRINO_LDAP_BIND_PASSWORD}
+    ldap.user-base-dn={{ .Values.trino.ldapGroups.userBaseDn }}
+    ldap.user-search-filter={{ .Values.trino.ldapGroups.userSearchFilter }}
+    ldap.group-name-attribute={{ .Values.trino.ldapGroups.groupNameAttribute }}
+{{- end }}
   access-control.properties: |
     access-control.name=file
     security.config-file=etc/rules.json
@@ -304,6 +314,20 @@ data:
         {"user": ".*", "privileges": ["SELECT"]}
       ]{{- end }}
     }
+{{- if and .Values.trino.ldapGroups.enabled .Values.trino.ldapGroups.bindPassword }}
+---
+# Dev-convenience inline Secret for the Trino LDAP bind password — rendered ONLY
+# when ldapGroups.bindPassword supplied. Empty => NOT rendered; provision out-of-band
+# under the SAME name/key per `.Values.secrets.mode`. NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-ldap-bind
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  password: {{ .Values.trino.ldapGroups.bindPassword | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -369,6 +393,9 @@ spec:
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
         - {name: KEYSTORE_PASS, valueFrom: {secretKeyRef: {name: trino-internal-tls-pass, key: password}}}
 {{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+        - {name: TRINO_LDAP_BIND_PASSWORD, valueFrom: {secretKeyRef: {name: trino-ldap-bind, key: password, optional: true}}}
+{{- end }}
         resources:
           requests:
             memory: {{ .Values.trino.coordinator.resources.requests.memory | quote }}
@@ -387,6 +414,9 @@ spec:
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
 {{- if .Values.sandbox.enabled }}
         - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
+{{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+        - {name: config, mountPath: /etc/trino/group-provider.properties, subPath: group-provider.properties}
 {{- end }}
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
         - {name: trino-certs, mountPath: /etc/trino/certs}

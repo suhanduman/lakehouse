@@ -27,3 +27,40 @@ tests:
     asserts:
       - hasDocuments:
           count: 7
+
+  - it: renders no group-provider when ldapGroups off
+    set:
+      trino.ldapGroups.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["group-provider.properties"]
+          pattern: "group-provider.name=ldap"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: renders ldap group provider + bind secret when on
+    set:
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.ldapGroups.bindDn: "CN=svc,DC=test"
+      trino.ldapGroups.bindPassword: "devbind"
+      trino.ldapGroups.userBaseDn: "OU=users,DC=test"
+    asserts:
+      - matchRegex:
+          path: data["group-provider.properties"]
+          pattern: "group-provider.name=ldap"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["group-provider.properties"]
+          pattern: "ldap.url=ldaps://ad.test:636"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: trino-ldap-bind
+          any: true
