@@ -67,18 +67,10 @@ def bucket_name(target_ns: str) -> str:
 
 
 def _pipeline_bucket(prefix: str, pipeline: str) -> str:
-    """`<prefix>-<pipeline>`, S3-bucket-safe (lowercase/hyphen/<=63). If the clean
-    join exceeds 63 (risking a truncation collision between two distinct
-    pipelines), append a short deterministic crc32 suffix of the full untruncated
-    join so distinct pipeline names never map to the same bucket."""
-    full = _k8s_name(prefix, pipeline)
-    joined_raw = f"{prefix}-{pipeline}"
-    sanitized_uncapped = re.sub(r"[^a-z0-9-]+", "-", joined_raw.lower())
-    sanitized_uncapped = re.sub(r"-{2,}", "-", sanitized_uncapped).strip("-")
-    if len(sanitized_uncapped) > 63:
-        suffix = format(zlib.crc32(joined_raw.encode()) & 0xFFFFFFFF, "08x")
-        full = f"{full[:63 - 9].rstrip('-')}-{suffix}"
-    return full
+    """`<prefix>-<pipeline>`, S3-bucket-safe (lowercase/hyphen/<=63). Distinct
+    pipelines never collide: `_k8s_name` appends a deterministic crc32 when the
+    join exceeds 63."""
+    return _k8s_name(prefix, pipeline)
 
 
 def bronze_bucket_name(pipeline: str) -> str:
@@ -108,11 +100,17 @@ def _safe_ident(value: str) -> str:
 
 def _k8s_name(*parts: str) -> str:
     """RFC1123-label-safe k8s object name: join parts with '-', lowercase,
-    replace any run of invalid chars with a single '-', trim leading/trailing
-    '-', cap at 63. Clean lowercase-alnum-'-' inputs pass through unchanged."""
+    replace any run of invalid chars with a single '-', trim, cap 63. Clean
+    lowercase-alnum-'-' inputs <=63 pass through unchanged. If the sanitized
+    join exceeds 63 (risking a truncation collision between two distinct
+    inputs), append a deterministic 8-hex crc32 of the full join so distinct
+    inputs never map to the same name."""
     joined = "-".join(p for p in parts if p)
     s = re.sub(r"[^a-z0-9-]+", "-", joined.lower())
     s = re.sub(r"-{2,}", "-", s).strip("-")
+    if len(s) > 63:
+        suffix = format(zlib.crc32(joined.encode()) & 0xFFFFFFFF, "08x")
+        s = s[:63 - 9].rstrip("-") + "-" + suffix
     return s[:63].strip("-")
 
 
@@ -120,9 +118,15 @@ def _k8s_topic_name(topic: str) -> str:
     """RFC1123-subdomain-safe KafkaTopic CR name: keep '.' (valid + meaningful
     in Kafka topic names), lowercase, invalid runs -> '-', trim. Used as the CR
     metadata.name; the real (possibly '_'/uppercase) topic goes in spec.topicName
-    when it differs (see render_kafka_topic)."""
+    when it differs (see render_kafka_topic). If the sanitized name exceeds 63
+    (risking a truncation collision between two distinct topics), append a
+    deterministic 8-hex crc32 of the full topic so distinct topics never map
+    to the same CR name."""
     s = re.sub(r"[^a-z0-9.-]+", "-", topic.lower())
     s = re.sub(r"-{2,}", "-", s).strip("-.")
+    if len(s) > 63:
+        suffix = format(zlib.crc32(topic.encode()) & 0xFFFFFFFF, "08x")
+        s = s[:63 - 9].rstrip("-.") + "-" + suffix
     return s[:253]
 
 
