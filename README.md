@@ -329,6 +329,10 @@ trino:
 ```
 **Kapsam:** gerçek-kullanıcı Trino kimlikleri (interaktif OAuth2 + BYO `lakehouse-cli` JWT-bearer). **Kapsam dışı:**
 Superset/Zeppelin/dbt paylaşımlı servis hesabıyla bağlanır → Trino'da per-user ayrım yok (Superset kendi RBAC'ını yapar).
+**Önemli:** bir `tablePolicies` filter/mask YALNIZCA adlandırılan gruba uygulanır — başka gruplardaki
+(veya o grupta olmayan) kullanıcılar kolonu izin-veren read-only `.*` taban kuralı üzerinden HAM görür.
+Bir kolon herkesten kısıtlanacaksa onu kısıtlaması gereken HER grup için bir policy yazın (ya da tabanı
+deny'a sıkılaştırın).
 **Doğrulama:** helm-unittest + `helm template`; canlı AD + gerçek tabloda maskeleme/filtreleme = **OpenShift UAT**.
 
 ---
