@@ -1014,6 +1014,12 @@ trino:
   # (dedicated workers). Single-node (worker.replicas=0) MUST be true, else
   # queries have no execution node.
   includeCoordinator: false
+  # Opsiyonel pod scheduling önceliği (coordinator + worker). Boş (default) =
+  # priorityClassName RENDER EDİLMEZ (byte-identical). Set edilirse mevcut bir
+  # PriorityClass adı olmalı — chart cluster-scoped PriorityClass CR YARATMAZ
+  # (namespace-scoped/no-ClusterRole duruşu; İdare/OpenShift built-in'i sağlar,
+  # örn. openshift-user-critical / system-cluster-critical).
+  priorityClassName: ""
   coordinator:
     resources:
       requests:
@@ -1022,6 +1028,11 @@ trino:
       limits:
         memory: 6Gi
         cpu: "4"
+    # PodDisruptionBudget (Trino OSS tek-coordinator → SPOF-koruma). minAvailable:1
+    # voluntary eviction'ı (node drain / autoscaler) bloklar. Rutin drain için
+    # operatör bunu geçici 0'a çeker VEYA scale-then-drain uygular (README).
+    pdb:
+      minAvailable: 1
   worker:
     replicas: 3
     resources:

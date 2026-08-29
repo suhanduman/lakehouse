@@ -544,10 +544,12 @@ tests:
     templates:
       - 06-trino-ha.yaml
     documentSelector:
-      # trino-coordinator names BOTH the Service and the Deployment; only
-      # the Deployment has `spec.selector.matchLabels` (the Service's own
-      # `spec.selector` is a flat map with no `matchLabels` wrapper).
-      path: spec.selector.matchLabels.role
+      # trino-coordinator names BOTH the Service and the Deployment, and
+      # (Slice C) the new trino-coordinator-pdb PodDisruptionBudget ALSO has
+      # `spec.selector.matchLabels.role: coordinator` — so that path is no
+      # longer Deployment-unique. `spec.template.metadata.labels.role` is:
+      # only Deployments have a pod template.
+      path: spec.template.metadata.labels.role
       value: coordinator
     set:
       components.trino: true

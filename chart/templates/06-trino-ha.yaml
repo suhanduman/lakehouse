@@ -427,6 +427,9 @@ spec:
     metadata:
       labels: {app: trino, role: coordinator}
     spec:
+      {{- if .Values.trino.priorityClassName }}
+      priorityClassName: {{ .Values.trino.priorityClassName }}
+      {{- end }}
       {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
       {{- if $psc }}
       securityContext:
@@ -487,6 +490,16 @@ spec:
           limits:
             memory: {{ .Values.trino.coordinator.resources.limits.memory | quote }}
             cpu: {{ .Values.trino.coordinator.resources.limits.cpu | quote }}
+        readinessProbe:
+          httpGet: {path: /v1/info, port: 8080}
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          httpGet: {path: /v1/info, port: 8080}
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          failureThreshold: 6
         volumeMounts:
         {{- include "lakehouse.s3TrustStoreMount" . | nindent 8 }}
         - {name: config, mountPath: /etc/trino/jvm.config,                subPath: jvm.config}
@@ -531,6 +544,9 @@ spec:
     metadata:
       labels: {app: trino, role: worker}
     spec:
+      {{- if .Values.trino.priorityClassName }}
+      priorityClassName: {{ .Values.trino.priorityClassName }}
+      {{- end }}
       {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
       {{- if $psc }}
       securityContext:
@@ -579,6 +595,16 @@ spec:
           limits:
             memory: {{ .Values.trino.worker.resources.limits.memory | quote }}
             cpu: {{ .Values.trino.worker.resources.limits.cpu | quote }}
+        readinessProbe:
+          httpGet: {path: /v1/info, port: 8080}
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          httpGet: {path: /v1/info, port: 8080}
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          failureThreshold: 6
         volumeMounts:
         - {name: config, mountPath: /etc/trino/jvm.config,                   subPath: jvm.config}
         - {name: config, mountPath: /etc/trino/config.properties,            subPath: worker.config.properties}
@@ -619,6 +645,17 @@ spec:
 {{- else }}
   ports: [{name: http, port: 8080, targetPort: 8080}]
 {{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-pdb" (include "lakehouse.svc.trino" .) }}
+  namespace: {{ include "lakehouse.namespace" . }}
+  labels: {app: trino, role: coordinator}
+spec:
+  minAvailable: {{ .Values.trino.coordinator.pdb.minAvailable }}
+  selector:
+    matchLabels: {app: trino, role: coordinator}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
