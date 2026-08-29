@@ -196,6 +196,37 @@ Metrik seri adları/PromQL'ler sürüm-bağımlı olabilir; doğrulama runbook'u
 
 ---
 
+## Trino coordinator/worker dayanıklılığı (liveness, PDB, priorityClass)
+
+Trino coordinator + worker pod'ları artık bir `readinessProbe`/`livenessProbe`
+çifti taşır (`httpGet /v1/info`:8080) — asılı/çöken bir coordinator kubelet
+tarafından fark edilip restart edilir.
+
+- **`trino-coordinator-pdb` (PodDisruptionBudget):**
+  `trino.coordinator.pdb.minAvailable` (varsayılan `1`) üzerinden ayarlanır.
+  Trino OSS **tek-coordinator** olduğundan `minAvailable: 1` voluntary
+  eviction'ı (node drain, cluster-autoscaler) bloklar. **Rutin node drain
+  için** operatör bu PDB'yi geçici olarak düşürmeli VEYA scale-then-drain
+  uygulamalıdır — bu bilinçli bir trade-off'tur (SPOF-koruma vs. drain
+  kolaylığı), chart'ın kendisi drain sırasında otomatik gevşetme yapmaz.
+- **`trino.priorityClassName`** (opsiyonel, varsayılan `""` = render
+  edilmez): set edilirse MEVCUT bir PriorityClass adı vermelidir — chart
+  cluster-scoped bir `PriorityClass` CR'ı YARATMAZ (namespace-scoped
+  duruş; İdare/OpenShift built-in bir PriorityClass'ı sağlar, örn.
+  `openshift-user-critical` / `system-cluster-critical`).
+- **`TrinoCoordinatorDown` alert'i** (`PrometheusRule`,
+  `components.monitoring: true` iken aktif): `up{job="trino-coordinator"}
+  == 0` metriği `monitoring.alerts.trinoCoordinatorDownFor` (varsayılan
+  `"2m"`) boyunca sürerse `severity: critical` ile tetiklenir.
+
+**Bilinen sınırlama:** bu slice helm-unittest + `helm template` ile
+doğrulandı (probe/PDB/priorityClass render'ı, alert PromQL/eşik); gerçek bir
+node-drain veya coordinator-failover sırasındaki canlı davranış (PDB'nin
+gerçekten eviction'ı bloklaması, alert'in gerçek bir Prometheus'ta ateşlenmesi)
+OpenShift UAT'ta doğrulanacak bir kalemdir.
+
+---
+
 ## Superset (BI)
 
 `components.superset: true` iken (medium/large tier'larda açık —
