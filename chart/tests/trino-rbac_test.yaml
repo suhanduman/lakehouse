@@ -1,0 +1,28 @@
+# chart/tests/trino-rbac_test.yaml — Trino row/column security (rbac + ldap group provider).
+# Negative asserts carry `any: true`. Off-state must be byte-identical to today.
+suite: trino rbac (row/column security)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: fails loud when rbac enabled without a group source
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.enabled requires a group source — set trino.ldapGroups.enabled=true (Trino needs AD groups to match role/row/column rules)"
+
+  - it: fails loud when ldapGroups enabled without a URL
+    set:
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.ldapGroups.enabled requires trino.ldapGroups.url"
+
+  - it: renders normally when rbac off (no fail)
+    set:
+      trino.rbac.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 7

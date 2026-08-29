@@ -1054,6 +1054,26 @@ trino:
     # "16M" in that case (e.g. a memory-minimal single-node overlay; see
     # values-microk8s-ingest.yaml).
     g1HeapRegionSize: "32M"
+  rbac:
+    # Rol/grup-bazlı satır-filtresi + kolon-maskesi (şartname 3.5.3). Açınca rules.json
+    # grup-modeline geçer; kapalı = bugünkü .*-permissive kurallar. Bir grup kaynağı gerektirir
+    # → ldapGroups.enabled=true zorunlu (fail-loud). Tüm sizing tier'larında off.
+    enabled: false
+    adminGroup: "lakehouse-admins"
+    analystGroup: "lakehouse-analysts"
+    userGroup: "lakehouse-users"
+    # [{group, catalog, schema, table, filter?, columns?: [{name, mask}]}]
+    # BİR girdi = BİR Trino tablo kuralı (filter satır + columns[].mask kolon AYNI kuralda).
+    tablePolicies: []
+  ldapGroups:
+    # Trino, kimliği doğrulanan kullanıcının gruplarını doğrudan AD/LDAP'tan çözer.
+    enabled: false
+    url: "ldaps://ad.example.local:636"
+    bindDn: ""
+    bindPassword: ""     # dev-convenience; prod out-of-band Secret trino-ldap-bind/key=password
+    userBaseDn: ""
+    userSearchFilter: "(&(objectClass=person)(sAMAccountName={0}))"
+    groupNameAttribute: "cn"
 
 # Cross-cutting Spark job tuning knobs, not scoped to a single
 # ScheduledSparkApplication (see `sparkOperator.*` below for the

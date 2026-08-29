@@ -20,6 +20,12 @@
 #   - S3 + OIDC credentials come from `.Values.storage.s3.
 #     secretName` / `.Values.oidc.secretName` (name-reference-only Secrets,
 #     see chart/templates/01-storage.yaml).
+{{- if and .Values.trino.rbac.enabled (not .Values.trino.ldapGroups.enabled) }}
+{{- fail "trino.rbac.enabled requires a group source — set trino.ldapGroups.enabled=true (Trino needs AD groups to match role/row/column rules)" }}
+{{- end }}
+{{- if and .Values.trino.ldapGroups.enabled (eq .Values.trino.ldapGroups.url "") }}
+{{- fail "trino.ldapGroups.enabled requires trino.ldapGroups.url" }}
+{{- end }}
 {{- if .Values.components.trino }}
 {{- if .Values.trino.internalSharedSecret }}
 # Inline stringData Secret -- rendered ONLY when a real value is explicitly
