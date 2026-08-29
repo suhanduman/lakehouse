@@ -64,3 +64,46 @@ tests:
           apiVersion: v1
           name: trino-ldap-bind
           any: true
+
+  - it: rules.json keeps the alice placeholder when rbac off
+    set:
+      trino.rbac.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "alice\\|admin-group"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: rbac on uses role groups, drops the alice placeholder, keeps svc + catch-all
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      components.dbt: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: "alice\\|admin-group"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"group": "lakehouse-admins"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config

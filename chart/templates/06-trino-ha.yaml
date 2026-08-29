@@ -289,6 +289,7 @@ data:
     access-control.name=file
     security.config-file=etc/rules.json
   rules.json: |
+{{- if not .Values.trino.rbac.enabled }}
     {
       "catalogs": [
         {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
@@ -314,6 +315,38 @@ data:
         {"user": ".*", "privileges": ["SELECT"]}
       ]{{- end }}
     }
+{{- else }}
+    {
+      "catalogs": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "catalog": ".*", "allow": "all"},
+{{- if .Values.components.dbt }}
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "allow": "all"},
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+        {"user": ".*", "catalog": "sandbox", "allow": "all"},
+{{- end }}
+        {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
+        {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
+        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
+      ],
+      "schemas": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "schema": ".*", "owner": true}{{- if .Values.components.dbt }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "schema": ".*", "owner": true}{{- end }}
+      ],
+      "tables": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- if .Values.components.dbt }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
+{{/* TABLE-POLICIES-ANCHOR — Task 4 tablePolicies kuralları BU YORUM SATIRININ YERİNE render eder */}}
+        {"user": ".*", "privileges": ["SELECT"]}
+      ]
+    }
+{{- end }}
 {{- if and .Values.trino.ldapGroups.enabled .Values.trino.ldapGroups.bindPassword }}
 ---
 # Dev-convenience inline Secret for the Trino LDAP bind password — rendered ONLY
