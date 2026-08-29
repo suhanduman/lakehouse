@@ -25,8 +25,10 @@ tests:
     set:
       trino.rbac.enabled: false
     asserts:
+      # 8, not 7: Slice C added the trino-coordinator-pdb PodDisruptionBudget
+      # document (chart/tests/trino-liveness_test.yaml).
       - hasDocuments:
-          count: 7
+          count: 8
 
   - it: renders no group-provider when ldapGroups off
     set:

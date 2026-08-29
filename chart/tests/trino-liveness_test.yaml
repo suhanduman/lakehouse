@@ -1,0 +1,84 @@
+# chart/tests/trino-liveness_test.yaml — Slice C: Trino coordinator/worker
+# liveness hardening (probes + PDB + priorityClassName). Spec:
+# docs/superpowers/specs/2026-08-29-trino-coordinator-liveness-design.md
+suite: trino liveness (slice C)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: coordinator Deployment has readiness+liveness probes on /v1/info:8080
+    # NOTE: metadata.name alone is ambiguous — the coordinator Service is ALSO
+    # named `trino-coordinator` (via `lakehouse.svc.trino`). Select on
+    # spec.template.metadata.labels.role instead, which only Deployments have.
+    documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /v1/info
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 8080
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /v1/info
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: 8080
+
+  - it: worker Deployment has readiness+liveness probes on /v1/info:8080
+    # NOTE: metadata.name alone is ambiguous — the worker HPA is ALSO named
+    # `trino-worker`. Select on spec.template.metadata.labels.role instead.
+    documentSelector: {path: spec.template.metadata.labels.role, value: worker}
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /v1/info
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /v1/info
+
+  - it: renders trino-coordinator-pdb with default minAvailable 1 and coordinator selector
+    asserts:
+      - containsDocument: {kind: PodDisruptionBudget, apiVersion: policy/v1, name: trino-coordinator-pdb, any: true}
+      - equal:
+          path: spec.minAvailable
+          value: 1
+        documentSelector: {path: metadata.name, value: trino-coordinator-pdb}
+      - equal:
+          path: spec.selector.matchLabels.role
+          value: coordinator
+        documentSelector: {path: metadata.name, value: trino-coordinator-pdb}
+
+  - it: pdb minAvailable is values-driven
+    set:
+      trino.coordinator.pdb.minAvailable: 2
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 2
+        documentSelector: {path: metadata.name, value: trino-coordinator-pdb}
+
+  - it: priorityClassName is NOT rendered by default (empty)
+    documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}
+    asserts:
+      - notExists:
+          path: spec.template.spec.priorityClassName
+
+  - it: priorityClassName is set on coordinator+worker when values-set
+    set:
+      trino.priorityClassName: high-priority
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: high-priority
+        documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: high-priority
+        documentSelector: {path: spec.template.metadata.labels.role, value: worker}
+
+  - it: does NOT create a cluster-scoped PriorityClass CR even when priorityClassName set
+    set:
+      trino.priorityClassName: high-priority
+    asserts:
+      - containsDocument: {kind: PriorityClass, apiVersion: scheduling.k8s.io/v1, any: true}
+        not: true
