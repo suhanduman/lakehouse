@@ -71,6 +71,12 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "Trino başarısız sorgu hızı yüksek"
+        - alert: TrinoCoordinatorDown
+          expr: up{job="trino-coordinator"} == 0
+          for: {{ .Values.monitoring.alerts.trinoCoordinatorDownFor }}
+          labels: {severity: critical}
+          annotations:
+            summary: "Trino coordinator erişilemez (scrape hedefi up==0)"
     - name: lakehouse.platform
       rules:
         - alert: PodRestartingFrequently

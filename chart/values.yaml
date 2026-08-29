@@ -465,6 +465,7 @@ monitoring:
     dlqRatePerSec: 1                 # DLQ topic'ine yazım hızı (msg/s)
     cnpgReplicationLagSeconds: 30    # CNPG streaming replication gecikmesi
     trinoErrorRatePerSec: 5          # Trino başarısız sorgu hızı (query/s)
+    trinoCoordinatorDownFor: "2m"    # Trino coordinator scrape hedefi (up==0) bu süre down ise alert
     podRestartThreshold: 5           # 1 saatte pod restart sayısı
 
   # Dashboard-as-code toggle'ları (ConfigMap'ler koşullu).
