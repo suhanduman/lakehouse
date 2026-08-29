@@ -292,7 +292,9 @@ data:
 {{- if not .Values.trino.rbac.enabled }}
     {
       "catalogs": [
-        {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
+{{- if .Values.trino.rbac.offModeAdminUser }}
+        {"user": {{ .Values.trino.rbac.offModeAdminUser | quote }}, "catalog": ".*", "allow": "all"},
+{{- end }}
 {{- if .Values.components.dbt }}
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "allow": "all"},
 {{- end }}
@@ -301,17 +303,29 @@ data:
 {{- end }}
         {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
         {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
-      ]{{- if or .Values.components.dbt .Values.sandbox.enabled }},
+      ]{{- if or .Values.components.dbt .Values.sandbox.enabled .Values.trino.rbac.offModeAdminUser }},
       "schemas": [
-        {"user": "alice|admin-group", "schema": ".*", "owner": true}{{- if .Values.components.dbt }},
-        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}{{- end }}{{- if .Values.sandbox.enabled }},
-        {"user": ".*", "catalog": "sandbox", "schema": ".*", "owner": true}{{- end }}
+{{- if .Values.trino.rbac.offModeAdminUser }}
+        {"user": {{ .Values.trino.rbac.offModeAdminUser | quote }}, "schema": ".*", "owner": true}{{- if or .Values.components.dbt .Values.sandbox.enabled }},{{- end }}
+{{- end }}
+{{- if .Values.components.dbt }}
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}{{- if .Values.sandbox.enabled }},{{- end }}
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+        {"user": ".*", "catalog": "sandbox", "schema": ".*", "owner": true}
+{{- end }}
       ],
       "tables": [
-        {"user": "alice|admin-group", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- if .Values.components.dbt }},
+{{- if .Values.trino.rbac.offModeAdminUser }}
+        {"user": {{ .Values.trino.rbac.offModeAdminUser | quote }}, "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+{{- end }}
+{{- if .Values.components.dbt }}
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
-        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
-        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]},
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+{{- end }}
         {"user": ".*", "privileges": ["SELECT"]}
       ]{{- end }}
     }

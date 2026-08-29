@@ -1065,6 +1065,15 @@ trino:
     # [{group, catalog, schema, table, filter?, columns?: [{name, mask}]}]
     # BİR girdi = BİR Trino tablo kuralı (filter satır + columns[].mask kolon AYNI kuralda).
     tablePolicies: []
+    # rbac.enabled=false (dev/smoke): admin identity as a Trino user-regex.
+    # EMPTY (default) = NO catalog-admin in rbac-off mode (removes the old
+    # hardcoded `alice` footgun — a user literally named alice was catalog-admin).
+    # For real admin use rbac.enabled=true (AD groups).
+    offModeAdminUser: ""
+    # rbac.enabled=true: when true, DROP the permissive `.*` read-only catalog +
+    # `.*`-SELECT table floors so an unmatched principal gets NO access
+    # (deny-by-default). Default false = current permissive floors (backward-compat).
+    denyUnmatched: false
   ldapGroups:
     # Trino, kimliği doğrulanan kullanıcının gruplarını doğrudan AD/LDAP'tan çözer.
     enabled: false
