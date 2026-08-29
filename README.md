@@ -300,8 +300,15 @@ uygular. Grup kaynağı zorunlu: `trino.ldapGroups.enabled: true` (Trino kullan�
 AD/LDAP'tan çözer; `url`/`bindDn`/`bindPassword`/`userBaseDn` values'tan, bind şifresi out-of-band Secret
 `trino-ldap-bind`). `rbac.enabled=true` ama `ldapGroups.enabled=false` → **fail-loud**.
 
-**Rol grupları** (coarse erişim): `adminGroup` (tümü), `analystGroup` (lakehouse/rawlake read + sandbox write),
-`userGroup` (read-only). **Satır/kolon politikaları** (`trino.rbac.tablePolicies`) — İdare kendi Gold tablolarına yazar:
+**Rol grupları** (coarse erişim): `adminGroup` tüm kataloglarda tam yetkilidir; `analystGroup` ve
+`userGroup` ise bu dilimde katalog düzeyinde AYNIDIR — ikisi de yalnızca `lakehouse`/`rawlake`'te
+**read-only**'dur (rol'e göre ayrım yok). Sandbox yazma yetkisi (`sandbox.enabled` iken) rol'den
+BAĞIMSIZ, **kurum-geneli**dir (herhangi bir kimlik doğrulanmış kullanıcı — sandbox-v2'nin
+org-wide-write kontratı); analyst'e özel bir sandbox ayrıcalığı YOKTUR. Şartname 3.5.3'ün gerçek
+**rol-bazlı** ayrımı — satır-filtresi ve kolon-maskesi — AD grubuna göre eşleşen
+**`trino.rbac.tablePolicies`** üzerinden sağlanır. Daha ince coarse rol-ayrımı (ör. sandbox
+yazımını yalnızca analyst'e açmak) ayrı bir rol-modeli konusudur (bu dilimde YOK, ertelenmiştir).
+**Satır/kolon politikaları** (`trino.rbac.tablePolicies`) — İdare kendi Gold tablolarına yazar:
 ```yaml
 trino:
   rbac:
