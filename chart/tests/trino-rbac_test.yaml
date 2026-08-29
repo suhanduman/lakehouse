@@ -1,0 +1,181 @@
+# chart/tests/trino-rbac_test.yaml — Trino row/column security (rbac + ldap group provider).
+# Negative containsDocument/notMatchRegex asserts (added by later tasks) carry `any: true`.
+# Off-state must be byte-identical to today.
+suite: trino rbac (row/column security)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: fails loud when rbac enabled without a group source
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.enabled requires a group source — set trino.ldapGroups.enabled=true (Trino needs AD groups to match role/row/column rules)"
+
+  - it: fails loud when ldapGroups enabled without a URL
+    set:
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.ldapGroups.enabled requires trino.ldapGroups.url"
+
+  - it: renders normally when rbac off (no fail)
+    set:
+      trino.rbac.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  - it: renders no group-provider when ldapGroups off
+    set:
+      trino.ldapGroups.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["group-provider.properties"]
+          pattern: "group-provider.name=ldap"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: renders ldap group provider + bind secret when on
+    set:
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.ldapGroups.bindDn: "CN=svc,DC=test"
+      trino.ldapGroups.bindPassword: "devbind"
+      trino.ldapGroups.userBaseDn: "OU=users,DC=test"
+    asserts:
+      - matchRegex:
+          path: data["group-provider.properties"]
+          pattern: "group-provider.name=ldap"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["group-provider.properties"]
+          pattern: "ldap.url=ldaps://ad.test:636"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - containsDocument:
+          kind: Secret
+          apiVersion: v1
+          name: trino-ldap-bind
+          any: true
+
+  - it: rules.json keeps the alice placeholder when rbac off
+    set:
+      trino.rbac.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "alice\\|admin-group"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: rbac on uses role groups, drops the alice placeholder, keeps svc + catch-all
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      components.dbt: true
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: "alice\\|admin-group"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"group": "lakehouse-admins"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: "service-account-svc-dbt-trino"
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"user": ".\*", "privileges": \["SELECT"\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: tablePolicies render one table rule with filter + column mask
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          filter: "department = current_user"
+          columns:
+            - {name: "tckn", mask: "'***'"}
+    asserts:
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"filter": "department = current_user"'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+      - matchRegex:
+          path: data["rules.json"]
+          pattern: '"columns": \[\{"name": "tckn", "mask": "''\*\*\*''"\}\]'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: no filter/columns keys when tablePolicies empty
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+    asserts:
+      - notMatchRegex:
+          path: data["rules.json"]
+          pattern: '"filter":'
+        documentSelector:
+          path: metadata.name
+          value: trino-config
+
+  - it: fails loud when a column mask is null (unquoted YAML NULL footgun)
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          columns:
+            - name: "tckn"
+              mask: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")"
+
+  - it: fails loud when a filter key is present but null (unquoted YAML NULL footgun)
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          filter: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely"

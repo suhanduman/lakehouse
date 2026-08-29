@@ -293,6 +293,48 @@ e-postada (headless tarayıcı gerektirir — Day-2/opsiyonel; şartname 3.6.2.1
 istemez). **Doğrulama:** helm-unittest + `helm template`; canlı beat→worker→Trino→CSV
 →müşteri-SMTP teslimi = **OpenShift UAT** (gerçek SMTP + AD kullanıcısı).
 
+### Trino satır/kolon güvenliği (şartname 3.5.3)
+
+`trino.rbac.enabled: true` iken Trino, kullanıcının **AD grubuna** göre satır-filtresi ve kolon-maskesi
+uygular. Grup kaynağı zorunlu: `trino.ldapGroups.enabled: true` (Trino kullanıcının gruplarını doğrudan
+AD/LDAP'tan çözer; `url`/`bindDn`/`bindPassword`/`userBaseDn` values'tan, bind şifresi out-of-band Secret
+`trino-ldap-bind`). `rbac.enabled=true` ama `ldapGroups.enabled=false` → **fail-loud**.
+
+**Rol grupları** (coarse erişim): `adminGroup` tüm kataloglarda tam yetkilidir; `analystGroup` ve
+`userGroup` ise bu dilimde katalog düzeyinde AYNIDIR — ikisi de yalnızca `lakehouse`/`rawlake`'te
+**read-only**'dur (rol'e göre ayrım yok). Sandbox yazma yetkisi (`sandbox.enabled` iken) rol'den
+BAĞIMSIZ, **kurum-geneli**dir (herhangi bir kimlik doğrulanmış kullanıcı — sandbox-v2'nin
+org-wide-write kontratı); analyst'e özel bir sandbox ayrıcalığı YOKTUR. Şartname 3.5.3'ün gerçek
+**rol-bazlı** ayrımı — satır-filtresi ve kolon-maskesi — AD grubuna göre eşleşen
+**`trino.rbac.tablePolicies`** üzerinden sağlanır. Daha ince coarse rol-ayrımı (ör. sandbox
+yazımını yalnızca analyst'e açmak) ayrı bir rol-modeli konusudur (bu dilimde YOK, ertelenmiştir).
+**Satır/kolon politikaları** (`trino.rbac.tablePolicies`) — İdare kendi Gold tablolarına yazar:
+```yaml
+trino:
+  rbac:
+    enabled: true
+    tablePolicies:
+      - group: "lakehouse-users"
+        catalog: "lakehouse"
+        schema: "gold"
+        table: "patients"
+        filter: "department = current_user"        # satır: kullanıcı yalnız kendi bölümünü görür
+        columns:
+          - {name: "tckn", mask: "'***'"}          # kolon: TCKN maskelenir
+  ldapGroups:
+    enabled: true
+    url: "ldaps://<ad-host>:636"
+    bindDn: "<bind-dn>"
+    userBaseDn: "<user-base-dn>"
+```
+**Kapsam:** gerçek-kullanıcı Trino kimlikleri (interaktif OAuth2 + BYO `lakehouse-cli` JWT-bearer). **Kapsam dışı:**
+Superset/Zeppelin/dbt paylaşımlı servis hesabıyla bağlanır → Trino'da per-user ayrım yok (Superset kendi RBAC'ını yapar).
+**Önemli:** bir `tablePolicies` filter/mask YALNIZCA adlandırılan gruba uygulanır — başka gruplardaki
+(veya o grupta olmayan) kullanıcılar kolonu izin-veren read-only `.*` taban kuralı üzerinden HAM görür.
+Bir kolon herkesten kısıtlanacaksa onu kısıtlaması gereken HER grup için bir policy yazın (ya da tabanı
+deny'a sıkılaştırın).
+**Doğrulama:** helm-unittest + `helm template`; canlı AD + gerçek tabloda maskeleme/filtreleme = **OpenShift UAT**.
+
 ---
 
 ## dbt-trino Certified Gold (b2)

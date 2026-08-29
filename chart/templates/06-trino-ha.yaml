@@ -21,6 +21,12 @@
 #     secretName` / `.Values.oidc.secretName` (name-reference-only Secrets,
 #     see chart/templates/01-storage.yaml).
 {{- if .Values.components.trino }}
+{{- if and .Values.trino.rbac.enabled (not .Values.trino.ldapGroups.enabled) }}
+{{- fail "trino.rbac.enabled requires a group source — set trino.ldapGroups.enabled=true (Trino needs AD groups to match role/row/column rules)" }}
+{{- end }}
+{{- if and .Values.trino.ldapGroups.enabled (eq .Values.trino.ldapGroups.url "") }}
+{{- fail "trino.ldapGroups.enabled requires trino.ldapGroups.url" }}
+{{- end }}
 {{- if .Values.trino.internalSharedSecret }}
 # Inline stringData Secret -- rendered ONLY when a real value is explicitly
 # supplied via `.Values.trino.internalSharedSecret` (dev/test convenience).
@@ -269,10 +275,21 @@ data:
     s3.aws-access-key=${ENV:S3_ACCESS_KEY}
     s3.aws-secret-key=${ENV:S3_SECRET_KEY}
 {{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+  group-provider.properties: |
+    group-provider.name=ldap
+    ldap.url={{ .Values.trino.ldapGroups.url }}
+    ldap.admin-user={{ .Values.trino.ldapGroups.bindDn }}
+    ldap.admin-password=${ENV:TRINO_LDAP_BIND_PASSWORD}
+    ldap.user-base-dn={{ .Values.trino.ldapGroups.userBaseDn }}
+    ldap.user-search-filter={{ .Values.trino.ldapGroups.userSearchFilter }}
+    ldap.group-name-attribute={{ .Values.trino.ldapGroups.groupNameAttribute }}
+{{- end }}
   access-control.properties: |
     access-control.name=file
     security.config-file=etc/rules.json
   rules.json: |
+{{- if not .Values.trino.rbac.enabled }}
     {
       "catalogs": [
         {"user": "alice|admin-group", "catalog": ".*", "allow": "all"},
@@ -298,6 +315,54 @@ data:
         {"user": ".*", "privileges": ["SELECT"]}
       ]{{- end }}
     }
+{{- else }}
+    {
+      "catalogs": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "catalog": ".*", "allow": "all"},
+{{- if .Values.components.dbt }}
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "allow": "all"},
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+        {"user": ".*", "catalog": "sandbox", "allow": "all"},
+{{- end }}
+        {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.analystGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "lakehouse", "allow": "read-only"},
+        {"group": {{ .Values.trino.rbac.userGroup | quote }}, "catalog": "rawlake",   "allow": "read-only"},
+        {"user": ".*", "catalog": "lakehouse", "allow": "read-only"},
+        {"user": ".*", "catalog": "rawlake",   "allow": "read-only"}
+      ],
+      "schemas": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "schema": ".*", "owner": true}{{- if .Values.components.dbt }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "owner": true}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "schema": ".*", "owner": true}{{- end }}
+      ],
+      "tables": [
+        {"group": {{ .Values.trino.rbac.adminGroup | quote }}, "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- if .Values.components.dbt }},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "schema": "gold", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]},
+        {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
+        {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
+{{- range .Values.trino.rbac.tablePolicies }}
+        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if hasKey . "filter" }}{{ if not .filter }}{{ fail "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely" }}{{ end }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{{ if not $c.name }}{{ fail "trino.rbac.tablePolicies: a column name is empty/null — quote the value (an unquoted YAML NULL/YES/NO becomes null/bool)" }}{{ end }}{{ if not $c.mask }}{{ fail "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")" }}{{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}},
+{{- end }}
+        {"user": ".*", "privileges": ["SELECT"]}
+      ]
+    }
+{{- end }}
+{{- if and .Values.trino.ldapGroups.enabled .Values.trino.ldapGroups.bindPassword }}
+---
+# Dev-convenience inline Secret for the Trino LDAP bind password — rendered ONLY
+# when ldapGroups.bindPassword supplied. Empty => NOT rendered; provision out-of-band
+# under the SAME name/key per `.Values.secrets.mode`. NEVER logged.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-ldap-bind
+  namespace: {{ include "lakehouse.namespace" . }}
+type: Opaque
+stringData:
+  password: {{ .Values.trino.ldapGroups.bindPassword | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -363,6 +428,9 @@ spec:
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
         - {name: KEYSTORE_PASS, valueFrom: {secretKeyRef: {name: trino-internal-tls-pass, key: password}}}
 {{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+        - {name: TRINO_LDAP_BIND_PASSWORD, valueFrom: {secretKeyRef: {name: trino-ldap-bind, key: password, optional: true}}}
+{{- end }}
         resources:
           requests:
             memory: {{ .Values.trino.coordinator.resources.requests.memory | quote }}
@@ -381,6 +449,9 @@ spec:
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
 {{- if .Values.sandbox.enabled }}
         - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
+{{- end }}
+{{- if .Values.trino.ldapGroups.enabled }}
+        - {name: config, mountPath: /etc/trino/group-provider.properties, subPath: group-provider.properties}
 {{- end }}
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
         - {name: trino-certs, mountPath: /etc/trino/certs}
