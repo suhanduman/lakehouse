@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.deps import get_connect, get_k8s, get_roles
 from app.main import app
 from app.services.authz import Role
+from app.services.k8s_service import SecretNameConflict
 
 # A KafkaConnector CR carrying the `lakehouse.solus.dev/source` round-trip
 # annotation render_service._connector stamps on every rendered connector --
@@ -57,6 +58,8 @@ class FakeK8s:
     def create_secret(
         self, name: str, data: Dict[str, str], labels: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
+        if getattr(self, "raise_conflict", False):
+            raise SecretNameConflict(name)
         self.created_secret = (name, data)
         return {"ok": True}
 
@@ -154,6 +157,28 @@ def test_rotate_password_not_logged(caplog):
 
     assert resp.status_code == 200
     assert "SUPERSECRETPW" not in caplog.text
+
+
+def test_rotate_secret_conflict_returns_409_not_500():
+    # SEC-1 (Task 3, part b): a SecretNameConflict raised directly out of
+    # rotate_credentials (no orchestrator run() wrapper here) must be caught
+    # by the global FastAPI exception handler and surfaced as a clean 409,
+    # never a raw 500.
+    fake_k8s = FakeK8s([PGDEMO_CR])
+    fake_k8s.raise_conflict = True
+    fake_connect = FakeConnect()
+    client = _client({Role.ANALYST}, fake_k8s, fake_connect)
+
+    resp = client.post(
+        "/api/sources/dbz-pgdemo-customers/credentials",
+        json={"user": "u2", "password": "p2"},
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert "pgdemo" in body["detail"]
+    assert "already exists" in body["detail"]
+    assert not fake_connect.restarted_called
 
 
 def test_rotate_requires_source_edit():

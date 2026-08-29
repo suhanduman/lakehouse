@@ -9,6 +9,15 @@ from app import source_types
 
 DeleteMode = Literal["pipeline_only", "with_data"]
 
+# Platform/infra Secret names a self-service source must never be able to name
+# (would collide with a real Secret; k8s_service fail-closed create is the
+# airtight backstop, this is the early, clear rejection). Non-exhaustive.
+_RESERVED_SOURCE_NAMES = frozenset({
+    "s3-credentials", "trino-internal-secret", "pg-nessie-app",
+    "nessie-machine-auth-credentials", "oidc-credentials", "connect",
+    "pg", "mssql", "mongo", "mongodb", "debezium-src",
+})
+
 
 class ColumnSpec(BaseModel):
     """Iceberg tablo pre-create için kolon tanımı (SourceSpec.columns). `type`
@@ -112,6 +121,10 @@ class SourceSpec(BaseModel):
             raise ValueError(
                 "source must be an RFC1123 label (lowercase letters, digits, '-'; "
                 f"must start/end alphanumeric) — got {v!r}"
+            )
+        if v in _RESERVED_SOURCE_NAMES:
+            raise ValueError(
+                f"source name {v!r} is reserved (collides with a platform secret) — choose another"
             )
         return v
 
