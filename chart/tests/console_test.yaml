@@ -143,6 +143,26 @@ tests:
           namespace: argocd
         not: true
 
+  # 2026-08-29-self-service-resource-safety Task 4: the release-namespace
+  # Role (`lakehouse-console-role` — disambiguated by `metadata.name` from
+  # the file's OTHER Role, `lakehouse-console-argocd-read`, which has no
+  # `secrets` rule at all) grants `get` on secrets IN ADDITION TO
+  # create/update/delete. `get` is needed ONLY for the fail-closed
+  # `create_secret` 409-conflict path (console/backend/app/services/
+  # k8s_service.py) to read a colliding secret's metadata/labels — deciding
+  # whether it's a Console-created secret (safe to replace) or a foreign/
+  # platform secret (SEC-1: must NEVER be overwritten). The secret's VALUE
+  # (`.data`) is still never read — see this file's header comment.
+  - it: "console Role (release namespace) can get secrets, in addition to create/update/delete (fail-closed conflict label-check, SEC-1)"
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, create, update, delete]
+        documentSelector: {path: metadata.name, value: lakehouse-console-role}
+
   - it: "deployMode=gitops: the ArgoCD-read Role+RoleBinding render in .Values.console.argocdNamespace (kind: Role, NEVER ClusterRole), bound to the lakehouse-console ServiceAccount, and the ConfigMap carries ARGOCD_NAMESPACE"
     set:
       console.deployMode: gitops

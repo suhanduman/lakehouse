@@ -10,11 +10,20 @@
 #     `RoleBinding` (never `ClusterRole`/`ClusterRoleBinding`) — this is the
 #     task's explicit acceptance criterion, carried over verbatim from the
 #     source manifest's own "cluster-admin YOK, ClusterRole YOK" comment.
-#   - `secrets` verbs are exactly `[create, update, delete]` — no `get`/
-#     `list`/`patch` (console/backend/app/services/k8s_service.py never
-#     reads secrets and never calls a JSON-patch; its 409-fallback on
-#     `create_secret` calls `replace_namespaced_secret`, a PUT, whose RBAC
-#     verb is `update`, not `patch`).
+#   - `secrets` verbs are `[get, create, update, delete]` — no `list`/`patch`
+#     (console/backend/app/services/k8s_service.py never LISTS secrets and
+#     never calls a JSON-patch; its 409-fallback on `create_secret` calls
+#     `replace_namespaced_secret`, a PUT, whose RBAC verb is `update`, not
+#     `patch`). `get` (2026-08-29-self-service-resource-safety Task 4) is
+#     used ONLY by that same 409-conflict path: when a self-service source-
+#     secret name collides with an existing Secret, `create_secret` GETs the
+#     existing object to read its **metadata/labels** — deciding whether it
+#     carries `app.kubernetes.io/managed-by: lakehouse-console` (a
+#     Console-created secret, safe to replace) or not (a foreign/platform
+#     secret — e.g. `s3-credentials`/`trino-internal-secret` — which is
+#     fail-closed: NEVER overwritten, SEC-1). The secret's VALUE (`.data`)
+#     is still never read or logged by the Console — `get` only ever
+#     inspects labels, never `.data`.
 #
 # Service wiring (spec §3.1/§8):
 #   - Backend Service name = `lakehouse.svc.consoleBackend` (`console-backend`)
@@ -84,7 +93,7 @@ rules:
   verbs: [get]
 - apiGroups: [""]
   resources: [secrets]
-  verbs: [create, update, delete]
+  verbs: [get, create, update, delete]
 
 ---
 # -------- RoleBinding (namespace-scoped — NEVER ClusterRoleBinding) --------
