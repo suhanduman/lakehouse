@@ -343,7 +343,7 @@ data:
         {"user": "service-account-svc-dbt-trino", "catalog": "lakehouse", "privileges": ["SELECT"]}{{- end }}{{- if .Values.sandbox.enabled }},
         {"user": ".*", "catalog": "sandbox", "privileges": ["SELECT","INSERT","DELETE","UPDATE","OWNERSHIP"]}{{- end }},
 {{- range .Values.trino.rbac.tablePolicies }}
-        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if .filter }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}},
+        {"group": {{ .group | quote }}, "catalog": {{ .catalog | quote }}, "schema": {{ .schema | quote }}, "table": {{ .table | quote }}, "privileges": ["SELECT"]{{ if hasKey . "filter" }}{{ if not .filter }}{{ fail "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely" }}{{ end }}, "filter": {{ .filter | quote }}{{ end }}{{ if .columns }}, "columns": [{{ range $i, $c := .columns }}{{ if $i }}, {{ end }}{{ if not $c.name }}{{ fail "trino.rbac.tablePolicies: a column name is empty/null — quote the value (an unquoted YAML NULL/YES/NO becomes null/bool)" }}{{ end }}{{ if not $c.mask }}{{ fail "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")" }}{{ end }}{"name": {{ $c.name | quote }}, "mask": {{ $c.mask | quote }}}{{ end }}]{{ end }}},
 {{- end }}
         {"user": ".*", "privileges": ["SELECT"]}
       ]

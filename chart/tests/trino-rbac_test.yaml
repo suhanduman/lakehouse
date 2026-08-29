@@ -147,3 +147,35 @@ tests:
         documentSelector:
           path: metadata.name
           value: trino-config
+
+  - it: fails loud when a column mask is null (unquoted YAML NULL footgun)
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          columns:
+            - name: "tckn"
+              mask: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.tablePolicies: a column mask is empty/null — quote the SQL expression (e.g. mask: \"NULL\" or mask: \"'***'\")"
+
+  - it: fails loud when a filter key is present but null (unquoted YAML NULL footgun)
+    set:
+      trino.rbac.enabled: true
+      trino.ldapGroups.enabled: true
+      trino.ldapGroups.url: "ldaps://ad.test:636"
+      trino.rbac.tablePolicies:
+        - group: "lakehouse-users"
+          catalog: "lakehouse"
+          schema: "gold"
+          table: "patients"
+          filter: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "trino.rbac.tablePolicies: a filter is empty/null — quote the SQL expression, or remove the filter key entirely"
