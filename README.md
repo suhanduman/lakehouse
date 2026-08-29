@@ -333,6 +333,14 @@ Superset/Zeppelin/dbt paylaşımlı servis hesabıyla bağlanır → Trino'da pe
 (veya o grupta olmayan) kullanıcılar kolonu izin-veren read-only `.*` taban kuralı üzerinden HAM görür.
 Bir kolon herkesten kısıtlanacaksa onu kısıtlaması gereken HER grup için bir policy yazın (ya da tabanı
 deny'a sıkılaştırın).
+
+**Yönetici (admin) erişimi:** rbac kapalıyken (dev/smoke) hardcoded admin YOKTUR. Gerçek admin için
+`trino.rbac.enabled=true` (AD `adminGroup`), veya dev'de `trino.rbac.offModeAdminUser=<user-regex>` set edin.
+
+**Deny-by-default (opsiyonel, sıkı posture):** `trino.rbac.denyUnmatched=true` (rbac açıkken) permissive `.*`
+read-only floor'larını kaldırır — yalnız rol-grubu/tablePolicies ile açıkça yetkili principal'lar okur; servis
+hesapları korunur. Default `false` (geriye-uyum). Hassas veri için `true` önerilir.
+
 **Doğrulama:** helm-unittest + `helm template`; canlı AD + gerçek tabloda maskeleme/filtreleme = **OpenShift UAT**.
 
 ---
