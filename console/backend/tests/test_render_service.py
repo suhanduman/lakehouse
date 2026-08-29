@@ -901,10 +901,27 @@ def test_pipeline_bucket_names_unchanged():
     assert b.endswith("-" + suffix)
 
 
-def test_k8s_topic_name_long_disambiguated():
-    long = "a" * 80
-    out = r._k8s_topic_name(f"cdc.{long}.orders")
-    assert len(out) <= 63
+def test_k8s_topic_name_mid_length_unchanged():
+    # 64-253 sanitized chars: below the real 253 subdomain cap, so no
+    # truncation-collision risk -- must be returned UNCHANGED (dots
+    # preserved, no crc32 suffix appended).
+    topic = "cdc." + "a" * 90 + ".orders"
+    out = r._k8s_topic_name(topic)
+    assert out == topic
+    assert len(out) <= 253
+    assert "." in out
+
+
+def test_k8s_topic_name_over_253_gets_deterministic_crc32_suffix():
+    topic_a = "cdc." + "a" * 300 + ".orders"
+    topic_b = "cdc." + "b" * 300 + ".orders"
+    out_a = r._k8s_topic_name(topic_a)
+    out_b = r._k8s_topic_name(topic_b)
+    assert len(out_a) <= 253
+    suffix_a = format(zlib.crc32(topic_a.encode()) & 0xFFFFFFFF, "08x")
+    assert out_a.endswith("-" + suffix_a)
+    assert r._k8s_topic_name(topic_a) == out_a          # deterministic
+    assert out_a != out_b                                # two distinct >253 topics don't collide
 
 
 def test_render_kafka_topic_parametrized():

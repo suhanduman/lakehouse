@@ -118,15 +118,16 @@ def _k8s_topic_name(topic: str) -> str:
     """RFC1123-subdomain-safe KafkaTopic CR name: keep '.' (valid + meaningful
     in Kafka topic names), lowercase, invalid runs -> '-', trim. Used as the CR
     metadata.name; the real (possibly '_'/uppercase) topic goes in spec.topicName
-    when it differs (see render_kafka_topic). If the sanitized name exceeds 63
-    (risking a truncation collision between two distinct topics), append a
-    deterministic 8-hex crc32 of the full topic so distinct topics never map
-    to the same CR name."""
+    when it differs (see render_kafka_topic). This is an RFC1123 *subdomain*
+    (not a label), so the real cap is 253, not 63 -- a 64-253-char sanitized
+    name is returned as-is (no truncation-collision risk in that range). Only
+    when the sanitized name exceeds 253 does it append a deterministic 8-hex
+    crc32 of the full topic, so distinct topics never map to the same CR name."""
     s = re.sub(r"[^a-z0-9.-]+", "-", topic.lower())
     s = re.sub(r"-{2,}", "-", s).strip("-.")
-    if len(s) > 63:
+    if len(s) > 253:
         suffix = format(zlib.crc32(topic.encode()) & 0xFFFFFFFF, "08x")
-        s = s[:63 - 9].rstrip("-.") + "-" + suffix
+        s = s[:253 - 9].rstrip("-.") + "-" + suffix
     return s[:253]
 
 
