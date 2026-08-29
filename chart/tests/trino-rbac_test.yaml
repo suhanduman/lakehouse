@@ -1,5 +1,6 @@
 # chart/tests/trino-rbac_test.yaml — Trino row/column security (rbac + ldap group provider).
-# Negative asserts carry `any: true`. Off-state must be byte-identical to today.
+# Negative containsDocument/notMatchRegex asserts (added by later tasks) carry `any: true`.
+# Off-state must be byte-identical to today.
 suite: trino rbac (row/column security)
 templates:
   - 06-trino-ha.yaml
