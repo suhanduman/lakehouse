@@ -293,6 +293,37 @@ e-postada (headless tarayıcı gerektirir — Day-2/opsiyonel; şartname 3.6.2.1
 istemez). **Doğrulama:** helm-unittest + `helm template`; canlı beat→worker→Trino→CSV
 →müşteri-SMTP teslimi = **OpenShift UAT** (gerçek SMTP + AD kullanıcısı).
 
+### Trino satır/kolon güvenliği (şartname 3.5.3)
+
+`trino.rbac.enabled: true` iken Trino, kullanıcının **AD grubuna** göre satır-filtresi ve kolon-maskesi
+uygular. Grup kaynağı zorunlu: `trino.ldapGroups.enabled: true` (Trino kullanıcının gruplarını doğrudan
+AD/LDAP'tan çözer; `url`/`bindDn`/`bindPassword`/`userBaseDn` values'tan, bind şifresi out-of-band Secret
+`trino-ldap-bind`). `rbac.enabled=true` ama `ldapGroups.enabled=false` → **fail-loud**.
+
+**Rol grupları** (coarse erişim): `adminGroup` (tümü), `analystGroup` (lakehouse/rawlake read + sandbox write),
+`userGroup` (read-only). **Satır/kolon politikaları** (`trino.rbac.tablePolicies`) — İdare kendi Gold tablolarına yazar:
+```yaml
+trino:
+  rbac:
+    enabled: true
+    tablePolicies:
+      - group: "lakehouse-users"
+        catalog: "lakehouse"
+        schema: "gold"
+        table: "patients"
+        filter: "department = current_user"        # satır: kullanıcı yalnız kendi bölümünü görür
+        columns:
+          - {name: "tckn", mask: "'***'"}          # kolon: TCKN maskelenir
+  ldapGroups:
+    enabled: true
+    url: "ldaps://<ad-host>:636"
+    bindDn: "<bind-dn>"
+    userBaseDn: "<user-base-dn>"
+```
+**Kapsam:** gerçek-kullanıcı Trino kimlikleri (interaktif OAuth2 + BYO `lakehouse-cli` JWT-bearer). **Kapsam dışı:**
+Superset/Zeppelin/dbt paylaşımlı servis hesabıyla bağlanır → Trino'da per-user ayrım yok (Superset kendi RBAC'ını yapar).
+**Doğrulama:** helm-unittest + `helm template`; canlı AD + gerçek tabloda maskeleme/filtreleme = **OpenShift UAT**.
+
 ---
 
 ## dbt-trino Certified Gold (b2)
