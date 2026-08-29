@@ -100,7 +100,7 @@ class FakeK8s:
     def _wrap(state):
         return {"connector": {"state": state}} if state is not None else {}
 
-    def create_secret(self, name, data):
+    def create_secret(self, name, data, labels=None):
         if self.fail_on == "secret":
             raise RuntimeError("secret boom")
         self.calls.append(("create_secret", name))
@@ -689,6 +689,24 @@ class _LowFakeCoreApi:
 
     def delete_namespaced_secret(self, name, namespace):
         return {}
+
+    def read_namespaced_secret(self, name, namespace):
+        # Metadata-only GET create_secret's 409 path uses to decide whether
+        # to replace (console-labeled) or raise SecretNameConflict.
+        body = self._secrets.get(name, {})
+        labels = body.get("metadata", {}).get("labels", {})
+
+        class _Meta:
+            pass
+
+        class _Secret:
+            pass
+
+        meta = _Meta()
+        meta.labels = labels
+        secret = _Secret()
+        secret.metadata = meta
+        return secret
 
 
 class _LowFakeS3Client:

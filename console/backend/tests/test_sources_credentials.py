@@ -54,7 +54,9 @@ class FakeK8s:
     def list_sources(self):
         return self._sources
 
-    def create_secret(self, name: str, data: Dict[str, str]) -> Dict[str, Any]:
+    def create_secret(
+        self, name: str, data: Dict[str, str], labels: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         self.created_secret = (name, data)
         return {"ok": True}
 

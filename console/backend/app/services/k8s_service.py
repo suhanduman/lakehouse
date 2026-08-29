@@ -33,6 +33,17 @@ USER_PLURAL = "kafkausers"
 HTTP_CONFLICT = 409
 HTTP_NOT_FOUND = 404
 
+CONSOLE_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
+CONSOLE_MANAGED_BY_VALUE = "lakehouse-console"
+
+
+class SecretNameConflict(Exception):
+    """A Secret with the requested name already exists and was NOT created by
+    the self-service Console (no `managed-by: lakehouse-console` label) --
+    refuse to overwrite it (SEC-1). The caller must surface a clear
+    name-collision error rather than silently clobbering a platform/infra
+    Secret that happens to share the name."""
+
 
 def _acl_key(acl: Dict[str, Any]) -> tuple:
     """Identity of a Strimzi ACL entry for dedup/removal purposes: compares by
@@ -115,23 +126,32 @@ class K8sService:
 
     # ----------------------------------------------------------------
     # create_secret — base64-encodes values (v1.Secret.data is base64 text).
-    # Idempotent like apply_* (create, fall back on 409): a 409 (already
-    # exists) triggers a replace so the existing Secret converges to the
-    # desired data, rather than being left with stale credentials. This
-    # matters for credential rotation and for the orchestrator re-running
-    # create_secret on an already-provisioned source — an
+    # Idempotent like apply_* (create, fall back on 409) BUT fail-closed
+    # (SEC-1): a 409 (already exists) is only converged via replace when the
+    # existing Secret carries our own `managed-by: lakehouse-console` label
+    # (checked via a metadata-only GET -- the Secret's `.data` is never read).
+    # That matters for credential rotation and for the orchestrator
+    # re-running create_secret on an already-provisioned source -- an
     # idempotent retry must reflect the new data, not silently keep the old.
+    # A 409 against a Secret we did NOT create (no console label -- a
+    # platform/infra Secret that happens to share the requested name) raises
+    # SecretNameConflict instead of silently overwriting it.
     # ----------------------------------------------------------------
 
-    def create_secret(self, name: str, data: Dict[str, str]) -> Dict[str, Any]:
+    def create_secret(
+        self, name: str, data: Dict[str, str], labels: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         encoded = {
             key: base64.b64encode(value.encode("utf-8")).decode("utf-8")
             for key, value in data.items()
         }
+        meta: Dict[str, Any] = {"name": name, "namespace": self.namespace}
+        if labels:
+            meta["labels"] = labels
         body = {
             "apiVersion": "v1",
             "kind": "Secret",
-            "metadata": {"name": name, "namespace": self.namespace},
+            "metadata": meta,
             "type": "Opaque",
             "data": encoded,
         }
@@ -140,6 +160,13 @@ class K8sService:
         except ApiException as exc:
             if exc.status != HTTP_CONFLICT:
                 raise
+            # Fail-closed: only replace a Secret WE created (console label).
+            # Never overwrite a platform/infra Secret that happens to share
+            # the name -- and never read `.data` to make that determination.
+            existing = self.core_api.read_namespaced_secret(name=name, namespace=self.namespace)
+            existing_labels = getattr(existing.metadata, "labels", None) or {}
+            if existing_labels.get(CONSOLE_MANAGED_BY_LABEL) != CONSOLE_MANAGED_BY_VALUE:
+                raise SecretNameConflict(name)
             return self.core_api.replace_namespaced_secret(
                 name=name, namespace=self.namespace, body=body
             )

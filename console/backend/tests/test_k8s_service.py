@@ -12,7 +12,7 @@ import base64
 import pytest
 from kubernetes.client.exceptions import ApiException
 
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import K8sService, SecretNameConflict
 
 NAMESPACE = "example"
 
@@ -113,6 +113,7 @@ class FakeCore:
         secret_data: dict | None = None,
         secret_not_found: bool = False,
         not_found_on_delete: bool = False,
+        secret_labels: dict | None = None,
     ):
         self.conflict_on_create = conflict_on_create
         self.created_secrets = []
@@ -124,6 +125,10 @@ class FakeCore:
         # succeeding -- exercises delete_secret's 404-tolerance (a producer
         # Secret that never materialized / was already deleted).
         self.not_found_on_delete = not_found_on_delete
+        # Labels on the Secret returned by read_namespaced_secret (the 409
+        # path's metadata-only GET in create_secret) -- drives the SEC-1
+        # fail-closed managed-by check. None/{} == "not ours".
+        self.secret_labels = secret_labels
 
     def create_namespaced_secret(self, **kw):
         if self.conflict_on_create:
@@ -145,11 +150,16 @@ class FakeCore:
         if self.secret_not_found:
             raise ApiException(status=404, reason="NotFound")
 
-        class FakeSecret:
-            def __init__(self, data):
-                self.data = data
+        class FakeMetadata:
+            def __init__(self, labels):
+                self.labels = labels
 
-        return FakeSecret(self.secret_data or {})
+        class FakeSecret:
+            def __init__(self, data, labels):
+                self.data = data
+                self.metadata = FakeMetadata(labels)
+
+        return FakeSecret(self.secret_data or {}, self.secret_labels or {})
 
 
 # --------------------------------------------------------------------------
@@ -349,10 +359,15 @@ def test_create_secret_base64_encodes_data():
 
 
 def test_create_secret_on_409_replaces_to_converge_data():
-    fake_core = FakeCore(conflict_on_create=True)
+    # SEC-1 fail-closed: a 409 only converges via replace when the existing
+    # Secret already carries OUR console label (e.g. a prior create_secret
+    # call, or credential rotation on a source's own Secret) -- see the
+    # test_create_secret_conflict_* tests below for the "not ours" refusal.
+    console_labels = {"app.kubernetes.io/managed-by": "lakehouse-console"}
+    fake_core = FakeCore(conflict_on_create=True, secret_labels=console_labels)
     svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
 
-    result = svc.create_secret("mssql1", {"user": "sa2", "pass": "rotated"})
+    result = svc.create_secret("mssql1", {"user": "sa2", "pass": "rotated"}, labels=console_labels)
 
     # create was attempted, 409'd, then replace converged the existing Secret
     assert fake_core.created_secrets == []
@@ -365,6 +380,49 @@ def test_create_secret_on_409_replaces_to_converge_data():
     assert body["data"]["user"] == base64.b64encode(b"sa2").decode("utf-8")
     assert body["data"]["pass"] == base64.b64encode(b"rotated").decode("utf-8")
     assert result["data"]["pass"] == base64.b64encode(b"rotated").decode("utf-8")
+
+
+def test_create_secret_conflict_unlabeled_raises_no_overwrite():
+    # SEC-1: an existing Secret with the requested name but NO console label
+    # (a platform/infra Secret that happens to collide) must never be
+    # overwritten -- create_secret raises SecretNameConflict instead, and
+    # replace is never called. The existing Secret's `.data` is never read
+    # either (FakeCore.read_namespaced_secret's `.metadata.labels` is the
+    # only thing create_secret looks at).
+    fake_core = FakeCore(conflict_on_create=True, secret_labels={})
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    with pytest.raises(SecretNameConflict):
+        svc.create_secret(
+            "s3-credentials",
+            {"user": "x", "pass": "y"},
+            labels={"app.kubernetes.io/managed-by": "lakehouse-console"},
+        )
+    assert fake_core.replaced_secrets == []
+
+
+def test_create_secret_conflict_console_labeled_replaces():
+    # Mirror of the "not ours" case above: an existing Secret that DOES carry
+    # our console label is fair game to replace on 409.
+    console_labels = {"app.kubernetes.io/managed-by": "lakehouse-console"}
+    fake_core = FakeCore(conflict_on_create=True, secret_labels=console_labels)
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    svc.create_secret("mydb", {"user": "x", "pass": "y"}, labels=console_labels)
+
+    assert len(fake_core.replaced_secrets) == 1
+
+
+def test_create_secret_new_sets_labels():
+    fake_core = FakeCore()
+    svc = K8sService(custom_api=None, core_api=fake_core, namespace=NAMESPACE)
+
+    svc.create_secret(
+        "mydb", {"user": "x"}, labels={"app.kubernetes.io/managed-by": "lakehouse-console"}
+    )
+
+    body = fake_core.created_secrets[0]["body"]
+    assert body["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "lakehouse-console"
 
 
 def test_delete_secret():

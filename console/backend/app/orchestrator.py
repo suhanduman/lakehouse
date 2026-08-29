@@ -109,6 +109,7 @@ from typing import Any, Callable, Dict, List, Optional
 from app import source_types
 from app.models import SourceCredentials, SourceSpec
 from app.services.gitops_render import render_pipeline_fileset
+from app.services.k8s_service import CONSOLE_MANAGED_BY_LABEL, CONSOLE_MANAGED_BY_VALUE
 from app.services.render_service import BRONZE_NAMESPACE_SUFFIX
 
 VERIFY_PENDING_DETAIL = "PENDING — reconciliation ongoing"
@@ -311,7 +312,15 @@ class AddSourceOrchestrator:
             secret_name = spec.source
 
             def _create_secret() -> Optional[str]:
-                self.k8s.create_secret(secret_name, {"user": creds.user, "pass": creds.password})
+                # SEC-1: label this Secret as console-managed so a re-run of
+                # add_source on an already-provisioned source (idempotent
+                # retry) can converge its own Secret on a 409 instead of
+                # being fail-closed as a name collision with a foreign Secret.
+                self.k8s.create_secret(
+                    secret_name,
+                    {"user": creds.user, "pass": creds.password},
+                    labels={CONSOLE_MANAGED_BY_LABEL: CONSOLE_MANAGED_BY_VALUE},
+                )
                 return None
 
             if not run("secret", _create_secret, lambda: self.k8s.delete_secret(secret_name)):
