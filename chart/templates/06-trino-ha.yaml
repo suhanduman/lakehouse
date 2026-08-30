@@ -189,6 +189,13 @@ data:
     # 4GB → 3GB: JVM + IO tamponu
     query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeWorker }}
     internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+{{- if .Values.trino.spill.enabled }}
+    # Slice C2 spill-to-disk — dedicated sizeLimit'd emptyDir (see worker volume below)
+    spill-enabled=true
+    spiller-spill-path=/data/trino/spill
+    memory-revoking-threshold={{ .Values.trino.spill.memoryRevokingThreshold }}
+    memory-revoking-target={{ .Values.trino.spill.memoryRevokingTarget }}
+{{- end }}
   node.properties: |
     node.environment=prod
     node.data-dir=/data/trino
@@ -614,10 +621,17 @@ spec:
 {{- if .Values.sandbox.enabled }}
         - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
 {{- end }}
+{{- if .Values.trino.spill.enabled }}
+        - {name: spill, mountPath: /data/trino/spill}
+{{- end }}
       volumes:
       {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
       - name: config
         configMap: {name: trino-config}
+{{- if .Values.trino.spill.enabled }}
+      - name: spill
+        emptyDir: {sizeLimit: {{ .Values.trino.spill.sizeLimit }}}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

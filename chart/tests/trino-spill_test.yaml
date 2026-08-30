@@ -1,0 +1,45 @@
+# chart/tests/trino-spill_test.yaml — Slice C2: Trino worker spill-to-disk.
+# Spec: docs/superpowers/specs/2026-08-30-trino-resource-groups-spill-design.md
+suite: trino spill (slice C2)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: worker config has spill enabled + dedicated spill path (default on)
+    asserts:
+      - matchRegex:
+          path: data["worker.config.properties"]
+          pattern: "spill-enabled=true"
+        documentSelector: {path: metadata.name, value: trino-config}
+      - matchRegex:
+          path: data["worker.config.properties"]
+          pattern: "spiller-spill-path=/data/trino/spill"
+        documentSelector: {path: metadata.name, value: trino-config}
+
+  - it: coordinator config does NOT enable spill (plan-only node)
+    asserts:
+      - notMatchRegex:
+          path: data["coordinator.config.properties"]
+          pattern: "spill-enabled"
+        documentSelector: {path: metadata.name, value: trino-config}
+
+  - it: worker pod has a sizeLimit'd spill emptyDir volume + mount (default on)
+    documentSelector: {path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'}
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="spill")].emptyDir.sizeLimit
+          value: 10Gi
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: spill, mountPath: /data/trino/spill}
+
+  - it: spill disabled → no spill config, no volume, no mount
+    set:
+      trino.spill.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["worker.config.properties"]
+          pattern: "spill-enabled"
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name=="spill")]
+        documentSelector: {path: '$[?(@.kind=="Deployment" && @.metadata.name=="trino-worker")]'}

@@ -1095,6 +1095,15 @@ trino:
     userBaseDn: ""
     userSearchFilter: "(&(objectClass=person)(sAMAccountName={0}))"
     groupNameAttribute: "cn"
+  # Worker spill-to-disk (Slice C2): bellek-üstü hash-join/aggregation/sort
+  # operatörleri diske taşar → RESOURCE_EXHAUSTED yerine yavaş tamamlanır.
+  # Ayrı sizeLimit'li emptyDir'e yazar (/data/trino/spill) — node rootfs'ini
+  # DOLDURAMAZ. Sadece worker (HA prod'da coordinator plan-only). Default açık.
+  spill:
+    enabled: true
+    sizeLimit: "10Gi"                # worker spill emptyDir tavanı
+    memoryRevokingThreshold: 0.9     # bu doluluğun üstünde spill'e revoke başlar
+    memoryRevokingTarget: 0.5        # revoke hedef doluluğu
 
 # Cross-cutting Spark job tuning knobs, not scoped to a single
 # ScheduledSparkApplication (see `sparkOperator.*` below for the
