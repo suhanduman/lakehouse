@@ -1,4 +1,4 @@
-# chart/templates/monitoring/podmonitors.yaml — D1 (İzleme/Monitoring).
+# chart/templates/monitoring/podmonitors.yaml — D1 (Monitoring).
 #
 # PodMonitors ONLY for targets that expose Prometheus metrics on the POD
 # itself with no owning `kind: Service` fronting that port — kafka, connect

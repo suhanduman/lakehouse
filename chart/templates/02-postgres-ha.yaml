@@ -5,17 +5,18 @@
 # 11-apicurio-registry.yaml — both CNPG clusters are one "postgres"
 # subsystem toggle).
 #
-# CNPG Operator OpenShift OperatorHub'dan önceden kurulu olmalı.
+# The CNPG Operator must already be installed via the OpenShift OperatorHub.
 #
-# CNPG Cluster adını taşıyan Secret'ları otomatik üretir:
-#   pg-nessie-app       — application user (Nessie bağlanacak)
-#   pg-nessie-superuser — superuser (operator kullanır)
+# It auto-generates Secrets named after the CNPG Cluster:
+#   pg-nessie-app       — application user (used by Nessie to connect)
+#   pg-nessie-superuser — superuser (used by the operator)
 #
-# Service DNS: CNPG operatörü bu Cluster'ı reconcile ederken `pg-nessie-rw`
-# (+ `-ro`/`-r`) Service'lerini KENDİSİ üretir (chart bunları literal
-# `kind: Service` olarak render ETMEZ). Tüketiciler bu adı ASLA sabit
-# yazmaz — `lakehouse.svc.pgNessieRw` helper'ından okur (bkz. _helpers.tpl
-# ve chart/scripts/helm-check.py'nin CNPG-farkında servis-kapanış kontrolü).
+# Service DNS: while reconciling this Cluster, the CNPG operator generates
+# the `pg-nessie-rw` (+ `-ro`/`-r`) Services ITSELF (this chart does NOT
+# render them as a literal `kind: Service`). Consumers NEVER hardcode this
+# name — they read it from the `lakehouse.svc.pgNessieRw` helper (see
+# _helpers.tpl and chart/scripts/helm-check.py's CNPG-aware service-closure
+# check).
 {{- if .Values.components.postgres }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -44,16 +45,17 @@ spec:
       wal_level: "replica"
       max_wal_senders: "10"
       archive_mode: "on"
-      # archive_timeout VARSAYILAN (0): yalnızca WAL dolduğunda arşivle.
-      # Düşük değerlere (örn. 60s) çekmek S3'e sürekli küçük obje
-      # akışı yaratır — IO yükü ve obje sayısı patlar. barman zaten zstd
-      # ile sıkıştırıyor; agresif timeout yerine sıkıştırmaya güvenin.
-    # NOT bir `postgresql.parameters` anahtarı — CNPG'nin GÜNCEL Cluster
-    # CRD'sinde (operator 1.30 / v1) `shared_preload_libraries` kendi
-    # top-level `[]string` alanına taşındı; `parameters` map'i içinde
-    # bırakmak admission webhook'undan "Can't set fixed configuration
-    # parameter" hatasıyla reddedilir (microk8s canlı smoke-test'te
-    # doğrulandı — bkz. .superpowers/sdd/microk8s-smoke-report.md Finding 5).
+      # archive_timeout DEFAULT (0): only archive once a WAL segment fills up.
+      # Pulling this down to a low value (e.g. 60s) creates a constant stream
+      # of small objects to S3 — IO load and object count explode. barman
+      # already compresses with zstd; rely on compression rather than an
+      # aggressive timeout.
+    # NOT a `postgresql.parameters` key — in CNPG's CURRENT Cluster CRD
+    # (operator 1.30 / v1), `shared_preload_libraries` moved to its own
+    # top-level `[]string` field; leaving it inside the `parameters` map
+    # gets rejected by the admission webhook with "Can't set fixed
+    # configuration parameter" (confirmed on a live microk8s smoke test —
+    # see .superpowers/sdd/microk8s-smoke-report.md Finding 5).
     shared_preload_libraries: ["pg_stat_statements"]
 
   bootstrap:
@@ -77,7 +79,7 @@ spec:
 {{- end }}
     size: {{ .Values.postgres.nessie.walStorage.size | quote }}
 
-  # S3'e WAL + base backup
+  # WAL + base backup to S3
   backup:
     barmanObjectStore:
       destinationPath: {{ .Values.postgres.nessie.backup.destinationPath | quote }}
@@ -108,7 +110,7 @@ spec:
       memory: {{ .Values.postgres.nessie.resources.limits.memory | quote }}
       cpu: {{ .Values.postgres.nessie.resources.limits.cpu | quote }}
 ---
-# Scheduled backup — her gece 02:00
+# Scheduled backup — every night at 02:00
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:

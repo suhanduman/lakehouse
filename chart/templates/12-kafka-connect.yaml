@@ -1,4 +1,4 @@
-# Kafka Connect — tek ingest düzlemi. Only parameterized + made
+# Kafka Connect — the single ingest plane. Only parameterized + made
 # namespace-aware. Gated by `.Values.components.kafkaConnect`.
 #
 # LOAD-BEARING (do not change without re-reading spec + sub-project A —
@@ -38,9 +38,9 @@ metadata:
   name: connect
   namespace: {{ include "lakehouse.namespace" . }}
   annotations:
-    strimzi.io/use-connector-resources: "true"   # Git tek doğruluk kaynağı
+    strimzi.io/use-connector-resources: "true"   # Git is the single source of truth
 spec:
-  version: {{ .Values.versions.kafka | quote }}   # Kafka broker sürümü ile hizalı (bkz. 03-kafka-strimzi.yaml spec.kafka.version)
+  version: {{ .Values.versions.kafka | quote }}   # aligned with the Kafka broker version (see 03-kafka-strimzi.yaml spec.kafka.version)
   replicas: {{ .Values.kafkaConnect.replicas }}
   bootstrapServers: {{ printf "%s:9093" (include "lakehouse.svc.kafkaBootstrap" .) }}
   tls:

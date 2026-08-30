@@ -299,7 +299,7 @@ data:
         # (spike-confirmed from source) -- no extra flag needed.
 
         spawner.environment["NESSIE_SANDBOX_CATALOG"] = {{ .Values.sandbox.namespace | quote }}
-        # Per-user schema (şartname 3.5.4.2/3.5.4.3): images/jupyter/
+        # Per-user schema (spec 3.5.4.2/3.5.4.3): images/jupyter/
         # lakehouse_nb.py's spark()/iceberg()/trino() helpers default their
         # sandbox writes here. `spawner.user.name` is the SAME
         # `preferred_username` OIDC claim (`username_claim`, above) the Hub

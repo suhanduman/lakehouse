@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""lakehouse-cli — KÇ lakehouse için Keycloak token al (oc-login tarzı, yerel/BYO notebook erişimi)."""
+"""lakehouse-cli — get a Keycloak token for the KÇ lakehouse (oc-login style, for local/BYO notebook access)."""
 import argparse, json, os, sys, time, urllib.parse, urllib.request, urllib.error
 
 

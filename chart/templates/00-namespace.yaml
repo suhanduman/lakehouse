@@ -3,8 +3,8 @@
 # (no `enabled` flag): every release needs its namespace's isolation policy,
 # regardless of which optional components are turned on.
 #
-# Compute/storage quota'ları çekişmeyi önler, default-deny prensibi
-# namespace'i dışarıdan gelen trafiğe kapalı tutar.
+# Compute/storage quotas prevent resource contention; the default-deny
+# principle keeps the namespace closed off from outside traffic.
 #
 # Chart prereq-check: runs before anything else renders — see
 # chart/templates/_prereq-check.tpl for the full mechanism + why it is
@@ -20,12 +20,12 @@ metadata:
   name: {{ include "lakehouse.namespace" . }}
   labels:
     {{- include "lakehouse.labels" . | nindent 4 }}
-    openshift.io/cluster-monitoring: "true"  # Prometheus bu ns'i scrape eder
+    openshift.io/cluster-monitoring: "true"  # Prometheus scrapes this namespace
   annotations:
     openshift.io/description: "Lakehouse Data Platform (Prod)"
     openshift.io/display-name: "Lakehouse"
 ---
-# Namespace toplam kaynak kotası (values'tan; kendi sizing'inize göre ayarlayın)
+# Total namespace resource quota (from values; adjust to your own sizing)
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -40,10 +40,10 @@ spec:
     persistentvolumeclaims: {{ .Values.namespaceConfig.quota.persistentVolumeClaims | quote }}
     requests.storage: {{ .Values.namespaceConfig.quota.requestsStorage | quote }}
     pods: {{ .Values.namespaceConfig.quota.pods | quote }}
-    services.nodeports: {{ .Values.namespaceConfig.quota.serviceNodePorts | quote }}         # Prod'da NodePort yok; Route kullanırız
+    services.nodeports: {{ .Values.namespaceConfig.quota.serviceNodePorts | quote }}         # No NodePort in prod; we use Route
     count/deployments.apps: {{ .Values.namespaceConfig.quota.countDeployments | quote }}
 ---
-# "resources:" yazmayan podların varsayılan + tavan değerleri
+# Default + ceiling values for pods that don't specify "resources:"
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -88,15 +88,15 @@ spec:
   - from:
     - podSelector: {}
 ---
-# Route/Ingress controller + monitoring'in girebilmesi için. Kaynak
-# namespace'ler platform'a göre farklı etiketlenir (bkz. `lakehouse.
-# isOpenShift`, _helpers.tpl): OpenShift'in `network.openshift.io/
-# policy-group` etiketi vanilla kümelerde YOK — vanilla'da bunun yerine
-# k8s-standart `kubernetes.io/metadata.name` (her namespace'de otomatik var)
-# ile `.Values.ingress.controllerNamespace` / `.Values.monitoring.
-# prometheusNamespace`'i hedefleriz. Pod/port scoping (podSelector: {},
-# policyTypes: [Ingress]) HER İKİ platformda da AYNI — yalnızca kaynak
-# namespaceSelector'lar farklı.
+# So the Route/Ingress controller + monitoring can reach in. Source
+# namespaces are labeled differently depending on the platform (see
+# `lakehouse.isOpenShift`, _helpers.tpl): OpenShift's `network.openshift.io/
+# policy-group` label does NOT exist on vanilla clusters — there, instead,
+# we target `.Values.ingress.controllerNamespace` / `.Values.monitoring.
+# prometheusNamespace` via the k8s-standard `kubernetes.io/metadata.name`
+# label (automatically present on every namespace). Pod/port scoping
+# (podSelector: {}, policyTypes: [Ingress]) is the SAME on BOTH platforms —
+# only the source namespaceSelectors differ.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

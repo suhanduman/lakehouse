@@ -58,8 +58,9 @@ def _owned_map(pipelines: List[Dict[str, Any]], key: str) -> Dict[str, Tuple[str
 class ColumnSpec(BaseModel):
     name: str
     type: str
-    # identifier (PK) kolonları Iceberg kuralı gereği REQUIRED olmak zorunda;
-    # IcebergService bunu identifier için zaten zorlar, burada ipucu/override.
+    # identifier (PK) columns must be REQUIRED per Iceberg's rules;
+    # IcebergService already enforces this for the identifier -- this is
+    # just a hint/override here.
     required: bool = False
 
 
@@ -68,8 +69,9 @@ class CreateTableRequest(BaseModel):
     namespace: str
     table: str
     columns: List[ColumnSpec]
-    # CDC upsert/delete için identifier (PK) ZORUNLU — bu olmadan Iceberg sink
-    # equality-delete yazamaz ve UPDATE'ler duplicate satır bırakır.
+    # identifier (PK) is REQUIRED for CDC upsert/delete -- without it the
+    # Iceberg sink can't write equality-deletes, and UPDATEs leave duplicate
+    # rows.
     identifier: List[str]
 
 
@@ -120,11 +122,12 @@ def list_tables(
 
 
 # --------------------------------------------------------------------------
-# Create -- TABLE_CREATE. Tabloyu identifier field (PK) ile pyiceberg → Nessie
-# REST üzerinden yaratır (Trino DDL DEĞİL — Trino identifier set edemez; bkz.
-# IcebergService). Namespace kaynak-başına bucket konumuyla (Model X)
-# idempotent yaratılır. Tablo zaten farklı identifier ile varsa 409
-# (fail-loud) — sessiz append-only'e düşmez.
+# Create -- TABLE_CREATE. Creates the table with the identifier field (PK)
+# via pyiceberg -> Nessie REST (NOT Trino DDL -- Trino can't set the
+# identifier; see IcebergService). The namespace is created idempotently
+# with a per-source bucket location (Model X). If the table already exists
+# with a different identifier, this returns 409 (fail-loud) instead of
+# silently degrading to append-only.
 # --------------------------------------------------------------------------
 
 @router.post(

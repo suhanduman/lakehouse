@@ -1,50 +1,52 @@
 # Keycloak — OIDC Provider + AD LDAP Federation. Only parameterized + made
 # namespace-aware.
 #
-# Neden: Kurumsal AD OIDC protokolü konuşmaz (yalnızca LDAP/Kerberos).
-# Trino, Superset, Jupyter, AI UI gibi modern servisler OIDC ister.
-# Keycloak aradaki çevirici: AD'yi "user federation" olarak tanır,
-# OIDC token dağıtır.
+# Why: the corporate AD doesn't speak the OIDC protocol (only LDAP/Kerberos).
+# Modern services like Trino, Superset, Jupyter, and the AI UI want OIDC.
+# Keycloak is the translator in between: it recognizes AD as "user
+# federation" and issues OIDC tokens.
 #
-# Zeppelin istisnası: Apache Shiro ActiveDirectoryRealm üzerinden
-# doğrudan AD'ye LDAPS ile bağlanır (Keycloak'ı atlar) — bkz.
+# Zeppelin exception: it connects directly to AD via LDAPS through Apache
+# Shiro's ActiveDirectoryRealm (bypassing Keycloak) — see
 # chart/templates/09-zeppelin.yaml.
 #
-# Ön koşul: Keycloak Operator OperatorHub'dan kurulu olmalı.
+# Prerequisite: the Keycloak Operator must be installed from OperatorHub.
 #
-# Gating (iki bağımsız switch, aynı dosyada):
-#   - `pg-keycloak` CNPG Cluster  -> `.Values.components.keycloakDb`, ki bu
-#     DEĞER AÇIKÇA SET EDİLMEDİĞİ SÜRECE `.Values.components.keycloak`'a
-#     düşer (bkz. aşağıdaki `$keycloakDbEnabled` hesaplaması). `postgres`
-#     subsystem toggle'ından (pg-nessie/pg-apicurio ile AYNI toggle)
-#     BAĞIMSIZDIR: Keycloak app'i kapatıldığında (`components.keycloak: false`)
-#     hiçbir zaman bağlanmayacak bir "sahipsiz" pg-keycloak CNPG Cluster'ı
-#     üretilmez. Bir operatör Keycloak'ı kapatırken DB'yi bilinçli olarak
-#     önceden sağlamak isterse (`components.keycloak: false` +
-#     `components.keycloakDb: true`), bu mümkündür.
+# Gating (two independent switches, same file):
+#   - `pg-keycloak` CNPG Cluster  -> `.Values.components.keycloakDb`, which
+#     falls back to `.Values.components.keycloak` UNLESS explicitly set
+#     (see the `$keycloakDbEnabled` computation below). INDEPENDENT of the
+#     `postgres` subsystem toggle (the SAME toggle as pg-nessie/pg-apicurio):
+#     when the Keycloak app is disabled (`components.keycloak: false`), an
+#     "orphaned" pg-keycloak CNPG Cluster that nothing will ever connect to
+#     is never produced. If an operator deliberately wants to provision the
+#     DB ahead of time while disabling Keycloak (`components.keycloak: false` +
+#     `components.keycloakDb: true`), that is possible.
 #   - Admin Secret/Certificate/Keycloak CR/KeycloakRealmImport/Route
 #                                  -> `.Values.components.keycloak`.
 #
-# Host/redirect tutarlılığı (task brief kabul kriteri): Keycloak'ın kendi
-# Route'u ("auth" adı) VE her OIDC client'ın redirectUris/webOrigins'i AYNI
-# `lakehouse.routeHost` helper'ından (_helpers.tpl) üretilir — bir Route'un
-# host'u ile ona karşılık gelen client'ın redirect host'u asla ayrışamaz.
+# Host/redirect consistency (task brief acceptance criterion): Keycloak's
+# own Route (the "auth" name) AND every OIDC client's redirectUris/
+# webOrigins are generated from the SAME `lakehouse.routeHost` helper
+# (_helpers.tpl) — a Route's host and its corresponding client's redirect
+# host can never drift apart.
 #
-# `lakehouse-console` + `kafka-ui` client'ları (+ `groups` claim mapper): B
-# alt-projesinin patch'i (bkz. prod-manifests/17-console-routes-oidc.yaml
-# header notu — aynı realme ikinci bir KeycloakRealmImport eklemek yerine bu
-# TEK `clients:` listesine patch'lendi). Bu iki client'ın KENDİ Route'ları
-# (console/kafka-ui) chart/templates/console/ altında tanımlı; burada
-# yalnızca redirect host tutarlılığı için `lakehouse.routeHost` ile AYNI
-# "console"/"kafka-ui" mantıksal isimleri kullanılır.
+# The `lakehouse-console` + `kafka-ui` clients (+ the `groups` claim
+# mapper): a patch from sub-project B (see the header note in
+# prod-manifests/17-console-routes-oidc.yaml — rather than adding a second
+# KeycloakRealmImport to the same realm, this was patched into this SINGLE
+# `clients:` list). These two clients' OWN Routes (console/kafka-ui) are
+# defined under chart/templates/console/; here only the SAME
+# "console"/"kafka-ui" logical names are used with `lakehouse.routeHost`,
+# for redirect-host consistency.
 #
-# AI-UI client: kaynak manifestte var, ama `prod-manifests/optional/
-# 07-ai-gpu.yaml` (Ollama + text-to-sql-ui) bu Helm paketleme planının HİÇBİR
-# task'ında chart template'e taşınmıyor (plan: "ai.enabled: false, prod'da AI
-# yok"). Bu yüzden hem bu client hem de 08-routes-tls.yaml'daki "ai-ui"
-# Route'u `.Values.components.ai` ile gate'lenir (varsayılan false) — prod'da
-# render OLMAZ, dolayısıyla var-olmayan `text-to-sql-ui` Service'ine
-# dangling referans oluşmaz.
+# AI-UI client: it exists in the source manifest, but `prod-manifests/
+# optional/07-ai-gpu.yaml` (Ollama + text-to-sql-ui) is not being moved
+# into a chart template in ANY task of this Helm-packaging plan (plan:
+# "ai.enabled: false, no AI in prod"). This is why both this client and the
+# "ai-ui" Route in 08-routes-tls.yaml are gated on `.Values.components.ai`
+# (default false) — they do NOT render in prod, so no dangling reference
+# to the non-existent `text-to-sql-ui` Service is created.
 {{- $keycloakDbEnabled := .Values.components.keycloak }}
 {{- if hasKey .Values.components "keycloakDb" }}
 {{- $keycloakDbEnabled = .Values.components.keycloakDb }}
@@ -57,7 +59,7 @@ metadata:
   namespace: {{ include "lakehouse.namespace" . }}
 spec:
   instances: {{ .Values.postgres.keycloak.instances }}
-  # SAME pin as pg-nessie/pg-apicurio — tek kaynak, sürüm drift'i önler.
+  # SAME pin as pg-nessie/pg-apicurio — single source, prevents version drift.
   imageName: {{ .Values.versions.cnpgPostgresImage | quote }}
   primaryUpdateStrategy: {{ .Values.postgres.keycloak.primaryUpdateStrategy }}
   affinity:
@@ -92,15 +94,15 @@ spec:
           name: {{ .Values.storage.s3.secretName }}
           key: secret-access-key
       wal:
-        # zstd — pg-nessie/pg-apicurio'nun gzip'inden KASITLI farklı.
+        # zstd — deliberately different from pg-nessie/pg-apicurio's gzip.
         compression: zstd
         maxParallel: {{ .Values.postgres.keycloak.backup.walMaxParallel }}
       data:
-        # gzip — DİKKAT: `data.compression: zstd` CNPG'nin Cluster CRD'sinde
-        # GEÇERSİZ ("supported values: bzip2, gzip, lz4, snappy" — zstd bu
-        # enum'da YOK), `wal.compression: zstd` (yukarıda) ise aynı CRD
-        # sürümünde geçerlidir — iki farklı enum, biri zstd'yi destekliyor
-        # diğeri desteklemiyor. gzip kullanılır (pg-nessie/pg-apicurio ile aynı).
+        # gzip — NOTE: `data.compression: zstd` is INVALID in CNPG's Cluster
+        # CRD ("supported values: bzip2, gzip, lz4, snappy" — zstd is NOT
+        # in this enum), while `wal.compression: zstd` (above) IS valid in
+        # the same CRD version — two different enums, one supports zstd
+        # and the other doesn't. gzip is used (same as pg-nessie/pg-apicurio).
         compression: gzip
         jobs: {{ .Values.postgres.keycloak.backup.dataJobs }}
     retentionPolicy: {{ .Values.postgres.keycloak.backup.retentionPolicy | quote }}
@@ -143,11 +145,11 @@ spec:
     kind: ClusterIssuer
     name: {{ .Values.routes.certIssuer | quote }}
   dnsNames:
-  # Operator'ün ürettiği GERÇEK Service adı (`lakehouse.svc.keycloak`
-  # helper'ı, Route'un `to.name` hedefiyle eşleşir) + dış erişim için
-  # "auth.<domain>" SAN'ı. helm-check.py'nin --service-closure kontrolü
-  # (chart/scripts/helm-check.py Keycloak Operator closure eklentisi) bu
-  # Service adının doğruluğunu doğrular.
+  # The ACTUAL Service name produced by the Operator (the
+  # `lakehouse.svc.keycloak` helper, matching the Route's `to.name` target)
+  # + the "auth.<domain>" SAN for external access. helm-check.py's
+  # --service-closure check (the Keycloak Operator closure extension in
+  # chart/scripts/helm-check.py) verifies this Service name is correct.
   - {{ include "lakehouse.fqdn" (dict "svc" (include "lakehouse.svc.keycloak" .) "context" .) }}
   - {{ include "lakehouse.routeHost" (dict "name" "auth" "context" .) }}
 ---
@@ -179,7 +181,7 @@ spec:
   http:
     tlsSecret: keycloak-tls
   ingress:
-    enabled: false                  # OpenShift Route ile; aşağıda Route tanımlı
+    enabled: false                  # via OpenShift Route; the Route is defined below
   additionalOptions:
   - name: log
     value: "console"
@@ -195,8 +197,8 @@ spec:
       memory: {{ .Values.keycloak.resources.limits.memory | quote }}
       cpu: {{ .Values.keycloak.resources.limits.cpu | quote }}
 ---
-# Realm import — AD federation + OIDC client'lar tek YAML'da. Operator
-# bunu işleyip Keycloak'a deklaratif olarak uygular.
+# Realm import — AD federation + OIDC clients in a single YAML. The
+# Operator processes this and applies it to Keycloak declaratively.
 apiVersion: k8s.keycloak.org/v2alpha1
 kind: KeycloakRealmImport
 metadata:
@@ -274,7 +276,7 @@ spec:
           membership.user.ldap.attribute: ["sAMAccountName"]
           mode: ["READ_ONLY"]
 
-    # --- OIDC Client'lar ---
+    # --- OIDC Clients ---
     clients:
     - clientId: trino
       enabled: true
@@ -496,10 +498,11 @@ spec:
       redirectUris: [{{ printf "https://%s/*" (include "lakehouse.routeHost" (dict "name" "nessie" "context" .)) | quote }}]
       webOrigins: [{{ printf "https://%s" (include "lakehouse.routeHost" (dict "name" "nessie" "context" .)) | quote }}]
     # Self-Service Lakehouse Console (frontend, SPA). PUBLIC client
-    # (PKCE): frontend backend'e Bearer JWT gönderir, backend audience'ı
-    # doğrular — bu client'ın confidential secret'ına İHTİYACI YOK (diğer
-    # client'ların aksine). `groups` claim mapper: console/backend/app/
-    # services/authz.py `claims.get("groups")` (AD grup adı listesi) bekliyor.
+    # (PKCE): the frontend sends a Bearer JWT to the backend, and the
+    # backend verifies the audience — this client does NOT NEED a
+    # confidential secret (unlike the other clients). `groups` claim
+    # mapper: console/backend/app/services/authz.py expects
+    # `claims.get("groups")` (a list of AD group names).
     - clientId: lakehouse-console
       enabled: true
       protocol: "openid-connect"
@@ -521,10 +524,10 @@ spec:
           "access.token.claim": "true"
           "userinfo.token.claim": "true"
     # Kafka UI (kafbat-ui). CONFIDENTIAL client (Spring Security
-    # OAuth2 authorization_code, sunucu tarafı) — secret
-    # kafka-ui-oidc-credentials Secret'ıyla eşleşmeli. Redirect URI Spring
-    # Security OAuth2 login'in varsayılan `/login/oauth2/code/{registrationId}`
-    # deseni (registrationId: keycloak).
+    # OAuth2 authorization_code, server-side) — the secret must match the
+    # kafka-ui-oidc-credentials Secret. The redirect URI follows Spring
+    # Security OAuth2 login's default `/login/oauth2/code/{registrationId}`
+    # pattern (registrationId: keycloak).
     - clientId: kafka-ui
       enabled: true
       protocol: "openid-connect"
@@ -549,7 +552,7 @@ spec:
           "access.token.claim": "true"
           "userinfo.token.claim": "true"
     {{- if .Values.monitoring.grafana.oidc.enabled }}
-    # Grafana (İzleme/D1). CONFIDENTIAL client (generic OAuth,
+    # Grafana (Monitoring/D1). CONFIDENTIAL client (generic OAuth,
     # authorization_code). Redirect URI = Grafana's `generic_oauth` callback
     # (`/login/generic_oauth`). Host derives from the SAME `lakehouse.routeHost`
     # helper ("grafana" logical name) as the Grafana Route's own spec.host
@@ -574,8 +577,8 @@ spec:
       secret: {{ .Values.monitoring.grafana.oidc.clientSecret | quote }}
     {{- end }}
     {{- if and .Values.auth.oidc.enabled .Values.byoNotebook.enabled }}
-    # BYO/yerel notebook erişimi (2026-08-07-byo-notebook-access design,
-    # Task 1; şartname 3.6.1.2). PUBLIC device-flow client — NO secret
+    # BYO/local notebook access (2026-08-07-byo-notebook-access design,
+    # Task 1; spec 3.6.1.2). PUBLIC device-flow client — NO secret
     # (oc-login style): the user's local `tools/lakehouse-cli login`
     # (Task 2) does an OIDC device-authorization-grant flow against this
     # client to mint their OWN token (their AD identity/roles, not a
@@ -605,7 +608,7 @@ spec:
           "access.token.claim": "true"
     {{- end }}
 
-    # Realm roller — AD grup üyeliğine göre runtime'da atanır
+    # Realm roles — assigned at runtime based on AD group membership
     roles:
       realm:
       - name: admin
@@ -624,9 +627,10 @@ spec:
       realmRoles: [student]
 {{- if include "lakehouse.isOpenShift" . }}
 ---
-# Keycloak Route — harici erişim (reencrypt: Keycloak kendisi TLS, Route
-# bunu reencrypt eder). Ek gate: `lakehouse.isOpenShift` (`.Values.platform`)
-# — vanilla eşleniği chart/templates/08b-ingress-tls.yaml'da.
+# Keycloak Route — external access (reencrypt: Keycloak terminates its own
+# TLS, and the Route re-encrypts it). Extra gate: `lakehouse.isOpenShift`
+# (`.Values.platform`) — its vanilla counterpart is
+# chart/templates/08b-ingress-tls.yaml.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -638,7 +642,7 @@ spec:
   host: {{ include "lakehouse.routeHost" (dict "name" "auth" "context" .) }}
   to:
     kind: Service
-    name: {{ include "lakehouse.svc.keycloak" . }}   # Keycloak Operator tarafından üretilen Service
+    name: {{ include "lakehouse.svc.keycloak" . }}   # Service produced by the Keycloak Operator
   port:
     targetPort: https
   tls:

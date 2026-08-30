@@ -2,12 +2,12 @@
 # Only parameterized + made namespace-aware. Gated by
 # `.Values.components.trino`.
 #
-# İç iletişim: internal-communication.shared-secret pod'lar arası kimlik
-# doğrulama için zorunlu (HMAC). Bulk data şifrelemesi için iki seçenek:
-#   (a) Trino native internal TLS — ConfigMap'te yorum satırları aktif
-#       edilir + cert-manager Certificate CR ile keystore.p12 üretilir.
-#   (b) OpenShift Service Mesh (Istio) — namespace'e PeerAuthentication
-#       {mode: STRICT} uygulanır; uygulama kodunda değişiklik gerekmez.
+# Internal communication: internal-communication.shared-secret is mandatory
+# for pod-to-pod authentication (HMAC). Two options for bulk data encryption:
+#   (a) Trino native internal TLS — activate the commented-out lines in the
+#       ConfigMap + generate keystore.p12 via a cert-manager Certificate CR.
+#   (b) OpenShift Service Mesh (Istio) — apply PeerAuthentication
+#       {mode: STRICT} to the namespace; no application code changes needed.
 #
 # Service wiring (spec §3.1/§8 — never hardcode a cross-component name):
 #   - Trino coordinator's own Service NAME is `lakehouse.svc.trino` (helper,
@@ -90,8 +90,8 @@ metadata:
 data:
   jvm.config: |
     -server
-    # Xmx 6G (worker pod limit 8Gi) — JVM overhead + Iceberg memory-mapped
-    # file okuma için 2 GB tampon bırakır. OOM crash riskini düşürür.
+    # Xmx 6G (worker pod limit 8Gi) — leaves a 2 GB buffer for JVM overhead +
+    # Iceberg memory-mapped file reads. Lowers OOM crash risk.
     -Xmx{{ .Values.trino.memory.jvmXmx }}
     -XX:+UseG1GC
     -XX:G1HeapRegionSize={{ .Values.trino.jvm.g1HeapRegionSize }}
@@ -115,7 +115,7 @@ data:
     http-server.http.port=8080
     discovery.uri=http://{{ include "lakehouse.svc.trino" . }}:8080
     query.max-memory={{ .Values.trino.memory.queryMaxMemory }}
-    # coord sadece planner; küçük tut
+    # the coordinator is only a planner; keep this small
     query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeCoordinator }}
     memory.heap-headroom-per-node={{ .Values.trino.memory.heapHeadroomPerNode }}
 {{- if and .Values.components.monitoring .Values.monitoring.targets.trino.enabled }}
@@ -131,10 +131,10 @@ data:
     # `openmetrics.jmx-object-names` (valid property) can filter exposed MBeans.
 {{- end }}
 {{- if .Values.auth.oidc.enabled }}
-    # OIDC (TLS Route'ta sonlanır). Trino yalnızca `etc/config.properties`'i
-    # (bu dosya) otomatik yükler — ayrı bir `oauth2.properties` dosyası
-    # OTOMATİK OKUNMAZ, bu yüzden OIDC satırları doğrudan buraya inline
-    # edilmiştir. Gated by `.Values.auth.oidc.enabled` (default true — see
+    # OIDC (TLS terminates at the Route). Trino only auto-loads
+    # `etc/config.properties` (this file) — a separate `oauth2.properties`
+    # file is NOT read automatically, which is why the OIDC lines are
+    # inlined directly here. Gated by `.Values.auth.oidc.enabled` (default true — see
     # values.yaml's `auth:` comment); Trino's OAuth2 authenticator does EAGER
     # discovery at startup, so with no reachable issuer this config MUST be
     # omitted entirely rather than pointed at a dummy URL, or the coordinator
@@ -159,11 +159,11 @@ data:
     # Trino runs in no-auth mode; web UI + client connections are
     # unauthenticated. NEVER use this in prod.
 {{- end }}
-    # Pod'lar arası iletişim auth zorunlu (shared-secret Secret'tan)
+    # Pod-to-pod communication auth is mandatory (from the shared-secret Secret)
     internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
-    # Faz-2: cluster içi trafik şifreleme. Aşağıdaki satırları aktif ederek
-    # coordinator↔worker arası TLS açılır. Gerekli: cert-manager Certificate
-    # CR ile trino-internal-tls Secret üretmek (keystore.p12 + passphrase).
+    # Phase 2: in-cluster traffic encryption. Activating the lines below
+    # turns on TLS between coordinator and worker. Requires: generating the
+    # trino-internal-tls Secret via a cert-manager Certificate CR (keystore.p12 + passphrase).
     # internal-communication.https.required=true
     # internal-communication.https.keystore.path=/etc/trino/certs/keystore.p12
     # internal-communication.https.keystore.key=${ENV:KEYSTORE_PASS}
@@ -172,8 +172,8 @@ data:
     # http-server.https.port=8443
     # http-server.https.keystore.path=/etc/trino/certs/keystore.p12
     # http-server.https.keystore.key=${ENV:KEYSTORE_PASS}
-    # Alternatif: OpenShift Service Mesh (Istio) PeerAuthentication CR ile
-    # namespace-seviye mTLS; uygulama konfigürasyonu değişmez.
+    # Alternative: namespace-level mTLS via an OpenShift Service Mesh
+    # (Istio) PeerAuthentication CR; application configuration stays unchanged.
 {{- if and .Values.auth.oidc.enabled .Values.superset.trino.tls.enabled }}
     # Client-facing HTTPS (:8443) for JWT machine-auth (b1). Coordinator keeps
     # :8080 for worker discovery + the edge-TLS Route. cert-manager PKCS12.
@@ -186,7 +186,7 @@ data:
     coordinator=false
     http-server.http.port=8080
     discovery.uri=http://{{ include "lakehouse.svc.trino" . }}:8080
-    # 4GB → 3GB: JVM + IO tamponu
+    # 4GB → 3GB: JVM + IO buffer
     query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeWorker }}
     internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
 {{- if .Values.trino.spill.enabled }}
@@ -249,7 +249,7 @@ data:
     s3.aws-access-key=${ENV:S3_ACCESS_KEY}
     s3.aws-secret-key=${ENV:S3_SECRET_KEY}
 {{- if .Values.sandbox.enabled }}
-  # Sandbox v2 (Task 3, şartname 3.5.4.2 — analyst CTAS/view/temp via Trino).
+  # Sandbox v2 (Task 3, spec 3.5.4.2 — analyst CTAS/view/temp via Trino).
   # Own S3 bucket + Nessie namespace (Tasks 1-2); Trino still commits to
   # Nessie as the SAME broad-write `svc-trino-nessie` identity lakehouse/
   # rawlake use above — per-catalog write scope is enforced purely by

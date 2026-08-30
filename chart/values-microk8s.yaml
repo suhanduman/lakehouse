@@ -4,7 +4,7 @@
 # is OpenShift). This file exists ONLY to de-risk the Helm chart's core
 # ingest-slice wiring (CNPG Postgres <-> Nessie/Apicurio, Strimzi Kafka,
 # Trino catalogs, S3 buckets) against a REAL Kubernetes API server before
-# the same chart is exercised on OpenShift, per the POC-DOĞRULA plan. Layer
+# the same chart is exercised on OpenShift, per the POC-VERIFY plan. Layer
 # on top of values-prod.example.yaml:
 #
 #   helm install lakehouse ./chart -n lakehouse-test --create-namespace \
@@ -237,10 +237,11 @@ trino:
     heapHeadroomPerNode: 256MB
     queryMaxMemoryPerNodeWorker: 768MB
 
-# İzleme (D1): microk8s'te UWM YOKTUR. Test-only prometheus-operator kurulur
-# (bu chart'ın parçası DEĞİL). Grafana OIDC kapalı (anonim/admin login test
-# için yeterli). Thanos datasource microk8s'te erişilemez; canlı test yerel
-# prometheus'u datasource olarak --set ile geçici override eder.
+# Monitoring (D1): microk8s has NO UWM. A test-only prometheus-operator is
+# installed (NOT part of this chart). Grafana OIDC is disabled (anonymous/
+# admin login is enough for testing). The Thanos datasource is unreachable on
+# microk8s; live testing temporarily overrides the datasource to the local
+# prometheus via --set.
 monitoring:
   grafana:
     oidc:

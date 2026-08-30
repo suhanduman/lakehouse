@@ -120,10 +120,11 @@ data:
     AUTH_ROLES_MAPPING = {"lakehouse-admins": ["Admin"], "lakehouse-analysts": ["Alpha"], "lakehouse-students": ["Gamma"]}
     AUTH_ROLES_SYNC_AT_LOGIN = True
 
-    # --- Alerts & Reports: ALERT_REPORTS flag'i alertsReports.enabled ile şablonlanır.
-    #     (ternary "True"/"False" — Python bool literal'i; helm'in lowercase true/false'u
-    #     Python'da geçersizdir.) Celery/SMTP bloğu yalnız enabled iken eklenir.
-    #     Tarayıcı yok → THUMBNAILS her zaman False. ---
+    # --- Alerts & Reports: the ALERT_REPORTS flag is templated from
+    #     alertsReports.enabled. (ternary "True"/"False" — a Python bool
+    #     literal; helm's lowercase true/false is invalid in Python.) The
+    #     Celery/SMTP block is only added when enabled. No browser →
+    #     THUMBNAILS is always False. ---
     FEATURE_FLAGS = {"THUMBNAILS": False, "ALERT_REPORTS": {{ .Values.superset.alertsReports.enabled | ternary "True" "False" }}}
     SQLLAB_TIMEOUT = 60
     SUPERSET_WEBSERVER_TIMEOUT = 120
@@ -143,7 +144,7 @@ data:
             "reports.prune_log": {"task": "reports.prune_log", "schedule": crontab(minute=0, hour=0)},
         }
     CELERY_CONFIG = CeleryConfig
-    # --- SMTP: müşterinin dış sunucusu (values → env; şifre Secret'tan, opsiyonel) ---
+    # --- SMTP: the customer's external server (values → env; password from a Secret, optional) ---
     SMTP_HOST = os.environ["SMTP_HOST"]
     SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
     SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").lower() == "true"
@@ -151,7 +152,7 @@ data:
     SMTP_USER = os.environ.get("SMTP_USER", "")
     SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
     SMTP_MAIL_FROM = os.environ["SMTP_MAIL_FROM"]
-    WEBDRIVER_BASEURL = os.environ.get("WEBDRIVER_BASEURL", "http://superset:8088/")  # e-posta linki; TARAYICI DEĞİL
+    WEBDRIVER_BASEURL = os.environ.get("WEBDRIVER_BASEURL", "http://superset:8088/")  # email link; NOT a browser
     EMAIL_REPORTS_SUBJECT_PREFIX = "[Lakehouse] "
 {{- end }}
 

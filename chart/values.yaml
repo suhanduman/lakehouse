@@ -52,27 +52,27 @@ global:
   # streaming jobs, etc.). Overridden per-environment.
   imageRegistry: image-registry.openshift-image-registry.svc:5000/lakehouse
 
-  # --- Prod hardening (OpenShift) — VARSAYILAN KAPALI. -------------------------
-  # microk8s'te KAPALI kalır (restricted-v2 SCC yok; runAsNonRoot bazı imajları
-  # kırabilir). Prod values (values-prod.example.yaml) AÇAR. Detay + S3-CA
-  # per-bileşen JVM truststore runbook: gitops/README.md "Prod hardening".
+  # --- Prod hardening (OpenShift) — DEFAULT OFF. -------------------------
+  # Stays OFF on microk8s (no restricted-v2 SCC; runAsNonRoot can break some
+  # images). Prod values (values-prod.example.yaml) turn it ON. Details + S3-CA
+  # per-component JVM truststore runbook: gitops/README.md "Prod hardening".
   security:
-    # OpenShift restricted-v2 SCC / PSA-restricted uyumlu pod+container
-    # securityContext'i (runAsNonRoot, drop ALL caps, seccomp RuntimeDefault,
-    # allowPrivilegeEscalation:false). runAsUser SET EDİLMEZ — OpenShift SCC
-    # rastgele UID atar. Helper: _helpers.tpl lakehouse.podSecurityContext /
+    # OpenShift restricted-v2 SCC / PSA-restricted compliant pod+container
+    # securityContext (runAsNonRoot, drop ALL caps, seccomp RuntimeDefault,
+    # allowPrivilegeEscalation:false). runAsUser is NOT SET — OpenShift SCC
+    # assigns a random UID. Helper: _helpers.tpl lakehouse.podSecurityContext /
     # lakehouse.containerSecurityContext.
     restrictedSecurityContext: false
-    # S3 Internal-CA truststore. Etkinse chart, OpenShift'in
-    # "trusted CA bundle" injection'ı için etiketli bir ConfigMap üretir
-    # (00-s3-trust-bundle.yaml); JVM S3 istemcileri (Trino/Nessie/Connect/Spark)
-    # bunu mount edip truststore'a ekler — bkz. gitops/README runbook.
+    # S3 Internal-CA truststore. When enabled, the chart produces a labeled
+    # ConfigMap for OpenShift's "trusted CA bundle" injection
+    # (00-s3-trust-bundle.yaml); JVM S3 clients (Trino/Nessie/Connect/Spark)
+    # mount it and add it to their truststore — see the gitops/README runbook.
     s3TrustBundle:
       enabled: false
-      # OpenShift trusted-CA-bundle injection: boş bir ConfigMap'e
-      # `config.openshift.io/inject-trusted-cabundle: "true"` etiketi konur;
-      # OpenShift `ca-bundle.crt`'yi (sistem + cluster-additional CA'lar) doldurur.
-      # false ise `configMapName` mevcut (elle sağlanan) bir CA ConfigMap olmalı.
+      # OpenShift trusted-CA-bundle injection: an empty ConfigMap is labeled
+      # with `config.openshift.io/inject-trusted-cabundle: "true"`; OpenShift
+      # then fills in `ca-bundle.crt` (system + cluster-additional CAs).
+      # If false, `configMapName` must be an existing (manually-provided) CA ConfigMap.
       openshiftInject: true
       configMapName: s3-trust-bundle
       key: ca-bundle.crt
@@ -157,11 +157,12 @@ components:
   # OFF by default (on in medium/large tiers). See the top-level `dbt:`
   # block for the git-source-of-truth + machine-auth contract.
   dbt: false
-  # İzleme (D1): ServiceMonitor/PodMonitor/PrometheusRule CR'ları + Grafana.
-  # OpenShift user-workload-monitoring (UWM) HEDEFLİ — bu chart UWM'i KURMAZ,
-  # yalnızca CR'ları ve Grafana'yı ekler (spec 2026-07-19-monitoring-design §2).
-  # Kapalıyken (false) chart/templates/monitoring/* ve tüm metrik-hook
-  # eklentileri render'dan tümüyle çıkar; mevcut render birebir korunur.
+  # Monitoring (D1): ServiceMonitor/PodMonitor/PrometheusRule CRs + Grafana.
+  # TARGETS OpenShift user-workload-monitoring (UWM) — this chart does NOT
+  # install UWM itself, it only adds the CRs and Grafana (spec
+  # 2026-07-19-monitoring-design §2). When off (false), chart/templates/
+  # monitoring/* and every metric-hook add-on are completely excluded from the
+  # render; the existing render is preserved byte-for-byte.
   monitoring: true
   # Gates chart/templates/15-external-secrets.yaml's `ExternalSecret` CRs
   # (rendered only when ALSO `secrets.mode: external`, see that key's own
@@ -396,11 +397,11 @@ secrets:
     remoteKeyPrefix: lakehouse
     refreshInterval: 1h
 
-# İzleme (D1 — spec 2026-07-19-monitoring-design). Tümü `components.monitoring`
-# arkasında. Metrik toplama motoru OpenShift UWM'dir; bu blok yalnızca CR'ları
-# ve Grafana'yı yapılandırır.
+# Monitoring (D1 — spec 2026-07-19-monitoring-design). Everything sits behind
+# `components.monitoring`. The metrics-collection engine is OpenShift UWM;
+# this block only configures the CRs and Grafana.
 monitoring:
-  # ServiceMonitor scrape aralığı (tüm hedefler için ortak varsayılan).
+  # ServiceMonitor scrape interval (common default for all targets).
   serviceMonitorInterval: 30s
 
   # Namespace the vanilla-Kubernetes Prometheus Operator (kube-prometheus-
@@ -413,21 +414,21 @@ monitoring:
   # `platform: openshift`.
   prometheusNamespace: monitoring
 
-  # Hedef-başına açma/kapama. Her biri AYRICA `components.monitoring`'e bağlı:
-  # bir hedefin ServiceMonitor/PodMonitor'ı ancak ikisi de true ise render edilir.
+  # Per-target enable/disable. Each one is ALSO gated on `components.monitoring`:
+  # a target's ServiceMonitor/PodMonitor renders only when both are true.
   targets:
     kafka:    {enabled: true}   # Strimzi Kafka broker JMX-Prometheus exporter
-    connect:  {enabled: true}   # Kafka Connect JMX exporter (connect-metrics zaten var)
+    connect:  {enabled: true}   # Kafka Connect JMX exporter (connect-metrics already exists)
     trino:    {enabled: true}   # Trino OpenMetrics endpoint
     nessie:   {enabled: true}   # Nessie/Quarkus micrometer (/q/metrics)
     apicurio: {enabled: true}   # Apicurio micrometer (/metrics)
     console:  {enabled: true}   # Lakehouse Console FastAPI /metrics
     spark:    {enabled: true}   # Spark PrometheusServlet (PodMonitor)
-    postgres: {enabled: true}   # CNPG PodMonitor (operatör üretir; sadece gate)
+    postgres: {enabled: true}   # CNPG PodMonitor (the operator produces it; this is just a gate)
 
-  # Grafana'nın okuyacağı UWM Thanos-querier endpoint'i. OpenShift'te sabit
-  # platform namespace'i `openshift-monitoring`'tedir (cross-namespace,
-  # kasıtlı — helm-check bunu "recognized external" olarak tanır).
+  # The UWM Thanos-querier endpoint Grafana reads from. On OpenShift this is a
+  # fixed platform namespace, `openshift-monitoring` (cross-namespace,
+  # deliberate — helm-check recognizes this as "recognized external").
   # Port :9091 = tenancy-aware Thanos (namespace-scoped okuma).
   datasource:
     thanosUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
@@ -438,41 +439,41 @@ monitoring:
     route:
       host: grafana            # -> grafana.<global.domain> (lakehouse.routeHost)
     oidc:
-      # Keycloak OIDC login. microk8s testinde false (anonim/admin login yeterli),
-      # prod'da values-prod.example.yaml'da true.
+      # Keycloak OIDC login. False in microk8s testing (anonymous/admin login is
+      # enough); true in prod, in values-prod.example.yaml.
       enabled: false
       clientId: grafana
-      # Client secret'ın DURDUĞU Secret adı (materyal burada DEĞİL — secrets.mode).
+      # Name of the Secret HOLDING the client secret (material is NOT here — secrets.mode).
       secretName: grafana-oidc
-      # Confidential client secret DEĞERİ. Varsayılan boş (secrets.mode): materyal
-      # burada DEĞİL — `grafana-oidc` Secret'ı ExternalSecret/Vault ya da elle
-      # `oc create secret` ile sağlanır. Dolu verilirse (yalnız dev/test) hem
-      # 10-keycloak.yaml grafana client `secret:` alanını hem de monitoring/
-      # grafana.yaml'ın render ettiği `grafana-oidc` Secret'ını AYNI kaynaktan
-      # tohumlar (kafkaUi.oidc.clientSecret ile birebir aynı desen — tek kaynak,
-      # drift yok).
+      # Confidential client secret VALUE. Empty by default (secrets.mode): the
+      # material is NOT here — the `grafana-oidc` Secret is provisioned via
+      # ExternalSecret/Vault or a manual `oc create secret`. If filled in (dev/test
+      # only), it seeds BOTH 10-keycloak.yaml's grafana client `secret:` field and
+      # the `grafana-oidc` Secret rendered by monitoring/grafana.yaml from the SAME
+      # source (identical pattern to kafkaUi.oidc.clientSecret — single source,
+      # no drift).
       clientSecret: ""
-    # Grafana admin kimlik bilgisinin durduğu Secret adı (materyal burada DEĞİL).
+    # Name of the Secret holding the Grafana admin credential (material is NOT here).
     adminSecretName: grafana-admin
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits:   {cpu: 500m, memory: 512Mi}
 
-  # PrometheusRule alert eşikleri. Değerler values ile ayarlanabilir.
+  # PrometheusRule alert thresholds. Values can be tuned via values.
   alerts:
-    connectorFailedFor: 5m           # KafkaConnector FAILED bu süre boyunca
-    consumerLagThreshold: 100000     # toplam consumer lag (mesaj)
-    dlqRatePerSec: 1                 # DLQ topic'ine yazım hızı (msg/s)
-    cnpgReplicationLagSeconds: 30    # CNPG streaming replication gecikmesi
-    trinoErrorRatePerSec: 5          # Trino başarısız sorgu hızı (query/s)
-    trinoCoordinatorDownFor: "2m"    # Trino coordinator scrape hedefi (up==0) bu süre down ise alert
-    podRestartThreshold: 5           # 1 saatte pod restart sayısı
-    pvcFreeFraction: 0.15            # PVC boş oranı bunun altına düşerse (kubelet_volume_stats) → dolma uyarısı
-    cnpgBackupStaleHours: 26         # son başarılı CNPG yedeği bu saatten eskiyse → yedek başarısız/eski
-    hpaMaxedFor: "15m"               # HPA current==max bu süre boyunca → autoscaler tavanda (kapasite doygun)
-    kafkaUnderReplicatedFor: "10m"   # under-replicated partition >0 bu süre → broker down / ISR daralması
+    connectorFailedFor: 5m           # how long a KafkaConnector stays FAILED before alerting
+    consumerLagThreshold: 100000     # total consumer lag (messages)
+    dlqRatePerSec: 1                 # write rate into the DLQ topic (msg/s)
+    cnpgReplicationLagSeconds: 30    # CNPG streaming replication lag
+    trinoErrorRatePerSec: 5          # Trino failed-query rate (query/s)
+    trinoCoordinatorDownFor: "2m"    # alert if the Trino coordinator scrape target (up==0) stays down this long
+    podRestartThreshold: 5           # number of pod restarts in 1 hour
+    pvcFreeFraction: 0.15            # if the PVC free fraction drops below this (kubelet_volume_stats) → filling-up warning
+    cnpgBackupStaleHours: 26         # if the last successful CNPG backup is older than this many hours → backup failed/stale
+    hpaMaxedFor: "15m"               # HPA current==max for this long → autoscaler is maxed out (capacity saturated)
+    kafkaUnderReplicatedFor: "10m"   # under-replicated partitions >0 for this long → broker down / ISR shrinkage
 
-  # Dashboard-as-code toggle'ları (ConfigMap'ler koşullu).
+  # Dashboard-as-code toggles (ConfigMaps are conditional).
   dashboards:
     kafka: true
     cnpg: true
@@ -635,10 +636,11 @@ versions:
   # full-string-pin convention as `nessieImage`/`trinoImage` above (not built
   # via `.Values.global.imageRegistry` — kafbat-ui is pulled straight from ghcr.io).
   kafkaUiImage: ghcr.io/kafbat/kafka-ui:v1.5.0
-  # Superset Alerts & Reports için Celery broker/results-backend Redis'i.
-  # Üçüncü-parti → full-string-pin (kafkaUiImage/configurableHttpProxyImage gibi),
-  # global.imageRegistry+tag DEĞİL. `--save ""`+`--appendonly no` ile diske yazmaz
-  # → OpenShift arbitrary-UID uyumlu. Air-gapped'te mirror'lanmalı.
+  # Redis used as the Celery broker/results-backend for Superset Alerts & Reports.
+  # Third-party → full-string-pin (like kafkaUiImage/configurableHttpProxyImage),
+  # NOT global.imageRegistry+tag. Does not write to disk thanks to `--save ""`
+  # + `--appendonly no` → OpenShift arbitrary-UID compatible. Must be mirrored
+  # in air-gapped environments.
   redisImage: "docker.io/library/redis:7.4-alpine"
   # chart/templates/19-superset.yaml: internally-built Superset image (same
   # `.Values.global.imageRegistry` + tag convention as `consoleBackendImageTag`
@@ -894,8 +896,9 @@ kafka:
     # signals via the same KafkaSignalChannel).
     debeziumSignals: {partitions: 1, replicas: 3}
     debeziumNotifications: {partitions: 3, replicas: 3}
-  # Kafka iç-topic replication ayarları. Prod default = 3/3/2/3/2 (3+ broker
-  # gerektirir). Tek-broker ortam (microk8s-ingest) hepsini 1'e çeker.
+  # Kafka internal-topic replication settings. Prod default = 3/3/2/3/2
+  # (requires 3+ brokers). Single-broker environments (microk8s-ingest) pull
+  # all of these down to 1.
   replication:
     offsetsTopic: 3
     txnStateLog: 3
@@ -1019,11 +1022,12 @@ trino:
   # (dedicated workers). Single-node (worker.replicas=0) MUST be true, else
   # queries have no execution node.
   includeCoordinator: false
-  # Opsiyonel pod scheduling önceliği (coordinator + worker). Boş (default) =
-  # priorityClassName RENDER EDİLMEZ (byte-identical). Set edilirse mevcut bir
-  # PriorityClass adı olmalı — chart cluster-scoped PriorityClass CR YARATMAZ
-  # (namespace-scoped/no-ClusterRole duruşu; İdare/OpenShift built-in'i sağlar,
-  # örn. openshift-user-critical / system-cluster-critical).
+  # Optional pod scheduling priority (coordinator + worker). Empty (default) =
+  # priorityClassName is NOT RENDERED (byte-identical). If set, it must be an
+  # existing PriorityClass name — the chart does NOT create a cluster-scoped
+  # PriorityClass CR (namespace-scoped/no-ClusterRole posture; the platform /
+  # OpenShift provides the built-in one, e.g. openshift-user-critical /
+  # system-cluster-critical).
   priorityClassName: ""
   coordinator:
     resources:
@@ -1033,9 +1037,9 @@ trino:
       limits:
         memory: 6Gi
         cpu: "4"
-    # PodDisruptionBudget (Trino OSS tek-coordinator → SPOF-koruma). minAvailable:1
-    # voluntary eviction'ı (node drain / autoscaler) bloklar. Rutin drain için
-    # operatör bunu geçici 0'a çeker VEYA scale-then-drain uygular (README).
+    # PodDisruptionBudget (Trino OSS single-coordinator → SPOF protection). minAvailable:1
+    # blocks voluntary eviction (node drain / autoscaler). For routine drains,
+    # the operator temporarily pulls this to 0 OR applies scale-then-drain (README).
     pdb:
       minAvailable: 1
   worker:
@@ -1071,15 +1075,16 @@ trino:
     # values-microk8s-ingest.yaml).
     g1HeapRegionSize: "32M"
   rbac:
-    # Rol/grup-bazlı satır-filtresi + kolon-maskesi (şartname 3.5.3). Açınca rules.json
-    # grup-modeline geçer; kapalı = bugünkü .*-permissive kurallar. Bir grup kaynağı gerektirir
-    # → ldapGroups.enabled=true zorunlu (fail-loud). Tüm sizing tier'larında off.
+    # Role/group-based row-filter + column-mask (spec 3.5.3). Turning it on
+    # switches rules.json to group-mode; off = today's .*-permissive rules. Requires
+    # a group source → ldapGroups.enabled=true is mandatory (fail-loud). Off in all
+    # sizing tiers.
     enabled: false
     adminGroup: "lakehouse-admins"
     analystGroup: "lakehouse-analysts"
     userGroup: "lakehouse-users"
     # [{group, catalog, schema, table, filter?, columns?: [{name, mask}]}]
-    # BİR girdi = BİR Trino tablo kuralı (filter satır + columns[].mask kolon AYNI kuralda).
+    # ONE entry = ONE Trino table rule (row filter + columns[].mask column in the SAME rule).
     tablePolicies: []
     # rbac.enabled=false (dev/smoke): admin identity as a Trino user-regex.
     # EMPTY (default) = NO catalog-admin in rbac-off mode (removes the old
@@ -1091,7 +1096,7 @@ trino:
     # (deny-by-default). Default false = current permissive floors (backward-compat).
     denyUnmatched: false
   ldapGroups:
-    # Trino, kimliği doğrulanan kullanıcının gruplarını doğrudan AD/LDAP'tan çözer.
+    # Trino resolves the authenticated user's groups directly from AD/LDAP.
     enabled: false
     url: "ldaps://ad.example.local:636"
     bindDn: ""
@@ -1099,21 +1104,23 @@ trino:
     userBaseDn: ""
     userSearchFilter: "(&(objectClass=person)(sAMAccountName={0}))"
     groupNameAttribute: "cn"
-  # Worker spill-to-disk (Slice C2): bellek-üstü hash-join/aggregation/sort
-  # operatörleri diske taşar → RESOURCE_EXHAUSTED yerine yavaş tamamlanır.
-  # Ayrı sizeLimit'li emptyDir'e yazar (/data/trino/spill) — node rootfs'ini
-  # DOLDURAMAZ. Sadece worker (HA prod'da coordinator plan-only). Default açık.
+  # Worker spill-to-disk (Slice C2): over-memory hash-join/aggregation/sort
+  # operators spill to disk → completes slowly instead of RESOURCE_EXHAUSTED.
+  # Writes to a separate sizeLimit'd emptyDir (/data/trino/spill) — CANNOT fill
+  # up the node rootfs. Worker only (in HA prod the coordinator is plan-only).
+  # Enabled by default.
   spill:
     enabled: true
-    sizeLimit: "10Gi"                # worker spill emptyDir tavanı
-    memoryRevokingThreshold: 0.9     # bu doluluğun üstünde spill'e revoke başlar
-    memoryRevokingTarget: 0.5        # revoke hedef doluluğu
-  # Coordinator resource-groups (Slice C2): sorgu admission + adil paylaşım.
-  # Ağaç: bi (BI/notebook/dbt servis hesapları — garantili), admin
-  # (lakehouse-admins, YALNIZ ldapGroups.enabled iken), adhoc (catch-all —
-  # analyst+herkes, concurrency-capped → kaçak sorgu KUYRUKLANIR, reddedilmez).
-  # Limitler kasıtlı gevşek; koruma yalnız contention altında devreye girer.
-  # Memory yüzde-bazlı (cluster ile ölçeklenir). Default açık.
+    sizeLimit: "10Gi"                # worker spill emptyDir ceiling
+    memoryRevokingThreshold: 0.9     # above this fullness, revoking to spill begins
+    memoryRevokingTarget: 0.5        # revoke target fullness
+  # Coordinator resource-groups (Slice C2): query admission + fair sharing.
+  # Tree: bi (BI/notebook/dbt service accounts — guaranteed), admin
+  # (lakehouse-admins, ONLY when ldapGroups.enabled), adhoc (catch-all —
+  # analyst+everyone, concurrency-capped → a runaway query is QUEUED, not
+  # rejected). Limits are deliberately loose; protection only kicks in under
+  # contention. Memory is percentage-based (scales with the cluster). Enabled
+  # by default.
   resourceGroups:
     enabled: true
     global: {softMemoryLimit: "100%", hardConcurrencyLimit: 100, maxQueued: 1000}
@@ -1180,25 +1187,25 @@ kafkaConnect:
   # plugins at cluster build time). Prod: image-registry.../connect-lakehouse:<tag>; F test:
   # 192.168.2.5:32000/connect-lakehouse:<tag> (see values-microk8s-ingest.yaml).
   image: ""
-  # Connect'in iç config/offset/status topic'lerinin replication factor'ü.
-  # Prod default = 3 (3+ broker gerektirir). Tek-broker ortam
-  # (microk8s-ingest) 1'e çeker — aksi halde Connect RF=3 auto-create'i,
-  # Topic Operator'ın RF=1 KafkaTopic CR'larını reconcile etmesiyle yarışır.
+  # Replication factor for Connect's internal config/offset/status topics.
+  # Prod default = 3 (requires 3+ brokers). Single-broker environments
+  # (microk8s-ingest) pull it down to 1 — otherwise Connect's RF=3 auto-create
+  # races with the Topic Operator reconciling RF=1 KafkaTopic CRs.
   internalTopicReplicationFactor: 3
-  # Strimzi `spec.build.output` push ayarları. Prod default = OpenShift iç
-  # registry (pushSecret'li). microk8s'te insecure yerel registry
-  # (container-registry addon) için: pushSecret boş (auth yok) +
-  # additionalPushOptions ile builder'a insecure push söylenir. Bu değerler
-  # yalnız `spec.build.output` push davranışını etkiler; prod byte-unchanged.
-  # NOT: Strimzi v1 (0.51 default builder = Buildah) `additionalPushOptions`
-  # kullanır — v1beta2/Kaniko'nun `additionalKanikoOptions` alanı v1'de
-  # kaldırıldı (kafka.strimzi.io/v1 `unknown field` hatası verir).
+  # Strimzi `spec.build.output` push settings. Prod default = OpenShift internal
+  # registry (with pushSecret). On microk8s, for the insecure local registry
+  # (container-registry addon): pushSecret is empty (no auth) + additionalPushOptions
+  # tells the builder to push insecurely. These values only affect
+  # `spec.build.output` push behavior; prod stays byte-unchanged.
+  # NOTE: Strimzi v1 (0.51 default builder = Buildah) uses `additionalPushOptions`
+  # — v1beta2/Kaniko's `additionalKanikoOptions` field was removed in v1
+  # (throws a kafka.strimzi.io/v1 `unknown field` error).
   build:
     pushSecret: connect-build-push-secret
-    # v1 böldü: additionalBuildOptions = build komutu (Kaniko executor bayrakları
-    # burada — Strimzi 0.51 default builder KANIKO); additionalPushOptions = push
-    # komutu (Buildah). İnsecure yerel registry'ye push için Kaniko: --insecure
-    # --skip-tls-verify (additionalBuildOptions'a konur).
+    # v1 split this: additionalBuildOptions = the build command (Kaniko executor
+    # flags go here — Strimzi 0.51 default builder is KANIKO); additionalPushOptions
+    # = the push command (Buildah). To push to an insecure local registry, Kaniko
+    # needs: --insecure --skip-tls-verify (goes into additionalBuildOptions).
     additionalBuildOptions: []
     additionalPushOptions: []
   resources:
@@ -1324,7 +1331,7 @@ zeppelin:
     bindPassword: ""
     userSearchBase: "{{AD_USER_SEARCH_BASE}}"
     groupSearchBase: "{{AD_GROUP_SEARCH_BASE}}"
-    # AD group DN -> Zeppelin role eşlemesi.
+    # AD group DN -> Zeppelin role mapping.
     groups:
       admin: "CN=lakehouse-admins,OU=Groups,DC=example,DC=com"
       analyst: "CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"
@@ -1435,14 +1442,14 @@ superset:
     # (a committed Superset export is version-brittle — kept opt-in).
     enabled: false
   alertsReports:
-    # Zamanlanmış rapor (chart→CSV) + SQL-koşullu alert e-postaları (şartname 3.6.2.1.5).
-    # Redis + Celery worker + Celery beat ekler. Default off — açmak için bunu true
-    # yapıp superset.smtp.host'u müşterinin SMTP sunucusuna ayarla (ikisi birlikte).
-    # Tüm sizing tier'larında off kalır (SMTP host müşteriye özgü). Tarayıcı YOK:
-    # dashboard/grafik PNG görseli kapsam dışı (Day-2); rapor formatı CSV/veri.
+    # Scheduled reports (chart→CSV) + SQL-conditional alert emails (spec 3.6.2.1.5).
+    # Adds Redis + Celery worker + Celery beat. Default off — to enable, set this to
+    # true and set superset.smtp.host to the customer's SMTP server (both together).
+    # Stays off in all sizing tiers (SMTP host is customer-specific). NO browser:
+    # dashboard/chart PNG images are out of scope (Day-2); report format is CSV/data.
     enabled: false
   smtp:
-    host: ""                # müşteri SMTP sunucusu — alertsReports.enabled ise ZORUNLU (fail-loud)
+    host: ""                # customer SMTP server — REQUIRED if alertsReports.enabled (fail-loud)
     port: 587
     startTLS: true
     ssl: false
@@ -1485,16 +1492,16 @@ dbt:
 # design (each dept with its own bucket/catalog/Secret/Keycloak client/K8s
 # SA/AD-group-gated Zeppelin) was retired in the slice's final task (Task 5)
 # in favor of this single unified shape. Prod data stays untouched — a
-# separate bucket + Nessie namespace from `lakehouse`/`rawlake` (şartname
+# separate bucket + Nessie namespace from `lakehouse`/`rawlake` (spec
 # 3.5.4.3).
 sandbox:
   enabled: false
-  bucket: "sandbox"            # S3 bucket + warehouse location kökü
-  namespace: "sandbox"         # Nessie namespace + Trino katalog adı
-  # Notebook (Jupyter/Zeppelin) erişimine izinli AD grupları (login gate). Rol modeli = Slice B.
-  allowedGroups: []            # ör. ["CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"]
+  bucket: "sandbox"            # S3 bucket + warehouse location root
+  namespace: "sandbox"         # Nessie namespace + Trino catalog name
+  # AD groups allowed access to notebooks (Jupyter/Zeppelin) (login gate). Role model = Slice B.
+  allowedGroups: []            # e.g. ["CN=lakehouse-analysts,OU=Groups,DC=example,DC=com"]
   oidc:
-    clientSecret: ""           # svc-sandbox service-account client secret (single-source; boş => Secret render edilmez)
+    clientSecret: ""           # svc-sandbox service-account client secret (single-source; empty => Secret not rendered)
 
 # Hand-rolled JupyterHub (per-user notebook sandbox). Gated by
 # `components.jupyter` (default false) AND `auth.oidc.enabled` (the Hub's
@@ -1546,12 +1553,13 @@ jupyter:
       requests: {cpu: "100m", memory: "128Mi"}
       limits:   {cpu: "500m", memory: "256Mi"}
 
-# Yerel/harici (BYO) notebook erişimi (şartname 3.6.1.2). Keycloak public device-flow
-# client `lakehouse-token` render eder; kullanıcı `tools/lakehouse-cli login` ile token alır.
+# Local/external (BYO) notebook access (spec 3.6.1.2). Renders a Keycloak
+# public device-flow client `lakehouse-token`; the user gets a token via
+# `tools/lakehouse-cli login`.
 byoNotebook:
   enabled: false
 
-# Kurumsal AD LDAP federation settings for Keycloak (prod-manifests/
+# Corporate AD LDAP federation settings for Keycloak (prod-manifests/
 # 10-keycloak.yaml KeycloakRealmImport
 # `components["org.keycloak.storage.UserStorageProvider"]` + its
 # `group-ldap-mapper`). Same corporate AD service account as

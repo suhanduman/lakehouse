@@ -83,7 +83,7 @@ rules:
   verbs: [get, list, create, patch, delete]
 # kafkausers: only get+patch — the orchestrator READ-MODIFY-WRITEs the `connect`
 # KafkaUser's per-source ACLs (ensure/remove_user_acl); it never creates/lists/
-# deletes KafkaUsers. Scoped to least-privilege (sartname 3.7.1.3) rather than
+# deletes KafkaUsers. Scoped to least-privilege (spec 3.7.1.3) rather than
 # reusing the broader connector/topic verb set above.
 - apiGroups: [kafka.strimzi.io]
   resources: [kafkausers]
@@ -112,9 +112,9 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 
 ---
-# -------- Backend config (console/backend/app/config.py Settings ile
-# birebir — pydantic-settings büyük/küçük harf duyarsız NAMESPACE/TRINO_HOST/...
-# okur) --------
+# -------- Backend config (matches console/backend/app/config.py's Settings
+# exactly — pydantic-settings reads NAMESPACE/TRINO_HOST/... case-
+# insensitively) --------
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -210,13 +210,13 @@ spec:
         envFrom:
         - configMapRef: {name: lakehouse-console-config}
         env:
-        # S3 kimlik bilgileri S3 secret'ından — key adları farklı
-        # olduğu için (access-key-id/secret-access-key/endpoint) tek tek
-        # eşlenir, envFrom ile blindly aktarılmaz.
+        # S3 credentials come from the S3 secret — since the key names
+        # differ (access-key-id/secret-access-key/endpoint) they are mapped
+        # one by one, not blindly passed through via envFrom.
         - {name: S3_ENDPOINT, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: endpoint}}}
         - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: access-key-id}}}
         - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}}
-        # OIDC issuer — Trino/Nessie ile AYNI oidc-credentials Secret (tek kaynak).
+        # OIDC issuer — the SAME oidc-credentials Secret as Trino/Nessie (single source).
         - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
         readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 15}
@@ -262,8 +262,8 @@ spec:
       {{- end }}
 
 ---
-# -------- Backend Service — nginx `/api` proxy hedefiyle BİREBİR eşleşmeli
-# (bkz. dosya başı NOTE) --------
+# -------- Backend Service — MUST match the nginx `/api` proxy target
+# exactly (see the file-header NOTE) --------
 apiVersion: v1
 kind: Service
 metadata:
@@ -299,10 +299,11 @@ spec:
       securityContext:
         {{- $psc | nindent 8 }}
       {{- end }}
-      # Statik nginx sunucusu — apiserver/Trino/Connect/Apicurio/S3'e hiç
-      # ihtiyacı yok; ayrı bir ServiceAccount/RBAC gerekmez (default SA yeterli).
-      # NOT (restrictedSecurityContext): OpenShift'te non-root nginx imajı
-      # gerekir (unprivileged; 8080 zaten ayrıcalıksız port).
+      # The static nginx server has NO need at all for apiserver/Trino/
+      # Connect/Apicurio/S3; it doesn't need a separate ServiceAccount/RBAC
+      # (the default SA is enough). NOTE (restrictedSecurityContext): on
+      # OpenShift a non-root nginx image is required (unprivileged; 8080 is
+      # already an unprivileged port).
       containers:
       - name: console-frontend
         image: {{ printf "%s/console-frontend:%s" .Values.global.imageRegistry .Values.versions.consoleFrontendImageTag | quote }}
@@ -335,13 +336,14 @@ spec:
 
 {{- if include "lakehouse.isOpenShift" . }}
 ---
-# -------- Route (cert-manager TLS) — yalnızca frontend dışarı açılır;
-# backend'e doğrudan dışarıdan erişim YOK (NetworkPolicy ile de kapalı).
-# Host, 10-keycloak.yaml'daki `lakehouse-console` OIDC client'ın
-# redirectUris/webOrigins'iyle AYNI `lakehouse.routeHost` helper'ından
-# ("console" mantıksal isim) üretilir — host/redirect asla ayrışmaz. --------
-# Ek gate: `lakehouse.isOpenShift` (`.Values.platform`) — vanilla eşleniği
-# chart/templates/08b-ingress-tls.yaml'da.
+# -------- Route (cert-manager TLS) — only the frontend is exposed
+# externally; the backend has NO direct external access (also closed off
+# by NetworkPolicy). The host is generated from the SAME
+# `lakehouse.routeHost` helper ("console" logical name) as the
+# `lakehouse-console` OIDC client's redirectUris/webOrigins in
+# 10-keycloak.yaml — host/redirect can never drift apart. --------
+# Extra gate: `lakehouse.isOpenShift` (`.Values.platform`) — its vanilla
+# counterpart is chart/templates/08b-ingress-tls.yaml.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -363,15 +365,16 @@ spec:
 
 ---
 # -------- NetworkPolicy: Ingress --------
-# Frontend: SADECE Route/ingress-controller'dan giriş (namespace içindeki
-# `allow-intra-namespace` politikası (00-namespace.yaml) ns-içi tüm pod'lardan
-# trafiğe zaten izin veriyor — bu politika console'a özgü savunma derinliği
-# katmanıdır, o geniş kuralı DARALTMAZ). Kaynak namespace selector'ı platform'a
-# göre değişir — AYNI gerekçe + AYNI helper 00-namespace.yaml'daki
-# `allow-from-ingress-and-monitoring` politikasıyla: OpenShift'in
-# `network.openshift.io/policy-group` etiketi vanilla'da YOK, k8s-standart
-# `kubernetes.io/metadata.name` + `.Values.ingress.controllerNamespace`
-# kullanılır. Pod/port scoping HER İKİ platformda AYNI.
+# Frontend: ingress ONLY from the Route/ingress-controller (the
+# namespace-wide `allow-intra-namespace` policy (00-namespace.yaml) already
+# allows traffic from every pod within the namespace — this policy is a
+# console-specific defense-in-depth layer, it does NOT narrow that broader
+# rule). The source namespace selector varies by platform — the SAME
+# rationale + the SAME helper as the `allow-from-ingress-and-monitoring`
+# policy in 00-namespace.yaml: OpenShift's `network.openshift.io/policy-group`
+# label does NOT exist on vanilla, so the k8s-standard
+# `kubernetes.io/metadata.name` + `.Values.ingress.controllerNamespace` is
+# used instead. Pod/port scoping is THE SAME on BOTH platforms.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -392,8 +395,8 @@ spec:
     ports: [{protocol: TCP, port: 8080}]
 
 ---
-# Backend: SADECE frontend pod'undan (nginx `/api` proxy) — Route/dışarıdan
-# doğrudan erişim YOK.
+# Backend: ingress ONLY from the frontend pod (nginx `/api` proxy) — NO
+# direct access from the Route/outside.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -410,8 +413,8 @@ spec:
 ---
 # -------- NetworkPolicy: Egress --------
 # console-backend -> apiserver + Trino + Kafka Connect + Apicurio + S3 (+DNS).
-# Frontend'in (statik nginx) bu egress'e ihtiyacı YOK — bilerek bu politikaya
-# dahil edilmedi.
+# The frontend (static nginx) has NO need for this egress — it was
+# deliberately left out of this policy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -421,13 +424,14 @@ spec:
   podSelector: {matchLabels: {app: console-backend}}
   policyTypes: [Egress]
   egress:
-  # DNS çözümleme. Kaynak namespace selector'ı platform'a göre değişir — AYNI
-  # gerekçe + AYNI desen bu dosyanın frontend Ingress NetworkPolicy'sindeki
-  # (yukarıda) ve 00-namespace.yaml'daki allow-from-ingress-and-monitoring
-  # ile: OpenShift'in "dns" policy-group'u vanilla kümelerde YOK,
-  # k8s-standart `kubernetes.io/metadata.name` +
-  # `.Values.console.networkPolicy.dnsNamespace` ("kube-system", CoreDNS'in
-  # k8s-standart adresi) kullanılır.
+  # DNS resolution. The source namespace selector varies by platform — the
+  # SAME rationale + the SAME pattern as this file's frontend Ingress
+  # NetworkPolicy (above) and 00-namespace.yaml's
+  # allow-from-ingress-and-monitoring: OpenShift's "dns" policy-group does
+  # NOT exist on vanilla clusters, so the k8s-standard
+  # `kubernetes.io/metadata.name` +
+  # `.Values.console.networkPolicy.dnsNamespace` ("kube-system", CoreDNS's
+  # k8s-standard address) is used instead.
   - to:
 {{- if include "lakehouse.isOpenShift" . }}
     - namespaceSelector:
@@ -437,8 +441,9 @@ spec:
         matchLabels: {kubernetes.io/metadata.name: {{ .Values.console.networkPolicy.dnsNamespace }}}
 {{- end }}
     ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
-  # Kubernetes API server — 443 VE 6443/TCP (bkz. kaynak manifest POC-DOĞRULA
-  # notu: CNI'ye göre in-cluster apiserver erişimi 443 veya 6443 olabilir).
+  # Kubernetes API server — 443 AND 6443/TCP (see the source manifest's
+  # POC-VERIFY note: in-cluster apiserver access can be 443 or 6443
+  # depending on the CNI).
   - to:
     - namespaceSelector: {}
     ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
@@ -446,7 +451,7 @@ spec:
   - to:
     - podSelector: {matchLabels: {app: trino, role: coordinator}}
     ports: [{protocol: TCP, port: 8080}]
-  # Kafka Connect REST API (Strimzi otomatik pod label'ları — bkz. 12-kafka-connect.yaml)
+  # Kafka Connect REST API (Strimzi's automatic pod labels — see 12-kafka-connect.yaml)
   - to:
     - podSelector: {matchLabels: {strimzi.io/cluster: connect, strimzi.io/kind: KafkaConnect}}
     ports: [{protocol: TCP, port: 8083}]
@@ -454,7 +459,7 @@ spec:
   - to:
     - podSelector: {matchLabels: {app: apicurio-registry}}
     ports: [{protocol: TCP, port: 8080}]
-  # S3 (küme dışı) — CIDR/IP bloğu ortam-özel.
+  # S3 (outside the cluster) — the CIDR/IP block is environment-specific.
   - to:
     - ipBlock: {cidr: {{ .Values.console.networkPolicy.s3Cidr | quote }}}
     ports: [{protocol: TCP, port: 443}]

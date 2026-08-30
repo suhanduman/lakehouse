@@ -5,10 +5,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     namespace: str = "example"
     s3_endpoint: str = ""
-    # Iceberg tablo pre-create (IcebergService → pyiceberg → Nessie REST). CDC
-    # upsert'ün identifier field'ı için tablolar Trino DDL ile DEĞİL pyiceberg
-    # ile yaratılır (bkz. tools/create_iceberg_table.py). S3 creds pyiceberg
-    # FileIO içindir.
+    # Iceberg table pre-create (IcebergService → pyiceberg → Nessie REST).
+    # For the CDC upsert's identifier field, tables are created via pyiceberg,
+    # NOT Trino DDL (see tools/create_iceberg_table.py). S3 creds are for
+    # pyiceberg's FileIO.
     nessie_uri: str = "http://nessie:19120/iceberg/"
     s3_access_key: str = ""
     s3_secret_key: str = ""

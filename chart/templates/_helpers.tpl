@@ -190,11 +190,11 @@ Usage:
 
 {{/*
 lakehouse.podSecurityContext / lakehouse.containerSecurityContext —
-OpenShift restricted-v2 SCC + PSA-restricted uyumlu securityContext. Yalnızca
-`.Values.global.security.restrictedSecurityContext` true iken çıktı üretir
-(aksi halde BOŞ → şablon değişmez, microk8s'te ve mevcut testlerde etkisiz).
-runAsUser BİLİNÇLİ olarak SET EDİLMEZ — OpenShift SCC rastgele (namespace'e
-atanmış) UID verir; sabit UID SCC ihlali olur. Kullanım (pod spec):
+securityContext compatible with OpenShift restricted-v2 SCC + PSA-restricted. Only
+produces output when `.Values.global.security.restrictedSecurityContext` is true
+(otherwise EMPTY → template is unchanged, no effect on microk8s or in existing tests).
+runAsUser is DELIBERATELY NOT SET — OpenShift SCC assigns a random (namespace-
+assigned) UID; a fixed UID would violate the SCC. Usage (pod spec):
   {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
   {{- if $psc }}
   securityContext:
@@ -222,11 +222,11 @@ seccompProfile:
 
 {{/*
 S3 internal-CA truststore wiring (gated: .Values.global.security.s3TrustBundle
-.enabled). S3 endpoint kurum Internal-CA ile imzalıysa JVM S3
-istemcileri SSLHandshakeException verir; bu helper'lar sistem cacerts'in bir
-kopyasına CA'yı ekleyip (init-container + keytool) JVM'i o truststore'a
-yönlendirir. Trino referans implementasyonudur; aynı 4 helper Nessie/Connect/
-Spark'a da uygulanabilir (bkz. gitops/README runbook).
+.enabled). If the S3 endpoint is signed by the organization's Internal-CA, JVM S3
+clients throw SSLHandshakeException; these helpers add the CA to a copy of the
+system cacerts (init-container + keytool) and point the JVM at that truststore.
+Trino is the reference implementation; the same 4 helpers can also be applied
+to Nessie/Connect/Spark (see the gitops/README runbook).
   - s3TrustVolumes       : ConfigMap (CA) + emptyDir (built store) — pod volumes
   - s3TrustStoreMount    : emptyDir mount (ana container /work/s3-trust)
   - s3TrustInitContainer : dict {context, image} — cacerts kopyala + CA import

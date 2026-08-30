@@ -214,17 +214,16 @@ def get_trino() -> TrinoService:
 
 def get_iceberg() -> IcebergService:
     """Real `IcebergService` (pyiceberg RestCatalog over Nessie, built lazily
-    per call, warehouse-aware). CDC tablo pre-create bunu kullanır (Trino DDL
-    DEĞİL — Trino identifier field set edemez). Overridable in tests via
-    `app.dependency_overrides[get_iceberg]` (fake, pyiceberg gerekmez).
+    per call, warehouse-aware). The CDC table pre-create step uses this (NOT
+    Trino DDL -- Trino can't set the identifier field). Overridable in tests
+    via `app.dependency_overrides[get_iceberg]` (fake, no pyiceberg needed).
 
-    `warehouse` construction property, tools/create_iceberg_table.py
-    `_load_catalog`'ı birebir yansıtır: verildiğinde (bronze -> "rawdata")
-    RestCatalog o Nessie warehouse'a bağlanır (S3 konumunu bu belirler);
-    None ise (silver) prop hiç eklenmez -> Nessie default warehouse'u
-    kullanılır. Bir "warehouse" namespace property'si stamplemek Nessie
-    tarafından yok sayılır -- bu YALNIZCA construction-time prop olarak
-    çalışır."""
+    The `warehouse` construction property mirrors tools/create_iceberg_table.py's
+    `_load_catalog` exactly: when given (bronze -> "rawdata"), RestCatalog
+    connects to that Nessie warehouse (this determines the S3 location);
+    when None (silver), the prop is never added -> the Nessie default
+    warehouse is used. Stamping a "warehouse" namespace property is ignored
+    by Nessie -- this ONLY works as a construction-time prop."""
 
     def _catalog(warehouse: str | None = None):
         from pyiceberg.catalog.rest import RestCatalog

@@ -1,37 +1,37 @@
-# Vanilla Kubernetes Ingress + cert-manager entegrasyonu — chart/templates/
-# 08-routes-tls.yaml (trino/ai-ui/nessie/superset/zeppelin/jupyter),
-# 10-keycloak.yaml'daki auth Route, console/console.yaml + console/
-# kafka-ui.yaml'daki Route'ların VE monitoring/grafana.yaml'daki Route'un
-# `networking.k8s.io/v1` Ingress eşleniği.
+# Vanilla Kubernetes Ingress + cert-manager integration — the
+# `networking.k8s.io/v1` Ingress counterpart of chart/templates/
+# 08-routes-tls.yaml (trino/ai-ui/nessie/superset/zeppelin/jupyter), the
+# auth Route in 10-keycloak.yaml, the Routes in console/console.yaml +
+# console/kafka-ui.yaml, AND the Route in monitoring/grafana.yaml.
 #
-# Bu dosyanın TAMAMI `lakehouse.isOpenShift` (`.Values.platform`) helper'ının
-# TERSİ ile gate'lenir: `platform: openshift` iken buradan HİÇBİR ŞEY render
-# edilmez (o path'te Route'lar render edilir); `platform: vanilla`
-# (varsayılan) iken TERSİ — Route'lar render OLMAZ, buradaki Ingress'ler
-# render edilir. Aynı `lakehouse.isOpenShift` helper'ı (bir kez tanımlı,
-# _helpers.tpl), asla ikinci bir literal `eq .Values.platform ...` kontrolü
-# değil — bu yüzden iki path aynı anda render olamaz (ya da ikisi de boş
-# kalamaz) aynı mantıksal endpoint için.
+# This ENTIRE file is gated on the INVERSE of the `lakehouse.isOpenShift`
+# helper (`.Values.platform`): when `platform: openshift`, NOTHING here
+# renders (that path renders the Routes instead); when `platform: vanilla`
+# (default), the INVERSE holds — the Routes do NOT render, and the
+# Ingresses here render instead. It is always the SAME
+# `lakehouse.isOpenShift` helper (defined once, in _helpers.tpl), never a
+# second literal `eq .Values.platform ...` check — so the two paths can
+# never both render (or both stay empty) for the same logical endpoint.
 #
-# Host tutarlılığı (task brief kabul kriteri, Route'larla AYNI): her
-# Ingress'in `spec.rules[].host`'u AYNI `lakehouse.routeHost` helper'ından
-# (_helpers.tpl), AYNI mantıksal isimle üretilir — Keycloak OIDC client
-# redirectUris/webOrigins'i (10-keycloak.yaml) platformdan bağımsız her
-# zaman aynı host'u gösterir.
+# Host consistency (task brief acceptance criterion, SAME as the Routes):
+# every Ingress's `spec.rules[].host` is generated from the SAME
+# `lakehouse.routeHost` helper (_helpers.tpl) with the SAME logical name —
+# Keycloak's OIDC client redirectUris/webOrigins (10-keycloak.yaml) always
+# point at the same host regardless of platform.
 #
-# Gating: her Ingress, Route eşleniğiyle BİREBİR AYNI `.Values.components.*`
-# flag'i arkasında (dangling-Route notunun AYNISı burada da geçerli —
-# superset/jupyter/ai backing Service'i bu pakette YOK, flag'leri varsayılan
-# false, bkz. 08-routes-tls.yaml header).
+# Gating: every Ingress sits behind the EXACT SAME `.Values.components.*`
+# flag as its Route counterpart (the SAME dangling-Route note applies here
+# — superset/jupyter/ai have NO backing Service in this package, their
+# flags default to false, see the 08-routes-tls.yaml header).
 #
-# cert-manager: her Ingress AYNI `.Values.routes.certIssuer`'ı
-# `cert-manager.io/cluster-issuer` annotation'ı olarak taşır (Route'larla
-# aynı ClusterIssuer) ve kendi `spec.tls[].secretName`'ini talep eder
-# (`<name>-tls` — cert-manager bu Secret'ı üretir).
+# cert-manager: every Ingress carries the SAME `.Values.routes.certIssuer`
+# as the `cert-manager.io/cluster-issuer` annotation (the same
+# ClusterIssuer as the Routes) and requests its own `spec.tls[].secretName`
+# (`<name>-tls` — cert-manager produces this Secret).
 {{- if not (include "lakehouse.isOpenShift" .) }}
 {{- if .Values.components.routesTls }}
 ---
-# Trino — SQL endpoint + OAuth2 callback (bkz. 08-routes-tls.yaml Route eşleniği)
+# Trino — SQL endpoint + OAuth2 callback (see the Route counterpart in 08-routes-tls.yaml)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -58,8 +58,8 @@ spec:
               name: http
 {{- if .Values.components.ai }}
 ---
-# AI Text-to-SQL UI — bkz. 08-routes-tls.yaml header notu (`text-to-sql-ui`
-# Service'i bu pakette YOK; flag varsayılan false).
+# AI Text-to-SQL UI — see the header note in 08-routes-tls.yaml (the
+# `text-to-sql-ui` Service does NOT exist in this package; flag defaults to false).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -86,7 +86,7 @@ spec:
               name: http
 {{- end }}
 ---
-# Nessie REST Catalog (opsiyonel: dış client'lar / federated catalog)
+# Nessie REST Catalog (optional: external clients / federated catalog)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -113,8 +113,8 @@ spec:
               name: http
 {{- if .Values.components.superset }}
 ---
-# Superset BI — Deployment/Service bu pakette YOK (follow-up bileşen, bkz.
-# 08-routes-tls.yaml header notu); flag varsayılan false.
+# Superset BI — Deployment/Service does NOT exist in this package (follow-up
+# component, see the header note in 08-routes-tls.yaml); flag defaults to false.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -142,10 +142,10 @@ spec:
 {{- end }}
 {{- if .Values.components.zeppelin }}
 ---
-# Apache Zeppelin (chart/templates/09-zeppelin.yaml ile deploy edildi).
-# components.zeppelin gate'i: zeppelin kapalıyken backing Service'i olmayan
-# dangling bir Ingress kalmasın (Route tarafındaki gate ile birebir — bkz.
-# 08-routes-tls.yaml).
+# Apache Zeppelin (deployed via chart/templates/09-zeppelin.yaml).
+# components.zeppelin gate: prevents a dangling Ingress without a backing
+# Service when zeppelin is disabled (identical to the gate on the Route
+# side — see 08-routes-tls.yaml).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -173,8 +173,8 @@ spec:
 {{- end }}
 {{- if .Values.components.sparkHistory }}
 ---
-# Spark History Server (Consumption slice d) — bkz. 08-routes-tls.yaml Route
-# eşleniği; backing `spark-history` Service bu chart'ta üretiliyor (Task 3).
+# Spark History Server (Consumption slice d) — see the Route counterpart in
+# 08-routes-tls.yaml; the backing `spark-history` Service IS produced by this chart (Task 3).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -202,9 +202,9 @@ spec:
 {{- end }}
 {{- if .Values.components.jupyter }}
 ---
-# JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu pakette YOK
-# (follow-up bileşen, bkz. 08-routes-tls.yaml header notu); flag varsayılan
-# false.
+# JupyterHub (multi-user notebook) — Deployment/Service does NOT exist in
+# this package (follow-up component, see the header note in
+# 08-routes-tls.yaml); flag defaults to false.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -233,11 +233,11 @@ spec:
 {{- end }}
 {{- if .Values.components.keycloak }}
 ---
-# Keycloak auth Ingress — bkz. 10-keycloak.yaml'daki Route eşleniği (orada
-# `termination: reencrypt`; burada eşdeğeri
-# `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` — nginx ingress
-# controller'a backend'e HTTPS ile konuşmasını söyler, Keycloak Operator'ün
-# ürettiği Service'in `https` portu hedeflenir).
+# Keycloak auth Ingress — see the Route counterpart in 10-keycloak.yaml
+# (there it's `termination: reencrypt`; here the equivalent is
+# `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` — it tells the
+# nginx ingress controller to speak HTTPS to the backend, targeting the
+# `https` port of the Service produced by the Keycloak Operator).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -266,8 +266,8 @@ spec:
 {{- end }}
 {{- if .Values.components.console }}
 ---
-# Self-Service Lakehouse Console frontend — bkz. console/console.yaml'daki
-# Route eşleniği.
+# Self-Service Lakehouse Console frontend — see the Route counterpart in
+# console/console.yaml.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -295,7 +295,7 @@ spec:
 {{- end }}
 {{- if .Values.components.kafkaUi }}
 ---
-# Kafka UI — bkz. console/kafka-ui.yaml'daki Route eşleniği.
+# Kafka UI — see the Route counterpart in console/kafka-ui.yaml.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -323,8 +323,8 @@ spec:
 {{- end }}
 {{- if and .Values.components.monitoring .Values.components.routesTls }}
 ---
-# Grafana — bkz. monitoring/grafana.yaml'daki Route eşleniği (AYNI iki gate:
-# `components.monitoring` + `components.routesTls`).
+# Grafana — see the Route counterpart in monitoring/grafana.yaml (the SAME
+# two gates: `components.monitoring` + `components.routesTls`).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

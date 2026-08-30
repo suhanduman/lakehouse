@@ -1,24 +1,24 @@
 # Spark Operator RBAC + SparkApplication templates. Only parameterized +
 # made namespace-aware. Gated by `.Values.components.sparkOperator`.
 #
-# Spark Operator (kubeflow/spark-operator) OperatorHub'dan önceden kurulu.
-# PoC'deki "tek sandbox pod + interaktif spark-sql" yerine, prod'da her iş
-# bir SparkApplication CR olarak submit edilir; driver + N executor açılır,
-# iş bitince kapanır.
+# The Spark Operator (kubeflow/spark-operator) must already be installed via
+# OperatorHub. Instead of the PoC's "single sandbox pod + interactive
+# spark-sql", in prod every job is submitted as a SparkApplication CR; a
+# driver + N executors spin up and shut down again once the job finishes.
 #
-# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py) `spark-py` imajına
-# gömülüdür ve `local://` yolu ile referanslanır — imaj build ayrı bir
-# pipeline'dır (spec §0.3); bu chart yalnızca `image`/version values ile
-# referans verir, job dosyalarını TAŞIMAZ.
+# jobs/*.py (prod-manifests/jobs/iceberg_maintenance.py) is baked into the
+# `spark-py` image and referenced via a `local://` path — the image build is
+# a separate pipeline (spec §0.3); this chart only references it through the
+# `image`/version values and does NOT ship the job files themselves.
 #
 # Service wiring (spec §3.1/§8): the inline `sparkConf` below (via the
 # `lakehouse.spark.baseConf` helper, chart/templates/_helpers.tpl) resolves
 # its Iceberg REST catalog URI through the SAME `lakehouse.svc.nessie`
-# helper Nessie'nin kendisinin (04-nessie-ha.yaml) ve Trino'nun
-# (06-trino-ha.yaml) kullandığı AYNI helper — namespace-içi kısa ad,
-# `/iceberg/` path (Trino'nun REST catalog path'i ile birebir aynı, `/v1`
-# yok). (Was resolved via a mounted `spark-defaults` ConfigMap; retired —
-# spark-operator v2.x auto-mounts its own config at /opt/spark/conf.)
+# helper that Nessie itself (04-nessie-ha.yaml) and Trino (06-trino-ha.yaml)
+# use — namespace-internal short name, `/iceberg/` path (identical to
+# Trino's REST catalog path, no `/v1`). (Was previously resolved via a
+# mounted `spark-defaults` ConfigMap; retired — spark-operator v2.x
+# auto-mounts its own config at /opt/spark/conf.)
 {{- if .Values.components.sparkOperator }}
 apiVersion: v1
 kind: ServiceAccount
@@ -50,14 +50,16 @@ roleRef:
   name: spark-driver-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Iceberg bakım — saatlik compaction + snapshot expire + orphan-file temizliği.
-# jobs/iceberg_maintenance.py DİNAMİK: hardcoded tablo YOK. Script önce
-# lakehouse ve rawlake kataloglarındaki tüm namespace/tablo çiftlerini
-# keşfeder (SHOW NAMESPACES + SHOW TABLES), sonra her tablo için sırayla:
+# Iceberg maintenance — hourly compaction + snapshot expiry + orphan-file
+# cleanup. jobs/iceberg_maintenance.py is DYNAMIC: no hardcoded tables. The
+# script first discovers every namespace/table pair in the lakehouse and
+# rawlake catalogs (SHOW NAMESPACES + SHOW TABLES), then for each table runs,
+# in order:
 #   CALL {catalog}.system.rewrite_data_files(table => '{ns}.{tbl}')
 #   CALL {catalog}.system.expire_snapshots(table => '{ns}.{tbl}')
 #   CALL {catalog}.system.remove_orphan_files(table => '{ns}.{tbl}')
-# Yeni tablolar eklendiğinde manifest değişmez; script otomatik keşfeder.
+# When new tables are added, the manifest doesn't change; the script
+# discovers them automatically.
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
 metadata:
@@ -109,11 +111,11 @@ spec:
 {{ include "lakehouse.spark.awsEnv" . | indent 6 }}
 ---
 {{- if .Values.sparkOperator.silverMerge.enabled }}
-# Bronze -> Silver incremental CDC MERGE. DİNAMİK (iceberg-maintenance gibi):
-# jobs/merge_cdc.py rawlake'teki her `<ns>_raw` namespace'ini keşfeder, Silver'a
-# MERGE eder. Yeni kaynak eklenince manifest değişmez. Dynamic Allocation +
-# shuffle-tracking (bu CR'ın kendi `sparkConf`'unda, aşağıda) ile executor'lar
-# tablo başına elastik.
+# Bronze -> Silver incremental CDC MERGE. DYNAMIC (like iceberg-maintenance):
+# jobs/merge_cdc.py discovers every `<ns>_raw` namespace in rawlake and
+# MERGEs it into Silver. The manifest doesn't change when a new source is
+# added. Dynamic Allocation + shuffle-tracking (in this CR's own
+# `sparkConf`, below) let executors scale elastically per table.
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
 metadata:

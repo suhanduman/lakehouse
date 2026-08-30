@@ -79,12 +79,12 @@ spec:
         - {name: mgmt, containerPort: 9000}
         env:
         {{- if .Values.global.security.s3TrustBundle.enabled }}
-        # S3 internal-CA truststore — s3-trust-init container kurar
-        # (prod hardening). Quarkus JAVA_OPTS_APPEND ile JVM'e verilir.
+        # S3 internal-CA truststore — set up by the s3-trust-init container
+        # (prod hardening). Passed to the JVM via Quarkus JAVA_OPTS_APPEND.
         - name: JAVA_OPTS_APPEND
           value: "-Djavax.net.ssl.trustStore=/work/s3-trust/cacerts -Djavax.net.ssl.trustStorePassword=changeit"
         {{- end }}
-        # --- Version store (CNPG Cluster'dan secret ile) ---
+        # --- Version store (via a secret from the CNPG Cluster) ---
         - {name: NESSIE_VERSION_STORE_TYPE, value: "JDBC2"}
         - {name: QUARKUS_DATASOURCE_POSTGRESQL_DB_KIND, value: "postgresql"}
         - name: QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL
@@ -95,7 +95,7 @@ spec:
           valueFrom: {secretKeyRef: {name: pg-nessie-app, key: password}}
         - {name: NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE, value: "postgresql"}
 
-        # --- Iceberg REST warehouses (multi-warehouse; PoC deseni) ---
+        # --- Iceberg REST warehouses (multi-warehouse; PoC pattern) ---
         - name: NESSIE_CATALOG_DEFAULT_WAREHOUSE
           value: {{ .Values.nessie.catalog.defaultWarehouse | quote }}
         - name: NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION
@@ -119,7 +119,7 @@ spec:
         # catalog name mismatch) — the guard above fails the render loudly
         # instead, before any of that can happen at runtime.
         #
-        # Sandbox v2 (Task 3 review fix, şartname 3.5.4.3 isolation) — a
+        # Sandbox v2 (Task 3 review fix, spec 3.5.4.3 isolation) — a
         # named `sandbox` warehouse, registered the SAME way as `warehouse`/
         # `rawdata` above. Trino's sandbox.properties references this
         # warehouse BY NAME (`iceberg.rest-catalog.warehouse=sandbox`), not
@@ -135,7 +135,7 @@ spec:
           value: {{ printf "s3://%s/warehouse" .Values.sandbox.bucket | quote }}
 {{- end }}
 
-        # --- S3 (credentials from Secret, resolved via Nessie URN) ---
+        # --- S3 (credentials from a Secret, resolved via Nessie URN) ---
         - name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION
           valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: region}}
         - {name: NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS, value: "true"}
@@ -147,7 +147,7 @@ spec:
         - name: NESSIE_CATALOG_SECRETS_S3CREDS_SECRET
           valueFrom: {secretKeyRef: {name: {{ .Values.storage.s3.secretName }}, key: secret-access-key}}
 
-        # --- AuthN — OIDC (prod'da zorunlu) ---
+        # --- AuthN — OIDC (mandatory in prod) ---
         # Gated by `.Values.auth.oidc.enabled` (default true — see
         # values.yaml's `auth:` comment). Unlike Trino, Nessie's Quarkus OIDC
         # extension does LAZY discovery (pod stays Running even with a

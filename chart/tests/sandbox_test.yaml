@@ -487,7 +487,7 @@ tests:
           matchMany: true
 
   # --- Trino `sandbox` catalog + rules.json `.*` read-write (Task 3,
-  # KABUL AÇIĞI #2, şartname 3.5.4.2). ADDITIVE alongside the existing
+  # ACCEPTANCE GAP #2, spec 3.5.4.2). ADDITIVE alongside the existing
   # lakehouse/rawlake read-only rules and every existing principal (admin,
   # svc-dbt-trino, catch-all SELECT) — those must stay intact (the b2
   # lesson: a `tables` section, once defined, denies any principal not

@@ -13,10 +13,10 @@
 # Storage (PSO CSI driver) is one example (see
 # chart/values.yaml comment); any CSI driver works the same way.
 #
-# İki katmanda depolama:
-#   (a) PV/PVC   — konteyner-local disk (Postgres, Kafka, notebook, Ollama cache)
-#   (b) S3 object — lakehouse veri deposu; herhangi bir S3-uyumlu object store
-#                   endpoint'i (MinIO, AWS S3, Ceph RGW, ...).
+# Storage happens on two layers:
+#   (a) PV/PVC   — container-local disk (Postgres, Kafka, notebook, Ollama cache)
+#   (b) S3 object — the lakehouse data store; any S3-compatible object store
+#                   endpoint (MinIO, AWS S3, Ceph RGW, ...).
 #
 # NOTE (scope): the source manifest also carried `nessie-db-credentials` and
 # `oidc-credentials` Secret placeholders alongside these StorageClasses.
@@ -38,7 +38,7 @@ reclaimPolicy: {{ .Values.storage.classes.block.reclaimPolicy }}
 allowVolumeExpansion: {{ .Values.storage.classes.block.allowVolumeExpansion }}
 volumeBindingMode: {{ .Values.storage.classes.block.volumeBindingMode }}
 ---
-# -------- File (ReadWriteMany) StorageClass — JupyterHub shared home vb. --------
+# -------- File (ReadWriteMany) StorageClass — JupyterHub shared home, etc. --------
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -52,11 +52,11 @@ volumeBindingMode: {{ .Values.storage.classes.fileRwx.volumeBindingMode }}
 {{- end }}
 ---
 # -------- S3 credential Secret (vendor-neutral) — NAME REFERENCE ONLY --------
-# BU SECRET'I ELLE YAZMAYIN / bu chart material üretmez.
-# `{{ .Values.storage.s3.secretName }}` adlı bir `Opaque` Secret,
-# şu key'lerle namespace `{{ include "lakehouse.namespace" . }}` içinde
-# önceden var olmalı — ExternalSecret/Vault (`values.secrets.mode: external`)
-# veya `oc create secret` (`manual`) ile sağlanır:
+# DO NOT WRITE THIS SECRET BY HAND / this chart does not produce the material.
+# An `Opaque` Secret named `{{ .Values.storage.s3.secretName }}` must already
+# exist in namespace `{{ include "lakehouse.namespace" . }}` with these keys —
+# provisioned via ExternalSecret/Vault (`values.secrets.mode: external`) or
+# `oc create secret` (`manual`):
 #   access-key-id, secret-access-key, endpoint, region
-# Bu chart'ın hiçbir template'i bu Secret'ı OLUŞTURMAZ; yalnızca isimle
-# referans verir (bkz. spec §4 — secret materyali git'e/chart'a girmez).
+# No template in this chart CREATES this Secret; it is only referenced by
+# name (see spec §4 — secret material never goes into git/the chart).

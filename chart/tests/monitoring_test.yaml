@@ -1,5 +1,5 @@
-# chart/tests/monitoring_test.yaml — helm-unittest suite for D1 (İzleme/
-# Monitoring). This is the FIRST suite only: it proves conditionality —
+# chart/tests/monitoring_test.yaml — helm-unittest suite for D1
+# (Monitoring). This is the FIRST suite only: it proves conditionality —
 # when `components.monitoring` is false, none of the monitoring templates
 # render anything at all.
 #
@@ -130,8 +130,8 @@ tests:
 # doesn't pull `templates/06-trino-ha.yaml`'s ~9 documents into the first
 # suite's `hasDocuments: count: 0` assertion.
 #
-# Guard for spec §7 acceptance criterion: "ServiceMonitor selector'ı Service
-# label'larıyla eşleşir". A Prometheus Operator ServiceMonitor selects target
+# Guard for spec §7 acceptance criterion: "the ServiceMonitor selector matches
+# the Service labels". A Prometheus Operator ServiceMonitor selects target
 # Services by THEIR `metadata.labels` (NOT by `spec.selector`, which selects
 # the backing Pods). So this guard asserts the trino-coordinator Service now
 # carries `metadata.labels.app: trino` (chart/templates/06-trino-ha.yaml,

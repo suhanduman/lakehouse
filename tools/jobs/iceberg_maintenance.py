@@ -1,14 +1,15 @@
-# Iceberg bakım job'u — DİNAMİK tarama: hardcoded tablo listesi YOK.
-# lakehouse ve rawlake kataloglarındaki tüm namespace/tablo çiftleri
-# SHOW NAMESPACES / SHOW TABLES ile keşfedilir; her tablo için
+# Iceberg maintenance job — DYNAMIC discovery: NO hardcoded table list.
+# Every namespace/table pair in the lakehouse and rawlake catalogs is
+# discovered via SHOW NAMESPACES / SHOW TABLES; for each table,
 # rewrite_data_files (compaction) + expire_snapshots + remove_orphan_files
-# çağırılır. Yeni bir tablo eklendiğinde bu script veya manifest değişmez.
+# are called. Adding a new table requires no change to this script or any
+# manifest.
 #
-# Tablolar arasında paralel çalışır (ThreadPoolExecutor, MAINTENANCE_MAX_PARALLEL
-# env, varsayılan 4) -- bir tablonun hatası diğerlerini durdurmaz.
+# Runs across tables in parallel (ThreadPoolExecutor, MAINTENANCE_MAX_PARALLEL
+# env, default 4) -- one table's failure never stops the others.
 #
-# ScheduledSparkApplication `iceberg-maintenance` tarafından saatlik
-# tetiklenir (bkz. chart/templates/05-spark-operator.yaml).
+# Triggered hourly by the ScheduledSparkApplication `iceberg-maintenance`
+# (see chart/templates/05-spark-operator.yaml).
 import os
 from concurrent.futures import ThreadPoolExecutor
 

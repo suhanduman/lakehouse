@@ -96,7 +96,7 @@ spec:
     spec:
       serviceAccountName: lakehouse-prereq-check
       restartPolicy: Never
-      # POC-DOĞRULA: `openshift/tools:latest` is the standard OpenShift
+      # POC-VERIFY: `openshift/tools:latest` is the standard OpenShift
       # "tools" ImageStream (ships oc/kubectl), present on every OpenShift
       # 4.x cluster out of the box — chosen so this Job needs no extra image
       # build/mirror step (same zero-extra-dependency reasoning as picking
@@ -123,7 +123,7 @@ spec:
           check externalsecrets.external-secrets.io "ExternalSecrets Operator"
           check certificates.cert-manager.io "cert-manager"
           {{- if .Values.components.monitoring }}
-          # İzleme (D1): ServiceMonitor CRD from OpenShift UWM /
+          # Monitoring (D1): ServiceMonitor CRD from OpenShift UWM /
           # Prometheus-Operator — only required when components.monitoring is on.
           check servicemonitors.monitoring.coreos.com "UWM/Prometheus-Operator (enable user-workload-monitoring — see operators/README.md)"
           {{- end }}

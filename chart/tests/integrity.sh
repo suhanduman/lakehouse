@@ -65,7 +65,7 @@ NAMESPACES=(strayprobe lakehouse-test)
 # install shape, exercised below as `jupyter-on-openshift`.
 # - monitoring-oidc-on     : forces components.monitoring=true AND
 #                            monitoring.grafana.oidc.enabled=true, exercising
-#                            the full İzleme (D1) render — Grafana Deployment
+#                            the full Monitoring (D1) render — Grafana Deployment
 #                            + non-expiring SA-token Secret + Thanos datasource
 #                            + per-target ServiceMonitors/PodMonitors +
 #                            PrometheusRule + the Keycloak grafana confidential

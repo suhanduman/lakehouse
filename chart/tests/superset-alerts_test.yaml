@@ -69,8 +69,8 @@ tests:
       components.superset: true
       superset.alertsReports.enabled: false
     asserts:
-      # (superset-redis Deployment/Service ve superset-redis-auth/superset-smtp Secret
-      # hiç render olmaz.) `containsDocument` + `not: true` used instead of
+      # (superset-redis Deployment/Service and superset-redis-auth/superset-smtp Secret
+      # never render.) `containsDocument` + `not: true` used instead of
       # `notContains`/`metadata.name`: `notContains` requires the target path to be
       # an ARRAY field (it errors "expect to be an array" on a scalar like
       # metadata.name — verified against this repo's installed helm-unittest

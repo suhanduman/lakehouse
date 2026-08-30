@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Statik manifest/script doğrulama. Gereksinimler: yamllint, python3, shellcheck.
-# --helm modu için ayrıca: helm (v3/v4).
+# Static manifest/script validation. Requirements: yamllint, python3, shellcheck.
+# For --helm mode, also: helm (v3/v4).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
 # -------------------------------------------------------------------------
 # --helm mode: helm lint + helm template (render) -> helm-check.py
-#   (namespace-farkındalık + no-{{}} + servis-referans kapalılık kontrolü)
+#   (namespace-awareness + no-{{}} + service-reference closure check)
 # Usage: validate.sh --helm [namespace] [values-file]
 #   default namespace:    strayprobe
 #   default values-file:  chart/values-prod.example.yaml
