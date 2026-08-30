@@ -116,10 +116,10 @@ VERIFY_PENDING_DETAIL = "PENDING — reconciliation ongoing"
 
 
 def _resolve_identifier(spec: SourceSpec):
-    """Iceberg pre-create için identifier (PK) kolonları. Öncelik: açık
-    `spec.identifier` → mongo ise `_id` → scheduled `incrementing_col`. Hiçbiri
-    yoksa None (orchestrator fail-loud olur — CDC relational için PK açıkça
-    verilmeli)."""
+    """Identifier (PK) columns for the Iceberg pre-create step. Priority:
+    explicit `spec.identifier` -> `_id` for mongo -> `incrementing_col` for
+    scheduled. If none is available, returns None (the orchestrator then
+    fails loud -- CDC relational sources must supply the PK explicitly)."""
     if spec.identifier:
         return list(spec.identifier)
     if spec.type == "mongo":
@@ -175,8 +175,8 @@ class AddSourceOrchestrator:
         self.s3 = s3
         self.trino = trino
         self.render = render
-        # IcebergService — CDC hedef tablosunu identifier field ile connector'dan
-        # önce pre-create eder. None ise "table" adımı fail-loud olur.
+        # IcebergService -- pre-creates the CDC target table with the identifier
+        # field before the connector runs. If None, the "table" step fails loud.
         self.iceberg = iceberg
         self.verify_attempts = max(1, verify_attempts)
         self.verify_delay = verify_delay
@@ -381,25 +381,25 @@ class AddSourceOrchestrator:
         if not run("namespace", _run_ns_ddl):
             return fail()
 
-        # 3b. table pre-create — BOTH medallion layers, identifier field (PK)
-        # ile. Trino DDL DEĞİL; IcebergService (pyiceberg → Nessie REST).
-        # Sink'in dinamik-routing auto-create'i identifier koymaz → upsert
-        # sessizce append-only'e düşer, her UPDATE duplicate satır bırakır. Bu
-        # yüzden tablo(lar), connector'dan (dolayısıyla veriden) önce
-        # yaratılmalı: önce Bronze (<ns>_raw — partitioned changelog,
-        # identifier YOK, rawdata warehouse), sonra Silver (<ns> —
-        # current-state, identifier ile). Boş+idempotent olduğu için undo YOK
-        # (namespace/bucket ile aynı "Rollback scope" gerekçesi) — herhangi
-        # biri fail-loud olursa "table" adımı fail olur ve
-        # secret/bucket/namespace'ten sonra henüz hiçbir topic/connector apply
-        # edilmediği için rollback sadece secret'ı geri alır (bkz. undo
-        # stack). PK eksikse (identifier) veya columns tamamen boşsa
-        # fail-loud → connector asla apply edilmez. PK-only columns (sadece
-        # identifier kolon(lar)ı, business kolonu YOK) desteklenen, kasıtlı
-        # bir şekildir — tablo(lar) sadece PK ile pre-create edilir; kalan
-        # şema runtime'da evolve olur (Bronze: sink evolve-schema-enabled/
-        # auto-create; Silver: silver-merge._apply_reconcile'ın ALTER TABLE
-        # ADD COLUMN'ı).
+        # 3b. table pre-create -- BOTH medallion layers, with the identifier
+        # field (PK). NOT Trino DDL; IcebergService (pyiceberg -> Nessie REST).
+        # The sink's dynamic-routing auto-create doesn't set an identifier ->
+        # upsert silently degrades to append-only, and every UPDATE leaves a
+        # duplicate row. So the table(s) must be created before the connector
+        # (and hence before any data): first Bronze (<ns>_raw -- partitioned
+        # changelog, NO identifier, rawdata warehouse), then Silver (<ns> --
+        # current-state, with identifier). No undo, since this is empty and
+        # idempotent (same "Rollback scope" reasoning as namespace/bucket) --
+        # if either fails loud, the "table" step fails, and since no
+        # topic/connector has been applied yet after secret/bucket/namespace,
+        # rollback only undoes the secret (see the undo stack). If the PK
+        # (identifier) is missing or columns is completely empty, it fails
+        # loud -> the connector is never applied. PK-only columns (just the
+        # identifier column(s), no business columns) is a supported,
+        # intentional shape -- the table(s) are pre-created with just the PK;
+        # the rest of the schema evolves at runtime (Bronze: the sink's
+        # evolve-schema-enabled/auto-create; Silver: silver-merge.
+        # _apply_reconcile's ALTER TABLE ADD COLUMN).
         def _precreate_table() -> Optional[str]:
             from app.config import settings
 
@@ -408,10 +408,10 @@ class AddSourceOrchestrator:
                     "IcebergService enjekte edilmedi — tablo identifier field ile "
                     "pre-create edilemez (upsert append-only'e düşer)"
                 )
-            # location=... : per-pipeline bucket konumları (B-v2) — Nessie
-            # namespace-level location'ı honor eder (per-table location'ı
-            # YOK sayar, bkz. IcebergService.create_table docstring), bu
-            # yüzden konum burada, create_table'a location= olarak geçirilir.
+            # location=... : per-pipeline bucket locations (B-v2) -- Nessie
+            # honors the namespace-level location (it ignores any per-table
+            # location, see IcebergService.create_table docstring), so the
+            # location is passed here as location= to create_table.
             cols = [c.model_dump() for c in spec.columns] if spec.columns else []
             if disposition == "entity":
                 # Validate BEFORE any Iceberg write: a misconfigured entity
@@ -430,16 +430,16 @@ class AddSourceOrchestrator:
                         f"{spec.kind}+{spec.type}: identifier (PK) gerekli — spec.identifier "
                         "verin (sink auto-create identifier koymaz → upsert append-only)"
                     )
-                # "spec.columns gerekli" burada TAM şema anlamına gelmez — en
-                # az identifier (PK) kolon(lar)ı `columns` içinde, tipiyle
-                # birlikte bulunmalı (wizard PK-only gönderebilir: columns ==
-                # [pk kolonu]). Business kolonları burada opsiyonel; runtime'da
-                # evolve olur — Bronze tarafında sink'in
-                # evolve-schema-enabled/auto-create'i, Silver tarafında
-                # silver-merge._apply_reconcile'ın `ALTER TABLE ... ADD
-                # COLUMN`'ı devreye girer. Bu yüzden guard `not spec.columns`
-                # (boş liste/None) kontrolü — PK-only zaten non-empty olduğu
-                # için burada trivially geçer.
+                # "spec.columns gerekli" here doesn't mean the FULL schema --
+                # at least the identifier (PK) column(s) must be present in
+                # `columns`, with their type (the wizard may send PK-only:
+                # columns == [pk column]). Business columns are optional here;
+                # they evolve at runtime -- on the Bronze side via the sink's
+                # evolve-schema-enabled/auto-create, on the Silver side via
+                # silver-merge._apply_reconcile's `ALTER TABLE ... ADD
+                # COLUMN`. Hence the guard checks `not spec.columns` (empty
+                # list/None) -- PK-only is already non-empty, so it trivially
+                # passes here.
                 if not spec.columns:
                     raise RuntimeError(
                         "spec.columns gerekli (en az identifier/PK kolonu) — Console "
@@ -487,7 +487,7 @@ class AddSourceOrchestrator:
 
         # ACL — existing-Kafka (stream/kafka) consumes a customer-named topic
         # that matches none of `connect`'s prefix ACLs. Grant `connect` a
-        # scoped literal READ (least-privilege, sartname 3.7.1.3), runtime-owned
+        # scoped literal READ (least-privilege, spec 3.7.1.3), runtime-owned
         # so helm upgrade never clobbers it. Only for the kafka-ingest renderer;
         # other lanes' topics are under our own prefixes (already covered).
         if descriptor.render_key == "kafka-ingest":

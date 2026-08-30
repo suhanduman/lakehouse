@@ -1,23 +1,23 @@
-"""B-v2 GitOps — Console'un pipeline repo'suna PR olarak açtığı manifest SETini
-ÜRETİR (doğrudan-apply/orchestrator B-v1 YERİNE deklaratif dosyalar).
+"""B-v2 GitOps — PRODUCES the manifest SET the Console opens as a PR against
+the pipeline repo (declarative files INSTEAD OF direct-apply/orchestrator B-v1).
 
-`render_pipeline_fileset` lane-aware bir manifest SETi üretir — render_key/
-lane/disposition mantığını render_service'e DELEGE eder (burada tekrar
-implement edilmez), GitOps zarfını (PreSync pre-create, namespace stamp,
-dosya layout'u) ekler:
-  - spark-batch (örn. batch/s3)     → tek ScheduledSparkApplication (kendi
-    rawlake tablosunu full-refresh CTAS ile kendi yazar; topic/connector/
-    precreate YOK)
-  - cdc / scheduled / stream        → Bronze PreSync pre-create (ConfigMap +
-    Job) + entity disposition ise ayrıca Silver PreSync pre-create + (varsa)
-    KafkaTopic + KafkaConnector + (Camel gibi) dedicated sink varsa onun da
-    KafkaConnector'ı
+`render_pipeline_fileset` produces a lane-aware manifest SET — it DELEGATES
+the render_key/lane/disposition logic to render_service (never re-implements
+it here), and adds the GitOps envelope (PreSync pre-create, namespace stamp,
+file layout):
+  - spark-batch (e.g. batch/s3)      → a single ScheduledSparkApplication
+    (writes its own rawlake table itself via full-refresh CTAS; NO
+    topic/connector/precreate)
+  - cdc / scheduled / stream         → Bronze PreSync pre-create (ConfigMap +
+    Job), and for entity disposition also Silver PreSync pre-create +
+    (if any) KafkaTopic + KafkaConnector + (for a lane like Camel) the
+    dedicated sink's own KafkaConnector, if there is one
 
-Sink auto-create identifier koymaz → upsert append-only'e düşer; tablo(lar)
-bu yüzden connector'dan önce (PreSync) yaratılmalı — hem Bronze hem
-Silver, ikisi de connector'dan önce. Secret MATERYALİ PR'a ASLA girmez —
-connector CR secret'a ada göre referans verir (secret out-of-band /
-ExternalSecret ile sağlanır; mevcut secrets.mode modeli).
+Sink auto-create doesn't set an identifier → upsert degrades to append-only;
+the table(s) must therefore be created before the connector (PreSync) — both
+Bronze and Silver, both before the connector. Secret MATERIAL NEVER enters
+the PR — the connector CR references the secret by name (the secret is
+provisioned out-of-band / via ExternalSecret; the existing secrets.mode model).
 """
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ from app.models import ColumnSpec, SourceSpec
 from app.services import render_service
 from app.services.iceberg_service import BRONZE_METADATA_COLS
 
-# images/iceberg-tools — PreSync Job imajı. Prod'da <registry>/lakehouse/... ile
-# override edilir (POC-DOĞRULA).
+# images/iceberg-tools — the PreSync Job image. Overridden in prod with
+# <registry>/lakehouse/... (VERIFY FOR POC).
 ICEBERG_TOOLS_IMAGE = (
     "image-registry.openshift-image-registry.svc:5000/lakehouse/iceberg-tools:latest"
 )
@@ -43,8 +43,9 @@ def _cm_name(ice_namespace: str, target_table: str) -> str:
 
 
 def resolve_identifier(spec: SourceSpec) -> List[str]:
-    """Iceberg pre-create identifier (PK). AddSourceOrchestrator._resolve_identifier
-    ile aynı öncelik: spec.identifier → mongo `_id` → scheduled incrementing_col."""
+    """Identifier (PK) for the Iceberg pre-create step. Same priority as
+    AddSourceOrchestrator._resolve_identifier: spec.identifier -> mongo `_id`
+    -> scheduled incrementing_col."""
     if spec.identifier:
         return list(spec.identifier)
     if spec.type == "mongo":
@@ -93,7 +94,7 @@ def render_descriptor_configmap(
                 "argocd.argoproj.io/hook-delete-policy": "BeforeHookCreation",
             },
         },
-        # sort_keys=False: layer/identifier/columns okunası sırada kalsın (PR diff).
+        # sort_keys=False: keep layer/identifier/columns in a readable order (PR diff).
         "data": {"descriptor.yaml": yaml.safe_dump(descriptor, sort_keys=False)},
     }
 
@@ -160,8 +161,9 @@ def render_precreate_job(
 
 
 def _with_namespace(manifest: Dict[str, Any], namespace: str) -> Dict[str, Any]:
-    # render_service CR'ları namespace'i apply anında alır (metadata.namespace
-    # yok); GitOps dosyaları kendi-yeterli olmalı → burada set edilir.
+    # render_service's CRs pick up the namespace at apply time (no
+    # metadata.namespace); GitOps files must be self-sufficient -> it's set
+    # here instead.
     manifest.setdefault("metadata", {})["namespace"] = namespace
     return manifest
 

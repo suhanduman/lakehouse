@@ -3,12 +3,12 @@ templates:
   - templates/06-trino-ha.yaml
   - templates/00-s3-trust-bundle.yaml
 tests:
-  # S3 trust bundle — gated: varsayılan KAPALI → hiç doküman yok.
+  # S3 trust bundle — gated: default is OFF → no document at all.
   - it: s3 trust-bundle ConfigMap is not rendered by default
     template: templates/00-s3-trust-bundle.yaml
     asserts:
       - hasDocuments: {count: 0}
-  # Etkin + openshiftInject → ConfigMap + inject etiketi.
+  # Enabled + openshiftInject → ConfigMap + inject label.
   - it: s3 trust-bundle ConfigMap renders with OpenShift inject label when enabled
     template: templates/00-s3-trust-bundle.yaml
     set:
@@ -21,17 +21,17 @@ tests:
   # restricted-v2 securityContext — etkinken Trino coordinator pod+container.
   - it: trino coordinator gets restricted-v2 securityContext when enabled
     template: templates/06-trino-ha.yaml
-    # metadata.name=trino-coordinator hem Service hem Deployment'ta var → belirsiz.
-    # Deployment'a özgü bir yolla seç: yalnızca coordinator Deployment'ında
-    # spec.template.metadata.labels.role bulunur.
+    # metadata.name=trino-coordinator exists on both the Service and the Deployment → ambiguous.
+    # Select via a Deployment-specific path instead: only the coordinator Deployment
+    # has spec.template.metadata.labels.role.
     documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}
     set:
       global.security.restrictedSecurityContext: true
     asserts:
       - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
       - equal: {path: spec.template.spec.securityContext.seccompProfile.type, value: RuntimeDefault}
-  # S3-CA truststore — etkinken Trino jvm.config'e -Djavax.net.ssl.trustStore
-  # eklenir (init-container s3-trust-init cacerts'i kurar; referans wiring).
+  # S3-CA truststore — when enabled, -Djavax.net.ssl.trustStore is added to
+  # Trino's jvm.config (the s3-trust-init init-container installs cacerts; reference wiring).
   - it: trino jvm.config gets the S3 truststore JVM flag when s3TrustBundle enabled
     template: templates/06-trino-ha.yaml
     documentSelector: {path: metadata.name, value: trino-config}
@@ -41,7 +41,7 @@ tests:
       - matchRegex:
           path: data["jvm.config"]
           pattern: 'javax\.net\.ssl\.trustStore=/work/s3-trust/cacerts'
-      # NOT: container-level securityContext (drop ALL caps + allowPrivilegeEscalation:
-      # false) da render edilir — helm-unittest `containers[0]` index yolu bu
-      # şablonda "multiple indexes found" verdiğinden burada assert edilmiyor;
-      # render doğrulaması: `helm template --set ...restrictedSecurityContext=true`.
+      # NOTE: the container-level securityContext (drop ALL caps + allowPrivilegeEscalation:
+      # false) also renders — not asserted here because helm-unittest's `containers[0]`
+      # index path yields "multiple indexes found" in this template; render
+      # verification instead: `helm template --set ...restrictedSecurityContext=true`.

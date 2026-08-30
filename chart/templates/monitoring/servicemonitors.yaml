@@ -1,4 +1,4 @@
-# chart/templates/monitoring/servicemonitors.yaml — D1 (İzleme/Monitoring).
+# chart/templates/monitoring/servicemonitors.yaml — D1 (Monitoring).
 #
 # ServiceMonitors ONLY for targets that expose HTTP metrics via a real
 # in-cluster `kind: Service` — trino, nessie, apicurio, console. Kafka and

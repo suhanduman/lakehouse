@@ -84,8 +84,8 @@ Dict keys:
 {{- end }}
 {{- $oidcSecretKey := default "client-secret" .oidcSecretKey -}}
 {{- $groupRolesMap := printf "%s:admin,\\\n      %s:analyst,\\\n      %s:student\"" $ctx.Values.zeppelin.ad.groups.admin $ctx.Values.zeppelin.ad.groups.analyst $ctx.Values.zeppelin.ad.groups.student -}}
-# Spark binary image içinde geldiği için ayrı bir cache PVC gerekmez.
-# Notebook'ların paylaşımlı home'u — birden fazla replica için RWX.
+# No separate cache PVC needed since it ships baked into the Spark binary image.
+# Shared home for notebooks — RWX so it works across multiple replicas.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -104,7 +104,7 @@ spec:
 {{- end }}
 ---
 {{- if $ctx.Values.zeppelin.ad.bindPassword }}
-# AD bind (service account) secret şablonu -- rendered ONLY when a real
+# AD bind (service account) secret template -- rendered ONLY when a real
 # `zeppelin.ad.bindPassword` is explicitly supplied (dev/test convenience).
 # Default is empty: in that case this Secret is NOT rendered at all, and the
 # SAME name/keys (referenced by the Deployment's `secretKeyRef`s below
@@ -118,7 +118,7 @@ metadata:
   namespace: {{ include "lakehouse.namespace" $ctx }}
 type: Opaque
 stringData:
-  # Salt-okuma hakkına sahip AD service account:
+  # Read-only AD service account:
   #   CN=svc-lakehouse-ad,OU=Service Accounts,DC=example,DC=com
   bind-dn: {{ $ctx.Values.zeppelin.ad.bindDn | quote }}
   bind-password: {{ $ctx.Values.zeppelin.ad.bindPassword | quote }}
@@ -230,7 +230,7 @@ metadata:
 data:
   shiro.ini: |
     [main]
-    # AD realm — LDAPS (port 636) + TLS; AD sertifikası Zeppelin truststore'da
+    # AD realm — LDAPS (port 636) + TLS; AD certificate is in Zeppelin's truststore
     activeDirectoryRealm = org.apache.zeppelin.realm.ActiveDirectoryGroupRealm
     activeDirectoryRealm.systemUsername = ${AD_BIND_DN}
     activeDirectoryRealm.systemPassword = ${AD_BIND_PASSWORD}
@@ -238,14 +238,14 @@ data:
     activeDirectoryRealm.url = ${AD_URL}
     activeDirectoryRealm.principalSuffix = {{ $ctx.Values.zeppelin.ad.principalSuffix }}
 
-    # AD group DN → Zeppelin role eşlemesi
+    # AD group DN → Zeppelin role mapping
     activeDirectoryRealm.groupRolesMap = "\
       {{ $groupRolesMap }}
 
     cacheManager = org.apache.shiro.cache.MemoryConstrainedCacheManager
     securityManager.cacheManager = $cacheManager
     sessionManager = org.apache.shiro.web.session.mgt.DefaultWebSessionManager
-    sessionManager.globalSessionTimeout = {{ $ctx.Values.zeppelin.ad.sessionTimeoutMs | int64 }}   # {{ div $ctx.Values.zeppelin.ad.sessionTimeoutMs 3600000 }} saat
+    sessionManager.globalSessionTimeout = {{ $ctx.Values.zeppelin.ad.sessionTimeoutMs | int64 }}   # {{ div $ctx.Values.zeppelin.ad.sessionTimeoutMs 3600000 }} hours
     securityManager.sessionManager = $sessionManager
     securityManager.realms = $activeDirectoryRealm
 
@@ -263,10 +263,11 @@ data:
     /api/credential/** = authc
     /** = authc
 ---
-# Spark interpreter config — spark.yaml ile aynı iki catalog + hadoop-aws.
-# 05-spark-operator.yaml'daki paylaşılan `spark-defaults` ConfigMap ile KASITLI
-# olarak AYRI (bu, Kafka connector paketini içermez — Zeppelin interaktif
-# notebook, streaming job değil; kaynak manifestteki fark korunur).
+# Spark interpreter config — same two catalogs + hadoop-aws as spark.yaml.
+# DELIBERATELY SEPARATE from the shared `spark-defaults` ConfigMap in
+# 05-spark-operator.yaml (this one does not include the Kafka connector
+# package — Zeppelin is an interactive notebook, not a streaming job; the
+# difference from the source manifest is preserved).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -348,7 +349,7 @@ spec:
       securityContext:
         {{- $psc | nindent 8 }}
       {{- end }}
-      # Spark image'a gömülü olduğu için initContainers yok.
+      # No initContainers needed since Spark ships baked into the image.
 {{- if $nessieOAuth }}
       # Shared instance with Nessie machine-auth on (Task 6; ALSO carries the
       # unified sandbox catalog's OAuth2 secret when `sandboxWrite`, Task 5):

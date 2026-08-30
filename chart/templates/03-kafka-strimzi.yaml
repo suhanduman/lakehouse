@@ -1,8 +1,8 @@
-# Strimzi Kafka (KRaft mode, node pools) — Kafka omurgası (backbone). Only
+# Strimzi Kafka (KRaft mode, node pools) — the Kafka backbone. Only
 # parameterized (version/replicas/storage sizing/topic partition+RF/external
 # listener type) + made namespace-aware. Gated by `.Values.components.kafka`.
 #
-# Strimzi Operator OperatorHub'dan önceden kurulu olmalı. KRaft = ZooKeeper yok.
+# The Strimzi Operator must already be installed via OperatorHub. KRaft = no ZooKeeper.
 #
 # LOAD-BEARING (do NOT change without re-reading spec §10 + sub-project A/B):
 #   - listener `tls` (9093): tls: true + authentication.type: scram-sha-512
@@ -18,15 +18,16 @@
 #   - `default.replication.factor: 3` / `min.insync.replicas: 2` cluster
 #     config, and RF=3 on every KafkaTopic below.
 #
-# Kafka cluster adı SABİT "kafka" kalır (parametreleştirilmez) — Strimzi
-# operatörü bu isimden `kafka-kafka-bootstrap` Service'ini üretir; bu isim
-# `_helpers.tpl`'deki `lakehouse.svc.kafkaBootstrap` helper'ının ürettiği
-# değerle birebir eşleşmek ZORUNDA (bkz. helper dosyasının header yorumu +
-# chart/scripts/helm-check.py'nin Kafka-farkında servis-kapanış kontrolü).
+# The Kafka cluster name STAYS FIXED as "kafka" (not parameterized) — the
+# Strimzi operator generates the `kafka-kafka-bootstrap` Service from this
+# name; this name MUST match exactly the value produced by the
+# `lakehouse.svc.kafkaBootstrap` helper in `_helpers.tpl` (see that helper's
+# header comment + chart/scripts/helm-check.py's Kafka-aware
+# service-closure check).
 #
-# KAPSAM NOTU: `KafkaUser/spark-nginx` bu dosyada DEĞİL — o
-# prod-manifests/14-nginx-ingest/spark-nginx-streaming.yaml'da tanımlı ve
-# 14-nginx-ingest.yaml kapsamında migrate edilecek.
+# SCOPE NOTE: `KafkaUser/spark-nginx` is NOT in this file — it's defined in
+# prod-manifests/14-nginx-ingest/spark-nginx-streaming.yaml and will be
+# migrated as part of 14-nginx-ingest.yaml's scope.
 {{- if .Values.components.kafka }}
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaNodePool
@@ -99,17 +100,17 @@ spec:
     # compatibility contract.
     metadataVersion: {{ .Values.versions.kafkaMetadata | quote }}
     listeners:
-    - name: plain                    # iç plaintext (cluster içi)
+    - name: plain                    # internal plaintext (cluster-internal)
       port: 9092
       type: internal
       tls: false
-    - name: tls                      # iç TLS + SCRAM auth (spec §10: SCRAM+TLS)
+    - name: tls                      # internal TLS + SCRAM auth (spec §10: SCRAM+TLS)
       port: 9093
       type: internal
       tls: true
       authentication:
         type: scram-sha-512
-    - name: external                 # dış erişim — OpenShift Route + SCRAM
+    - name: external                 # external access — OpenShift Route + SCRAM
       port: 9094
       type: {{ .Values.kafka.externalListenerType }}
       tls: true
@@ -241,7 +242,7 @@ spec:
     retention.ms: 604800000
     compression.type: zstd
 ---
-# Kafka Connect internal topic'leri (config/offset/status) — RF=3.
+# Kafka Connect internal topics (config/offset/status) — RF=3.
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaTopic
 metadata:
@@ -275,7 +276,7 @@ spec:
   replicas: {{ .Values.kafka.topics.connectStatus.replicas }}
   config: {cleanup.policy: compact}
 ---
-# Ingest omurgası KafkaUser'ları (SCRAM-SHA-512 + ACL).
+# Ingest backbone KafkaUsers (SCRAM-SHA-512 + ACL).
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaUser
 metadata: {name: connect, namespace: {{ include "lakehouse.namespace" . }}, labels: {strimzi.io/cluster: kafka}}
@@ -329,7 +330,7 @@ data:
   kafka-metrics-config.yml: |
     lowercaseOutputName: true
     rules:
-      # Broker/topic başına mesaj & bayt hızı, consumer lag, request süreleri.
+      # Per-broker/topic message & byte rate, consumer lag, request durations.
       - pattern: kafka.server<type=(.+), name=(.+)PerSec\w*, topic=(.+)><>Count
         name: kafka_server_$1_$2_total
         type: COUNTER

@@ -1,34 +1,35 @@
-# OpenShift Routes + cert-manager entegrasyonu. Only parameterized + made
+# OpenShift Routes + cert-manager integration. Only parameterized + made
 # namespace-aware. Gated by `.Values.components.routesTls`.
 #
-# Prod'da her public UI ayrı bir Route ile HTTPS üzerinde servis edilir.
+# In prod, each public UI is served over HTTPS via its own separate Route.
 #
-# Host tutarlılığı (task brief kabul kriteri): her Route'un `spec.host`'u
-# `lakehouse.routeHost` helper'ından (_helpers.tpl) üretilir, `.Values.global.
-# domain`'e bağlı — Keycloak'ın OIDC client redirect URI'leri
-# (chart/templates/10-keycloak.yaml) de AYNI helper'dan AYNI mantıksal isimle
-# üretilir, böylece bir Route'un host'u ile o UI'nin OIDC redirect host'u
-# asla ayrışamaz.
+# Host consistency (task brief acceptance criterion): every Route's
+# `spec.host` is generated from the `lakehouse.routeHost` helper
+# (_helpers.tpl), tied to `.Values.global.domain` — Keycloak's OIDC client
+# redirect URIs (chart/templates/10-keycloak.yaml) are generated from the
+# SAME helper with the SAME logical name, so a Route's host and that UI's
+# OIDC redirect host can never drift apart.
 #
-# Ek gate (bu task): `lakehouse.isOpenShift` (`.Values.platform`) — bu
-# dosyanın TAMAMI yalnızca `platform: openshift` iken render edilir; vanilla
-# eşleniği chart/templates/08b-ingress-tls.yaml'da (`networking.k8s.io/v1`
-# Ingress, AYNI components.* gate'leri + AYNI lakehouse.routeHost helper'ı).
+# Extra gate (this task): `lakehouse.isOpenShift` (`.Values.platform`) —
+# this ENTIRE file only renders when `platform: openshift`; its vanilla
+# counterpart is chart/templates/08b-ingress-tls.yaml (`networking.k8s.io/v1`
+# Ingress, the SAME components.* gates + the SAME lakehouse.routeHost helper).
 #
-# DANGLING-ROUTE GATING (spec §3.1/§8 Route-referans kapalılığı):
-# `superset`/`jupyter`/`ai-ui` Route'ları backing Deployment/Service'i OLMAYAN
-# follow-up bileşenlere işaret ediyor (Superset+JupyterHub alt-proje D'de,
-# AI ise `prod-manifests/optional/07-ai-gpu.yaml`'da — bu Helm paketleme
-# planının HİÇBİR task'ında chart template'e taşınmıyor; plan: "prod'da AI
-# yok"). Bu yüzden ÜÇÜ DE kendi `.Values.components.{superset,jupyter,ai}`
-# flag'i arkasında (hepsi varsayılan false, `.Values.components.routesTls`'den
-# bağımsız ikinci switch'ler) — prod'da render OLMAZ, backing Service'i
-# olmayan dangling bir Route oluşmaz. helm-check.py'nin --service-closure
-# kontrolü artık Route `spec.to.name` hedeflerini de doğruluyor;
-# bu gate'ler sayesinde o kontrol whitelist-istisnasına gerek kalmadan
-# gerçekten kapalıdır. İlgili bileşen chart'a taşındığında flag true'ya
-# alınır + backing Service üretilir. Bkz. chart/templates/10-keycloak.yaml'daki
-# aynı `.Values.components.ai` gate'inin `ai-ui` OIDC client'ı.
+# DANGLING-ROUTE GATING (spec §3.1/§8 Route-reference closure):
+# the `superset`/`jupyter`/`ai-ui` Routes point at follow-up components that
+# have NO backing Deployment/Service (Superset+JupyterHub are in sub-project
+# D, and AI lives in `prod-manifests/optional/07-ai-gpu.yaml` — it is not
+# being moved into a chart template in ANY task of this Helm-packaging
+# plan; the plan is: "no AI in prod"). This is why ALL THREE sit behind
+# their own `.Values.components.{superset,jupyter,ai}` flag (all default
+# false, second switches independent of `.Values.components.routesTls`) —
+# they do NOT render in prod, so no dangling Route without a backing
+# Service is created. helm-check.py's --service-closure check now also
+# validates Route `spec.to.name` targets; thanks to these gates that check
+# is genuinely closed, with no need for a whitelist exception. When the
+# relevant component is moved into the chart, the flag is flipped to true
+# and the backing Service is produced. See the `ai-ui` OIDC client under
+# the same `.Values.components.ai` gate in chart/templates/10-keycloak.yaml.
 {{- if and .Values.components.routesTls (include "lakehouse.isOpenShift" .) }}
 ---
 # Trino — SQL endpoint + OAuth2 callback
@@ -51,8 +52,8 @@ spec:
     insecureEdgeTerminationPolicy: Redirect
 {{- if .Values.components.ai }}
 ---
-# AI Text-to-SQL UI (Streamlit) — bkz. dosya header notu (`components.ai`
-# gate'i, `text-to-sql-ui` Service'i bu chart'ta üretilmiyor).
+# AI Text-to-SQL UI (Streamlit) — see the file header note (`components.ai`
+# gate; the `text-to-sql-ui` Service is not produced by this chart).
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -72,7 +73,7 @@ spec:
     insecureEdgeTerminationPolicy: Redirect
 {{- end }}
 ---
-# Nessie REST Catalog (opsiyonel: dış client'lar / federated catalog)
+# Nessie REST Catalog (optional: external clients / federated catalog)
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -92,12 +93,12 @@ spec:
     insecureEdgeTerminationPolicy: Redirect
 {{- if .Values.components.superset }}
 ---
-# Superset BI — Deployment/Service bu paketta tanımlı DEĞİL (follow-up
-# bileşen, alt-proje D). Route bu yüzden `.Values.components.superset`
-# arkasında (varsayılan false): prod'da render OLMAZ, backing Service'i
-# olmayan dangling bir Route oluşmaz (Route-referans kapalılığı).
-# Superset chart'a taşındığında bu flag true'ya alınır + `superset` Service'i
-# üretilir.
+# Superset BI — Deployment/Service is NOT defined in this package (follow-up
+# component, sub-project D). The Route therefore sits behind
+# `.Values.components.superset` (default false): it does NOT render in
+# prod, so no dangling Route without a backing Service is created
+# (Route-reference closure). When Superset is moved into the chart, this
+# flag is flipped to true and the `superset` Service is produced.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -118,9 +119,9 @@ spec:
 {{- end }}
 {{- if .Values.components.zeppelin }}
 ---
-# Apache Zeppelin (chart/templates/09-zeppelin.yaml ile deploy edildi).
-# components.zeppelin gate'i: zeppelin kapalıyken backing Service'i olmayan
-# dangling bir Route kalmasın (superset/jupyter/ai ile aynı desen).
+# Apache Zeppelin (deployed via chart/templates/09-zeppelin.yaml).
+# components.zeppelin gate: prevents a dangling Route without a backing
+# Service when zeppelin is disabled (same pattern as superset/jupyter/ai).
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -142,9 +143,10 @@ spec:
 {{- if .Values.components.sparkHistory }}
 ---
 # Spark History Server (Consumption slice d, chart/templates/21-spark-history.
-# yaml). `components.sparkHistory` gate'i — backing `spark-history` Service
-# bu chart'ta üretiliyor (Task 3), bu yüzden diğer follow-up bileşenlerin
-# aksine dangling bir Route DEĞİL, sadece flag kapalıyken (varsayılan) skip.
+# yaml). `components.sparkHistory` gate — the backing `spark-history`
+# Service IS produced by this chart (Task 3), so unlike the other follow-up
+# components this is NOT a dangling Route, just a skip while the flag is
+# off (default).
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -165,11 +167,11 @@ spec:
 {{- end }}
 {{- if .Values.components.jupyter }}
 ---
-# JupyterHub (çoklu kullanıcı notebook) — Deployment/Service bu paketta
-# tanımlı DEĞİL (follow-up bileşen, alt-proje D). Route bu yüzden
-# `.Values.components.jupyter` arkasında (varsayılan false): prod'da render
-# OLMAZ, backing Service'i (`jupyterhub-proxy`) olmayan dangling bir Route
-# oluşmaz (Route-referans kapalılığı).
+# JupyterHub (multi-user notebook) — Deployment/Service is NOT defined in
+# this package (follow-up component, sub-project D). The Route therefore
+# sits behind `.Values.components.jupyter` (default false): it does NOT
+# render in prod, so no dangling Route without a backing Service
+# (`jupyterhub-proxy`) is created (Route-reference closure).
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -190,9 +192,9 @@ spec:
 {{- end }}
 {{- end }}
 
-# NOT: Superset + JupyterHub Deployment/Service şablonları bu paketin
-# kapsamı dışında (kaynak manifestteki AYNI not). Referans:
+# NOTE: the Superset + JupyterHub Deployment/Service templates are out of
+# scope for this package (SAME note as in the source manifest). Reference:
 #   - Superset Helm:   https://github.com/apache/superset/tree/master/helm
 #   - JupyterHub Z2J:  https://zero-to-jupyterhub.readthedocs.io/
-# HA deploy pattern bu chart'taki Nessie/Trino şablonlarıyla aynı
-# prensipleri takip eder (OIDC + RWX PVC + HPA + Pod anti-affinity).
+# The HA deploy pattern follows the SAME principles as the Nessie/Trino
+# templates in this chart (OIDC + RWX PVC + HPA + Pod anti-affinity).

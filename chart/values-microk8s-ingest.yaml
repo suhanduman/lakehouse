@@ -1,5 +1,5 @@
-# İngest e2e testi (F) — bellek-minimal, tek-node, no-auth. values-microk8s.yaml
-# ÜSTÜNE uygulanır: helm ... -f values-microk8s.yaml -f values-microk8s-ingest.yaml
+# Ingest e2e test (F) — memory-minimal, single-node, no-auth. Applied ON TOP OF
+# values-microk8s.yaml: helm ... -f values-microk8s.yaml -f values-microk8s-ingest.yaml
 #
 # values-microk8s.yaml's kafka.nodePools comment explains WHY that overlay
 # keeps Kafka at 3 brokers/3 controllers even on a memory-starved node: the
@@ -11,8 +11,8 @@
 # `kafka.replication.*`), so THIS overlay can now also drop broker/controller
 # replicas to 1 — the memory-minimal shape the ingest e2e test needs.
 components:
-  kafkaConnect: true            # F: Connect gerekli
-  sparkOperator: false          # ileride açılır
+  kafkaConnect: true            # F: Connect required
+  sparkOperator: false          # enabled later
   monitoring: false
   keycloak: false
   console: false
@@ -20,11 +20,11 @@ components:
   routesTls: false
   zeppelin: false
 # sparkOperator itself stays disabled here (components.sparkOperator: false,
-# ileride açılır) — these sizing overrides just pre-shrink silver-merge for
+# enabled later) — these sizing overrides just pre-shrink silver-merge for
 # this memory-minimal node once that gate flips.
 sparkOperator:
   maintenance:
-    bronzeRetentionDays: 7        # kısa TTL: bellek-minimal test node'unda Bronze hızlı temizlensin
+    bronzeRetentionDays: 7        # short TTL: let Bronze get cleaned up quickly on the memory-minimal test node
   silverMerge:
     driver: {memory: "768m"}
     executor: {memory: "768m"}
@@ -35,49 +35,49 @@ kafka:
   nodePools:
     controller: {replicas: 1}
     broker: {replicas: 1}
-  replication:                  # tek-broker → hepsi 1
+  replication:                  # single broker → everything set to 1
     offsetsTopic: 1
     txnStateLog: 1
     txnStateLogMinIsr: 1
     default: 1
     minInsync: 1
-  topics:                       # iç Connect + demo topic replica'ları 1
+  topics:                       # internal Connect + demo topic replicas are 1
     connectConfigs: {replicas: 1}
     connectOffsets: {replicas: 1}
     connectStatus: {replicas: 1}
     nginxAccess: {replicas: 1}
     lmsEvents: {replicas: 1}
 kafkaConnect:
-  replicas: 1                         # bellek: tek Connect worker (default 2 → ~4Gi)
-  # Önceden-build edilmiş imaj (images/connect/Dockerfile) — microk8s registry'ye
-  # import/push edilir. spec.image kullanılır (in-cluster build YOK). Apache
-  # Iceberg sink runtime kaynaktan derlenip bake edilir (indirilebilir binary yok).
+  replicas: 1                         # memory: single Connect worker (default 2 → ~4Gi)
+  # Pre-built image (images/connect/Dockerfile) — imported/pushed to the
+  # microk8s registry. spec.image is used (NO in-cluster build). The Apache
+  # Iceberg sink runtime is compiled from source and baked in (no downloadable binary).
   image: "192.168.2.5:32000/connect-lakehouse:1.1"
-  internalTopicReplicationFactor: 1   # tek-broker → Connect iç topic'leri RF=1
+  internalTopicReplicationFactor: 1   # single broker → Connect internal topics RF=1
   build:
-    # microk8s container-registry addon (insecure, in-cluster). Bu Strimzi
-    # build'i Buildah kullanır (v1 / Strimzi 0.51 default builder) — registry'ye
-    # auth'suz push eder → pushSecret YOK; --tls-verify=false ile TLS'siz push
-    # (Buildah insecure-registry bayrağı; Kaniko'nun --insecure/--skip-tls-verify
-    # bayrakları DEĞİL). imaj adı `<global.imageRegistry>/connect-lakehouse:<tag>`
-    # (global.imageRegistry aşağıda registry svc'ye işaret eder).
+    # microk8s container-registry addon (insecure, in-cluster). This Strimzi
+    # build uses Buildah (v1 / Strimzi 0.51 default builder) — it pushes to the
+    # registry without auth → pushSecret is NOT SET; pushes without TLS via
+    # --tls-verify=false (this is Buildah's insecure-registry flag; NOT Kaniko's
+    # --insecure/--skip-tls-verify flags). The image name is `<global.imageRegistry>/connect-lakehouse:<tag>`
+    # (global.imageRegistry below points to the registry svc).
     pushSecret: ""
     # Strimzi 0.51 default builder = KANIKO (build log: "Unpacking rootfs").
-    # İnsecure HTTP registry'ye push için Kaniko executor bayrakları
-    # additionalBuildOptions'a konur (Buildah'ın --tls-verify=false'i DEĞİL).
+    # To push to an insecure HTTP registry, the Kaniko executor flags go into
+    # additionalBuildOptions (NOT Buildah's --tls-verify=false).
     additionalBuildOptions:
       - "--insecure"
       - "--skip-tls-verify"
 trino:
-  worker: {replicas: 0}         # yalnız coordinator
-  includeCoordinator: true      # worker=0 → coordinator sorguları kendi çalıştırmalı
+  worker: {replicas: 0}         # coordinator only
+  includeCoordinator: true      # worker=0 → the coordinator must run queries itself
   jvm:
-    g1HeapRegionSize: "16M"     # tek-node/bellek-minimal: coordinator heap 32GB'ın çok altında
-# Connect build imajı microk8s registry addon'una (NodePort 32000) push edilir.
-# NODE IP:NodePort kullanılır çünkü: (a) Kaniko build pod'u node IP'ye
-# routable (svc DNS'i node'un containerd'si pull sırasında çözemez); (b) node'un
-# containerd'si aynı NodePort'a localhost=192.168.2.5:32000 ile erişir. containerd
-# bu adresi insecure olarak tanıyacak şekilde ayarlanır (node certs.d hosts.toml).
-# NOT: 192.168.2.5 bu multipass VM'inin IP'si (test-özgü; prod OpenShift iç registry).
+    g1HeapRegionSize: "16M"     # single-node/memory-minimal: coordinator heap is well below 32GB
+# The Connect build image is pushed to the microk8s registry addon (NodePort 32000).
+# NODE IP:NodePort is used because: (a) the Kaniko build pod can route to the
+# node IP (the node's containerd cannot resolve the svc DNS during pull); (b) the
+# node's containerd reaches that same NodePort via localhost=192.168.2.5:32000. containerd
+# is configured to treat this address as insecure (node certs.d hosts.toml).
+# NOTE: 192.168.2.5 is this multipass VM's IP (test-specific; prod uses the OpenShift internal registry).
 global:
   imageRegistry: "192.168.2.5:32000"

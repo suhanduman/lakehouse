@@ -1,4 +1,4 @@
-# chart/templates/monitoring/grafana.yaml — D1 (İzleme/Monitoring).
+# chart/templates/monitoring/grafana.yaml — D1 (Monitoring).
 #
 # Grafana (open-source) as the visualization layer over OpenShift
 # user-workload-monitoring (UWM). Grafana does NOT run its own Prometheus:
@@ -292,7 +292,7 @@ spec:
 # Gated on `components.routesTls` (same lever as chart/templates/
 # 08-routes-tls.yaml) AND `lakehouse.isOpenShift` (`.Values.platform`):
 # OpenShift Routes (route.openshift.io) only exist on OpenShift. On
-# `platform: vanilla` (Route-less cluster) the rest of the İzleme stack
+# `platform: vanilla` (Route-less cluster) the rest of the monitoring stack
 # (Grafana Deployment/Service, ServiceMonitors, PrometheusRule) still
 # installs; Grafana's vanilla equivalent Ingress renders in
 # chart/templates/08b-ingress-tls.yaml instead. Default true in

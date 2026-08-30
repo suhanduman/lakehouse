@@ -37,10 +37,10 @@ global:
   # starts consuming it.
   imageRegistry: image-registry.openshift-image-registry.svc:5000/lakehouse-images
 
-  # Prod hardening AÇIK (OpenShift). restricted-v2 SCC + PSA-restricted uyumlu
-  # securityContext + S3 Internal-CA trust bundle (OpenShift
-  # trusted-CA injection). microk8s overlay'lerinde KAPALI kalır. Ayrıntı +
-  # per-bileşen JVM truststore runbook: gitops/README.md "Prod hardening".
+  # Prod hardening is ON (OpenShift). restricted-v2 SCC + PSA-restricted
+  # compliant securityContext + S3 Internal-CA trust bundle (OpenShift
+  # trusted-CA injection). Stays OFF in microk8s overlays. Details +
+  # per-component JVM truststore runbook: gitops/README.md "Prod hardening".
   security:
     restrictedSecurityContext: true
     s3TrustBundle:
@@ -376,12 +376,13 @@ sparkOperator:
 # Kafka Connect — see chart/templates/12-kafka-connect.yaml.
 kafkaConnect:
   replicas: 2
-  # PROD, ZORUNLU: önceden-build edilmiş Connect imajı. spec.build yolu Iceberg
-  # sink runtime'ını İNDİREMEZ (Apache indirilebilir binary yayınlamıyor; Tabular
-  # fork arşivde). images/connect/Dockerfile ile bir kez build
-  # edip OpenShift iç registry'ye push edin, sonra bu değeri o imaja işaret ettirin.
-  # Boş bırakılırsa spec.build devreye girer ve iceberg-sink plugin indirmesi 404
-  # ile patlar. (Test: values-microk8s-ingest.yaml 192.168.2.5:32000/... kullanır.)
+  # PROD, REQUIRED: a pre-built Connect image. The spec.build path CANNOT
+  # download the Iceberg sink runtime (Apache does not publish a downloadable
+  # binary; the Tabular fork is archived). Build it once with
+  # images/connect/Dockerfile, push it to the OpenShift internal registry, then
+  # point this value at that image.
+  # If left empty, spec.build kicks in and the iceberg-sink plugin download
+  # blows up with a 404. (Test: values-microk8s-ingest.yaml uses 192.168.2.5:32000/...)
   image: "image-registry.openshift-image-registry.svc:5000/lakehouse-images/connect-lakehouse:1.0"
   resources:
     requests:
@@ -529,8 +530,8 @@ kafkaUi:
     # field, single source).
     clientSecret: ""
 
-# İzleme (D1): prod'da Grafana OIDC açık, gerçek Thanos endpoint (varsayılan
-# zaten doğru), tüm hedefler açık.
+# Monitoring (D1): in prod, Grafana OIDC is enabled, using a real Thanos
+# endpoint (the default is already correct), all targets enabled.
 monitoring:
   grafana:
     oidc:

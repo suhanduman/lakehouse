@@ -1,20 +1,20 @@
 {{- if and .Values.global.security.s3TrustBundle.enabled .Values.global.security.s3TrustBundle.openshiftInject }}
 # S3 Internal-CA trust bundle (prod hardening) — OpenShift
-# "trusted CA bundle" injection. Bu ConfigMap boş yaratılır ve etiketlenir;
-# OpenShift cluster-network-operator `ca-bundle.crt` anahtarını (sistem CA'ları
-# + cluster additional-trust) OTOMATİK doldurur. S3 endpoint'inin Root CA'sının
-# cluster'ın additional trust'ına (Proxy `trustedCA` / image config) eklenmiş
-# olması gerekir (cluster-admin, tek seferlik).
+# "trusted CA bundle" injection. This ConfigMap is created empty and
+# labeled; the OpenShift cluster-network-operator AUTOMATICALLY fills in
+# the `ca-bundle.crt` key (system CAs + cluster additional-trust). The S3
+# endpoint's Root CA must already be added to the cluster's additional
+# trust (Proxy `trustedCA` / image config) — a one-time, cluster-admin step.
 #
-# Bu bundle, JVM tabanlı S3 istemcilerine (Trino / Nessie / Kafka Connect /
-# Spark) mount edilip truststore'a eklenmelidir — aksi halde HTTPS S3
-# endpoint'ine `SSLHandshakeException`. Per-bileşen JVM truststore wiring
-# (init-container + keytool + -Djavax.net.ssl.trustStore) canlı-OpenShift'e
-# bağlı olduğundan RUNBOOK olarak belgelenmiştir: gitops/README.md
-# "Prod hardening kontrol listesi".
+# This bundle must be mounted into JVM-based S3 clients (Trino / Nessie /
+# Kafka Connect / Spark) and added to their truststore — otherwise the
+# HTTPS S3 endpoint throws `SSLHandshakeException`. Per-component JVM
+# truststore wiring (init-container + keytool + -Djavax.net.ssl.trustStore)
+# depends on live OpenShift, so it's documented as a RUNBOOK instead:
+# gitops/README.md, "Prod hardening checklist".
 #
-# openshiftInject=false ise: bu ConfigMap YARATILMAZ; `configMapName` elle
-# sağlanan (CA PEM içeren) mevcut bir ConfigMap'e işaret etmelidir.
+# If openshiftInject=false: this ConfigMap is NOT created; `configMapName`
+# must point to an existing ConfigMap (containing the CA PEM) provided manually.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,5 +23,5 @@ metadata:
   labels:
     {{- include "lakehouse.labels" . | nindent 4 }}
     config.openshift.io/inject-trusted-cabundle: "true"
-# data BİLİNÇLİ olarak boş — `ca-bundle.crt`'yi OpenShift enjekte eder.
+# data is DELIBERATELY empty — OpenShift injects `ca-bundle.crt`.
 {{- end }}

@@ -35,8 +35,8 @@ CDC_MSSQL_SPEC = SourceSpec(
     target_ns="mssql_ogrenci",
     target_table="students",
     db_host="mssql1.internal",
-    # F: CDC hedef tablosu identifier field ile pre-create edilir; mssql'de PK
-    # fallback yok, açık verilir. columns Iceberg şemasını kurar.
+    # F: the CDC target table is pre-created with the identifier field; for
+    # mssql there is no PK fallback, it must be given explicitly. columns builds the Iceberg schema.
     columns=[ColumnSpec(name="id", type="bigint"), ColumnSpec(name="name", type="varchar")],
     identifier=["id"],
 )
@@ -779,7 +779,7 @@ def test_add_source_is_idempotent_across_two_full_runs():
 
 
 # --------------------------------------------------------------------------
-# Table pre-create step (identifier field ile, connector'dan önce)
+# Table pre-create step (with identifier field, before the connector)
 # --------------------------------------------------------------------------
 
 def test_table_step_precreates_with_identifier_before_connector():
@@ -795,7 +795,7 @@ def test_table_step_precreates_with_identifier_before_connector():
         ("mssql_ogrenci", "students", ("id",), "silver",
          f"s3://{render_service.silver_bucket_name(p)}/warehouse"),
     ]
-    # "table" adımı connector'dan (ve topic'ten) ÖNCE
+    # the "table" step runs BEFORE connector (and topic)
     names = [s.name for s in res.steps]
     assert names.index("table") < names.index("topic") < names.index("connector")
 
@@ -838,13 +838,13 @@ def test_table_step_fails_loud_without_columns():
     res = orch.add_source(spec, CREDS)
     assert res.ok is False
     assert res.steps[-1].name == "table" and res.steps[-1].ok is False
-    # connector/topic hiç uygulanmadı; secret geri alındı
+    # connector/topic never applied; secret rolled back
     assert k8s.applied_connectors == [] and k8s.applied_topics == []
     assert k8s.deleted_secrets == ["mssql1"]
 
 
 def test_table_step_fails_loud_without_identifier_and_no_fallback():
-    # cdc+mssql, identifier YOK ve fallback yok (incrementing_col yok) → fail
+    # cdc+mssql, NO identifier and no fallback (no incrementing_col) → fail
     spec = CDC_MSSQL_SPEC.model_copy(update={"identifier": None})
     orch, *_ = _orch()
     res = orch.add_source(spec, CREDS)
@@ -872,7 +872,7 @@ def test_rollback_on_table_failure_undoes_only_secret():
     res = orch.add_source(CDC_MSSQL_SPEC, CREDS)
     assert res.ok is False
     assert [s.name for s in res.steps] == ["secret", "uniqueness", "bucket", "namespace", "table"]
-    # secret geri alındı; topic/connector hiç uygulanmadı (table connector'dan önce)
+    # secret rolled back; topic/connector never applied (table runs before connector)
     assert k8s.deleted_secrets == ["mssql1"]
     assert k8s.applied_topics == [] and k8s.applied_connectors == []
 

@@ -1,39 +1,39 @@
 # Kafka UI (kafbat-ui — community fork of provectus/kafka-ui, Apache-2.0) —
-# tek pencereden Kafka cluster/topic/consumer-group + Kafka Connect + Apicurio
-# schema registry görünürlüğü. Only parameterized + made namespace-aware.
-# Gated by `.Values.components.kafkaUi`.
-# Kafka UI'nin kendi Route'u burada tanımlı (kaynak manifestte
-# 17-console-routes-oidc.yaml'daydı — bu chart'ta "component dosyası kendi
-# Route'unu taşır" konvansiyonuyla buraya taşındı, bkz.
-# chart/templates/console/routes-oidc.yaml header notu).
+# single-pane-of-glass visibility into Kafka cluster/topic/consumer-group +
+# Kafka Connect + the Apicurio schema registry. Only parameterized + made
+# namespace-aware. Gated by `.Values.components.kafkaUi`.
+# Kafka UI's own Route is defined here (it was in
+# 17-console-routes-oidc.yaml in the source manifest — moved here under
+# this chart's "a component's file carries its own Route" convention, see
+# the header note in chart/templates/console/routes-oidc.yaml).
 #
-# Kafka UI YALNIZCA görüntüleme/işletim aracı: veri düzlemi konfigürasyonu
-# (topic/connector/kaynak tanımları) GİT tek doğruluk kaynağıdır (bkz.
-# 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — Console'un
-# add-source wizard'ının uyguladığı KafkaConnector CR'leri).
+# Kafka UI is ONLY a viewing/ops tool: for the data-plane configuration
+# (topic/connector/source definitions), Git is the single source of truth
+# (see 03-kafka-strimzi.yaml, 12-kafka-connect.yaml, console/ — the
+# KafkaConnector CRs the Console's add-source wizard applies).
 #
-# Servis wiring: Kafka bootstrap `lakehouse.svc.kafkaBootstrap`, Kafka
-# Connect `lakehouse.svc.connect`, Apicurio ccompat `lakehouse.svc.apicurio`
-# — hepsi helper'dan (asla hardcoded).
+# Service wiring: Kafka bootstrap via `lakehouse.svc.kafkaBootstrap`, Kafka
+# Connect via `lakehouse.svc.connect`, Apicurio ccompat via
+# `lakehouse.svc.apicurio` — all from helpers (never hardcoded).
 #
-# `kafka-ui` KafkaUser'ın SCRAM Secret'ı ve `kafka-cluster-ca-cert`
-# Strimzi-yönetimlidir (fixed convention, 12-kafka-connect.yaml'ın `connect`
-# kimlik bilgileriyle aynı desen) — values-driven değil.
+# The `kafka-ui` KafkaUser's SCRAM Secret and `kafka-cluster-ca-cert` are
+# Strimzi-managed (fixed convention, the SAME pattern as the `connect`
+# credentials in 12-kafka-connect.yaml) — not values-driven.
 #
-# POC-DOĞRULA (kaynak manifestten devralınan, kümede doğrulanacak — bkz.
-# prod-manifests/16-kafka-ui.yaml header notu):
-#   - kafbat-ui:v1.5.0 config şeması (kafka.clusters[].properties/ssl/
+# POC-VERIFY (inherited from the source manifest, to be confirmed on the
+# cluster — see the header note in prod-manifests/16-kafka-ui.yaml):
+#   - the kafbat-ui:v1.5.0 config schema (kafka.clusters[].properties/ssl/
 #     schemaRegistry/kafka-connect/auth.oauth2/rbac).
-#   - `ssl.truststore-location: .../ca.p12` — kafka-cluster-ca-cert Secret'ının
-#     PKCS12 `ca.p12`/`ca.password` anahtarları içerdiği varsayımı.
-#   - `SPRING_CONFIG_ADDITIONAL_LOCATION` env adı (altçizgili — relaxed binding).
-#   - `rbac.roles[].subjects[].type: role` (provider: oauth) enum değeri.
-#   - Apicurio ccompat path'i (`/apis/ccompat/v7`).
+#   - `ssl.truststore-location: .../ca.p12` — the assumption that the
+#     kafka-cluster-ca-cert Secret contains the PKCS12 `ca.p12`/`ca.password` keys.
+#   - the `SPRING_CONFIG_ADDITIONAL_LOCATION` env var name (underscored — relaxed binding).
+#   - the `rbac.roles[].subjects[].type: role` (provider: oauth) enum value.
+#   - the Apicurio ccompat path (`/apis/ccompat/v7`).
 {{- if .Values.components.kafkaUi }}
 ---
-# Kafka UI'nin kendi SCRAM kimliği — salt-okunur (Describe/Read); Write/
-# Create/Delete/Alter YOK. Veri düzlemine müdahale (topic/ACL oluşturma,
-# mesaj üretme) bilerek bu ACL setinin dışında tutuldu.
+# Kafka UI's own SCRAM identity — read-only (Describe/Read); NO
+# Write/Create/Delete/Alter. Intervening in the data plane (creating
+# topics/ACLs, producing messages) was deliberately kept out of this ACL set.
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaUser
 metadata:
@@ -52,9 +52,10 @@ spec:
     - {resource: {type: cluster}, operations: [Describe, DescribeConfigs]}
 
 ---
-# -------- Kafka UI config (Spring Boot YAML — kafbat-ui dokümantasyonu env
-# değişkenleri yerine bu dosyayı önerir). `${VAR}` yer tutucuları Spring'in
-# standart env değişkeni interpolasyonu (Trino'daki `${ENV:VAR}`'dan FARKLI). --------
+# -------- Kafka UI config (Spring Boot YAML — the kafbat-ui docs
+# recommend this file over env variables). The `${VAR}` placeholders are
+# Spring's standard env-variable interpolation (DIFFERENT from Trino's
+# `${ENV:VAR}`). --------
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -73,18 +74,18 @@ data:
               org.apache.kafka.common.security.scram.ScramLoginModule required
               username="kafka-ui" password="${KAFKA_UI_SCRAM_PASSWORD}";
           ssl:
-            truststore-location: /mnt/kafka-ca/ca.p12       # POC-DOĞRULA: bkz. dosya başı notu
+            truststore-location: /mnt/kafka-ca/ca.p12       # POC-VERIFY: see the file-header note
             truststore-password: "${KAFKA_CA_TRUSTSTORE_PASSWORD}"
           schemaRegistry: {{ printf "http://%s:8080/apis/ccompat/v7" (include "lakehouse.svc.apicurio" .) | quote }}
           kafka-connect:
             - name: connect
               address: {{ printf "http://%s:8083" (include "lakehouse.svc.connect" .) | quote }}
-      # NOT: connector'ların TEK doğruluk kaynağı, Console'un add-source
-      # wizard'ının (console/backend/app/orchestrator.py) küme'ye uyguladığı
-      # KafkaConnector CR'leridir (bkz. 12-kafka-connect.yaml
-      # `strimzi.io/use-connector-resources`). Aşağıdaki RBAC bilerek
-      # connector'a yalnızca "view" veriyor — Kafka UI'de connector oluşturma
-      # işlevsiz kalır.
+      # NOTE: the SINGLE source of truth for connectors is the
+      # KafkaConnector CRs the Console's add-source wizard
+      # (console/backend/app/orchestrator.py) applies to the cluster (see
+      # 12-kafka-connect.yaml's `strimzi.io/use-connector-resources`). The
+      # RBAC below deliberately grants connectors only "view" — creating a
+      # connector from within Kafka UI is left non-functional.
     auth:
       type: OAUTH2
       oauth2:
@@ -100,16 +101,16 @@ data:
             user-name-attribute: preferred_username
             custom-params:
               type: oauth
-              roles-field: groups             # bkz. 10-keycloak.yaml groups claim mapper
+              roles-field: groups             # see the groups claim mapper in 10-keycloak.yaml
     rbac:
       roles:
-        # AD grup adları 10-keycloak.yaml'daki `groups` (lakehouse-admins/
-        # lakehouse-analysts/lakehouse-students) ile birebir — bkz.
-        # console/backend/app/services/authz.py _GROUP_TO_ROLE ile aynı sözleşme.
+        # The AD group names match `groups` in 10-keycloak.yaml
+        # (lakehouse-admins/lakehouse-analysts/lakehouse-students) exactly
+        # — the SAME contract as console/backend/app/services/authz.py's _GROUP_TO_ROLE.
         - name: lakehouse-admins
           clusters: [{{ include "lakehouse.namespace" . }}]
           subjects:
-          - {provider: oauth, type: role, value: "lakehouse-admins"}   # POC-DOĞRULA: type enum
+          - {provider: oauth, type: role, value: "lakehouse-admins"}   # POC-VERIFY: type enum
           permissions:
           - {resource: applicationconfig, actions: ["view"]}
           - {resource: clusterconfig, actions: ["view"]}
@@ -117,7 +118,7 @@ data:
           - {resource: consumer, value: ".*", actions: ["view"]}
           - {resource: schema, value: ".*", actions: ["view"]}
           - {resource: connect, value: ".*", actions: ["view"]}
-          - {resource: connector, value: ".*", actions: ["view"]}   # salt-okunur — yukarıdaki NOT'a bkz.
+          - {resource: connector, value: ".*", actions: ["view"]}   # read-only — see the NOTE above
         - name: lakehouse-analysts
           clusters: [{{ include "lakehouse.namespace" . }}]
           subjects:
@@ -135,8 +136,8 @@ data:
           - {provider: oauth, type: role, value: "lakehouse-students"}
           permissions:
           - {resource: topic, value: ".*", actions: ["view"]}
-      # Eşleşmeyen (mapsiz) AD grupları/kullanıcıları — varsayılan: hiçbir
-      # şey görünmez (deny-by-default, least-privilege).
+      # Unmatched (unmapped) AD groups/users — default: nothing is visible
+      # (deny-by-default, least-privilege).
       default-role:
         permissions: []
 
@@ -154,9 +155,9 @@ spec:
     metadata:
       labels: {app: kafka-ui}
     spec:
-      # Kafka UI apiserver'a hiç çağrı yapmaz (yalnızca Kafka/Connect/
-      # Apicurio/Keycloak'a HTTP/Kafka protokolü) — özel ServiceAccount/RBAC
-      # gerekmez.
+      # Kafka UI never calls the apiserver at all (only HTTP/Kafka-protocol
+      # calls to Kafka/Connect/Apicurio/Keycloak) — no dedicated
+      # ServiceAccount/RBAC is needed.
       {{- $psc := include "lakehouse.podSecurityContext" . | trim }}
       {{- if $psc }}
       securityContext:
@@ -164,7 +165,7 @@ spec:
       {{- end }}
       containers:
       - name: kafka-ui
-        image: {{ .Values.versions.kafkaUiImage | quote }}   # POC-DOĞRULA: bkz. dosya başı notu
+        image: {{ .Values.versions.kafkaUiImage | quote }}   # POC-VERIFY: see the file-header note
         {{- $csc := include "lakehouse.containerSecurityContext" . | trim }}
         {{- if $csc }}
         securityContext:
@@ -172,15 +173,15 @@ spec:
         {{- end }}
         ports: [{containerPort: 8080, name: http}]
         env:
-        - {name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "/kafka-ui-config/config.yml"}   # POC-DOĞRULA: bkz. dosya başı notu
+        - {name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "/kafka-ui-config/config.yml"}   # POC-VERIFY: see the file-header note
         - {name: KAFKA_UI_SCRAM_PASSWORD, valueFrom: {secretKeyRef: {name: kafka-ui, key: password}}}
         - {name: KAFKA_CA_TRUSTSTORE_PASSWORD, valueFrom: {secretKeyRef: {name: kafka-cluster-ca-cert, key: ca.password}}}
         - {name: OIDC_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.oidc.secretName }}, key: issuer-url}}}
-        - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: kafka-ui-oidc-credentials, key: client-secret}}}  # bkz. chart/templates/console/routes-oidc.yaml
+        - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: kafka-ui-oidc-credentials, key: client-secret}}}  # see chart/templates/console/routes-oidc.yaml
         volumeMounts:
         - {name: kafka-ui-config, mountPath: /kafka-ui-config, readOnly: true}
         - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}
-        readinessProbe: {httpGet: {path: /actuator/health, port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}  # POC-DOĞRULA: actuator path
+        readinessProbe: {httpGet: {path: /actuator/health, port: 8080}, initialDelaySeconds: 20, periodSeconds: 10}  # POC-VERIFY: actuator path
         livenessProbe: {httpGet: {path: /actuator/health, port: 8080}, initialDelaySeconds: 40, periodSeconds: 15}
         resources:
           requests:
@@ -217,12 +218,12 @@ spec:
 
 {{- if include "lakehouse.isOpenShift" . }}
 ---
-# Kafka UI — cert-manager TLS Route (edge; Kafka UI kendi TLS'ini konuşmaz).
-# Host, 10-keycloak.yaml'daki `kafka-ui` OIDC client'ın redirectUris/
-# webOrigins'iyle AYNI `lakehouse.routeHost` helper'ından ("kafka-ui"
-# mantıksal isim) üretilir — host/redirect asla ayrışmaz. Ek gate:
-# `lakehouse.isOpenShift` (`.Values.platform`) — vanilla eşleniği
-# chart/templates/08b-ingress-tls.yaml'da.
+# Kafka UI — cert-manager TLS Route (edge; Kafka UI doesn't speak TLS
+# itself). The host is generated from the SAME `lakehouse.routeHost`
+# helper ("kafka-ui" logical name) as the `kafka-ui` OIDC client's
+# redirectUris/webOrigins in 10-keycloak.yaml — host/redirect can never
+# drift apart. Extra gate: `lakehouse.isOpenShift` (`.Values.platform`) —
+# its vanilla counterpart is chart/templates/08b-ingress-tls.yaml.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:

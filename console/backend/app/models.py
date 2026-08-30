@@ -20,9 +20,10 @@ _RESERVED_SOURCE_NAMES = frozenset({
 
 
 class ColumnSpec(BaseModel):
-    """Iceberg tablo pre-create için kolon tanımı (SourceSpec.columns). `type`
-    kaynak/SQL tip adıdır (IcebergService SQL→Iceberg eşlemesi yapar). identifier
-    (PK) kolonları IcebergService tarafından zaten REQUIRED'e zorlanır."""
+    """Column definition for the Iceberg table pre-create step (SourceSpec.columns).
+    `type` is the source/SQL type name (IcebergService does the SQL->Iceberg
+    mapping). identifier (PK) columns are already forced to REQUIRED by
+    IcebergService."""
 
     name: str
     type: str
@@ -85,11 +86,12 @@ class SourceSpec(BaseModel):
     rabbitmq_uri: Optional[str] = None
     rabbitmq_queue: Optional[str] = None
 
-    # Iceberg tablo pre-create için hedef şema + PK: sink auto-create identifier
-    # koymadığından tablo, connector'dan önce identifier field ile yaratılmalı —
-    # bkz. AddSourceOrchestrator "table" adımı + IcebergService. Console
-    # formu/discovery doldurur; identifier verilmezse orchestrator
-    # `incrementing_col` (scheduled) veya `_id` (mongo) fallback'ini dener.
+    # Target schema + PK for the Iceberg table pre-create step: since sink
+    # auto-create doesn't set an identifier, the table must be created with
+    # the identifier field before the connector -- see AddSourceOrchestrator's
+    # "table" step + IcebergService. Filled in by the Console form/discovery;
+    # if identifier isn't given, the orchestrator falls back to
+    # `incrementing_col` (scheduled) or `_id` (mongo).
     columns: Optional[List[ColumnSpec]] = None
     identifier: Optional[List[str]] = None
 

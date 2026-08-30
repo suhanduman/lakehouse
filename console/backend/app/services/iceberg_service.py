@@ -1,28 +1,29 @@
-"""IcebergService — CDC hedef Iceberg tablolarını *identifier field*
-(equality-delete anahtarı / PK) ile pyiceberg → Nessie REST üzerinden
-pre-create eder.
+"""IcebergService — pre-creates CDC target Iceberg tables with the
+*identifier field* (equality-delete key / PK) via pyiceberg -> Nessie REST.
 
-NEDEN: Iceberg sink'in dinamik-routing auto-create'i tabloyu
-`identifier-field-ids` OLMADAN yaratır → `upsert-enabled` sessizce
-append-only'e düşer ve her CDC UPDATE duplicate satır bırakır. Trino
-identifier field'ı DDL ile SET EDEMEZ; Nessie REST ALTER'ı reddediyor (400)
-— identifier YALNIZCA CREATE anında verilebiliyor. Bu yüzden Console tablo
-yaratımı Trino DDL değil, pyiceberg üzerinden yapılır.
+WHY: the Iceberg sink's dynamic-routing auto-create creates the table
+WITHOUT `identifier-field-ids` -> `upsert-enabled` silently degrades to
+append-only and every CDC UPDATE leaves a duplicate row. Trino CANNOT SET
+the identifier field via DDL; Nessie REST rejects the ALTER (400) --
+identifier can ONLY be given at CREATE time. So the Console creates tables
+via pyiceberg, not Trino DDL.
 
-Çekirdek mantık (tip eşleme + şema + fail-loud) tools/create_iceberg_table.py
-ile AYNIDIR — ikisi senkron tutulmalı (biri değişince diğeri de).
+The core logic (type mapping + schema + fail-loud) is IDENTICAL to
+tools/create_iceberg_table.py -- the two must be kept in sync (a change to
+one means a change to the other).
 
-pyiceberg LAZY import edilir: bu modül pyiceberg kurulu olmadan da import
-edilebilir (unit testler `get_iceberg`'i fake IcebergService ile override eder,
-gerçek pyiceberg yoluna hiç girmez)."""
+pyiceberg is imported LAZILY: this module can be imported even without
+pyiceberg installed (unit tests override `get_iceberg` with a fake
+IcebergService and never touch the real pyiceberg path)."""
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List
 
 
 class IdentifierMismatch(Exception):
-    """Tablo zaten var ama identifier field'ları isteneni karşılamıyor. Router
-    bunu 409'a çevirir — SESSİZCE devam edilmez (append-only bug'ının kaynağı)."""
+    """The table already exists but its identifier fields don't match what was
+    requested. The router turns this into a 409 -- it never proceeds SILENTLY
+    (that's the source of the append-only bug)."""
 
 
 # medallion CDC (tools/create_iceberg_table.py — kept verbatim in sync here;
@@ -59,7 +60,7 @@ _BRONZE_WAREHOUSE = "rawdata"
 _TARGET_FILE_SIZE_BYTES = "268435456"  # 256 MiB — bounds small-file growth; see spec storage note.
 
 
-# JDBC/SQL (Trino tip adları dahil) → kanonik Iceberg tipi. Kalan her şey → string.
+# JDBC/SQL (including Trino type names) -> canonical Iceberg type. Everything else -> string.
 _SQL_TO_ICEBERG = {
     "int": "int", "integer": "int", "smallint": "int", "tinyint": "int", "serial": "int",
     "bigint": "long", "bigserial": "long", "long": "long",
@@ -84,15 +85,15 @@ def _map_sql_type(sql_type: str) -> str:
 
 
 class IcebergService:
-    """`catalog_factory(warehouse=None)` çağrıldığında bir pyiceberg RestCatalog
-    döndürür (deps.py gerçeğini kurar; testler bu servisi tümden fake'ler).
-    `warehouse` verildiğinde (bronze → "rawdata") catalog o Nessie warehouse'a
-    bağlanır — bu, warehouse'un (ve dolayısıyla S3 konumunun) tek geçerli
-    resolve mekanizmasıdır (bkz. tools/create_iceberg_table.py _load_catalog);
-    namespace property olarak "warehouse" stamplemek Nessie tarafından yok
-    sayılır. Her warehouse için lazy + per-warehouse cache'lenir ki authz
-    403'te (sağlayıcı hiç inşa edilmeden) ağ/creds gerekmesin —
-    TrinoService'in conn_factory deseniyle aynı."""
+    """`catalog_factory(warehouse=None)` returns a pyiceberg RestCatalog when
+    called (deps.py wires up the real one; tests fake this service entirely).
+    When `warehouse` is given (bronze -> "rawdata"), the catalog connects to
+    that Nessie warehouse -- this is the ONLY valid mechanism for resolving
+    the warehouse (and hence the S3 location) (see tools/create_iceberg_table.py
+    _load_catalog); stamping "warehouse" as a namespace property is ignored
+    by Nessie. Lazy + cached per warehouse, so that a 403 (before any provider
+    is even constructed) doesn't need network/creds -- same pattern as
+    TrinoService's conn_factory."""
 
     def __init__(self, catalog_factory: Callable[..., Any]) -> None:
         self._catalog_factory = catalog_factory
@@ -128,7 +129,7 @@ class IcebergService:
         fields, name_to_id = [], {}
         for i, col in enumerate(columns, start=1):
             nm = col["name"]
-            # identifier kolonları Iceberg kuralı gereği REQUIRED olmalı.
+            # identifier columns must be REQUIRED per Iceberg's rules.
             required = bool(col.get("required", False)) or nm in id_names
             fields.append(NestedField(i, nm, _to_type(col["type"]), required=required))
             name_to_id[nm] = i
@@ -199,29 +200,30 @@ class IcebergService:
         bucket_count: int = 16,
         write_mode: str = "copy-on-write",
     ) -> str:
-        """Namespace + tabloyu yaratır (idempotent).
+        """Creates the namespace + table (idempotent).
 
-        layer="silver" (default): mevcut davranış — identifier field (PK)
-        ZORUNLU (boşsa fail-loud ValueError), default warehouse, bucket(N, id)
-        per identifier column (`bucket_count`, default 16) + identifier sort
-        order + write.distribution-mode=hash — scale-ready layout so MERGE
-        prunes to the increment's buckets instead of scanning the whole
-        table. `write_mode` (default "copy-on-write") sets the
+        layer="silver" (default): the existing behavior -- identifier field
+        (PK) is REQUIRED (fail-loud ValueError if empty), default warehouse,
+        bucket(N, id) per identifier column (`bucket_count`, default 16) +
+        identifier sort order + write.distribution-mode=hash -- a scale-ready
+        layout so MERGE prunes to the increment's buckets instead of scanning
+        the whole table. `write_mode` (default "copy-on-write") sets the
         write.merge/update/delete.mode trio ("merge-on-read" also
-        supported). Tablo VARSA identifier'ı doğrular; uyuşmazsa
-        IdentifierMismatch fırlatır (fail-loud). `location` verilirse
-        namespace bu S3 konumuyla yaratılır (kaynak-başına bucket modeli —
-        Model X).
+        supported). If the table already EXISTS, its identifier is validated;
+        a mismatch raises IdentifierMismatch (fail-loud). If `location` is
+        given, the namespace is created with that S3 location (the
+        per-source bucket model -- Model X).
 
-        layer="bronze": medallion CDC changelog tablosu — identifier YOK
-        (append-only log; MERGE hedefi Silver'dır), sabit CDC metadata
-        kolonları (BRONZE_METADATA_COLS) şemaya eklenir, `rawdata` Nessie
-        warehouse'una (catalog construction property — `_catalog_factory(
-        warehouse="rawdata")`, S3 konumunu bu belirler) ve day(__ts_ms)
-        partition spec'ine yaratılır. Bkz. tools/create_iceberg_table.py — bu
-        metod onun Console tarafındaki pre-create karşılığıdır.
+        layer="bronze": the medallion CDC changelog table -- NO identifier
+        (append-only log; Silver is the MERGE target), the fixed CDC metadata
+        columns (BRONZE_METADATA_COLS) are appended to the schema, and it's
+        created in the `rawdata` Nessie warehouse (catalog construction
+        property -- `_catalog_factory(warehouse="rawdata")`, which determines
+        the S3 location) with a day(__ts_ms) partition spec. See
+        tools/create_iceberg_table.py -- this method is its Console-side
+        pre-create counterpart.
 
-        Dönüş: fully-qualified name."""
+        Returns: fully-qualified name."""
         if layer == "silver" and not identifier:
             raise ValueError("identifier (PK) boş olamaz — upsert/delete için zorunlu")
 
@@ -244,7 +246,7 @@ class IcebergService:
         try:
             cat.create_namespace(namespace, ns_properties)
         except Exception:
-            pass  # zaten var / eşzamanlı
+            pass  # already exists / concurrent creation
         fq = f"{namespace}.{table}"
         try:
             existing = {t[1] for t in cat.list_tables(namespace)}

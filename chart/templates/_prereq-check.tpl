@@ -57,7 +57,7 @@ values this chart's OWN templates already emit for the corresponding CRs
   - sparkoperator.k8s.io/v1beta2    (05-spark-operator.yaml, 14-nginx-ingest.yaml)
   - k8s.keycloak.org/v2alpha1       (10-keycloak.yaml — NOTE: the modern
     Keycloak Operator's API group, NOT the legacy `keycloak.org/v1alpha1`
-    Operator SDK v1 CRDs; see operators/05-keycloak-operator.yaml POC-DOĞRULA
+    Operator SDK v1 CRDs; see operators/05-keycloak-operator.yaml POC-VERIFY
     note on picking a package that ships this exact group)
   - cert-manager.io/v1              (10-keycloak.yaml Certificate CR)
   - external-secrets.io/v1beta1      (chart/templates/15-external-secrets.yaml
@@ -109,7 +109,7 @@ values this chart's OWN templates already emit for the corresponding CRs
 {{- end -}}
 {{- end -}}
 {{/*
-  İzleme (D1): ONLY when components.monitoring is on does this chart
+  Monitoring (D1): ONLY when components.monitoring is on does this chart
   emit ServiceMonitor/PodMonitor/PrometheusRule CRs (monitoring.coreos.com/v1),
   which are supplied by OpenShift user-workload-monitoring (UWM) /
   Prometheus-Operator — NOT by operators/. So this CRD is checked

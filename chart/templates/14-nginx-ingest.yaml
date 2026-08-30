@@ -66,8 +66,8 @@ spec:
     - {name: SPARK_CONF_DIR, value: /spark-conf-rendered}
 {{- end }}
     volumeMounts:
-    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA: Strimzi cluster CA (ca.p12/ca.password)
-    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA: KafkaUser spark-nginx secret (password)
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-VERIFY: Strimzi cluster CA (ca.p12/ca.password)
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-VERIFY: KafkaUser spark-nginx secret (password)
 {{- if .Values.auth.oidc.enabled }}
 {{ include "lakehouse.spark.nessieOAuthDriverVolumeMount" . | indent 4 }}
 {{- end }}
@@ -79,13 +79,13 @@ spec:
     env:
 {{ include "lakehouse.spark.awsEnv" . | indent 4 }}
     volumeMounts:
-    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-DOĞRULA
-    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-DOĞRULA
+    - {name: kafka-ca, mountPath: /mnt/kafka-ca, readOnly: true}          # POC-VERIFY
+    - {name: spark-nginx-scram, mountPath: /mnt/spark-nginx, readOnly: true} # POC-VERIFY
   volumes:
   - name: kafka-ca
-    secret: {secretName: kafka-cluster-ca-cert}                            # POC-DOĞRULA: ca.p12 + ca.password anahtarları
+    secret: {secretName: kafka-cluster-ca-cert}                            # POC-VERIFY: ca.p12 + ca.password keys
   - name: spark-nginx-scram
-    secret: {secretName: spark-nginx}                                      # POC-DOĞRULA: Strimzi User Operator üretir (password)
+    secret: {secretName: spark-nginx}                                      # POC-VERIFY: produced by the Strimzi User Operator (password)
 {{- if .Values.auth.oidc.enabled }}
 {{ include "lakehouse.spark.nessieOAuthVolumes" . | indent 2 }}
 {{- end }}
@@ -93,9 +93,10 @@ spec:
     exposeDriverMetrics: true
     exposeExecutorMetrics: true
 ---
-# Spark → Kafka nginx-access consumer'ı için SCRAM-SHA-512 KafkaUser (spec §10: SCRAM+TLS).
-# `strimzi.io/cluster: kafka` SABİT kalır (03-kafka-strimzi.yaml'daki Kafka CR
-# adıyla aynı convention — bkz. o dosyanın "kadar SABİT 'kafka'" yorumu).
+# SCRAM-SHA-512 KafkaUser for the Spark → Kafka nginx-access consumer (spec §10: SCRAM+TLS).
+# `strimzi.io/cluster: kafka` STAYS FIXED (the SAME convention as the Kafka
+# CR name in 03-kafka-strimzi.yaml — see that file's "stays FIXED as
+# 'kafka'" comment).
 apiVersion: kafka.strimzi.io/{{ .Values.versions.strimziApi }}
 kind: KafkaUser
 metadata:
@@ -109,13 +110,14 @@ spec:
     type: simple
     acls:
     - {resource: {type: topic, name: nginx-access, patternType: literal}, operations: [Read, Describe]}
-    # Spark Structured Streaming default consumer group: spark-kafka-source-* → prefix "spark-" (lakehouse-ingest deseni)
+    # Spark Structured Streaming default consumer group: spark-kafka-source-* → prefix "spark-" (the lakehouse-ingest pattern)
     - {resource: {type: group, name: "spark-", patternType: prefix}, operations: [Read]}
 ---
-# FluentBit VM-agent artefaktları — kümede ÇALIŞMAZ (nginx host'larına kurulur,
-# bu chart yalnızca dosyaları taşır). ConfigMap olarak paketlenir ki chart
-# tek bir yerden (helm get / kubectl get configmap) dağıtılabilsin; NOTES.txt
-# kurulum adımlarını anlatır (bkz. prod-manifests/14-nginx-ingest/README.md).
+# FluentBit VM-agent artifacts — do NOT run in-cluster (installed on the
+# nginx hosts; this chart only carries the files). Packaged as a ConfigMap
+# so the chart can distribute them from a single place (helm get /
+# kubectl get configmap); NOTES.txt walks through the install steps
+# (see prod-manifests/14-nginx-ingest/README.md).
 apiVersion: v1
 kind: ConfigMap
 metadata:

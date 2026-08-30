@@ -17,16 +17,16 @@ import IngestConfigPanel from "../components/IngestConfigPanel";
 
 /**
  * Multi-step "add source" form, per docs/superpowers/sdd/task-12-brief.md:
- *   1. tip seç -- registry-driven (Plan B1 Task 6): fetched from
+ *   1. pick type -- registry-driven (Plan B1 Task 6): fetched from
  *      `GET /api/sources/types` (app/source_types.py) rather than a
  *      hard-coded cdc/scheduled x mssql/pg/mongo list, so a new descriptor
  *      registered on the backend (e.g. stream/kafka) shows up here with no
  *      frontend edit.
- *   2. bağlantı + credential
- *   3. tablo/kolon + delta/cdc opsiyon
- *   4. hedef ns/table
- *   5. önizleme -- POST /api/sources/preview (render only, no apply)
- *   6. uygula -- POST /api/sources (createSource)
+ *   2. connection + credential
+ *   3. table/column + delta/cdc options
+ *   4. target ns/table
+ *   5. preview -- POST /api/sources/preview (render only, no apply)
+ *   6. apply -- POST /api/sources (createSource)
  *
  * Field visibility per step 2/3 mirrors app.models.SourceSpec's own
  * kind/type-conditional requirements (see `_validate_kind_type_requirements`

@@ -72,8 +72,8 @@ class FakeTrino:
 
 
 class FakeIceberg:
-    """IcebergService double — tablo pre-create'i pyiceberg'e gitmeden kaydeder.
-    `mismatch=True` ise create_table IdentifierMismatch fırlatır (409 testi).
+    """IcebergService double — records the table pre-create without going to pyiceberg.
+    When `mismatch=True`, create_table raises IdentifierMismatch (409 test).
     `stats` seeds `table_stats`'s return value, keyed by (namespace, table,
     layer); every call is recorded in `stats_calls` so tests can assert
     table_stats was actually invoked (not just that a fake default leaked
@@ -90,7 +90,7 @@ class FakeIceberg:
         self.stats_calls: List[Tuple[str, str, str]] = []
 
     def create_table(self, namespace, table, columns, identifier, location=None):
-        # gerçek IcebergService sözleşmesini yansıt: identifier zorunlu.
+        # mirror the real IcebergService contract: identifier is mandatory.
         if not identifier:
             raise ValueError("identifier (PK) boş olamaz")
         if self._mismatch:
@@ -320,8 +320,8 @@ def test_create_table_forbidden_for_student(client_as_student):
 
 
 def test_create_table_ok_for_analyst():
-    # Tablo yaratımı Trino DDL değil, IcebergService (pyiceberg) üzerinden
-    # yapılır — identifier field ile (aksi halde upsert append-only'e düşer).
+    # Table creation is done via IcebergService (pyiceberg), not Trino DDL
+    # — with the identifier field (otherwise upsert falls back to append-only).
     iceberg = FakeIceberg()
     client = _client_as({Role.ANALYST}, iceberg=iceberg)
     r = client.post(
@@ -335,7 +335,7 @@ def test_create_table_ok_for_analyst():
     )
     assert r.status_code == 201
     assert r.json() == {"ok": True, "fqn": "lakehouse.mssql_ogrenci.students"}
-    # pyiceberg'e identifier + kaynak-başına bucket konumu ile gitti
+    # went to pyiceberg with the identifier + the per-source bucket location
     assert len(iceberg.created) == 1
     created = iceberg.created[0]
     assert created["namespace"] == "mssql_ogrenci"
@@ -345,7 +345,7 @@ def test_create_table_ok_for_analyst():
 
 
 def test_create_table_identifier_mismatch_returns_409():
-    # Tablo farklı identifier ile zaten varsa fail-loud (409) — sessiz append-only YOK.
+    # If the table already exists with a different identifier, fail loud (409) — NO silent append-only.
     client = _client_as({Role.ANALYST}, iceberg=FakeIceberg(mismatch=True))
     r = client.post(
         "/api/tables",
@@ -360,7 +360,7 @@ def test_create_table_identifier_mismatch_returns_409():
 
 
 def test_create_table_empty_identifier_returns_400():
-    # identifier (PK) zorunlu; boş liste → 400 (IcebergService ValueError).
+    # identifier (PK) is mandatory; empty list → 400 (IcebergService ValueError).
     client = _client_as({Role.ANALYST})
     r = client.post(
         "/api/tables",

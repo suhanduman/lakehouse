@@ -1,10 +1,10 @@
-"""IcebergService unit testleri — GERÇEK pyiceberg şema kurulumunu (tip eşleme +
-identifier field) ve idempotent/fail-loud create mantığını, sahte (fake) bir
-pyiceberg catalog ile test eder. Nessie/S3'e ihtiyaç yok; sadece pyiceberg
-kütüphanesi gerekir (requirements.txt).
+"""IcebergService unit tests — tests the REAL pyiceberg schema setup (type
+mapping + identifier field) and the idempotent/fail-loud create logic, using
+a fake pyiceberg catalog. No Nessie/S3 needed; only the pyiceberg library is
+required (requirements.txt).
 
-Kapsanan: tablonun identifier-field-ids ile yaratıldığını doğrular — bu
-olmadan Iceberg sink upsert'ü append-only'e düşer."""
+Covers: verifies the table is created with identifier-field-ids set — without
+this the Iceberg sink's upsert falls back to append-only."""
 from __future__ import annotations
 
 import pytest
@@ -43,7 +43,7 @@ class FakeTable:
 
 
 class FakeCatalog:
-    """existing: {table_name: [identifier_col, ...]} — önceden var olan tablolar."""
+    """existing: {table_name: [identifier_col, ...]} — tables that already exist."""
 
     def __init__(self, existing=None):
         self.existing = existing or {}
@@ -139,14 +139,14 @@ def test_create_table_sets_identifier_and_maps_types():
     assert cat.namespaces == [("depo", {"location": "s3://src-depo/warehouse"})]
     assert len(cat.created) == 1
     _, schema = cat.created[0]
-    # identifier field set edildi
+    # identifier field was set
     assert list(schema.identifier_field_names()) == ["id"]
-    # tip eşleme: bigint->long, varchar->string, timestamp->timestamp
+    # type mapping: bigint->long, varchar->string, timestamp->timestamp
     by_name = {f.name: f for f in schema.fields}
     assert str(by_name["id"].field_type) == "long"
     assert str(by_name["name"].field_type) == "string"
     assert str(by_name["created"].field_type) == "timestamp"
-    # identifier kolonu REQUIRED'e zorlandı
+    # identifier column was forced to REQUIRED
     assert by_name["id"].required is True
 
 
@@ -175,7 +175,7 @@ def test_existing_table_matching_identifier_is_noop():
         "depo", "customers", [{"name": "id", "type": "int"}], identifier=["id"]
     )
     assert fq == "depo.customers"
-    assert cat.created == []  # zaten var, yeniden yaratılmadı
+    assert cat.created == []  # already exists, was not recreated
 
 
 def test_existing_table_mismatched_identifier_fails_loud():

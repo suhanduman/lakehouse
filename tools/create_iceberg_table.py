@@ -5,36 +5,38 @@ runs. Silver lives in the Nessie default warehouse (`warehouse`); the append-onl
 sink writes the raw change-log to Bronze (`<ns>_raw`, rawdata warehouse) and the
 `silver-merge` Spark job MERGEs Bronze→Silver keyed on this identifier.
 
-NEDEN / WHY (medalyon CDC tasarımı):
-  Silver tablosu, Bronze değişiklik-log'undan MERGE INTO ile beslenen
-  current-state hedeftir; MERGE'in eşleşme koşulu (`ON silver.pk =
-  bronze.pk`) identifier field'ın Silver şemasında baştan var olmasını
-  gerektirir. identifier field YALNIZCA CREATE anında set edilebiliyor:
-  Nessie REST üzerinden ALTER / set-identifier-fields HTTP 400 döndürüyor;
-  Trino ise identifier field'ı hiç desteklemiyor. Dolayısıyla Silver tablosu
-  pyiceberg ile pre-create EDİLMELİDİR (console/backend/app/services/
-  iceberg_service.py bu script'in Console tarafındaki karşılığıdır).
+WHY (medallion CDC design):
+  The Silver table is a current-state target fed by MERGE INTO from the
+  Bronze changelog; the MERGE's join condition (`ON silver.pk = bronze.pk`)
+  requires the identifier field to already exist in the Silver schema up
+  front. The identifier field can ONLY be set at CREATE time: Nessie's REST
+  ALTER / set-identifier-fields returns HTTP 400, and Trino doesn't support
+  identifier fields at all. So the Silver table MUST be pre-created with
+  pyiceberg (console/backend/app/services/iceberg_service.py is this
+  script's Console-side counterpart).
 
-İKİ GİRDİ MODU / TWO INPUT MODES:
-  --descriptor FILE   YAML/JSON şema tanımı — B-v2 ArgoCD PreSync hook Job'ının
-                      ConfigMap'ten mount ederek kullandığı deklaratif girdi.
+TWO INPUT MODES:
+  --descriptor FILE   A YAML/JSON schema definition — the declarative input
+                      the B-v2 ArgoCD PreSync hook Job mounts from a
+                      ConfigMap and uses.
                       {namespace, table, identifier: [...],
                        columns: [{name, type, required}]}
-  --discover          Kaynak DB'ye bağlanıp (pg/mongo) şema + PK introspeksiyonu
-                      yapar — B-v1 Console backend'i ve scaffold-source.sh
-                      tarafından kullanılır.
+  --discover          Connects to the source DB (pg/mongo) and introspects
+                      the schema + PK — used by the B-v1 Console backend
+                      and scaffold-source.sh.
 
-IDEMPOTENCY / FAIL-LOUD SÖZLEŞMESİ:
-  Tablo zaten varsa, identifier field'ları istenenle AYNI olmalıdır — aksi
-  halde `exit 1` ile SESLİCE patlar (asla sessizce devam etmez; append-only
-  bug'ı tam olarak böyle sızmıştı). Sütun kayması (drift) bu script'in kapsamı
-  DIŞINDADIR — sink'in evolve-schema-enabled ayarı yeni sütunları yazma anında
-  ekler. Bir PreSync hook'ta bu davranış, tablo/anahtar hazır olmadan
-  KafkaConnector'ın apply edilmesini kilitler.
+IDEMPOTENCY / FAIL-LOUD CONTRACT:
+  If the table already exists, its identifier fields MUST match the
+  requested ones exactly — otherwise it fails LOUDLY via `exit 1` (never
+  silently continues; this is exactly how the append-only bug leaked
+  through before). Column drift is OUT OF SCOPE for this script — the
+  sink's evolve-schema-enabled setting adds new columns at write time. In a
+  PreSync hook, this behavior blocks the KafkaConnector from being applied
+  before the table/keys are ready.
 
-Bağımlılıklar / deps:  pip install "pyiceberg[s3fs]"
-  (discover modu için ayrıca: psycopg[binary] (pg) veya pymongo (mongo);
-   YAML descriptor için: pyyaml)
+Dependencies:  pip install "pyiceberg[s3fs]"
+  (discover mode additionally needs: psycopg[binary] (pg) or pymongo
+   (mongo); for YAML descriptors: pyyaml)
 """
 from __future__ import annotations
 
@@ -62,7 +64,7 @@ from pyiceberg.types import (
     NestedField,
 )
 
-# Kanonik Iceberg tip adları → pyiceberg tip nesnesi.
+# Canonical Iceberg type names → pyiceberg type object.
 # Storage defaults applied at CREATE time via pyiceberg `properties=` (kept in
 # lockstep with console/backend/app/services/iceberg_service.py — same
 # constant, same write-mode trio). 256 MiB bounds small-file growth for
@@ -109,11 +111,11 @@ def _iceberg_type(name: str):
         return DecimalType(p, s)
     if n in _ICEBERG_TYPES:
         return _ICEBERG_TYPES[n]
-    # Kanonik Iceberg adı değilse, SQL/JDBC tip adı olarak ele al (bigint→long,
-    # varchar→string, ...) — descriptor hem kanonik hem SQL tipini kabul etsin
-    # (console IcebergService ve discover modu ile tutarlı). decimal(p,s) zaten
-    # yukarıda ele alındı; _map_sql_type "decimal(38,10)" gibi bir string
-    # dönerse onu da çöz.
+    # If it's not a canonical Iceberg name, treat it as a SQL/JDBC type name
+    # (bigint→long, varchar→string, ...) — the descriptor accepts both
+    # canonical and SQL types (consistent with console IcebergService and
+    # discover mode). decimal(p,s) is already handled above; if
+    # _map_sql_type returns a string like "decimal(38,10)", resolve that too.
     mapped = _map_sql_type(name)
     if mapped.startswith("decimal"):
         return _iceberg_type(mapped)
@@ -122,8 +124,8 @@ def _iceberg_type(name: str):
     raise SystemExit(f"FATAL: bilinmeyen tip '{name}' (descriptor'da düzeltin)")
 
 
-# JDBC/SQL tip aileleri → kanonik Iceberg tipi (statik eşleme; kenar tipleri
-# descriptor ile override edilebilir).
+# JDBC/SQL type families → canonical Iceberg type (static mapping; edge-case
+# types can be overridden via the descriptor).
 _JDBC_TO_ICEBERG = {
     "int": "int", "integer": "int", "smallint": "int", "tinyint": "int", "serial": "int",
     "bigint": "long", "bigserial": "long",
@@ -136,7 +138,7 @@ _JDBC_TO_ICEBERG = {
     "timestamp with time zone": "timestamp", "timestamp without time zone": "timestamp",
     "datetime": "timestamp", "datetime2": "timestamp", "smalldatetime": "timestamp",
     "bytea": "binary", "varbinary": "binary", "binary": "binary", "image": "binary",
-    # kalan her şey (text/varchar/char/uuid/json/jsonb/nvarchar/...) → string
+    # everything else (text/varchar/char/uuid/json/jsonb/nvarchar/...) → string
 }
 
 
@@ -150,8 +152,9 @@ def _map_sql_type(sql_type: str) -> str:
 
 def _build_schema(columns: list[dict], identifier: list[str]) -> Schema:
     """columns=[{name,type,required}], identifier=[col,...] → pyiceberg Schema.
-    identifier kolonları Iceberg kuralı gereği REQUIRED olmalıdır; burada zorla
-    required=True yapılır (kaynakta nullable görünse bile PK non-null'dır)."""
+    Identifier columns must be REQUIRED per Iceberg's rules; this forces
+    required=True (even if the source shows them as nullable, a PK is
+    always non-null)."""
     id_names = set(identifier)
     fields, name_to_id = [], {}
     for i, col in enumerate(columns, start=1):
@@ -217,7 +220,7 @@ def _load_catalog(args) -> RestCatalog:
 
 
 # ---------------------------------------------------------------------------
-# Discover modu: kaynak DB'den şema + PK introspeksiyonu (B-v1 / scaffold)
+# Discover mode: schema + PK introspection from the source DB (B-v1 / scaffold)
 # ---------------------------------------------------------------------------
 def _discover_pg(dsn: str, schema_table: str) -> tuple[list[dict], list[str]]:
     import psycopg  # pip install "psycopg[binary]"
@@ -250,9 +253,10 @@ def _discover_pg(dsn: str, schema_table: str) -> tuple[list[dict], list[str]]:
 
 
 def _discover_mongo(uri: str, db: str, collection: str) -> tuple[list[dict], list[str]]:
-    # Mongo şemasızdır: _id daima STRING identifier olarak açılır (garanti anahtar).
-    # Alan çıkarımı örnek dokümandan best-effort'tur; yeni alanlar sink'in
-    # evolve-schema-enabled'ı ile sonradan eklenir.
+    # Mongo is schemaless: _id is always exposed as a STRING identifier
+    # (guaranteed key). Field inference from a sample document is
+    # best-effort; new fields get added later via the sink's
+    # evolve-schema-enabled setting.
     import pymongo  # pip install pymongo
 
     client = pymongo.MongoClient(uri)
@@ -289,20 +293,21 @@ def _ns_exists(cat: RestCatalog, namespace: str) -> bool:
 def _ensure_table(cat: RestCatalog, namespace: str, table: str, schema: Schema,
                    partition_spec: PartitionSpec, properties: dict,
                    sort_order: SortOrder | None = None) -> int:
-    """Namespace + tabloyu (identifier field'lı) yaratır. Tablo varsa identifier
-    field'ları doğrular; uyuşmazsa 1 döner (fail-loud). Dönüş kodları:
-    0=yaratıldı, 2=zaten uyumlu (no-op), 1=FATAL uyumsuzluk.
+    """Creates the namespace + table (with its identifier field). If the
+    table already exists, validates its identifier fields; returns 1 on
+    mismatch (fail-loud). Return codes: 0=created, 2=already compatible
+    (no-op), 1=FATAL mismatch.
 
-    `properties`: CREATE anında set edilen Iceberg tablo property'leri (256MB
-    target-file-size ALL layers; Silver'a ek olarak write-mode trio) — bkz.
-    main(). `sort_order`: Silver'da identifier kolon(lar)ına göre SortOrder
-    (bkz. _build_silver_sort_order); Bronze'da None."""
+    `properties`: Iceberg table properties set at CREATE time (256MB
+    target-file-size for ALL layers; plus the write-mode trio for Silver) —
+    see main(). `sort_order`: SortOrder over the identifier column(s), for
+    Silver (see _build_silver_sort_order); None for Bronze."""
     fq = f"{namespace}.{table}"
     want = set(schema.identifier_field_names())
     try:
         cat.create_namespace(namespace)
     except Exception:
-        pass  # zaten var / eşzamanlı yaratım
+        pass  # already exists / concurrent creation
     existing = {t[1] for t in cat.list_tables(namespace)} if _ns_exists(cat, namespace) else set()
     if table in existing:
         have = set(cat.load_table(fq).schema().identifier_field_names())
@@ -336,9 +341,9 @@ def main() -> int:
     p.add_argument("--s3-endpoint", default=os.environ.get("S3_ENDPOINT"))
     p.add_argument("--s3-access-key", default=os.environ.get("S3_ACCESS_KEY"))
     p.add_argument("--s3-secret-key", default=os.environ.get("S3_SECRET_KEY"))
-    # descriptor modu
+    # descriptor mode
     p.add_argument("--descriptor", help="YAML/JSON: {namespace, table, identifier[], columns[]}")
-    # discover modu
+    # discover mode
     p.add_argument("--discover", action="store_true")
     p.add_argument("--source-type", choices=["pg", "mongo"], help="discover için kaynak tipi")
     p.add_argument("--dsn", help="pg: libpq DSN/URI (ör. postgresql://user:pass@host:5432/db)")
@@ -373,8 +378,8 @@ def main() -> int:
             d = yaml.safe_load(raw)
         namespace, table = d["namespace"], d["table"]
         columns, identifier = d["columns"], d["identifier"]
-        # Descriptor'daki `layer`/`warehouse` alanları CLI bayraklarının önüne
-        # geçer — descriptor tek gerçek kaynak (IaC) olduğundan.
+        # The descriptor's `layer`/`warehouse` fields take precedence over
+        # the CLI flags — the descriptor is the single source of truth (IaC).
         if d.get("layer"):
             args.layer = d["layer"]
         if d.get("warehouse") and not args.warehouse:

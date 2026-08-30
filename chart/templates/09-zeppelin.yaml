@@ -1,21 +1,21 @@
 # Apache Zeppelin — prod deployment. Only parameterized + made
 # namespace-aware. Gated by `.Values.components.zeppelin`.
 #
-# Jupyter ile yan yana. Zeppelin, notebook içinde paragraf bazlı Spark SQL +
-# Python + Scala + Markdown harmanlamaya izin verir; yöneticilere sunum
-# dostu bir analiz ortamı sağlar.
+# Side-by-side with Jupyter. Zeppelin lets a single notebook blend
+# paragraph-based Spark SQL + Python + Scala + Markdown, giving admins a
+# presentation-friendly analysis environment.
 #
-# Arm64 sorunu: apache/zeppelin yalnızca linux/amd64 destekler. OpenShift
-# prod node'ları genelde amd64 olduğundan sorun yok.
+# Arm64 caveat: apache/zeppelin only supports linux/amd64. Not an issue
+# since OpenShift prod nodes are generally amd64.
 #
-# Spark binary'si: apache/zeppelin taban imajı Spark interpreter'ını zaten
-# içerir; internally-built imaj (images/zeppelin/Dockerfile) ayrıca %trino
-# interpreter'ı için trino-jdbc sürücüsünü de gömer — bkz. `versions.zeppelinImageTag`.
+# Spark binary: the apache/zeppelin base image already bundles the Spark
+# interpreter; the internally-built image (images/zeppelin/Dockerfile) also
+# embeds the trino-jdbc driver for the %trino interpreter — see `versions.zeppelinImageTag`.
 #
-# Kimlik doğrulama: Apache Shiro native ActiveDirectoryGroupRealm ile
-# kurumsal Active Directory. Bind service account DN + password Secret'tan
-# gelir; AD grup üyeliği Zeppelin rollerine eşlenir. AD/LDAPS ayarları
-# (`zeppelin.ad.*`) values-driven. `ad-bind-credentials` follows the SAME
+# Authentication: enterprise Active Directory via Apache Shiro's native
+# ActiveDirectoryGroupRealm. The bind service account DN + password come
+# from a Secret; AD group membership maps to Zeppelin roles. AD/LDAPS
+# settings (`zeppelin.ad.*`) are values-driven. `ad-bind-credentials` follows the SAME
 # "name reference only" contract as `storage.s3.secretName` by
 # default (`zeppelin.ad.bindPassword` defaults empty in chart/values.yaml —
 # see that field's comment): this template only renders the Secret inline
@@ -23,12 +23,12 @@
 # otherwise the Secret must be provisioned out-of-band (ExternalSecret/Vault
 # or `oc create secret`) under the same name/keys BEFORE install.
 #
-# Service wiring: Zeppelin'in kendi Service'inin bu chart'ta downstream
-# tüketicisi yok (yalnızca kullanıcı erişimi) — bu yüzden _helpers.tpl'nin
-# kanonik servis listesine eklenmedi (o liste yalnızca en az bir consumer'ı
-# olan Service'leri kapsar); ad literal "zeppelin" kalır, ns yalnızca helper'dan.
-# Nessie catalog URI'si ise `lakehouse.svc.nessie` helper'ından — Trino/Spark
-# Operator'ın kullandığı AYNI helper (spec §3.1/§8).
+# Service wiring: Zeppelin's own Service has no downstream consumer in this
+# chart (user access only) — so it was not added to _helpers.tpl's
+# canonical service list (that list only covers Services with at least one
+# consumer); the name stays the literal "zeppelin", only the ns comes from
+# the helper. The Nessie catalog URI, however, comes from the
+# `lakehouse.svc.nessie` helper — the SAME helper Trino/Spark Operator use (spec §3.1/§8).
 # Sandbox v2 (Task 5, 2026-08-07-sandbox-v2): this shared instance's %pyspark
 # interpreter also carries the UNIFIED sandbox WRITE catalog when
 # `.Values.sandbox.enabled` — see chart/templates/_zeppelin.tpl's define-

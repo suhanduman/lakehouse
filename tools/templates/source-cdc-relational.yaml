@@ -15,8 +15,8 @@ spec:
     table.include.list: "{{TABLE}}"
     schema.history.internal.kafka.bootstrap.servers: "kafka-kafka-bootstrap:9093"
     schema.history.internal.kafka.topic: "schema-history.{{SOURCE}}"
-    # Schema-history client (ayrı producer/consumer) — 9093 SCRAM-SHA-512+TLS
-    # POC-DOĞRULA: truststore path/secret keys küme'de doğrulanacak
+    # Schema-history client (separate producer/consumer) — 9093 SCRAM-SHA-512+TLS
+    # POC-VERIFY: truststore path/secret keys will be verified on the cluster
     schema.history.internal.producer.security.protocol: SASL_SSL
     schema.history.internal.producer.sasl.mechanism: SCRAM-SHA-512
     schema.history.internal.producer.sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="debezium-src" password="${directory:/mnt/external-configuration/debezium-src:password}";'
