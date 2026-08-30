@@ -26,12 +26,22 @@ def main():
 
     rc = rm = lc = lm = pods = 0.0
     quota = {}; lrmax = {}; worst = ("", 0.0, 0.0)
-    def add(res, reps=1):
-        nonlocal rc, rm, lc, lm, pods
+    def add(res, reps=1, count_pods=True, label=""):
+        # Sums one resource-spec's requests/limits (scaled by reps) into the
+        # aggregate, optionally counts pods (I1: callers with multiple
+        # containers per workload must count the workload's pods exactly
+        # once, not once per add() call), and tracks the single biggest
+        # per-container limit across EVERY kind (I2: LimitRange.max applies
+        # to every admitted container, not just Deployment/StatefulSet ones).
+        nonlocal rc, rm, lc, lm, pods, worst
         res = res or {}; rq = res.get("requests") or {}; li = res.get("limits") or {}
         rc += cpu(rq.get("cpu")) * reps; rm += mem(rq.get("memory")) * reps
         lc += cpu(li.get("cpu")) * reps; lm += mem(li.get("memory")) * reps
-        pods += reps
+        if count_pods:
+            pods += reps
+        cl, ml = cpu(li.get("cpu")), mem(li.get("memory"))
+        if cl > worst[1] or ml > worst[2]:
+            worst = (label, max(cl, worst[1]), max(ml, worst[2]))
 
     for d in yaml.safe_load_all(sys.stdin):
         if not d: continue
@@ -47,26 +57,26 @@ def main():
             reps = spec.get("replicas", 1) or 1
             pspec = spec.get("template", {}).get("spec", {})
             for c in pspec.get("containers", []):
-                add(c.get("resources"), reps)
-                li = (c.get("resources") or {}).get("limits") or {}
-                cl, ml = cpu(li.get("cpu")), mem(li.get("memory"))
-                if cl > worst[1] or ml > worst[2]:
-                    worst = (f"{k}/{name}/{c.get('name')}", max(cl, worst[1]), max(ml, worst[2]))
+                add(c.get("resources"), reps, count_pods=False,
+                    label=f"{k}/{name}/{c.get('name')}")
+            pods += reps  # once per workload, NOT once per container (I1)
         elif k == "KafkaNodePool":
-            add(spec.get("resources"), spec.get("replicas", 1) or 1)
+            add(spec.get("resources"), spec.get("replicas", 1) or 1, label=f"{k}/{name}")
         elif k == "KafkaConnect":
-            add(spec.get("resources"), spec.get("replicas", 1) or 1)
+            add(spec.get("resources"), spec.get("replicas", 1) or 1, label=f"{k}/{name}")
         elif k == "Cluster":            # CNPG
-            add(spec.get("resources"), spec.get("instances", 1) or 1)
+            add(spec.get("resources"), spec.get("instances", 1) or 1, label=f"{k}/{name}")
         elif k == "Keycloak":
-            add(spec.get("resources"), spec.get("instances", 1) or 1)
+            add(spec.get("resources"), spec.get("instances", 1) or 1, label=f"{k}/{name}")
         elif k in ("SparkApplication", "ScheduledSparkApplication"):
             base = spec.get("template", spec)
             ex = base.get("executor", {}) or {}
-            for role, cnt in [(base.get("driver", {}) or {}, 1),
-                              (ex, ex.get("instances", 1) or 1)]:
+            for role, cnt, rlabel in [(base.get("driver", {}) or {}, 1, "driver"),
+                                       (ex, ex.get("instances", 1) or 1, "executor")]:
                 c = cpu(role.get("coreLimit") or role.get("cores")); m = mem(role.get("memory"))
                 lc += c * cnt; lm += m * cnt; rc += cpu(role.get("cores")) * cnt; rm += m * cnt; pods += cnt
+                if c > worst[1] or m > worst[2]:
+                    worst = (f"{k}/{name}/{rlabel}", max(c, worst[1]), max(m, worst[2]))
 
     if not quota:
         print(f"[{args.tier}] FAIL: no ResourceQuota in render"); return 2
