@@ -218,12 +218,32 @@ tarafından fark edilip restart edilir.
   `components.monitoring: true` iken aktif): `up{job="trino-coordinator"}
   == 0` metriği `monitoring.alerts.trinoCoordinatorDownFor` (varsayılan
   `"2m"`) boyunca sürerse `severity: critical` ile tetiklenir.
+- **Spill-to-disk (Slice C2, default açık):** bellek-üstü hash-join/
+  aggregation/sort operatörleri `/data/trino/spill`'e taşar — ayrı,
+  `sizeLimit`'li bir `emptyDir` (`trino.spill.sizeLimit`, varsayılan
+  `10Gi`) — böylece node rootfs'ini dolduramaz; bir sorgu
+  `RESOURCE_EXHAUSTED` ile düşmek yerine yavaşça tamamlanır. Yalnız
+  worker (HA-prod coordinator plan-only kalır). `trino.spill.enabled=false`
+  kapatır.
+- **Resource-groups (Slice C2, default açık):** coordinator sorgu admission'ı.
+  BI/notebook/dbt servis hesapları (`service-account-svc-{superset,zeppelin,
+  jupyter,dbt}-trino`) → `bi` grubu (garantili ağırlık); `lakehouse-admins`
+  → `admin` grubu (YALNIZ `trino.ldapGroups.enabled` iken); geri kalan
+  herkes → `adhoc` (concurrency-capped — kaçak bir sorgu reddedilmez,
+  **kuyruklanır**). Limitler `trino.resourceGroups.*` altında, memory
+  yüzde-bazlı (cluster ile ölçeklenir). `trino.resourceGroups.enabled=false`
+  kapatır.
 
 **Bilinen sınırlama:** bu slice helm-unittest + `helm template` ile
 doğrulandı (probe/PDB/priorityClass render'ı, alert PromQL/eşik); gerçek bir
 node-drain veya coordinator-failover sırasındaki canlı davranış (PDB'nin
 gerçekten eviction'ı bloklaması, alert'in gerçek bir Prometheus'ta ateşlenmesi)
-OpenShift UAT'ta doğrulanacak bir kalemdir.
+OpenShift UAT'ta doğrulanacak bir kalemdir. Spill/resource-groups (Slice C2)
+için dev doğrulaması da aynı seviyede: helm-unittest + `helm template |
+json.loads` (yalnız iyi-biçimli JSON'ı kanıtlar); Trino 476'nın spill/
+resource-groups property ve selector şemasının gerçekten geçerli olması ve
+contention altındaki canlı davranış (kuyruklama, spill'e gerçekten düşme)
+OpenShift UAT'ta doğrulanacaktır.
 
 ---
 

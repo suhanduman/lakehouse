@@ -189,6 +189,13 @@ data:
     # 4GB → 3GB: JVM + IO tamponu
     query.max-memory-per-node={{ .Values.trino.memory.queryMaxMemoryPerNodeWorker }}
     internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+{{- if .Values.trino.spill.enabled }}
+    # Slice C2 spill-to-disk — dedicated sizeLimit'd emptyDir (see worker volume below)
+    spill-enabled=true
+    spiller-spill-path=/data/trino/spill
+    memory-revoking-threshold={{ .Values.trino.spill.memoryRevokingThreshold }}
+    memory-revoking-target={{ .Values.trino.spill.memoryRevokingTarget }}
+{{- end }}
   node.properties: |
     node.environment=prod
     node.data-dir=/data/trino
@@ -284,6 +291,37 @@ data:
     ldap.user-base-dn={{ .Values.trino.ldapGroups.userBaseDn }}
     ldap.user-search-filter={{ .Values.trino.ldapGroups.userSearchFilter }}
     ldap.group-name-attribute={{ .Values.trino.ldapGroups.groupNameAttribute }}
+{{- end }}
+{{- if .Values.trino.resourceGroups.enabled }}
+  resource-groups.properties: |
+    resource-groups.configuration-manager=file
+    resource-groups.config-file=/etc/trino/resource-groups.json
+  resource-groups.json: |
+    {
+      "rootGroups": [
+        {
+          "name": "global",
+          "softMemoryLimit": "{{ .Values.trino.resourceGroups.global.softMemoryLimit }}",
+          "hardConcurrencyLimit": {{ .Values.trino.resourceGroups.global.hardConcurrencyLimit }},
+          "maxQueued": {{ .Values.trino.resourceGroups.global.maxQueued }},
+          "schedulingPolicy": "weighted_fair",
+          "subGroups": [
+            {"name": "bi", "softMemoryLimit": "{{ .Values.trino.resourceGroups.bi.softMemoryLimit }}", "hardConcurrencyLimit": {{ .Values.trino.resourceGroups.bi.hardConcurrencyLimit }}, "maxQueued": {{ .Values.trino.resourceGroups.bi.maxQueued }}, "schedulingWeight": {{ .Values.trino.resourceGroups.bi.weight }}},
+{{- if .Values.trino.ldapGroups.enabled }}
+            {"name": "admin", "softMemoryLimit": "{{ .Values.trino.resourceGroups.admin.softMemoryLimit }}", "hardConcurrencyLimit": {{ .Values.trino.resourceGroups.admin.hardConcurrencyLimit }}, "maxQueued": {{ .Values.trino.resourceGroups.admin.maxQueued }}, "schedulingWeight": {{ .Values.trino.resourceGroups.admin.weight }}},
+{{- end }}
+            {"name": "adhoc", "softMemoryLimit": "{{ .Values.trino.resourceGroups.adhoc.softMemoryLimit }}", "hardConcurrencyLimit": {{ .Values.trino.resourceGroups.adhoc.hardConcurrencyLimit }}, "maxQueued": {{ .Values.trino.resourceGroups.adhoc.maxQueued }}, "schedulingWeight": {{ .Values.trino.resourceGroups.adhoc.weight }}}
+          ]
+        }
+      ],
+      "selectors": [
+        {"user": "service-account-svc-(superset|zeppelin|jupyter|dbt)-trino", "group": "global.bi"},
+{{- if .Values.trino.ldapGroups.enabled }}
+        {"userGroup": "{{ .Values.trino.rbac.adminGroup }}", "group": "global.admin"},
+{{- end }}
+        {"group": "global.adhoc"}
+      ]
+    }
 {{- end }}
   access-control.properties: |
     access-control.name=file
@@ -507,6 +545,10 @@ spec:
         - {name: config, mountPath: /etc/trino/node.properties,           subPath: node.properties}
         - {name: config, mountPath: /etc/trino/access-control.properties, subPath: access-control.properties}
         - {name: config, mountPath: /etc/trino/rules.json,                subPath: rules.json}
+{{- if .Values.trino.resourceGroups.enabled }}
+        - {name: config, mountPath: /etc/trino/resource-groups.properties, subPath: resource-groups.properties}
+        - {name: config, mountPath: /etc/trino/resource-groups.json,       subPath: resource-groups.json}
+{{- end }}
         - {name: config, mountPath: /etc/trino/catalog/lakehouse.properties, subPath: lakehouse.properties}
         - {name: config, mountPath: /etc/trino/catalog/rawlake.properties,   subPath: rawlake.properties}
 {{- if .Values.sandbox.enabled }}
@@ -614,10 +656,17 @@ spec:
 {{- if .Values.sandbox.enabled }}
         - {name: config, mountPath: /etc/trino/catalog/sandbox.properties,   subPath: sandbox.properties}
 {{- end }}
+{{- if .Values.trino.spill.enabled }}
+        - {name: spill, mountPath: /data/trino/spill}
+{{- end }}
       volumes:
       {{- include "lakehouse.s3TrustVolumes" . | nindent 6 }}
       - name: config
         configMap: {name: trino-config}
+{{- if .Values.trino.spill.enabled }}
+      - name: spill
+        emptyDir: {sizeLimit: {{ .Values.trino.spill.sizeLimit }}}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

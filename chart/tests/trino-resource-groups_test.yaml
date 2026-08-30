@@ -1,0 +1,81 @@
+# chart/tests/trino-resource-groups_test.yaml — Slice C2: Trino coordinator
+# resource-groups (query admission). Spec: docs/superpowers/specs/
+# 2026-08-30-trino-resource-groups-spill-design.md
+suite: trino resource-groups (slice C2)
+templates:
+  - 06-trino-ha.yaml
+tests:
+  - it: coordinator has resource-groups file manager wired (default on)
+    documentSelector: {path: metadata.name, value: trino-config}
+    asserts:
+      - matchRegex:
+          path: data["resource-groups.properties"]
+          pattern: "resource-groups.configuration-manager=file"
+      - matchRegex:
+          path: data["resource-groups.properties"]
+          pattern: "resource-groups.config-file=/etc/trino/resource-groups.json"
+
+  - it: coordinator mounts resource-groups.properties + .json (default on)
+    documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: config, mountPath: /etc/trino/resource-groups.properties, subPath: resource-groups.properties}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: config, mountPath: /etc/trino/resource-groups.json, subPath: resource-groups.json}
+
+  - it: resource-groups.json has global tree, bi/adhoc groups, catch-all selector (rbac/ldap off default)
+    documentSelector: {path: metadata.name, value: trino-config}
+    asserts:
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"name\": ?\"global\""
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"name\": ?\"bi\""
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"name\": ?\"adhoc\""
+      # admin group absent when ldapGroups off
+      - notMatchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"name\": ?\"admin\""
+      # BI service-account selector present
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "service-account-svc-"
+
+  - it: admin group + userGroup selector appear only when ldapGroups enabled
+    set:
+      trino.ldapGroups.enabled: true
+    documentSelector: {path: metadata.name, value: trino-config}
+    asserts:
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"name\": ?\"admin\""
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"userGroup\""
+
+  - it: values-driven concurrency limit
+    set:
+      trino.resourceGroups.bi.hardConcurrencyLimit: 5
+    documentSelector: {path: metadata.name, value: trino-config}
+    asserts:
+      - matchRegex:
+          path: data["resource-groups.json"]
+          pattern: "\"hardConcurrencyLimit\": ?5"
+
+  - it: resource-groups disabled → no properties key, no mount
+    set:
+      trino.resourceGroups.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data["resource-groups.properties"]
+          pattern: "configuration-manager"
+        documentSelector: {path: metadata.name, value: trino-config}
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: config, mountPath: /etc/trino/resource-groups.json, subPath: resource-groups.json}
+        documentSelector: {path: spec.template.metadata.labels.role, value: coordinator}

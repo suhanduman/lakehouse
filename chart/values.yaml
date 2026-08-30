@@ -1095,6 +1095,27 @@ trino:
     userBaseDn: ""
     userSearchFilter: "(&(objectClass=person)(sAMAccountName={0}))"
     groupNameAttribute: "cn"
+  # Worker spill-to-disk (Slice C2): bellek-üstü hash-join/aggregation/sort
+  # operatörleri diske taşar → RESOURCE_EXHAUSTED yerine yavaş tamamlanır.
+  # Ayrı sizeLimit'li emptyDir'e yazar (/data/trino/spill) — node rootfs'ini
+  # DOLDURAMAZ. Sadece worker (HA prod'da coordinator plan-only). Default açık.
+  spill:
+    enabled: true
+    sizeLimit: "10Gi"                # worker spill emptyDir tavanı
+    memoryRevokingThreshold: 0.9     # bu doluluğun üstünde spill'e revoke başlar
+    memoryRevokingTarget: 0.5        # revoke hedef doluluğu
+  # Coordinator resource-groups (Slice C2): sorgu admission + adil paylaşım.
+  # Ağaç: bi (BI/notebook/dbt servis hesapları — garantili), admin
+  # (lakehouse-admins, YALNIZ ldapGroups.enabled iken), adhoc (catch-all —
+  # analyst+herkes, concurrency-capped → kaçak sorgu KUYRUKLANIR, reddedilmez).
+  # Limitler kasıtlı gevşek; koruma yalnız contention altında devreye girer.
+  # Memory yüzde-bazlı (cluster ile ölçeklenir). Default açık.
+  resourceGroups:
+    enabled: true
+    global: {softMemoryLimit: "100%", hardConcurrencyLimit: 100, maxQueued: 1000}
+    bi:     {softMemoryLimit: "40%",  hardConcurrencyLimit: 20,  maxQueued: 100, weight: 3}
+    admin:  {softMemoryLimit: "60%",  hardConcurrencyLimit: 10,  maxQueued: 100, weight: 2}
+    adhoc:  {softMemoryLimit: "30%",  hardConcurrencyLimit: 10,  maxQueued: 200, weight: 1}
 
 # Cross-cutting Spark job tuning knobs, not scoped to a single
 # ScheduledSparkApplication (see `sparkOperator.*` below for the
