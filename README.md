@@ -211,8 +211,14 @@ Secret'ındaki admin kullanıcı/parola ile girilir.
 - **Dashboard'lar** (dosya-provisioning, `monitoring.dashboards.*`): Kafka, CNPG,
   Trino, Iceberg, Console, Platform — her biri minimal-geçerli panel(ler)le gelir.
 - **Alert'ler** (`PrometheusRule`, `monitoring.alerts.*`): connector FAILED, Kafka
-  consumer lag, DLQ, CNPG, Trino ve pod-sağlık uyarıları. Alertmanager
-  yönlendirmesi UWM tarafında yapılandırılır.
+  consumer lag, DLQ, **Kafka under-replicated partition** (broker down / ISR),
+  CNPG replication lag + **CNPG yedek eski/başarısız**, **PVC doluyor**
+  (kubelet_volume_stats), Trino sorgu-hata + coordinator-down, pod-restart +
+  **HPA tavanda** (kapasite doygun). Alertmanager yönlendirmesi UWM tarafında
+  yapılandırılır. NOT: `kubelet_volume_stats_*` (PVC) ve `kube_horizontalpodautoscaler_*`
+  (HPA) kube-state-metrics/kubelet platform metrikleridir — değerlendiren
+  Prometheus'un (OpenShift'te UWM) bunlara erişimi olmalı, yoksa alert sessizce
+  ateşlemez (mevcut `PodRestartingFrequently` de aynı kaynağa dayanır).
 
 Metrik seri adları/PromQL'ler sürüm-bağımlı olabilir; doğrulama runbook'u için
 `docs/POC-DOGRULA-cluster-checklist.md`'ye bakın.

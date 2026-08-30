@@ -1,6 +1,6 @@
 # chart/templates/monitoring/prometheusrules.yaml — D1 (İzleme/Monitoring).
 #
-# Single PrometheusRule (`lakehouse-alerts`) with 7 alert rules across the
+# Single PrometheusRule (`lakehouse-alerts`) with 11 alert rules across the
 # ingest / storage / query / platform surfaces. Thresholds come from
 # `.Values.monitoring.alerts.*` (chart/values.yaml).
 #
@@ -55,6 +55,12 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "DLQ topic'ine yazım artıyor ({{`{{ $labels.topic }}`}})"
+        - alert: KafkaUnderReplicatedPartitions
+          expr: kafka_server_replicamanager_underreplicatedpartitions > 0
+          for: {{ .Values.monitoring.alerts.kafkaUnderReplicatedFor }}
+          labels: {severity: critical}
+          annotations:
+            summary: "Kafka under-replicated partition var (broker down / ISR daralması)"
     - name: lakehouse.storage
       rules:
         - alert: CNPGReplicationLagHigh
@@ -63,6 +69,18 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "CNPG replication lag yüksek ({{`{{ $labels.pod }}`}})"
+        - alert: PersistentVolumeFillingUp
+          expr: kubelet_volume_stats_available_bytes{namespace="{{ include "lakehouse.namespace" . }}"} / kubelet_volume_stats_capacity_bytes{namespace="{{ include "lakehouse.namespace" . }}"} < {{ .Values.monitoring.alerts.pvcFreeFraction }}
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: "PVC doluyor — boş oran %{{ .Values.monitoring.alerts.pvcFreeFraction }} altında ({{`{{ $labels.persistentvolumeclaim }}`}})"
+        - alert: CNPGBackupStale
+          expr: time() - cnpg_collector_last_available_backup_timestamp > {{ mul .Values.monitoring.alerts.cnpgBackupStaleHours 3600 }}
+          for: 30m
+          labels: {severity: critical}
+          annotations:
+            summary: "CNPG son başarılı yedeği {{ .Values.monitoring.alerts.cnpgBackupStaleHours }} saatten eski (yedek başarısız?)"
     - name: lakehouse.query
       rules:
         - alert: TrinoQueryErrorRateHigh
@@ -85,4 +103,10 @@ spec:
           labels: {severity: warning}
           annotations:
             summary: "Pod sık yeniden başlıyor ({{`{{ $labels.pod }}`}})"
+        - alert: HPAMaxedOut
+          expr: kube_horizontalpodautoscaler_status_current_replicas{namespace="{{ include "lakehouse.namespace" . }}"} >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="{{ include "lakehouse.namespace" . }}"}
+          for: {{ .Values.monitoring.alerts.hpaMaxedFor }}
+          labels: {severity: warning}
+          annotations:
+            summary: "HPA tavanda — autoscaler max replica'ya ulaştı, kapasite doygun ({{`{{ $labels.horizontalpodautoscaler }}`}})"
 {{- end }}
