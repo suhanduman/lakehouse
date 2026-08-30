@@ -76,10 +76,13 @@ components:
 # override here per-cluster (e.g. a smaller staging cluster) if needed.
 namespaceConfig:
   quota:
-    requestsCpu: "16"
-    requestsMemory: 64Gi
-    limitsCpu: "32"
-    limitsMemory: 128Gi
+    # Base (small) tier quota. medium/large use bigger quotas — see
+    # values-medium.yaml / values-large.yaml. Tune to YOUR cluster capacity;
+    # chart/tests/quota-fits.sh verifies quota >= aggregate per tier.
+    requestsCpu: "34"
+    requestsMemory: 72Gi
+    limitsCpu: "84"
+    limitsMemory: 124Gi
     persistentVolumeClaims: "50"
     requestsStorage: 2Ti
     pods: "100"

@@ -168,3 +168,12 @@ sparkOperator:
 # without a compatibility review is a behavior change outside a sizing
 # overlay's scope, so this file does NOT restate/raise them — flagged here
 # instead so the choice is visible, not silent.
+
+namespaceConfig:
+  # medium tier aggregate ≈ req 29.8 / lim 77.8 cpu; quota = ×1.15 headroom.
+  # Only the 4 cpu/mem keys — pods/storage/etc. deep-merge from chart values.yaml.
+  quota:
+    requestsCpu: "36"
+    requestsMemory: 76Gi
+    limitsCpu: "92"
+    limitsMemory: 132Gi

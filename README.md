@@ -128,6 +128,29 @@ upgrade'leri operatör-yönetimlidir — chart yalnızca CR spec'ini değiştiri
 veri migration'ı ilgili operatörün sorumluluğundadır. Operatör/CRD
 upgrade'i OLM tarafında yapılır (chart kapsamı dışı).
 
+### Namespace kotası (sizing tier'ları)
+
+- **Namespace ResourceQuota (`lakehouse-quota`) tier-farkındadır:**
+  `values.yaml` (small: req 34cpu/72Gi, lim 84cpu/124Gi),
+  `values-medium.yaml` (req 36cpu/76Gi, lim 92cpu/132Gi),
+  `values-large.yaml` (req 62cpu/184Gi, lim 176cpu/320Gi) — her biri kendi
+  gerçek toplamına (steady + Spark-peak × ~%15 headroom) boyutlanmıştır, yani
+  `-f chart/values-medium.yaml`/`values-large.yaml` ile kurulumda pod'lar
+  artık `Pending`'de takılmaz.
+- **`chart/tests/quota-fits.sh`** (+ `chart/scripts/quota-check.py`) her
+  tier'ı `helm template` ile render edip `quota ≥ aggregate` + `container-limit
+  ≤ LimitRange.max` + `pods ≤ quota.pods` doğrular — quota'yı büyütürken veya
+  yeni bileşen eklerken bu gate'i çalıştırın (`bash chart/tests/quota-fits.sh`).
+- **Operatör kendi cluster kapasitesine göre quota'yı ayarlayabilir** —
+  quota bir tavandır, rezervasyon değil; yukarıdaki sayılar üç referans
+  tier'dır, gerçek küme kapasitesine göre `values-<env>.yaml`'da geçersiz
+  kılınabilir.
+
+**Bilinen sınırlama:** `quota-fits.sh` yalnızca matematiği doğrular
+(`helm template` render + statik toplam karşılaştırması, küme gerekmez);
+gerçek kümede pod'ların `Pending` kalmadığının uçtan-uca doğrulanması bir
+**OpenShift UAT** teslimatıdır.
+
 ---
 
 ## İzleme (Monitoring — D1)

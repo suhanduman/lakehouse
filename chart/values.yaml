@@ -196,10 +196,10 @@ namespaceConfig:
     - keycloak-system
     - openshift-operators
   quota:
-    requestsCpu: "16"
-    requestsMemory: 64Gi
-    limitsCpu: "32"
-    limitsMemory: 128Gi
+    requestsCpu: "34"        # small steady+spark-peak ≈ 28.4 × 1.15 headroom (quota-fits.sh gate)
+    requestsMemory: 72Gi     # ≈ 60Gi × 1.15
+    limitsCpu: "84"          # ≈ 72 × 1.15
+    limitsMemory: 124Gi      # ≈ 107Gi × 1.15
     persistentVolumeClaims: "50"
     requestsStorage: 2Ti
     pods: "100"
