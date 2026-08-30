@@ -467,6 +467,10 @@ monitoring:
     trinoErrorRatePerSec: 5          # Trino başarısız sorgu hızı (query/s)
     trinoCoordinatorDownFor: "2m"    # Trino coordinator scrape hedefi (up==0) bu süre down ise alert
     podRestartThreshold: 5           # 1 saatte pod restart sayısı
+    pvcFreeFraction: 0.15            # PVC boş oranı bunun altına düşerse (kubelet_volume_stats) → dolma uyarısı
+    cnpgBackupStaleHours: 26         # son başarılı CNPG yedeği bu saatten eskiyse → yedek başarısız/eski
+    hpaMaxedFor: "15m"               # HPA current==max bu süre boyunca → autoscaler tavanda (kapasite doygun)
+    kafkaUnderReplicatedFor: "10m"   # under-replicated partition >0 bu süre → broker down / ISR daralması
 
   # Dashboard-as-code toggle'ları (ConfigMap'ler koşullu).
   dashboards:
