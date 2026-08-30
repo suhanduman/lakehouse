@@ -181,3 +181,12 @@ sparkOperator:
     # executors available under load (minExecutors stays 0, hardcoded in
     # the template: scales down to zero between runs same as every tier).
     maxExecutors: 8
+
+namespaceConfig:
+  # large tier aggregate ≈ req 52.8 / lim 149.9 cpu; quota = ×1.15 headroom.
+  # Only the 4 cpu/mem keys — pods/storage/etc. deep-merge from chart values.yaml.
+  quota:
+    requestsCpu: "62"
+    requestsMemory: 184Gi
+    limitsCpu: "176"
+    limitsMemory: 320Gi
