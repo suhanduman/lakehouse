@@ -1,0 +1,129 @@
+# 05 — Iceberg REST Catalog Landscape Review: Is Nessie the right bet in 2026?
+
+Review date: 2026-09-10. Independent, fresh-eyes review. No local repository files were read; all claims are from primary sources (project docs, source code on GitHub `main`, GitHub API, ASF/vendor announcements) unless marked INFERENCE. Secondary/blog sources are named as such.
+
+System under review (given): on-prem k8s/OpenShift lakehouse product; Debezium → Strimzi Kafka Connect Iceberg sink (commit every 60 s per table) → Iceberg on S3-compatible storage; Spark 3.5.1 MERGE; Trino HA; Superset/dbt/Zeppelin/Jupyter; Keycloak OIDC. Catalog = **Project Nessie** (Iceberg REST mode) on CloudNativePG, **single `main` branch**, no branching/tagging workflows, HPA, OIDC machine auth.
+
+---
+
+## A. Nessie in 2026 — status, governance, Polaris relationship
+
+### A.1 Release cadence and activity (VERIFIED, GitHub API 2026-09-10)
+- Latest release **nessie-0.108.8 (2026-09-09)**. 40 non-prerelease releases between 2025-01-22 (0.102.1) and 2026-09-09; roughly 2–4 per month. Still **0.x** — no 1.0 after ~6 years.
+- Version line moved 0.102 → 0.108 in 20 months; 2026 releases are dominated by dependency bumps, Helm-chart probes, GC-tool fixes, BigTable/GCS fixes (release notes). No major feature releases in 2026.
+- Repo: 1,508 stars, 196 forks, 165 open issues, Apache-2.0.
+- **Contributor concentration is extreme.** Commits since 2026-03-01: 829 total, of which 674 = `renovate[bot]`, 28 = release bot, **105 = `snazy`** (Robert Stupp, Dremio), then 6, 3, 3, 1, 1. That is ~155 human commits in six months, ~68 % by one person, ~93 % by two Dremio engineers (`snazy`, `adutra`). This is a single-maintainer project in practice.
+- Blog: last post is **2024-08-02** ("Open Source Polaris announcement"). No roadmap, no "Nessie 1.0", nothing in 2025 or 2026.
+
+### A.2 Governance and the Polaris relationship (VERIFIED, dated)
+- **2024-07-30** (Dremio newsroom / BigDATAwire): Snowflake open-sources Polaris; announced plan to "merge Polaris with Project Nessie".
+- **2024-08-02** (projectnessie.org blog, R. Stupp): "The intent is to contribute Nessie's capabilities, like Catalog Level Versioning, Git-like semantics, multi-table transaction semantics to Polaris." No explicit retirement statement, but no independent roadmap either.
+- **2024-10-29** (SiliconANGLE, quoting Dremio CMO Read Maloney): **"We will treat Polaris as our catalog and we will merge Nessie into Polaris."** Same article: "Dremio intends to merge its catalog with and add read/write capabilities to Polaris, at which time **Project Nessie will be retired**."
+- **2025-06-03** (GlobeNewswire, Polaris first-year): Dremio "donating the Iceberg-catalog-migrator from Nessie to Polaris" (now `apache/polaris-tools`) and integrating the Quarkus runtime into Polaris — i.e. Nessie's engineering effort and tooling moved to Polaris.
+- **2026-02-18/19**: Apache Polaris graduates to ASF Top-Level Project. Dremio's press release: "Dremio leverages Apache Polaris as the foundation of our Open Catalog… Dremio is the data lakehouse platform built natively on Apache Iceberg, Polaris, and Arrow." **Nessie is not mentioned at all** by its own sponsor.
+- The same two Dremio engineers who carry Nessie are the top human committers to Polaris (`snazy` 165, `adutra` 85 commits since 2026-03-01), alongside a broad multi-company set (MonkeyCanCode, flyrain, ayushtkn, jbonofre, vigneshio…). Polaris: 1,147 commits / 6 months, 2,052 stars, 519 forks.
+- Nessie's branching/versioning has **not** been merged into Polaris (Polaris has no branches/tags; INFERENCE from Polaris docs/CHANGELOG containing no branch feature; corroborated by A. Merced's June-2026 survey stating Polaris has "no branching").
+
+### A.3 Assessment
+Nessie is **maintained, not developed**: its sponsor has publicly declared Polaris its catalog, stated Nessie would be merged/retired, moved its tooling into Polaris, and stopped communicating about Nessie in 2024. There is no foundation, no 1.0, and effectively one active maintainer. It is receiving dependency upgrades and bug fixes on a fast cadence, so it is not abandoned today — but for a **product** with a multi-year support obligation this is a **poor bet**: you are depending on one Dremio engineer's continued goodwill toward a project his employer has said it will retire.
+
+---
+
+## B. Nessie commit model under many writers on one branch (VERIFIED from source)
+
+### B.1 What actually happens on a commit
+Sources: `versioned/storage/common/.../logic/CommitRetry.java`, `CommitLogicImpl.java`, `config/StoreConfig.java` (GitHub `main`, read 2026-09-10); `projectnessie.org/develop/spec/`, `/develop/kernel/`.
+
+1. Every Nessie commit is a **new commit object appended to the branch's commit log**, and the branch reference is advanced with a **CAS on the branch HEAD**. The branch HEAD is a single serialization point: `StoreConfig` javadoc — "when the HEAD (or tip) of a branch changed during the commit, this value defines the maximum number of retries."
+2. **Conflict detection is per content key (table), not per branch.** `CommitLogicImpl` checks each Put/Delete/Unchanged against the current index (`KEY_EXISTS`, `KEY_DOES_NOT_EXIST`, `VALUE_DIFFERS`, `PAYLOAD_DIFFERS`, `CONTENT_ID_DIFFERS`). The spec says: "You shouldn't have to update your reference before transacting on table A because it just happened to update table B."
+3. **Retries are server-side and automatic** when only the HEAD moved (a "false" conflict): `CommitRetry.commitRetry()` loops with exponential random backoff. Defaults (`StoreConfig`): `commit-retries` = **Integer.MAX_VALUE** (unbounded), `commit-timeout-millis` = **5000**, `retry-initial-sleep-millis-lower/upper` = 5/25 ms, `retry-max-sleep-millis` = 250 ms. If the 5 s budget is exhausted → `RetryTimeoutException` → client error.
+4. A true per-table conflict (same table, stale expected state) is returned to the client as a 409; the Iceberg client then retries with its own defaults (`commit.retry.num-retries` = 4, min 100 ms, max 60 s, total 30 min — Iceberg `configuration.md`).
+
+**So: commits to DIFFERENT tables on one branch are logically independent (no false conflicts), but physically serialized through one HEAD CAS with optimistic server-side retry inside a 5 s window.**
+
+### B.2 Scale implications for ~N tables × 60 commits/hour
+- Nessie's own kernel doc: "The implementation can perform many hundred to many thousand commits per second… Concurrent commits against different branches are 'faster' than concurrent commits against a single branch."
+- Your load: N tables at 1 commit/min each. N=100 → ~1.7 commits/s; N=1,000 → ~17/s; plus Spark MERGE and maintenance commits. Against a stated capacity of "hundreds to thousands per second", raw throughput is **not** the problem. The **HEAD hot-spot** is: every commit contends on the same Postgres row; on a slow/contended CloudNativePG instance the 5 s `commit-timeout-millis` can be exhausted under bursts (e.g. all sink tasks commit at the same wall-clock second — which is exactly what a fixed 60 s `iceberg.control.commit.interval-ms` produces). Symptom would be intermittent 5xx/`RetryTimeoutException` on Connect and Spark commits, not steady degradation. INFERENCE: for N ≤ a few hundred this is fine with a healthy Postgres; I could not find Nessie-published Postgres benchmarks.
+- **Commit log growth**: each table commit is a commit object on `main` forever (until `nessie-gc`/history cut). At 60/h/table, N=200 tables → ~105 M commits/year of Nessie objects in Postgres. Nessie stores indexes incrementally (`max-incremental-index-size` 50 KiB, `max-serialized-index-size` 200 KiB, `max-reference-stripes-per-commit` 50), so reads stay O(log) — but the row count and vacuum load on Postgres are real. INFERENCE: this is an operational cost, not a correctness limit.
+- **Does Nessie recommend branch-per-writer?** No. The Transactions guide only lists branches as *an option* for cross-table atomicity ("Via Branches… a sequence of commits on one branch can be exposed… through the use of a merge"). The kernel doc merely notes different branches are faster. There is **no documented recommendation** to give each pipeline its own branch, and doing so would import merge-conflict handling you do not want.
+
+### B.3 The `gc.enabled=false` problem (VERIFIED from source)
+- `catalog/service/rest/.../IcebergApiV1TableResource.java`: if a table has no `gc.enabled` property, the REST server **injects `gc.enabled=false`** into the metadata it serves.
+- Iceberg client (`NessieUtil.checkAndUpdateGCProperties`, also applies conceptually): with `gc.enabled=false`, "all Iceberg's gc operations like expire_snapshots, remove_orphan_files, drop_table with purge will fail with an error." Rationale: files may be referenced by other branches/tags/historical commits.
+- **Worse for this product:** `NessieModelIceberg.nessieTableSnapshotToIceberg()` builds the Iceberg metadata Nessie serves/writes with **exactly one snapshot** (`metadata.addSnapshots(snapshot.build())` once, `putRef("main", …)`), and `addMetadataLog()`/`addSnapshotLog()` are commented out. Nessie docs confirm: "Nessie will always return only the Iceberg table snapshot that corresponds to the Nessie commit." Consequence:
+  - Iceberg-native `expire_snapshots` is meaningless (there is only one snapshot in the metadata) — the history lives in Nessie's commit log, so **only `nessie-gc` can reclaim old data/manifest files**.
+  - `nessie-gc` needs a running Nessie + its own JDBC (Postgres/MariaDB/MySQL/H2) live-set database, mark-and-sweep, run as a separate job. It is another stateful component your product must ship, schedule, and support in air-gap.
+  - `remove_orphan_files` from Spark/Trino is refused, so orphaned data from failed Connect commits accumulates until `nessie-gc` runs.
+  - Time-travel from engines (`VERSION AS OF`, Trino `FOR VERSION AS OF`) does not work in the Iceberg-native way — you must use Nessie's `branch@hash` references. For a product whose users are Superset/Trino/dbt users, this is a usability tax with no upside because you never branch.
+
+---
+
+## C. Alternatives comparison
+
+Legend: ✅ verified from primary source; ◐ partial / caveat; ❌ not supported; (I) INFERENCE.
+
+| Catalog | Iceberg REST compliance | Multi-table tx (`commitTransaction`) | Authz / credential vending | OIDC | On-prem k8s deploy | Postgres backend | Air-gap | Commit model | Client support | Maturity / backing | License |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Nessie 0.108.8** | ✅ REST endpoint since 0.90 (May 2024); Trino `nessie` type lacks views, use `rest` | ✅ native (catalog-level versioning) | ◐ CEL rules on (ref, path, op) — server-side only; ✅ S3 vending via STS (MinIO) or S3 request-signing; no row/column | ✅ Quarkus OIDC bearer; only bearer + client-credentials work from Iceberg clients | ✅ Helm chart w/ HPA (not for RocksDB) | ✅ JDBC2 (Postgres, MariaDB, MySQL) + Mongo/Cassandra/Dynamo/BigTable/RocksDB | ✅ JVM + Postgres; but **nessie-gc** extra component | Single branch HEAD CAS, server-side retry ≤5 s; per-key conflicts | Spark/Trino/Flink/PyIceberg/Connect via REST | 0.x, Dremio, ~1 active maintainer, sponsor declared Polaris its catalog | Apache-2.0 |
+| **Apache Polaris 1.7.0** (2026-08-02) | ✅ full REST incl. vending, views, policies; monthly-ish train (1.4 Apr, 1.5 May, 1.6 Jul, 1.7 Aug 2026) | ✅ implemented (`IcebergCatalogHandler.commitTransaction`, `CommitTransactionTest`); ◐ Unreleased CHANGELOG still fixing "stale sequence number → 409 not 400" | ✅ RBAC (principals/principal-roles/catalog-roles/grants), policies, External PDP/OPA; ✅ STS vending; ◐ **`stsUnavailable` / static-cred pass-through for S3 without STS is buggy** — issue #3742 open (NetApp S3) | ✅ internal / external / mixed; Keycloak guide; JWT claim → principal/role mapping | ✅ Apache Helm repo; Quarkus; multi-replica needs shared token keys | ✅ `relational-jdbc` (Postgres, H2 only); EclipseLink removed 1.3; MongoDB in Helm docs (I: newer) | ✅ JVM + Postgres, no extra components | Per-table optimistic commit in Postgres tx; multi-table = one DB tx | Spark/Trino/Flink/PyIceberg/Snowflake; Connect via `rest` | ASF **TLP since 2026-02-19**, ~100 contributors, Snowflake + Dremio + Apple/others; 2,052★ | Apache-2.0 |
+| **Lakekeeper 0.13.3** (2026-08-17) | ✅ full REST (`commit_transaction` in `api/iceberg/v1/tables.rs`), vending + remote signing | ✅ | ✅ OpenFGA FGA (table-level), OPA bridge for Trino, Cedar (paid Plus); ✅ S3 vending & remote signing incl. **MinIO, Ceph** explicitly | ✅ `LAKEKEEPER__OPENID_PROVIDER_URI`; k8s SA auth simultaneously | ✅ Helm chart (ArtifactHub), operator WIP; **Red Hat certified "Lakekeeper Plus" container for OpenShift** | ✅ Postgres ≥15 **only** | ✅ single Rust binary + Postgres (+ OpenFGA optional); smallest footprint | Per-table optimistic commit in Postgres tx | CI-tested Spark, PyIceberg, Trino, StarRocks; Flink/Hive less proven | 0.x, Vakamo (small company), **262/323 commits by one person (`c-thiel`)**; 1,447★ | Apache-2.0 (Plus = commercial) |
+| **Apache Gravitino 1.3.0** (2026-06-29) | ◐ REST server on Iceberg 1.11 spec; "most namespace, table, and view operations" | ❌ "not implemented: Multi-table transactions, View registration" | ✅ RBAC only in "auxiliary mode" (needs full Gravitino server); ✅ S3/GCS/OSS/ADLS vending | ✅ OAuth2 | ◐ docker/helm; large surface (metalake, connectors) | ✅ REST service backs onto Iceberg **JDBC** (Postgres/MySQL), Hive, or another REST catalog | ◐ JVM, many optional pieces | Delegates to Iceberg JDBC catalog commits | Trino strongest; Spark/Flink | ASF TLP since 2025-06; Datastrato; broad multi-author (907 commits/6 mo) | Apache-2.0 |
+| **Unity Catalog OSS 0.6.0** (2026-08-20) | ◐ Iceberg REST endpoint; historically read-only for UniForm; server tests now include `testIcebergTableWriteLifecycle`, `testStagedCreateAndCommit`, CAS test → writes exist (I: recent) | ◐ "Catalog Commits" claimed GA 2026 (secondary source only) | ✅ UC privileges model; ◐ vending: AWS-centric (`server/aws.md`) | ◐ `server/auth.md`, Google auth doc | ◐ docker; no official Helm found | ◐ Hibernate/H2 default; Postgres/MySQL via config (I) | ◐ JVM | Iceberg via UC commit coordinator | Delta-first; Spark; Iceberg clients via REST | LF AI **sandbox**; Databricks-driven (yili-db, openinx…); feature gap vs managed UC | Apache-2.0 |
+| **HMS + Iceberg REST servlet (Hive 4.1/4.2)** | ◐ HIVE-28059 shipped in 4.1.0 ("minimal functionality"); HIVE-29145: broken when embedded in common HMS, fixed **4.2.0** (2025-10-29) | ❌ (I) | ❌ no vending; Ranger for HMS (I) | ◐ servlet auth config | ◐ HMS on k8s = Thrift + RDBMS + Hadoop deps | ✅ HMS RDBMS | ◐ heavy JVM/Hadoop | HMS lock/commit per table | Everything supports HMS Thrift; REST path is new | Apache Hive, mature HMS, immature REST | Apache-2.0 |
+| **Iceberg JDBC catalog (no server)** | ❌ not REST; each engine needs JDBC driver + DB credentials | ❌ | ❌ none; every client holds DB + S3 creds | ❌ | ✅ nothing to deploy | ✅ Postgres | ✅ | Per-table atomic row update; "must support atomic transaction" | Spark/Flink ✅; Trino `jdbc` ✅ with docs warning "may have compatibility issues… consider REST"; PyIceberg `sql` ✅ (Postgres); Connect via `catalog-impl` | Reference impl in Iceberg; JDBC V1 schema (views) | Apache-2.0 |
+
+Notes on the table
+- "Polaris `stsUnavailable` bug": Polaris docs describe `stsUnavailable: true` for S3-compatible stores without STS, but issue #3742 (open, assigned) reports Polaris still tries to vend and fails on NetApp S3. With **MinIO** (which does expose STS AssumeRole) the vended-credentials path works per Polaris' MinIO guide; with Ceph RGW STS (I) or vendors without STS you may hit #3742. Lakekeeper documents MinIO and Ceph explicitly and also offers remote signing as the STS-free path — same as Nessie.
+- Nessie's Trino integration: Trino docs — "The Nessie catalog does not support view management or materialized view management"; use `iceberg.catalog.type=rest` against Nessie's REST endpoint (which you presumably do).
+- Kafka Connect Iceberg sink: `iceberg.catalog.type=rest` works with any REST catalog; non-REST via `catalog-impl` (Iceberg `kafka-connect.md`). Catalog swap for the sink is config.
+
+---
+
+## D. Migration cost and path (Nessie → another REST catalog)
+
+### D.1 Mechanics (VERIFIED)
+- Iceberg `register_table` / the **iceberg-catalog-migrator** (`apache/polaris-tools`, donated by Dremio, works with "any existing Iceberg catalog") registers each table's current `metadata-location` in the target catalog without copying data. Commands: `register` (table appears in both catalogs) and `migrate` (deletes from source after registering). README warnings: "**Avoid using this tool when there are in-progress commits** for tables or views in the source catalog"; after `register`, "avoid operating tables from the source catalog". Views are only migrated by `migrate`.
+- Nessie-specific catch #1 — **single-snapshot metadata**: the metadata.json Nessie wrote (`CatalogServiceImpl.storeSnapshot` → `…metadata.json` per commit, built by `NessieModelIceberg` with one snapshot and no metadata-log) is what you register. The new catalog will therefore see **only the current snapshot**: all Iceberg time-travel history is lost at cut-over, and every older data/manifest file becomes an *orphan* from the new catalog's point of view. You must run `nessie-gc` **before** switching (to reclaim what you want reclaimed) and then `remove_orphan_files` **after** (with a retention window that respects in-flight writers) to clean the rest. Alternatively, for tables where history matters, you'd have to rebuild a multi-snapshot metadata.json from Nessie's commit log — no tool does this; INFERENCE: not worth it for CDC mirror tables.
+- Nessie-specific catch #2 — **`gc.enabled=false` is baked into table properties** Nessie injected. After registering elsewhere, `ALTER TABLE … SET TBLPROPERTIES ('gc.enabled'='true')` (or unset) per table, or maintenance stays blocked.
+- Nessie-specific catch #3 — Nessie's `nessie.commit.id`-style properties and `metadata-location` naming (`00000-<id>.metadata.json`, `.nessie-metadata.json`) are harmless but visible.
+
+### D.2 Effort estimate for THIS product
+- Client side: **config change.** Spark (`type=rest`, `uri`, OAuth2 `credential`/`token`), Trino `iceberg.catalog.type=rest` + `iceberg.rest-catalog.*`, Kafka Connect `iceberg.catalog.*`, PyIceberg `type: rest`, dbt/Superset (via Trino) — untouched. Nessie-specific SQL extensions (`USE REFERENCE`, `CREATE BRANCH`) are unused per the brief.
+- Authn: Keycloak client credentials already exist; Polaris external-IdP mode or Lakekeeper `OPENID_PROVIDER_URI` both accept Keycloak JWTs — but **role mapping must be re-done** (Polaris expects `PRINCIPAL_ROLE:<name>` claims after regex mapping; Lakekeeper maps users/roles into OpenFGA). Authz rules (Nessie CEL) must be rewritten in the new model. This is a small project, not a setting.
+- Data-plane: STS/vending or remote-signing config per warehouse; MinIO works with both Polaris and Lakekeeper; Ceph → Lakekeeper documents it, Polaris has the #3742 risk.
+- Cut-over: **freeze all writers** (pause Connect connectors, stop Spark MERGE/maintenance), run migrator `migrate`, flip configs, unpause. Downtime = minutes for hundreds of tables (I). CDC backlog drains from Kafka; no data loss because Connect offsets sit behind the Iceberg commit.
+- New operational component: Polaris bootstrap/realm/token-broker keys, or Lakekeeper + (optional) OpenFGA. You drop `nessie-gc` and its DB.
+- Verdict on "config change vs project": **a 2–4 week project** (catalog install/Helm/GitOps, authz model, vending/signing, migration runbook, GC/orphan clean-up, docs/tests), dominated by authz and operational packaging, not by table migration itself.
+
+---
+
+## E. Evidence — VERIFIED vs INFERENCE
+
+VERIFIED (primary source, 2026-09-10)
+- Nessie releases and dates; commit/author counts since 2026-03-01 — GitHub API (`gh api repos/projectnessie/nessie/...`).
+- Nessie 0.108.8 docs; blog index (last post 2024-08-02) — projectnessie.org.
+- Nessie retry semantics and defaults — `CommitRetry.java`, `StoreConfig.java` (`DEFAULT_COMMIT_RETRIES = Integer.MAX_VALUE`, `DEFAULT_COMMIT_TIMEOUT_MILLIS = 5_000`, 5/25/250 ms backoff); per-key conflicts — `CommitLogicImpl.java`; spec text — `projectnessie.org/develop/spec/`; performance statements — `site/docs/develop/kernel.md` (note: that page still describes the older "global-state-log" design; the retry/CAS statements match the current `StoreConfig` javadoc).
+- `gc.enabled=false` injection — `IcebergApiV1TableResource.java` lines ~230-235; single-snapshot metadata generation — `NessieModelIceberg.java` ~1101-1161 (`addMetadataLog/addSnapshotLog` commented out); per-commit metadata.json writes — `CatalogServiceImpl.java` ~365-430, 679-684, 875-880; client warning text — `apache/iceberg` `NessieUtil.java`.
+- `nessie-gc` requirements — projectnessie.org/nessie-latest/gc/.
+- Nessie authn/authz — `site/in-dev/authentication.md`, `authorization.md`; Helm autoscaling — `helm/nessie/values.yaml`.
+- Nessie REST guide quotes (MinIO STS, request signing, "only Bearer and client-ID/secret work", "Nessie will always return only the Iceberg table snapshot that corresponds to the Nessie commit") — projectnessie.org/guides/iceberg-rest/.
+- Polaris/Nessie statements — projectnessie.org blog 2024-08-02; Dremio newsroom 2024-07-30; SiliconANGLE 2024-10-29 (Maloney quotes; "Project Nessie will be retired"); GlobeNewswire 2025-06-03 (migrator donation); polaris.apache.org blog 2026-02-19 and Dremio PR 2026-02-18 (no Nessie mention).
+- Polaris releases 0.9→1.7.0 (2026-08-02); CHANGELOG (EclipseLink removed 1.3; external IdP; Quarkus; `commitTransaction` 409 fix in Unreleased); `commitTransaction` implementation + tests (code search); docs: production config (`relational-jdbc`, Postgres/H2 only), external-idp modes, Helm repo, MinIO guide; issue #3742 open.
+- Lakekeeper releases (v0.13.3 2026-08-17), README feature/status tables (Postgres ≥15, OpenFGA, OPA bridge, MinIO/Ceph vending+signing, OIDC + k8s SA auth, Helm, operator WIP, CI on Spark/PyIceberg/Trino/StarRocks), `commit_transaction` in source, org repos, commit concentration; Red Hat catalog listing "Lakekeeper Plus" by Vakamo.
+- Gravitino releases (1.3.0 2026-06-29); `docs/iceberg-rest-service.md` ("not implemented: Multi-table transactions, View registration"; JDBC/Hive/REST backends; authz only in auxiliary mode).
+- Unity Catalog OSS releases (0.6.0 2026-08-20), README ("sandbox project with LF AI"), server Iceberg REST test names.
+- Hive HIVE-28059 (fixed 4.1.0), HIVE-29145 (fixed 4.2.0, 2025-10-29).
+- Iceberg JDBC docs, Trino metastores docs (jdbc warning, nessie no views), PyIceberg `sql` catalog docs, Iceberg Kafka Connect catalog config, Iceberg `commit.retry.*` defaults, polaris-tools migrator README warnings.
+
+INFERENCE / secondary
+- Polaris has no branching (absence in docs/CHANGELOG + A. Merced June-2026 survey; Merced is a Dremio DevRel — treat as vendor-adjacent).
+- UC OSS "Catalog Commits GA 2026" and current Iceberg write maturity — secondary blog + test names only; docs pages still describe UniForm read use.
+- Practical Nessie HEAD-CAS headroom at N=hundreds of tables; Postgres row growth cost — reasoning from source/defaults, no published benchmark.
+- Ceph RGW STS compatibility with Polaris vending; cut-over downtime "minutes".
+- Polaris MongoDB persistence being new (seen only in Helm doc summary).
+
+---
+
+## F. Verdict for this product
+
+**Plan the move; do not keep Nessie.** Nessie's only differentiator — Git-like catalog branching — is unused here, and everything it costs you is paid anyway: a single-HEAD commit path that every pipeline serializes through, a server that rewrites every table's metadata to a single snapshot and forces `gc.enabled=false`, a mandatory separate `nessie-gc` job and database to reclaim any storage, no engine-native time travel, and a coarse CEL authz model with no credential-scoped access. On top of that, the project is a 0.x codebase with effectively one active maintainer whose employer said in writing (Oct 2024) that it would merge Nessie into Polaris and retire it, has since moved its tooling and engineers to Polaris, and did not mention Nessie once when Polaris graduated in Feb 2026. That is not a foundation for a product you must support for years. For an on-prem, air-gap, small-team, OpenShift-leaning product the two real candidates are **Apache Polaris** (ASF TLP, monthly train, broad multi-vendor community, Postgres, Keycloak external-IdP mode, RBAC + OPA, full REST incl. multi-table commits — but a bigger JVM/Quarkus footprint and an open bug on S3 stores without STS) and **Lakekeeper** (single Rust binary + Postgres, first-class MinIO/Ceph vending and remote signing, OIDC + k8s SA auth, OpenFGA/OPA, Red Hat-certified OpenShift container — but a one-person, one-startup project at 0.13). Default recommendation: **Polaris**, because governance risk is exactly the failure you are escaping and Polaris is the only option with a foundation and many employers behind it; validate the `stsUnavailable`/MinIO-STS path on your storage first, and keep Lakekeeper as the fallback if Polaris' footprint or #3742 bites. Do it **before GA / before customer data accumulates**, because Nessie's single-snapshot metadata means the later you migrate, the more history you throw away and the more orphan clean-up you inherit. Until then, on Nessie: pin `nessie-gc` into the maintenance schedule, jitter the Connect commit interval so N sinks don't hit the HEAD in the same second, monitor `RetryTimeoutException`/409 rates, and raise `nessie.version.store.persist.commit-timeout-millis` above 5 s only as a stop-gap.
