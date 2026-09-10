@@ -39,7 +39,7 @@ Kapsam dışı (şartnamede yok, YAGNI): Camel http/mqtt/rabbitmq lane'leri, sch
 |---|---|---|---|
 | Strimzi (Kafka 4.x, KRaft) | 1.2.0 | Apache-2.0 | operatör (OLM/chart) + `Kafka`, `KafkaConnect`, `KafkaUser` CR |
 | Debezium pg / sqlserver / mongodb | 3.6.x | Apache-2.0 | `KafkaConnect.spec.build` Maven zip artefaktı |
-| Apache Iceberg Kafka Connect sink | 1.11.0 | Apache-2.0 | `spec.build` **maven** artefaktı `org.apache.iceberg:iceberg-kafka-connect` + `iceberg-aws-bundle` (transitive bağımlılıklar Strimzi tarafından çekilir — proposal 015) |
+| Apache Iceberg Kafka Connect sink | 1.11.0 | Apache-2.0 | `spec.build` **maven** artefaktları (F0 S2 ile sabitlendi): `iceberg-kafka-connect`, `iceberg-kafka-connect-transforms`, `iceberg-parquet`, `iceberg-orc`, `iceberg-aws`, `iceberg-aws-bundle` + `org.apache.hadoop:hadoop-client-api`/`-runtime` 3.4.3 (transitive'ler Strimzi tarafından çekilir); build ≈ 10 dk |
 | Apache Polaris (REST katalog) | 1.7.0 | Apache-2.0 | resmi Helm chart + CNPG Postgres |
 | CloudNativePG | 1.30.x | Apache-2.0 | operatör + `Cluster` CR (Polaris, Keycloak, Superset DB'leri) |
 | Apache Spark | 4.1.x | Apache-2.0 | resmi `apache/spark:4.1.x-python3` imajı; Iceberg runtime `spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0` |
@@ -107,11 +107,13 @@ iceberg.tables.dynamic-enabled: "true"
 iceberg.tables.route-field: _cdc.target
 iceberg.tables.auto-create-enabled: "true"
 iceberg.tables.evolve-schema-enabled: "true"
-iceberg.tables.default-partition-by: day(_cdc.ts)      # SPIKE-3 (nested alan); olmazsa partition'sız
+iceberg.tables.default-partition-by: day(_cdc.ts)      # F0 S3 ile doğrulandı: partition spec `_cdc.ts_day: day(7)`
 iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled: "true"
 iceberg.tables.auto-create-props.history.expire.max-snapshot-age-ms: "86400000"
 iceberg.catalog.type: rest ; iceberg.catalog.uri: <polaris>/api/catalog ; oauth2 client-credentials (${secrets:…})
-# commit aralığı SET EDİLMEZ (upstream 300 s)
+# commit aralığı SET EDİLMEZ (upstream 300 s). ZORUNLU (F0 S2): control consumer flap'ına karşı
+iceberg.kafka.session.timeout.ms: "120000" ; iceberg.kafka.heartbeat.interval.ms: "15000"
+iceberg.kafka.max.poll.interval.ms: "300000" ; iceberg.kafka.request.timeout.ms: "130000"
 errors.tolerance: all ; errors.deadletterqueue.topic.name: <source>.dlq ; errors.log.enable: "true"
 ```
 - Bronze satırı = iş kolonları + `_cdc{op,ts,offset,source,target,key}` (DELETE'te `before` satırı, `op=D`). `__op/__ts_ms/__deleted/__lsn/_target_table` sözleşmesi ve InsertField SMT zincirleri **gider**.
@@ -138,12 +140,12 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
       bucket_count: 16
   ```
 - `merge_cdc.py` (15 dk `ScheduledSparkApplication`): Silver `<ns>.<table>` yoksa **Spark DDL** ile yaratır — `CREATE TABLE … USING iceberg PARTITIONED BY (bucket(N, keys)) TBLPROPERTIES ('write.merge.mode'=…, 'write.update.mode'=…, 'write.delete.mode'=…, 'write.distribution-mode'='hash', 'write.metadata.delete-after-commit.enabled'='true')`; snapshot-id watermark (Silver tablo özelliği); latest-per-key `ROW_NUMBER() OVER (PARTITION BY keys ORDER BY _cdc.ts DESC, _cdc.offset DESC)`; `MERGE INTO … WHEN MATCHED AND s._cdc.op='D' THEN DELETE …`; şema-uzlaştırma (add / güvenli genişletme / uyumsuz→fail-loud, R1 haritası); Nessie'ye özgü retry gerekçesi kalkar ama genel commit-conflict retry kalır. pyiceberg ön-oluşturma, py4j identifier okuma, `_target_table` dışlaması **gider**.
-- Spark 4 uyumu: ANSI mode varsayılan → merge SQL'deki CAST/tip genişletmeleri testle doğrulanır (SPIKE-4).
+- Spark 4 uyumu (**F0 S4 ile doğrulandı**): ANSI mode açık → merge/şema-genişletme SQL'inde açık `CAST`/`try_cast`; Bronze `updated_at` gibi timestamptz alanları string gelir → Silver'da `CAST(... AS TIMESTAMP)`. MoR MERGE position-delete üretir, `rewrite_position_delete_files`+compaction sıfırlar; time travel Polaris altında çalışır.
 - **Bakım (D(f)):** `iceberg_maintenance.py` argümanla 3 CR: `--position-deletes` saatlik; `--compact` 6 saatte bir (`rewrite_data_files` `delete-file-threshold=5`, `remove-dangling-deletes=true`, `partial-progress`); `--expire-orphan-ttl` günlük (`expire_snapshots`, `remove_orphan_files older_than 3d`, Bronze `DELETE WHERE _cdc.ts < now()-30d`). `gc.enabled` ALTER hack'i yok. Yazma rejimi gerekçesi: rapor 04 (CoW ≈ 96× tablo/gün → MoR + 6 saatlik katlama ≈ 4×).
 
 ## 7. Katalog, sorgu, kullanıcı yüzü
 
-- **Polaris 1.7**: resmi chart; persistence `relational-jdbc` → CNPG; storage `S3` (endpoint/path-style, **STS'siz** — SPIKE-1 `#3742`); tek `lakehouse` katalog, `default-base-location s3://lakehouse/`, namespace'ler `erp_raw/erp/nginx_raw/…` (Trino `CREATE SCHEMA` runbook adımı ya da sink auto-create — SPIKE-2). Principal'lar: `connect`, `spark`, `trino`, `notebooks` (client-credentials). Yaratma yolu = **runbook** (Polaris management REST API'ye 4 `curl`; `runbooks/install.md`) — şartname "otomatik olmak zorunda değil" ilkesi; idempotent bir Job istenirse sonra. Yedek katalog: Lakekeeper (spike başarısızsa).
+- **Polaris 1.7** (**F0 S1 ile doğrulandı — kalır**): resmi chart (`persistence.type=relational-jdbc` → CNPG `-app` secret'ı; health 8182/API 8181) + `polaris-admin-tool bootstrap` Job; katalog/namespace/rol/grant/principal **tek YAML** ile `polaris setup apply setup.yaml` (credential'lar apply stdout'undan Secret'a; root principal `ROTATE_CREDENTIALS` yapamaz). Tek `lakehouse` katalog, `default_base_location s3://lakehouse/`; katalog konumları çakışamaz. **İki S3 modu (runbook):** STS'li (MinIO/AWS) → vended-credentials; STS'siz → `sts_unavailable: true` + Polaris pod'una `AWS_ACCESS_KEY_ID/SECRET` (`extraEnv`) + istemcilerde delegation header kapalı (`header.X-Iceberg-Access-Delegation=none`, Trino `iceberg.rest-catalog.vended-credentials-enabled=false`) + istemci `s3.*` anahtarları. Principal'lar `connect`, `spark`, `trino`, `notebooks`. Lakekeeper yedeği gerekmedi.
 - **Trino 483** chart: `iceberg.catalog.type=rest`, `iceberg.rest-catalog.security=OAUTH2`; Keycloak OIDC; `accessControl.type=file` + `rules.json` values'tan (mevcut satır-filtre/kolon-maske modeli taşınır); resource groups values; HA coordinator = chart değerleri.
 - **Superset 6.1** chart: `configOverrides` ile Keycloak OAuth + Trino URI; CNPG metadata DB; Alerts&Reports opsiyonel değer.
 - **JupyterHub** z2jh: `hub.config.GenericOAuthenticator` Keycloak; `singleuser.image` resmi pyspark-notebook; `lifecycleHooks.postStart` `pip install pyiceberg[s3fs] trino`; kişisel PVC (F.1.2).

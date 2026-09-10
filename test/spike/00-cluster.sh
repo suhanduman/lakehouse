@@ -21,6 +21,13 @@ if ! kind get clusters | grep -qx "$CLUSTER"; then
   kind create cluster --name "$CLUSTER" "${NODE_IMAGE_ARG[@]}" --wait 120s
 fi
 kubectl config use-context "kind-$CLUSTER" >/dev/null
+# Podman: düğüm konteyneri pids_limit=2048 -> pod başına systemd DefaultTasksMax %15 = 307 thread -> Spark driver
+# "unable to create native thread" (canlı bulgu S0d). Düğüm limitini yükselt + systemd drop-in ile pod TasksMax'ı kaldır
+# (kubelet podPidsLimit pod cgroup'una yansımadı). Docker'da gereksiz; komutlar hata verirse sessizce geçer.
+if [[ "$KIND_EXPERIMENTAL_PROVIDER" == "podman" ]]; then
+  podman update --pids-limit 8192 "${CLUSTER}-control-plane" >/dev/null 2>&1 || true
+  podman exec "${CLUSTER}-control-plane" sh -c 'mkdir -p /etc/systemd/system.conf.d && printf "[Manager]\nDefaultTasksMax=infinity\n" > /etc/systemd/system.conf.d/tasksmax.conf && systemctl daemon-reexec' >/dev/null 2>&1 || true
+fi
 for ns in minio polaris lakehouse spark; do kubectl create ns "$ns" --dry-run=client -o yaml | kubectl apply -f -; done
 
 kubectl -n minio apply -f - <<'YAML'
