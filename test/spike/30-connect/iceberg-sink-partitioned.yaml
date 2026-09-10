@@ -1,0 +1,46 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: iceberg-shop-part
+  namespace: lakehouse
+  labels: {strimzi.io/cluster: connect}
+spec:
+  class: org.apache.iceberg.connect.IcebergSinkConnector
+  tasksMax: 1
+  config:
+    topics.regex: shop\.public\..*
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "true"
+    value.converter.schemas.enable: "true"
+    transforms: dbz
+    transforms.dbz.type: org.apache.iceberg.connect.transforms.DebeziumTransform
+    transforms.dbz.cdc.target.pattern: shop_part_raw.{table}
+    iceberg.tables.dynamic-enabled: "true"
+    iceberg.tables.default-partition-by: day(_cdc.ts)   # S3: nested alanla partition denemesi
+    iceberg.tables.route-field: _cdc.target
+    iceberg.tables.auto-create-enabled: "true"
+    iceberg.tables.evolve-schema-enabled: "true"
+    iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled: "true"
+    iceberg.catalog.type: rest
+    iceberg.catalog.uri: http://polaris.polaris.svc:8181/api/catalog
+    iceberg.catalog.warehouse: lakehouse
+    iceberg.catalog.credential: ${secrets:lakehouse/polaris-connect:credential}
+    iceberg.catalog.scope: PRINCIPAL_ROLE:ALL
+    iceberg.catalog.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+    iceberg.catalog.s3.endpoint: http://minio.minio.svc:9000
+    iceberg.catalog.s3.path-style-access: "true"
+    iceberg.catalog.client.region: us-east-1
+    iceberg.catalog.header.X-Iceberg-Access-Delegation: vended-credentials   # MinIO STS var (S1b); STS'siz S3'te: none + s3.access-key-id/secret
+    # Control-topic consumer (iceberg.kafka.* = sink'in belgeli pass-through'u): veri yokken Connect poll'u 60 s'ye kadar
+    # bloke olur, control consumer yalnız put() içinde poll'lanır -> 45 s varsayılan session timeout her turda düşer,
+    # cg-control sonsuz rebalance -> "committed to 0 table(s)" (canlı bulgu S2). Prod'da da ZORUNLU.
+    iceberg.kafka.session.timeout.ms: "120000"
+    iceberg.kafka.heartbeat.interval.ms: "15000"
+    iceberg.kafka.max.poll.interval.ms: "300000"
+    iceberg.kafka.request.timeout.ms: "130000"
+    iceberg.control.commit.interval-ms: "30000"   # SADECE spike'ta kısa (varsayılan 300000); prod'da set edilmez
+    errors.tolerance: all
+    errors.log.enable: "true"
+    errors.deadletterqueue.topic.name: shop-part.dlq
+    errors.deadletterqueue.topic.replication.factor: "1"

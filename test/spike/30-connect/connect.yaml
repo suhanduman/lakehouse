@@ -1,0 +1,44 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: connect
+  namespace: lakehouse
+  annotations: {strimzi.io/use-connector-resources: "true"}
+spec:
+  version: 4.3.1
+  replicas: 1
+  bootstrapServers: lakehouse-kafka-bootstrap:9092
+  # Strimzi v1 API: bu dört alan spec üst düzeyinde ZORUNLU (config altında değil) — canlı bulgu S2
+  groupId: connect
+  configStorageTopic: connect-configs
+  offsetStorageTopic: connect-offsets
+  statusStorageTopic: connect-status
+  config:
+    config.storage.replication.factor: -1
+    offset.storage.replication.factor: -1
+    status.storage.replication.factor: -1
+    config.providers: secrets
+    config.providers.secrets.class: io.strimzi.kafka.KubernetesSecretConfigProvider
+  build:
+    output:
+      type: docker
+      image: ttl.sh/lakehouse-connect-spike-CHANGEME:24h   # 30-connect.sh benzersiz UUID ile değiştirir
+    plugins:
+    - name: debezium-postgres
+      artifacts:
+      - type: zip
+        url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.6.2.Final/debezium-connector-postgres-3.6.2.Final-plugin.zip
+    - name: iceberg
+      artifacts:
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-kafka-connect, version: 1.11.0}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-kafka-connect-transforms, version: 1.11.0}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-parquet, version: 1.11.0}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-orc, version: 1.11.0}          # 1.11: GenericFormatModels static init ORC ister (canlı bulgu S2a)
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-aws, version: 1.11.0}          # S3FileIO burada (canlı bulgu S2a)
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-aws-bundle, version: 1.11.0}   # shaded AWS SDK
+      # Parquet yazıcısı Hadoop Configuration ister; runtime zip hadoop-common(+ağaç) taşır — biz shaded, bağımlılıksız client jar'larını alıyoruz (Iceberg 1.11 = Hadoop 3.4.3)
+      - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-api, version: 3.4.3}
+      - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-runtime, version: 3.4.3}
+  resources:
+    requests: {cpu: 500m, memory: 1536Mi}
+    limits: {memory: 2Gi}
