@@ -4,6 +4,7 @@ kafka:
   replicas: 1
   storageSize: 5Gi
   plainListener: true
+  externalListener: true
   config:
     default.replication.factor: 1
     min.insync.replicas: 1
@@ -29,8 +30,14 @@ sources:
   database: shop
   tables: [public.orders]
   signalTable: public.debezium_signal
+- name: crm
+  type: mongodb
+  connectionString: "mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0"
+  collections: [crm.customers]
 pipelines:
 - {bronze: shop_raw.orders, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}
+- {bronze: crm_raw.customers, keys: [_id], bucket_count: 4}
+nginx: {enabled: true, partitions: 3}
 spark:
   driver:   {cores: 1, memory: 1536m, memoryOverhead: 512m}
   executor: {instances: 1, cores: 1, memory: 1g, memoryOverhead: 512m}
@@ -39,3 +46,4 @@ spark:
     positionDeletes: "15 2 * * *"
     compact: "30 2 * * *"
     expireOrphanTtl: "45 2 * * *"
+    mongoBronze: "*/30 * * * *"        # e2e tek seferlik koşturur

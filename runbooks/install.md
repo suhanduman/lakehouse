@@ -5,7 +5,7 @@
 - S3 uyumlu depolama + bucket (`lakehouse`). Kind/dev için `components.minio=true` küme içi MinIO kurar.
 - Secret'lar (Git'e girmez; kurulumdan önce `lakehouse` ns'inde): `polaris-root` (`clientId`, `clientSecret`), `keycloak-admin` (`username`, `password`), `connect-push` (`kubernetes.io/dockerconfigjson`; Connect build çıktısını registry'ye iter — `connect.buildPushSecret`), `s3-creds` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) — her ortamda aynı isim: dev'de `components.minio=true` iken glue chart'ın MinIO şablonu tarafından üretilir, prod'da kurulumdan önce operatör tarafından oluşturulur.
 - Kaynak DB kimlik bilgileri (F2): `<source>-db` Secret'ları (`username`, `password`).
-- **Spark işleri her koşuda `spark.jars.packages`'i Maven Central'dan (`repo1.maven.org`) çözer** (Iceberg runtime + AWS bundle; driver/executor pod'ları `/tmp/.ivy2`'ye indirir, pod ömürlük). Yani `silver-merge` ve 3 bakım işi için **sürekli dışarı erişim** gerekir; kapalı ağda işler `UnresolvedAddressException`/`Ivy` hatasıyla FAILED olur. Kısıtlı ağ seçenekleri (F5 işi, bu sürümde uygulanmadı): iç Maven aynası (`spark.jars.ivySettings` ile) ya da `spark.jars.ivy`'yi kalıcı bir PVC'ye alıp tek seferlik ısıtma.
+- **Spark işleri her koşuda `spark.jars.packages`'i Maven Central'dan (`repo1.maven.org`) çözer** (Iceberg runtime + AWS bundle; driver/executor pod'ları `/tmp/.ivy2`'ye indirir, pod ömürlük). Yani `silver-merge`, `mongo-bronze` ve 3 bakım işi için **sürekli dışarı erişim** gerekir; kapalı ağda işler `UnresolvedAddressException`/`Ivy` hatasıyla FAILED olur. Kısıtlı ağ seçenekleri (F5 işi, bu sürümde uygulanmadı): iç Maven aynası (`spark.jars.ivySettings` ile) ya da `spark.jars.ivy`'yi kalıcı bir PVC'ye alıp tek seferlik ısıtma.
 
 ## Adımlar
 1. `platform/values/glue.yaml` ve `polaris.yaml`'ı ortama göre düzenle (hostname, S3 endpoint, `platform`, `route`, **`connect.buildImage`** = Connect build çıktısının gerçek `registry/repo:tag`'i — zorunlu, `:latest` kullanma; gerekiyorsa `connect.buildPushSecret`; HA/depolama için `cnpg.*.instances` ve `kafka.storageClass`/`cnpg.*.storageClass`); `platform/polaris/setup.yaml`'da S3 endpoint'i.
@@ -28,3 +28,5 @@ Podman: kind ≥ 0.33 (Podman 6 uyumu); `kind.sh` düğüm pids limitini yüksel
 - Polaris health `:8182/q/health`, API `:8181`; bootstrap Job log'u `kubectl -n lakehouse logs job/polaris-bootstrap`.
 - Spark işi FAILED: `kubectl -n lakehouse get sparkapplication`; `kubectl -n lakehouse logs <ad>-driver`.
 - `silver-merge` `SchemaConflict`: Silver kolon tipi güvenli genişletilemiyor → manuel `ALTER TABLE` ya da yeni kolon.
+- `mongo-bronze` `KAFKA_JAAS` yok → KafkaUser spark yalnız mongodb kaynağı varken oluşur.
+- nginx: `nginx.dlq` doluysa `ts` dönüşümü başarısız (Fluent Bit lua filtresi eksik).

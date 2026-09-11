@@ -12,6 +12,9 @@ cnpg:
   polarisDb: {instances: 2}
   keycloakDb: {instances: 2}
 # Ingestion (F2): kaynaklar ve pipeline'lar kurulumda doldurulur — runbooks/add-source.md
+# nginx erişim logu (F3): Fluent Bit ajanları müşteri sunucusunda -> Kafka dış listener (Route). Açmadan önce ikisini de doldur:
+#kafka: {externalListener: true}
+#nginx: {enabled: true}
 s3:
   endpoint: https://s3.example.com     # müşteri S3 endpoint'i (platform/polaris/setup.yaml ile aynı)
   vendedCredentials: true              # STS yoksa false (F0 S1c)

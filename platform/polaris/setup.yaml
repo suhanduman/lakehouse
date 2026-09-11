@@ -27,3 +27,5 @@ catalogs:
       - name: shop_raw
       - name: shop
       - name: nginx_raw
+      - name: crm_raw
+      - name: crm

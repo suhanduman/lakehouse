@@ -35,3 +35,6 @@ jobs:
           kubectl -n lakehouse get kafkaconnector -o wide || true
           kubectl -n lakehouse get sparkapplication,scheduledsparkapplication || true
           for p in $(kubectl -n lakehouse get pods -o name | grep -- -driver); do kubectl -n lakehouse logs "$p" --tail=40 || true; done
+          kubectl -n lakehouse get kafkatopic,kafkauser || true
+          kubectl -n lakehouse logs deploy/fluent-bit --tail=40 || true
+          kubectl -n lakehouse logs deploy/demo-mongo --tail=20 || true
