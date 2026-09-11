@@ -50,7 +50,8 @@ def main() -> None:
                      ", options => map('delete-file-threshold','5','remove-dangling-deletes','true','partial-progress.enabled','true')")
             else:
                 call(spark, "expire_snapshots", t, f", older_than => TIMESTAMP '{ts_days_ago(a.snapshot_days)}', retain_last => 1")
-                call(spark, "remove_orphan_files", t, f", older_than => TIMESTAMP '{ts_days_ago(a.orphan_days)}'")
+                # prefix_listing: Hadoop FS yerine FileIO (S3FileIO) ile listeler -> resmi Spark imajında s3a yok (F2 e2e: "No FileSystem for scheme s3")
+                call(spark, "remove_orphan_files", t, f", older_than => TIMESTAMP '{ts_days_ago(a.orphan_days)}', prefix_listing => true")
                 if t in bronze:
                     sql = f"DELETE FROM {CATALOG}.{t} WHERE _cdc.ts < current_timestamp() - INTERVAL {a.bronze_ttl_days} DAYS"
                     print(sql)
