@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: glue, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "1"}}
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/suhanduman/lakehouse.git
+    targetRevision: v2
+    path: glue
+    helm:
+      valueFiles: [../platform/values/glue.yaml]
+  destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true, RespectIgnoreDifferences=true]
+  ignoreDifferences:
+  - group: kafka.strimzi.io
+    kind: KafkaConnect
+    jsonPointers: [/spec/build/output/image]   # Strimzi digest ile yeniden yazar

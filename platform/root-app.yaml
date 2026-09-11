@@ -1,0 +1,12 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: lakehouse-root, namespace: argocd, finalizers: [resources-finalizer.argocd.argoproj.io]}
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/suhanduman/lakehouse.git
+    targetRevision: v2
+    path: platform/envs/dev        # bootstrap.sh --env ile değiştirilir
+  destination: {server: https://kubernetes.default.svc, namespace: argocd}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}

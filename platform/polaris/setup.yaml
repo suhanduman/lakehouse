@@ -1,0 +1,29 @@
+# `polaris setup apply` (apache-polaris CLI 1.7.0) — katalog/namespace/rol/grant/principal tek YAML. Şema = `setup export`.
+# S3 modu: STS varsa (MinIO/AWS) bu hâliyle; STS yoksa `sts_unavailable: true` ekle (F0 S1c) ve istemcilerde delegation header'ı kapat.
+principal_roles: [writers, readers]
+principals:
+  connect:   {type: service, roles: [writers]}
+  spark:     {type: service, roles: [writers]}
+  trino:     {type: service, roles: [readers]}
+  notebooks: {type: service, roles: [readers]}
+catalogs:
+  - name: lakehouse
+    type: internal
+    storage_type: s3
+    default_base_location: s3://lakehouse/
+    allowed_locations: [s3://lakehouse/]
+    region: us-east-1
+    endpoint: http://minio.lakehouse.svc:9000            # prod: müşteri S3 endpoint'i (kurulumda değiştir)
+    endpoint_internal: http://minio.lakehouse.svc:9000
+    path_style_access: true
+    roles:
+      lakehouse_admin:
+        assign_to: [writers]
+        privileges: {catalog: [CATALOG_MANAGE_CONTENT]}
+      lakehouse_read:
+        assign_to: [readers]
+        privileges: {catalog: [CATALOG_READ_PROPERTIES, NAMESPACE_LIST, TABLE_LIST, TABLE_READ_PROPERTIES, TABLE_READ_DATA, VIEW_LIST, VIEW_READ_PROPERTIES]}
+    namespaces:
+      - name: shop_raw
+      - name: shop
+      - name: nginx_raw

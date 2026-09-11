@@ -1,0 +1,5 @@
+# prod varsayılanları (glue/values.yaml üstüne): müşteri S3'ü, 3 broker, Route (openshift) — hostname/S3 kurulumda doldurulur
+platform: openshift
+route: {enabled: true}
+keycloak:
+  hostname: keycloak.lakehouse.example.com

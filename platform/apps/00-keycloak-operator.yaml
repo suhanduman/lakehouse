@@ -1,0 +1,13 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: keycloak-operator, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/suhanduman/lakehouse.git
+    targetRevision: v2
+    path: platform/keycloak-operator
+  destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

@@ -1,0 +1,23 @@
+# kind / lokal geliştirme
+platform: vanilla
+kafka:
+  replicas: 1
+  storageSize: 5Gi
+  plainListener: true
+  config:
+    default.replication.factor: 1
+    min.insync.replicas: 1
+    offsets.topic.replication.factor: 1
+    transaction.state.log.replication.factor: 1
+    transaction.state.log.min.isr: 1
+connect:
+  buildImage: ttl.sh/lakehouse-connect-dev:24h
+cnpg:
+  polarisDb: {instances: 1, storageSize: 2Gi}
+  keycloakDb: {instances: 1, storageSize: 2Gi}
+components: {minio: true}
+networkPolicy: {enabled: false}      # kind'ın varsayılan CNI'si NetworkPolicy enforce etmez; prod'da true
+keycloak:
+  hostname: keycloak.127.0.0.1.nip.io
+sources:
+- {name: shop, topicPrefix: shop}
