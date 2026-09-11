@@ -36,6 +36,8 @@ def parse_pipelines(doc: dict) -> list[Pipeline]:
 
 def silver_name(bronze: str) -> str:
     """<ns>_raw.<t> -> <ns>.<t>"""
+    if "." not in bronze:
+        raise ValueError(f"{bronze!r}: Bronze tablo adı '<namespace>.<tablo>' biçiminde olmalı (ör. shop_raw.orders)")
     ns, tbl = bronze.rsplit(".", 1)
     if not ns.endswith("_raw"):
         raise ValueError(f"{bronze}: Bronze namespace '_raw' ile bitmeli ya da pipeline'da 'silver' verilmeli")
@@ -59,6 +61,8 @@ def silver_columns(bronze_fields: list[tuple[str, str]], casts: dict[str, str]) 
 
 
 def create_silver_sql(silver: str, columns: list[tuple[str, str]], keys: list[str], write_mode: str, bucket_count: int) -> str:
+    if not keys:
+        raise ValueError(f"{silver}: 'keys' boş olamaz (MERGE anahtarı ve bucket partition'ı ondan türer)")
     names = {n for n, _ in columns}
     missing = [k for k in keys if k not in names]
     if missing:
@@ -68,6 +72,7 @@ def create_silver_sql(silver: str, columns: list[tuple[str, str]], keys: list[st
              "write.delete.mode": write_mode, "write.distribution-mode": "hash",
              "write.metadata.delete-after-commit.enabled": "true"}
     tbl = ", ".join(f"'{k}'='{v}'" for k, v in props.items())
+    # bucket(N, keys[0]): YALNIZ ilk anahtar bölümlemeye girer -> keys'i kardinalitesi yüksek olan kolonla başlat
     return (f"CREATE TABLE IF NOT EXISTS {silver} ({cols}) USING iceberg "
             f"PARTITIONED BY (bucket({bucket_count}, {q(keys[0])})) TBLPROPERTIES ({tbl})")
 

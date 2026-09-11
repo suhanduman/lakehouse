@@ -14,12 +14,25 @@ def test_parse_pipelines_defaults_and_validation():
     with pytest.raises(ValueError):
         ml.parse_pipelines({"pipelines": [{"bronze": "x_raw.t", "keys": ["a"], "write_mode": "cow"}]})
     assert ml.parse_pipelines({}) == []
+    # pipelines.json'da fazladan anahtarlar var (bronze_namespaces — bakım işi kullanır): parse etkilenmez
+    extra = ml.parse_pipelines({"pipelines": [{"bronze": "shop_raw.orders", "keys": ["id"]}], "bronze_namespaces": ["shop_raw"]})
+    assert [p.bronze for p in extra] == ["shop_raw.orders"]
 
 
 def test_silver_name_strips_raw_suffix():
     assert ml.silver_name("shop_raw.orders") == "shop.orders"
     with pytest.raises(ValueError):
         ml.silver_name("shop.orders")
+
+
+def test_silver_name_requires_namespace():
+    with pytest.raises(ValueError, match="namespace"):
+        ml.silver_name("orders")
+
+
+def test_create_silver_sql_requires_keys():
+    with pytest.raises(ValueError, match="keys"):
+        ml.create_silver_sql("lakehouse.shop.orders", ml.silver_columns(B, {}), [], "merge-on-read", 4)
 
 
 def test_silver_columns_drop_cdc_and_apply_casts():

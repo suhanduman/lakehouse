@@ -2,7 +2,9 @@
   --mode position-deletes   Silver: rewrite_position_delete_files (MoR delete dosyalarını katla)         saatlik
   --mode compact            Silver+Bronze: rewrite_data_files(delete-file-threshold=5, remove-dangling-deletes, partial-progress)  6 saat
   --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts < now-ttl  günlük
-Tablolar pipelines.json'dan (bronze + türetilen silver). Var olmayan tablo atlanır (henüz veri gelmemiş olabilir)."""
+Silver tabloları pipelines.json'dan (bronze'dan türetilir). Bronze tabloları KATALOGDAN: pipelines.json'daki
+bronze_namespaces için SHOW TABLES (+ pipelines'ın bronze adları) — Silver pipeline'ı olmayan (append-only) Bronze
+tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir)."""
 import argparse
 import json
 import os
@@ -12,14 +14,29 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import merge_lib as ml  # noqa: E402
 from merge_cdc import CATALOG, PIPELINES, session, table_exists  # noqa: E402
+from pyspark.sql.utils import AnalysisException  # noqa: E402
 
 
 def ts_days_ago(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S+00:00")
 
 
+def bronze_tables(spark, namespaces: list[str], from_pipelines: list[str]) -> list[str]:
+    """bronze_namespaces içindeki tüm tablolar (ns.tablo) + pipelines'ın bronze adları. Olmayan namespace atlanır."""
+    out = set(from_pipelines)
+    for ns in namespaces:
+        try:
+            rows = spark.sql(f"SHOW TABLES IN {CATALOG}.{ns}").collect()
+        except AnalysisException as e:
+            print(f"[{ns}] namespace yok/okunamadı — atlandı ({type(e).__name__}: {str(e)[:120]})")
+            continue
+        out |= {f"{ns}.{r['tableName']}" for r in rows}
+    return sorted(out)
+
+
 def call(spark, proc: str, table: str, extra: str = "") -> None:
-    sql = f"CALL {CATALOG}.system.{proc}(table => '{table}'{extra})"
+    # katalogla nitelenmiş ad: aksi hâlde Spark, prosedür argümanının ilk parçasını katalog sanıp CATALOG_NOT_FOUND yoklar
+    sql = f"CALL {CATALOG}.system.{proc}(table => '{CATALOG}.{table}'{extra})"
     print(sql)
     for r in spark.sql(sql).collect():
         print("  ", r.asDict())
@@ -33,16 +50,18 @@ def main() -> None:
     ap.add_argument("--bronze-ttl-days", type=int, default=30)
     a = ap.parse_args()
     with open(PIPELINES, encoding="utf-8") as f:
-        pipes = ml.parse_pipelines(json.load(f))
+        doc = json.load(f)
+    pipes = ml.parse_pipelines(doc)
     silver = [p.silver or ml.silver_name(p.bronze) for p in pipes]
-    bronze = [p.bronze for p in pipes]
     spark = session(f"maint-{a.mode}")
+    bronze = bronze_tables(spark, list(doc.get("bronze_namespaces") or []), [p.bronze for p in pipes])
     failed = []
     for t in (silver if a.mode == "position-deletes" else silver + bronze):
-        if not table_exists(spark, f"{CATALOG}.{t}"):
-            print(f"[{t}] yok — atlandı")
-            continue
         try:
+            # table_exists try İÇİNDE: tek bir bozuk/erişilemeyen tablo döngünün kalanını kesmesin (sonda fail-loud)
+            if not table_exists(spark, f"{CATALOG}.{t}"):
+                print(f"[{t}] yok — atlandı")
+                continue
             if a.mode == "position-deletes":
                 call(spark, "rewrite_position_delete_files", t)
             elif a.mode == "compact":
@@ -53,7 +72,9 @@ def main() -> None:
                 # prefix_listing: Hadoop FS yerine FileIO (S3FileIO) ile listeler -> resmi Spark imajında s3a yok (F2 e2e: "No FileSystem for scheme s3")
                 call(spark, "remove_orphan_files", t, f", older_than => TIMESTAMP '{ts_days_ago(a.orphan_days)}', prefix_listing => true")
                 if t in bronze:
-                    sql = f"DELETE FROM {CATALOG}.{t} WHERE _cdc.ts < current_timestamp() - INTERVAL {a.bronze_ttl_days} DAYS"
+                    # gün başına hizalı sınır: day(_cdc.ts) partition'ları tam düşer (kısmi gün = gereksiz delete dosyası)
+                    sql = (f"DELETE FROM {CATALOG}.{t} WHERE _cdc.ts < "
+                           f"date_trunc('DAY', current_timestamp() - INTERVAL {a.bronze_ttl_days} DAYS)")
                     print(sql)
                     spark.sql(sql)
         except Exception as e:  # noqa: BLE001

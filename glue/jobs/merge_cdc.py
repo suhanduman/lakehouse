@@ -1,6 +1,12 @@
 """merge_cdc — Bronze(_cdc) -> Silver MERGE (ScheduledSparkApplication silver-merge). Spark 4.1 / Iceberg 1.11 / Polaris REST.
-Watermark: Silver TBLPROPERTIES 'lakehouse.bronze.snapshot-id' -> artımlı okuma (yalnız append snapshot'ları); yoksa/okunamazsa
-tam okuma (snapshot-id=cur). MERGE idempotent (anahtar başına son durum) -> yeniden işleme güvenli. Bronze yoksa (henüz veri gelmedi) atlanır."""
+Watermark: Silver TBLPROPERTIES 'lakehouse.bronze.snapshot-id' -> artımlı okuma (yalnız append snapshot'ları).
+Artımlı okuma başarısızsa yedek yol (versionAsOf=cur) ikinci bir özellikle sınırlanır: 'lakehouse.bronze.max-ts' = işlenen
+artımdaki en büyük _cdc.ts. Yedek okuma `_cdc.ts >= max-ts - INTERVAL 1 DAY` filtresiyle yapılır; Bronze day(_cdc.ts) ile
+bölümlendiği için partition pruning devreye girer (tam tarama yerine 1-2 gün).
+SINIR: sınırlı yedek okuma, geç gelen satırların _cdc.ts'inin görülen en büyük değerin 1 günü içinde olduğunu VARSAYAR;
+daha eski _cdc.ts taşıyan bir satır ancak tam okumayla (max-ts özelliği silinirse ya da elle bir MERGE ile) yakalanır.
+max-ts yoksa (ilk koşu) tam okuma yapılır. MERGE idempotent (anahtar başına son durum) -> yeniden işleme güvenli.
+Bronze yoksa (henüz veri gelmedi) atlanır."""
 import json
 import os
 import sys
@@ -9,9 +15,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import merge_lib as ml  # noqa: E402
 from pyspark.sql import SparkSession  # noqa: E402
+from pyspark.sql.functions import max as spark_max  # noqa: E402
 from pyspark.sql.utils import AnalysisException  # noqa: E402
 
 WM_PROP = "lakehouse.bronze.snapshot-id"
+MAXTS_PROP = "lakehouse.bronze.max-ts"   # işlenen artımdaki en büyük _cdc.ts (ISO); sınırlı yedek okuma için
 CATALOG = os.environ.get("LAKEHOUSE_CATALOG", "lakehouse")
 PIPELINES = os.environ.get("PIPELINES_FILE", "/opt/job/pipelines.json")
 
@@ -41,28 +49,51 @@ def table_exists(spark, table) -> bool:
 
 
 def current_snapshot(spark, table):
-    rows = spark.sql(f"SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1").collect()
+    # refs: main dalının ucu (committed_at sıralaması yerine) — expire/rollback sonrası da doğru uç
+    rows = spark.sql(f"SELECT snapshot_id FROM {table}.refs WHERE name = 'main'").collect()
+    if not rows:
+        rows = spark.sql(f"SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1").collect()
     return int(rows[0][0]) if rows else None
 
 
-def watermark(spark, silver):
-    rows = spark.sql(f"SHOW TBLPROPERTIES {silver} ('{WM_PROP}')").collect()
+def tbl_property(spark, table, prop):
+    """TBLPROPERTIES değeri; yoksa None (Spark 'Table ... does not have property' metnini değer olarak döner)."""
+    rows = spark.sql(f"SHOW TBLPROPERTIES {table} ('{prop}')").collect()
     val = rows[0]["value"] if rows else None
-    return int(val) if val and str(val).isdigit() else None
+    if val is None or "does not have property" in str(val):
+        return None
+    return str(val)
 
 
-def load_bronze(spark, bronze, wm, cur):
+def watermark(spark, silver):
+    val = tbl_property(spark, silver, WM_PROP)
+    return int(val) if val and val.isdigit() else None
+
+
+def max_ts_watermark(spark, silver):
+    """ISO zaman damgası (rakamla başlar); tırnak içeren değer SQL'e gömülmez (fail-safe -> tam okuma)."""
+    val = tbl_property(spark, silver, MAXTS_PROP)
+    return val if val and val[:1].isdigit() and "'" not in val else None
+
+
+def load_bronze(spark, bronze, wm, cur, max_ts=None):
     """(df, mod). Artımlı: (wm, cur] aralığındaki append snapshot'ları; delete/replace snapshot'ları Iceberg atlar.
-    Herhangi bir hata (snapshot expire edilmiş, overwrite vb.) -> cur snapshot'ının tam okuması."""
+    Herhangi bir hata (snapshot expire edilmiş, overwrite vb.) -> cur snapshot'ının okunması: max-ts biliniyorsa
+    `_cdc.ts >= max-ts - 1 gün` ile SINIRLI (day(_cdc.ts) partition pruning), bilinmiyorsa TAM."""
     if wm is not None:
         try:
             df = spark.read.format("iceberg").option("start-snapshot-id", wm).option("end-snapshot-id", cur).load(bronze)
             df.limit(1).count()  # fizik planı zorla: Iceberg artımlı scan doğrulaması (expire edilmiş wm, overwrite) burada patlar
             return df, "incremental"
         except Exception as e:  # noqa: BLE001
-            print(f"[{bronze}] artımlı okuma başarısız ({type(e).__name__}: {str(e)[:160]}) -> tam okuma")
+            print(f"[{bronze}] artımlı okuma başarısız ({type(e).__name__}: {str(e)[:160]}) -> yedek okuma")
     # Iceberg 1.11 / Spark 4: `snapshot-id` okuma seçeneği kaldırıldı -> Spark'ın yerleşik `versionAsOf` (F2 e2e canlı bulgu)
-    return spark.read.format("iceberg").option("versionAsOf", cur).load(bronze), "full"
+    df = spark.read.format("iceberg").option("versionAsOf", cur).load(bronze)
+    if max_ts:
+        print(f"[{bronze}] FALLBACK bounded (_cdc.ts >= {max_ts} - INTERVAL 1 DAY)")
+        return df.where(f"_cdc.ts >= to_timestamp('{max_ts}') - INTERVAL 1 DAY"), "FALLBACK bounded"
+    print(f"[{bronze}] FALLBACK full")
+    return df, "FALLBACK full"
 
 
 def with_commit_retry(fn, tries=3):
@@ -93,21 +124,26 @@ def run_pipeline(spark, p: ml.Pipeline) -> None:
         ddl = ml.create_silver_sql(silver, cols, p.keys, p.write_mode, p.bucket_count)
         print(ddl)
         spark.sql(ddl)
-        wm = None
+        wm, prev_max_ts = None, None
     else:
         for ddl in ml.plan_schema_changes(silver, ml.business_columns(fields(spark, silver)), cols):
             print(ddl)
             spark.sql(ddl)
         wm = watermark(spark, silver)
+        prev_max_ts = max_ts_watermark(spark, silver)
     if wm == cur:
         print(f"[{p.bronze}] yeni snapshot yok (watermark {cur})")
         return
-    df, mode = load_bronze(spark, bronze, wm, cur)
+    df, mode = load_bronze(spark, bronze, wm, cur, prev_max_ts)
     df.createOrReplaceTempView("bronze_inc")
     spark.sql(ml.dedup_select_sql("bronze_inc", cols, p.keys, p.casts)).createOrReplaceTempView("inc")
     n = spark.table("inc").count()
     with_commit_retry(lambda: spark.sql(ml.merge_sql(silver, "inc", cols, p.keys)))
-    spark.sql(f"ALTER TABLE {silver} SET TBLPROPERTIES ('{WM_PROP}'='{cur}')")
+    mx = spark.table("bronze_inc").agg(spark_max("_cdc.ts")).collect()[0][0]
+    if mx is not None and getattr(mx, "tzinfo", None) is not None:
+        mx = mx.replace(tzinfo=None)          # to_timestamp() literali tz eki almaz (oturum saat dilimi UTC)
+    props = f"'{WM_PROP}'='{cur}'" + (f", '{MAXTS_PROP}'='{mx.isoformat(sep=' ')}'" if mx is not None else "")
+    spark.sql(f"ALTER TABLE {silver} SET TBLPROPERTIES ({props})")
     print(f"[{p.bronze}] -> {silver}: {mode}, {n} anahtar, snapshot {wm} -> {cur}")
 
 
