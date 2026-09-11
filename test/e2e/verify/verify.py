@@ -1,5 +1,6 @@
-"""verify.py <ns.table> <min_rows> [--wait SANİYE] [--exact] [--prev-rows N] [k=v:k=v ...] ['!k=v' ...]
+"""verify.py <ns.table> <min_rows> [--wait SANİYE] [--exact] [--prev-rows N] [k=v:~k2=s ...] ['!k=v' ...]
 Polaris'ten pyiceberg ile okur (küme içi Job; F0 karar 9). k=v:k=v -> tüm eşleşen bir satır OLMALI; !k=v -> böyle satır OLMAMALI.
+~k=s -> alan değeri s'yi İÇERİR (str; JSON _doc / timestamp için); ':' ile birleşik satırda parça başına kullanılabilir.
 --wait: koşullar sağlanana kadar 15 s aralıkla tekrar dener (sink commit / merge gecikmesi).
 --exact: satır sayısı min_rows'a EŞİT olmalı (fazlası da hata; MERGE sonrası Silver'da kesin sayı).
 --prev-rows N: mevcut snapshot'ın EBEVEYNİ (parent_snapshot_id) taranır ve satır sayısı N olmalı — spec §9 zaman-yolculuğu."""
@@ -25,16 +26,20 @@ while rest and rest[0].startswith("--"):        # bayraklar koşullardan önce (
     else:
         print(f"bilinmeyen bayrak: {rest[0]}")
         sys.exit(2)
-must = [dict(kv.split("=", 1) for kv in c.split(":")) for c in rest if not c.startswith("!")]
-must_not = [dict(kv.split("=", 1) for kv in c[1:].split(":")) for c in rest if c.startswith("!")]
+def cond(c):                                    # "k=v:~k2=s" -> [(k, v, exact), (k2, s, contains)]
+    return [(kv.lstrip("~").split("=", 1)[0], kv.split("=", 1)[1], not kv.startswith("~")) for kv in c.split(":")]
+
+
+must = [cond(c) for c in rest if not c.startswith("!")]
+must_not = [cond(c[1:]) for c in rest if c.startswith("!")]
 cat = load_catalog("lakehouse", type="rest", uri=os.environ["POLARIS_URI"], warehouse="lakehouse",
                    credential=f"{os.environ['CLIENT_ID']}:{os.environ['CLIENT_SECRET']}", scope="PRINCIPAL_ROLE:ALL",
                    **{"header.X-Iceberg-Access-Delegation": "vended-credentials", "s3.endpoint": os.environ["S3_ENDPOINT"],
                       "s3.path-style-access": "true", "s3.region": "us-east-1"})
 
 
-def match(row, cond):
-    return all(str(row.get(k)) == v for k, v in cond.items())
+def match(row, parts):
+    return all(str(row.get(k)) == v if exact else v in str(row.get(k) or "") for k, v, exact in parts)
 
 
 deadline = time.time() + wait

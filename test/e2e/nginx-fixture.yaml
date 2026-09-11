@@ -1,0 +1,40 @@
+# e2e nginx yolu: örnek combined access.log (3 satır) + küme içi Fluent Bit 5.1.2 (aynı ajan config'i: agents/fluent-bit/*,
+# ConfigMap fluent-bit-config'i nginx-path.sh o dosyalardan yaratır — kopya yok). Gerçekte ajan müşteri sunucusunda koşar.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: nginx-sample-log, namespace: lakehouse}
+data:
+  access.log: |
+    10.0.0.1 - - [11/Sep/2026:13:52:24 +0000] "GET /index.html HTTP/1.1" 200 512 "-" "curl/8.0"
+    10.0.0.2 - - [11/Sep/2026:13:52:25 +0000] "POST /api/orders HTTP/1.1" 201 87 "-" "Mozilla/5.0"
+    10.0.0.3 - - [11/Sep/2026:13:52:26 +0000] "GET /missing HTTP/1.1" 404 153 "-" "curl/8.0"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: fluent-bit, namespace: lakehouse}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: fluent-bit}}
+  template:
+    metadata: {labels: {app: fluent-bit}}
+    spec:
+      containers:
+      - name: fluent-bit
+        image: fluent/fluent-bit:5.1.2
+        args: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
+        env:
+        - {name: KAFKA_BOOTSTRAP, value: lakehouse-kafka-bootstrap:9093}
+        - {name: KAFKA_PASSWORD, valueFrom: {secretKeyRef: {name: fluentbit, key: password}}}
+        - {name: KAFKA_CA, value: /etc/kafka-ca/ca.crt}
+        - {name: NGINX_ACCESS_LOG, value: /var/log/nginx/access.log}
+        - {name: READ_FROM_HEAD, value: "on"}
+        volumeMounts:
+        - {name: config, mountPath: /fluent-bit/etc/}
+        - {name: sample-log, mountPath: /var/log/nginx/}
+        - {name: kafka-ca, mountPath: /etc/kafka-ca/, readOnly: true}
+        - {name: buffer, mountPath: /var/lib/fluent-bit}
+      volumes:
+      - {name: config, configMap: {name: fluent-bit-config}}
+      - {name: sample-log, configMap: {name: nginx-sample-log}}
+      - {name: kafka-ca, secret: {secretName: lakehouse-cluster-ca-cert, items: [{key: ca.crt, path: ca.crt}]}}
+      - {name: buffer, emptyDir: {}}

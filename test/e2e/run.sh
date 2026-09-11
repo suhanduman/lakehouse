@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e (F1): kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke Job. CI ve lokal aynı.
+# e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) yolları. CI ve lokal aynı.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; MODE=argocd; REVISION="${REVISION:-v2}"; REPO="${REPO:-https://github.com/suhanduman/lakehouse.git}"
 while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --repo) REPO="$2"; shift 2;; *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
@@ -9,6 +9,8 @@ while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) R
 # CRD + operatör webhook'u hazır olmadan apply reddedilir (CI: "failed calling webhook mcluster.cnpg.io") -> sınırlı yeniden deneme
 for _ in $(seq 1 60); do kubectl apply -f "$ROOT/test/e2e/pg-fixture.yaml" >/dev/null 2>&1 && break; sleep 5; done
 kubectl -n lakehouse get cluster/demo-pg >/dev/null
+# Mongo fixture'ı da connector'lardan önce (dbz-crm Secret crm-db'yi bekler — aksi glue Degraded, F2 notu 8); idempotent
+kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun
   kubectl -n argocd wait application/lakehouse-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
@@ -55,3 +57,5 @@ kubectl -n lakehouse wait --for=condition=complete job/polaris-smoke --timeout=6
 kubectl -n lakehouse logs job/polaris-smoke | grep "^OK"
 echo "E2E F1 OK"
 "$ROOT/test/e2e/pg-path.sh"
+"$ROOT/test/e2e/mongo-path.sh"
+"$ROOT/test/e2e/nginx-path.sh"
