@@ -49,6 +49,8 @@ def test_classify_paths():
     assert kind == "quarantine" and p["reason"] == "no-key"
     kind, p = mg.classify(KEY_OID, "garbage")
     assert kind == "quarantine" and p["reason"] == "bad-envelope"
+    kind, p = mg.classify(KEY_OID, env("c", ts=None))
+    assert kind == "quarantine" and p["reason"] == "no-ts"
 
 
 def test_offsets_json_shapes():

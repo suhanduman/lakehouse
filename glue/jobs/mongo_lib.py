@@ -52,6 +52,8 @@ def classify(key_json: str | None, value_json: str | None) -> tuple[str, dict]:
     _id = mongo_id(key_json)
     if _id is None:
         return "quarantine", {"reason": "no-key"}
+    if not isinstance(env["ts_ms"], int):
+        return "quarantine", {"reason": "no-ts"}
     op = bronze_op(env["op"])
     if op != "D" and env["after"] is None:
         return "quarantine", {"reason": "after-null"}

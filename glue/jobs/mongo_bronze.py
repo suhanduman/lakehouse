@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mongo_lib as mg  # noqa: E402
 from merge_cdc import CATALOG, PIPELINES, session, tbl_property  # noqa: E402
 from pyspark.sql import Row  # noqa: E402
-from pyspark.sql.functions import col, from_unixtime, lit, struct, to_timestamp  # noqa: E402
+from pyspark.sql.functions import col, lit, struct, timestamp_millis  # noqa: E402
 from pyspark.sql.types import (  # noqa: E402
     IntegerType,
     LongType,
@@ -75,26 +75,28 @@ def run_topic(spark, topic: str, bronze: str) -> None:
     if not rows:
         print(f"[{topic}] yeni kayıt yok (offsets={starting})")
         return
-    bronze_rows, quar_rows = [], []
+    bronze_rows, quar_rows, drop_n = [], [], 0
     for r in rows:
         kind, p = mg.classify(r.k, r.v)
         if kind == "drop":
+            drop_n += 1
             continue
         if kind == "quarantine":
             quar_rows.append(Row(_key=r.k, _value=r.v, reason=p["reason"], ts=r.kafka_ts, partition=int(r.partition), offset=int(r.offset)))
             continue
-        bronze_rows.append(Row(_id=p["_id"], _doc=p["_doc"], op=p["op"], ts_ms=int(p["ts_ms"] or 0), offset=int(r.offset), source=r.topic))
+        bronze_rows.append(Row(_id=p["_id"], _doc=p["_doc"], op=p["op"], ts_ms=int(p["ts_ms"]), offset=int(r.offset), source=r.topic))
     if bronze_rows:
         df = spark.createDataFrame(bronze_rows, schema=BRONZE_RAW_SCHEMA)
         df = df.select(col("_id"), col("_doc"),
-                       struct(col("op"), to_timestamp(from_unixtime(col("ts_ms") / 1000)).alias("ts"), col("offset"),
+                       struct(col("op"), timestamp_millis(col("ts_ms")).alias("ts"), col("offset"),
                               col("source"), lit(bronze).alias("target"), struct(col("_id")).alias("key")).alias("_cdc"))
         df.writeTo(bt).append()
     if quar_rows:
         spark.createDataFrame(quar_rows, schema=QUAR_SCHEMA).writeTo(qt).append()
     nxt = mg.merge_offsets(json.loads(prev) if prev else None, mg.next_offsets([(r.topic, r.partition, r.offset) for r in rows]))
     spark.sql(f"ALTER TABLE {bt} SET TBLPROPERTIES ('{OFFSETS_PROP}'='{mg.offsets_json(nxt)}')")
-    print(f"[{topic}] -> {bt}: {len(bronze_rows)} bronze, {len(quar_rows)} karantina, offsets {starting} -> {mg.offsets_json(nxt)}")
+    print(f"[{topic}] -> {bt}: {len(bronze_rows)} bronze, {len(quar_rows)} karantina, {drop_n} tombstone düşüldü, "
+          f"offsets {starting} -> {mg.offsets_json(nxt)}")
 
 
 def main() -> None:
