@@ -61,7 +61,8 @@ def load_bronze(spark, bronze, wm, cur):
             return df, "incremental"
         except Exception as e:  # noqa: BLE001
             print(f"[{bronze}] artımlı okuma başarısız ({type(e).__name__}: {str(e)[:160]}) -> tam okuma")
-    return spark.read.format("iceberg").option("snapshot-id", cur).load(bronze), "full"
+    # Iceberg 1.11 / Spark 4: `snapshot-id` okuma seçeneği kaldırıldı -> Spark'ın yerleşik `versionAsOf` (F2 e2e canlı bulgu)
+    return spark.read.format("iceberg").option("versionAsOf", cur).load(bronze), "full"
 
 
 def with_commit_retry(fn, tries=3):
