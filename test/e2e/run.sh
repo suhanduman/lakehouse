@@ -15,6 +15,13 @@ if [[ "$MODE" == "argocd" ]]; then
   for app in strimzi cnpg keycloak-operator spark-operator glue polaris; do
     echo "bekleniyor: application/$app"
     for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
+    # Yeniden koşuda eski revizyonun "Synced" durumu yanıltır: git kaynaklı uygulamalar yeni revizyonu görmüş olsun
+    case "$app" in keycloak-operator|glue|polaris)
+      for _ in $(seq 1 120); do
+        rev=$(kubectl -n argocd get application/"$app" -o jsonpath='{.status.sync.revision}{.status.sync.revisions}' 2>/dev/null)
+        [[ "$rev" == *"$REVISION"* ]] && break; sleep 5
+      done;;
+    esac
     kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout=1800s
     # glue'nun sync işlemi dalga (wave) bekler: Connect build bitmeden Synced olmaz -> Healthy ile aynı bütçe
     kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.sync.status}'=Synced --timeout=1800s

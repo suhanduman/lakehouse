@@ -14,6 +14,8 @@ verify() {  # verify <ns.table> <min_rows> [ek argümanlar…]  -> küme içi py
 
 run_spark_once() {  # run_spark_once <ScheduledSparkApplication adı> -> template'ten tek seferlik SparkApplication (plan P9)
   local ssa="$1" app="e2e-$1" st=""
+  # önceki koşudan kalan (FAILED) aynı adlı SparkApplication yeniden koşmaz: önce sil
+  kubectl -n "$NS" delete sparkapplication "$app" --ignore-not-found --wait=true >/dev/null 2>&1 || true
   kubectl -n "$NS" get scheduledsparkapplication "$ssa" -o json \
     | jq --arg n "$app" '{apiVersion:"sparkoperator.k8s.io/v1beta2",kind:"SparkApplication",metadata:{name:$n,namespace:.metadata.namespace},spec:.spec.template}' \
     | kubectl apply -f - >/dev/null
