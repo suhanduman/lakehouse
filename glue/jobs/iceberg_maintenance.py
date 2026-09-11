@@ -15,7 +15,7 @@ from merge_cdc import CATALOG, PIPELINES, session, table_exists  # noqa: E402
 
 
 def ts_days_ago(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S+00:00")
 
 
 def call(spark, proc: str, table: str, extra: str = "") -> None:

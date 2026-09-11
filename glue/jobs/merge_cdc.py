@@ -29,11 +29,15 @@ def fields(spark, table):
 
 
 def table_exists(spark, table) -> bool:
+    """Yalnız TABLE_OR_VIEW_NOT_FOUND 'yok' sayılır; katalog/kimlik hataları yükselir (sahte MERGE_OK olmasın)."""
     try:
         spark.table(table)
         return True
-    except AnalysisException:
-        return False
+    except AnalysisException as e:
+        cls = getattr(e, "getErrorClass", lambda: None)() or ""
+        if "TABLE_OR_VIEW_NOT_FOUND" in (cls or "") or "TABLE_OR_VIEW_NOT_FOUND" in str(e):
+            return False
+        raise
 
 
 def current_snapshot(spark, table):
@@ -53,7 +57,7 @@ def load_bronze(spark, bronze, wm, cur):
     if wm is not None:
         try:
             df = spark.read.format("iceberg").option("start-snapshot-id", wm).option("end-snapshot-id", cur).load(bronze)
-            df.schema  # plan tetikle (hata varsa burada çıkar)
+            df.limit(1).count()  # fizik planı zorla: Iceberg artımlı scan doğrulaması (expire edilmiş wm, overwrite) burada patlar
             return df, "incremental"
         except Exception as e:  # noqa: BLE001
             print(f"[{bronze}] artımlı okuma başarısız ({type(e).__name__}: {str(e)[:160]}) -> tam okuma")
