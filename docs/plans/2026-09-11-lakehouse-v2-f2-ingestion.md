@@ -763,6 +763,7 @@ tests:
       - isNull: {path: 'spec.template.sparkConf["spark.sql.catalog.lakehouse.credential"]'}
       - equal: {path: 'spec.template.sparkConf["spark.jars.packages"]', value: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0"}
       - equal: {path: 'spec.template.sparkConf["spark.sql.shuffle.partitions"]', value: "8"}
+      - equal: {path: 'spec.template.sparkConf["spark.sql.session.timeZone"]', value: UTC}
       - equal: {path: spec.template.image, value: apache/spark:4.1.0-java21-python3}
       - equal: {path: spec.template.driver.serviceAccount, value: spark-operator-spark}
 EOF
@@ -963,6 +964,7 @@ spec:
       spark.sql.catalog.lakehouse.client.region: {{ $.Values.s3.region | quote }}
       spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation: {{ ternary "vended-credentials" "none" $.Values.s3.vendedCredentials }}
       spark.sql.defaultCatalog: lakehouse
+      spark.sql.session.timeZone: UTC            # bakım TIMESTAMP literal'leri ve _cdc.ts karşılaştırmaları UTC (F2-B)
       spark.sql.shuffle.partitions: {{ $s.shufflePartitions | quote }}
       spark.default.parallelism: {{ $s.shufflePartitions | quote }}
       spark.driver.memoryOverhead: {{ $s.driver.memoryOverhead }}
