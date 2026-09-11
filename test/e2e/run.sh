@@ -12,15 +12,24 @@ kubectl -n lakehouse get cluster/demo-pg >/dev/null
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun
   kubectl -n argocd wait application/lakehouse-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
+  # ArgoCD status.sync.revision her zaman commit SHA'sıdır: dal/etiket adıyla karşılaştırmak (eski "v2" Synced'ı)
+  # yanıltır -> beklenen SHA'yı uzaktan çöz. (head SIGPIPE'ı pipefail'i tetiklemesin diye || true; boşsa fail-loud.)
+  if [[ "$REVISION" =~ ^[0-9a-f]{7,40}$ ]]; then EXPECT="$REVISION"
+  else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi
+  [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
+  echo "beklenen revizyon: $EXPECT"
   for app in strimzi cnpg keycloak-operator spark-operator glue polaris; do
     echo "bekleniyor: application/$app"
     for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
     # Yeniden koşuda eski revizyonun "Synced" durumu yanıltır: git kaynaklı uygulamalar yeni revizyonu görmüş olsun
     case "$app" in keycloak-operator|glue|polaris)
+      seen="" rev=""
       for _ in $(seq 1 120); do
         rev=$(kubectl -n argocd get application/"$app" -o jsonpath='{.status.sync.revision}{.status.sync.revisions}' 2>/dev/null)
-        [[ "$rev" == *"$REVISION"* ]] && break; sleep 5
-      done;;
+        [[ "$rev" == *"$EXPECT"* ]] && { seen=1; break; }; sleep 5
+      done
+      # sessizce düşmek eski revizyonla test etmek demekti: zaman aşımında yüksek sesle başarısız ol
+      [[ -n "$seen" ]] || { echo "application/$app 10 dk içinde $EXPECT revizyonuna gelmedi (görülen: ${rev:-yok})"; exit 1; };;
     esac
     kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout=1800s
     # glue'nun sync işlemi dalga (wave) bekler: Connect build bitmeden Synced olmaz -> Healthy ile aynı bütçe
