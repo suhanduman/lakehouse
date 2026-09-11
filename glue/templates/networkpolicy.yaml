@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-ingress, namespace: {{ include "glue.ns" . }}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-same-namespace, namespace: {{ include "glue.ns" . }}}
+spec:
+  podSelector: {}
+  ingress:
+  - from: [{podSelector: {}}]
+---
+# Operatörler (cnpg-system), ArgoCD, ingress/router ve izleme namespace'leri
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-platform-namespaces, namespace: {{ include "glue.ns" . }}}
+spec:
+  podSelector: {}
+  ingress:
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: cnpg-system}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-ingress" "ingress-nginx" (eq (include "glue.isOpenShift" .) "true") }}}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-monitoring" "monitoring" (eq (include "glue.isOpenShift" .) "true") }}}}
+{{- end }}

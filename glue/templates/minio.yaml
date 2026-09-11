@@ -1,0 +1,59 @@
+{{- if .Values.components.minio }}
+# DEV-ONLY (kind/PoC): tek replika MinIO. Prod'da müşterinin S3'ü kullanılır; components.minio=false ile render edilmez.
+apiVersion: v1
+kind: Secret
+metadata: {name: minio-creds, namespace: {{ include "glue.ns" . }}}
+stringData:
+  AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: minio, namespace: {{ include "glue.ns" . }}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: minio}}
+  template:
+    metadata: {labels: {app: minio}}
+    spec:
+      containers:
+      - name: minio
+        image: quay.io/minio/minio:latest
+        args: ["server", "/data", "--console-address", ":9001"]
+        env:
+        - {name: MINIO_ROOT_USER, value: {{ .Values.minio.rootUser }}}
+        - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.rootPassword }}}
+        ports: [{containerPort: 9000}, {containerPort: 9001}]
+        volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: minio, namespace: {{ include "glue.ns" . }}}
+spec:
+  selector: {app: minio}
+  ports: [{name: api, port: 9000}, {name: console, port: 9001}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-init
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/hook: Sync, argocd.argoproj.io/hook-delete-policy: BeforeHookCreation}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: quay.io/minio/mc:latest
+        command: ["/bin/sh","-c"]
+        args:
+        - |
+          until mc alias set m http://minio.{{ include "glue.ns" . }}.svc:9000 {{ .Values.minio.rootUser }} {{ .Values.minio.rootPassword }}; do sleep 3; done
+          {{- range .Values.minio.buckets }}
+          mc mb -p m/{{ . }}
+          {{- end }}
+          mc ls m
+{{- end }}

@@ -1,0 +1,30 @@
+# Realm + root credential bootstrap (chart bunu yapmaz). Root credential Secret'ı ÖNCEDEN var olmalı
+# (keys: clientId, clientSecret). Idempotent: mevcut realm'de no-op. Sync hook: her sync'te yeniden koşar, zararsız.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: polaris-bootstrap
+  namespace: {{ include "glue.ns" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: bootstrap
+        image: apache/polaris-admin-tool:{{ .Values.versions.polarisAdminTool }}
+        # Credential env'den geldiği için shell genişletmesi gerekir; imajın java başlatıcısı /opt/jboss/container/java/run/run-java.sh
+        # (F0'da doğrudan args ile çalıştı). Yol farklıysa: podman run --rm --entrypoint sh apache/polaris-admin-tool:1.7.0 -c 'ls /opt/jboss/container/java/run'
+        command: ["/bin/sh", "-c"]
+        args: ["exec /opt/jboss/container/java/run/run-java.sh bootstrap --realm={{ .Values.polaris.realm }} --credential={{ .Values.polaris.realm }},${ROOT_ID},${ROOT_SECRET}"]
+        env:
+        - {name: POLARIS_PERSISTENCE_TYPE, value: relational-jdbc}
+        - {name: QUARKUS_DATASOURCE_JDBC_URL, valueFrom: {secretKeyRef: {name: polaris-db-app, key: jdbc-uri}}}
+        - {name: QUARKUS_DATASOURCE_USERNAME, valueFrom: {secretKeyRef: {name: polaris-db-app, key: username}}}
+        - {name: QUARKUS_DATASOURCE_PASSWORD, valueFrom: {secretKeyRef: {name: polaris-db-app, key: password}}}
+        - {name: ROOT_ID, valueFrom: {secretKeyRef: {name: {{ .Values.polaris.rootCredentialSecret }}, key: clientId}}}
+        - {name: ROOT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.polaris.rootCredentialSecret }}, key: clientSecret}}}

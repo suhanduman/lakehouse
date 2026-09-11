@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: polaris-db
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  instances: {{ .Values.cnpg.polarisDb.instances }}
+  storage: {size: {{ .Values.cnpg.polarisDb.storageSize }}}
+  bootstrap:
+    initdb: {database: polaris, owner: polaris}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: keycloak-db
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  instances: {{ .Values.cnpg.keycloakDb.instances }}
+  storage: {size: {{ .Values.cnpg.keycloakDb.storageSize }}}
+  bootstrap:
+    initdb: {database: keycloak, owner: keycloak}
