@@ -1,8 +1,17 @@
 # Keycloak operatörünün resmi kubectl manifestleri (Helm chart yok); kustomize uzak kaynak = config, imaj değil.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: lakehouse
+# Namespace'i `namespace:` alanı yerine transformer ile veriyoruz: upstream ClusterRoleBinding'in SA subject'i de
+# (`setRoleBindingSubjects: allServiceAccounts`) lakehouse'a taşınsın; düz `namespace:` yalnız `default` SA'yı taşır.
+transformers:
+- |-
+  apiVersion: builtin
+  kind: NamespaceTransformer
+  metadata: {name: lakehouse-namespace, namespace: lakehouse}
+  setRoleBindingSubjects: allServiceAccounts
+  fieldSpecs:
+  - {path: metadata/namespace, create: true}
+# Uzak dizin (upstream kustomization.yml): 4 CRD (keycloaks, keycloakrealmimports, keycloakoidcclients, keycloaksamlclients)
+# + operatör Deployment/RBAC. Tek tek dosya listelemek 26.7'nin yeni client CRD'lerini kaçırıp operatörü CrashLoop'a soktu (F1 e2e).
 resources:
-- https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.7.3/kubernetes/keycloaks.k8s.keycloak.org-v1.yml
-- https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.7.3/kubernetes/keycloakrealmimports.k8s.keycloak.org-v1.yml
-- https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/26.7.3/kubernetes/kubernetes.yml
+- https://github.com/keycloak/keycloak-k8s-resources//kubernetes?ref=26.7.3
