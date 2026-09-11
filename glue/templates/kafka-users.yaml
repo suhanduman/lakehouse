@@ -21,6 +21,8 @@ spec:
     # Debezium schema-history + signal/notification topic'leri
     - {resource: {type: topic, name: "schema-history.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
     - {resource: {type: topic, name: "debezium-", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+    # Debezium heartbeat (heartbeat.interval.ms): __debezium-heartbeat.<topic.prefix>
+    - {resource: {type: topic, name: "__debezium-heartbeat.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- range .Values.sources }}
     - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- end }}

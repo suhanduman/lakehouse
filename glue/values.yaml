@@ -108,7 +108,8 @@ s3:                                   # istemciler (sink, Spark) için; Polaris 
 # Silver pipeline'ları (yalnız entity/upsert tabloları; append-only tablolar listelenmez). ConfigMap lakehouse-jobs/pipelines.json
 pipelines: []
 #  - bronze: shop_raw.orders
-#    keys: [id]
+#    keys: [id]                       # bucket(bucket_count, keys[0]): YALNIZ İLK anahtar bölümlemeye girer
+#                                     # -> bileşik anahtarda kardinalitesi en yüksek kolonu başa yaz
 #    write_mode: merge-on-read         # | copy-on-write (küçük tablo)
 #    bucket_count: 16
 #    casts: {updated_at: timestamp}    # Bronze'da string gelen timestamptz kolonları (F0 S2d)
@@ -116,7 +117,7 @@ pipelines: []
 spark:
   image: apache/spark:4.1.0-java21-python3
   version: "4.1.0"
-  packages: org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0
+  # spark.jars.packages şablonda versions.iceberg'den üretilir (iki yerde sürüm tutulmaz)
   serviceAccount: spark-operator-spark          # spark-operator chart'ının jobNamespaces'ta yarattığı SA
   credentialSecret: polaris-spark               # key: credential (polaris-setup.sh yazar)
   driver:   {cores: 1, memory: 2g, memoryOverhead: 512m}

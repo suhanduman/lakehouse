@@ -35,6 +35,7 @@ tests:
     asserts:
       - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "shop.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
       - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "hr.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+      - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "__debezium-heartbeat.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
   - it: build image is quoted, push secret only when set
     template: kafka-connect.yaml
     set: {connect.buildImage: "registry.example.com/lakehouse/connect:2.0.0", connect.buildPushSecret: "connect-push"}

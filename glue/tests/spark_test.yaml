@@ -3,6 +3,7 @@ templates: [spark-jobs.yaml]
 tests:
   - it: configmap carries job code and pipelines.json
     set:
+      sources: [{name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.debezium_signal}]
       pipelines: [{bronze: shop_raw.orders, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}]
     documentSelector: {path: kind, value: ConfigMap}
     asserts:
@@ -12,7 +13,11 @@ tests:
       - isNotNull: {path: 'data["iceberg_maintenance.py"]'}
       - matchRegex: {path: 'data["pipelines.json"]', pattern: '"bronze":"shop_raw.orders"'}
       - matchRegex: {path: 'data["pipelines.json"]', pattern: '"casts":\{"updated_at":"timestamp"\}'}
+      # bakım işi Bronze tablolarını bu namespace listesinden katalogda arar (pipeline'ı olmayan tablolar dahil)
+      - matchRegex: {path: 'data["pipelines.json"]', pattern: '"bronze_namespaces":\["shop_raw"\]'}
   - it: four scheduled spark applications with schedules and args
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
     asserts:
       - hasDocuments: {count: 5}
       - documentSelector: {path: metadata.name, value: silver-merge}
@@ -25,7 +30,15 @@ tests:
         equal: {path: spec.template.arguments, value: ["--mode", "expire-orphan-ttl", "--snapshot-days", "7", "--orphan-days", "3", "--bronze-ttl-days", "30"]}
       - documentSelector: {path: metadata.name, value: maint-position-deletes}
         equal: {path: spec.concurrencyPolicy, value: Forbid}
+  - it: no pipelines renders only the ConfigMap
+    set:
+      pipelines: []
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: kind, value: ConfigMap}
   - it: credential comes from Secret via env, never from sparkConf
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
     documentSelector: {path: metadata.name, value: silver-merge}
     asserts:
       - contains:
@@ -35,5 +48,6 @@ tests:
       - equal: {path: 'spec.template.sparkConf["spark.jars.packages"]', value: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0"}
       - equal: {path: 'spec.template.sparkConf["spark.sql.shuffle.partitions"]', value: "8"}
       - equal: {path: 'spec.template.sparkConf["spark.sql.session.timeZone"]', value: UTC}
+      - equal: {path: 'spec.template.sparkConf["spark.redaction.regex"]', value: "(?i)secret|password|token|credential"}
       - equal: {path: spec.template.image, value: apache/spark:4.1.0-java21-python3}
       - equal: {path: spec.template.driver.serviceAccount, value: spark-operator-spark}

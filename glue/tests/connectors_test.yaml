@@ -29,6 +29,9 @@ tests:
         equal: {path: 'spec.config["topic.creation.default.partitions"]', value: "3"}
       - documentIndex: 0
         equal: {path: 'spec.config["slot.name"]', value: debezium_shop}
+      # heartbeat: düşük trafikli kaynakta replication slot/LSN ilerlesin (pg WAL birikmesi)
+      - documentIndex: 0
+        equal: {path: 'spec.config["heartbeat.interval.ms"]', value: "10000"}
       - documentIndex: 1
         equal: {path: metadata.name, value: sink-shop}
       - documentIndex: 1
@@ -49,6 +52,9 @@ tests:
         equal: {path: 'spec.config["errors.deadletterqueue.topic.name"]', value: shop.dlq}
       - documentIndex: 1
         isNull: {path: 'spec.config["iceberg.control.commit.interval-ms"]'}
+      # snapshot saklama yalnız bakım işinin (expire_snapshots): auto-create-props'ta çelişen 1 günlük ayar yok
+      - documentIndex: 1
+        isNull: {path: 'spec.config["iceberg.tables.auto-create-props.history.expire.max-snapshot-age-ms"]'}
   - it: dev commit interval and no-STS mode
     set:
       connect.sinkCommitIntervalMs: "30000"
@@ -65,7 +71,7 @@ tests:
   - it: sqlserver source
     set:
       sources:
-        - {name: erp, type: sqlserver, host: mssql.example.com, port: 1433, database: ERP, tables: [dbo.Orders], signalTable: dbo.debezium_signal, extraConfig: {database.encrypt: "true"}}
+        - {name: erp, type: sqlserver, host: mssql.example.com, port: 1433, database: ERP, tables: [dbo.Orders], signalTable: dbo.debezium_signal}
     asserts:
       - documentIndex: 0
         equal: {path: spec.class, value: io.debezium.connector.sqlserver.SqlServerConnector}
@@ -77,8 +83,18 @@ tests:
         equal: {path: 'spec.config["schema.history.internal.store.only.captured.tables.ddl"]', value: "false"}
       - documentIndex: 0
         equal: {path: 'spec.config["schema.history.internal.producer.sasl.jaas.config"]', value: "${secrets:lakehouse/connect:sasl.jaas.config}"}
+      # TLS varsayılan açık; sertifika doğrulaması varsayılan KAPALI DEĞİL (trustServerCertificate=false)
       - documentIndex: 0
         equal: {path: 'spec.config["database.encrypt"]', value: "true"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["database.trustServerCertificate"]', value: "false"}
+  - it: sqlserver private-CA lab may trust the server certificate
+    set:
+      sources:
+        - {name: erp, type: sqlserver, host: h, port: 1433, database: ERP, tables: [dbo.Orders], signalTable: dbo.debezium_signal, trustServerCertificate: true}
+    asserts:
+      - documentIndex: 0
+        equal: {path: 'spec.config["database.trustServerCertificate"]', value: "true"}
   - it: unknown type fails
     set:
       sources: [{name: x, type: oracle, host: h, port: 1, database: d, tables: [a.b], signalTable: a.s}]

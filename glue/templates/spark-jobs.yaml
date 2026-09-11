@@ -1,6 +1,12 @@
 {{- /* jobs kodu + pipelines.json tek ConfigMap; 4 ScheduledSparkApplication (spec §6). Credential: Secret -> env (plan P4). */ -}}
 {{- $ns := include "glue.ns" . }}
 {{- $s := .Values.spark }}
+{{- /* Bakım işi Bronze tablolarını katalogdan bulur: her kaynağın Bronze namespace'i (pipeline'ı olmayan append-only tablolar da). */ -}}
+{{- $nsList := list }}
+{{- range .Values.sources }}
+{{- $nsList = append $nsList (.bronzeNamespace | default (printf "%s_raw" .name)) }}
+{{- end }}
+{{- $nsList = uniq $nsList }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,13 +15,15 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "3"}
 data:
 {{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
-  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines) | quote }}
+  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList) | quote }}
 {{- $m := $s.maintenance }}
 {{- $jobs := list
   (dict "name" "silver-merge"            "file" "merge_cdc.py"           "schedule" $s.schedules.silverMerge     "args" list)
   (dict "name" "maint-position-deletes"  "file" "iceberg_maintenance.py" "schedule" $s.schedules.positionDeletes "args" (list "--mode" "position-deletes"))
   (dict "name" "maint-compact"           "file" "iceberg_maintenance.py" "schedule" $s.schedules.compact         "args" (list "--mode" "compact"))
   (dict "name" "maint-expire-orphan-ttl" "file" "iceberg_maintenance.py" "schedule" $s.schedules.expireOrphanTtl "args" (list "--mode" "expire-orphan-ttl" "--snapshot-days" (toString $m.snapshotDays) "--orphan-days" (toString $m.orphanDays) "--bronze-ttl-days" (toString $m.bronzeTtlDays))) }}
+{{- /* pipelines boşken (F1 kurulumu, kaynak eklenmeden) zamanlanmış iş üretme: her koşu "atlandı" logundan ibaret olurdu. ConfigMap hep render edilir. */ -}}
+{{- if .Values.pipelines }}
 {{- range $job := $jobs }}
 ---
 apiVersion: sparkoperator.k8s.io/v1beta2
@@ -43,8 +51,10 @@ spec:
     restartPolicy: {type: Never}
     timeToLiveSeconds: 86400
     sparkConf:
-      spark.jars.packages: {{ $s.packages | quote }}
+      {{- /* Iceberg runtime + AWS bundle sürümü versions.iceberg'den (values'ta ikinci bir literal sürüm tutulmaz) */}}
+      spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:{{ $.Values.versions.iceberg }},org.apache.iceberg:iceberg-aws-bundle:{{ $.Values.versions.iceberg }}"
       spark.jars.ivy: /tmp/.ivy2
+      spark.redaction.regex: "(?i)secret|password|token|credential"   # driver/executor log ve Spark UI'da sır sızdırma
       spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
       spark.sql.catalog.lakehouse: org.apache.iceberg.spark.SparkCatalog
       spark.sql.catalog.lakehouse.type: rest
@@ -88,4 +98,5 @@ spec:
     volumes:
     - name: job
       configMap: {name: lakehouse-jobs}
+{{- end }}
 {{- end }}

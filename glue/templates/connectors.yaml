@@ -20,6 +20,7 @@
   "time.precision.mode" "connect"
   "decimal.handling.mode" "precise"
   "tombstones.on.delete" "false"
+  "heartbeat.interval.ms" "10000"
   "key.converter" "org.apache.kafka.connect.json.JsonConverter"
   "value.converter" "org.apache.kafka.connect.json.JsonConverter"
   "key.converter.schemas.enable" "true"
@@ -35,8 +36,10 @@
 {{- /* publication.autocreate.mode=filtered: superuser gerekmez; tablo sahibi dbz rolü (runbooks/add-source.md) */ -}}
 {{- else }}
 {{- $_ := set $cfg "database.names" .database }}
-{{- $_ := set $cfg "database.encrypt" "false" }}
-{{- /* database.encrypt=false varsayılan; prod: extraConfig ile "true" (+ database.trustServerCertificate gerekiyorsa) */ -}}
+{{- $_ := set $cfg "database.encrypt" "true" }}
+{{- $_ := set $cfg "database.trustServerCertificate" (.trustServerCertificate | default false) }}
+{{- /* TLS varsayılan AÇIK. Özel CA'lı laboratuvarda sources[].trustServerCertificate: true; üretimde truststore'u
+   extraConfig ile ver (database.trustServerCertificate=true sertifika doğrulamasını kapatır). */ -}}
 {{- $_ := set $cfg "schema.history.internal.kafka.topic" (printf "schema-history.%s" .name) }}
 {{- $_ := set $cfg "schema.history.internal.kafka.bootstrap.servers" "lakehouse-kafka-bootstrap:9093" }}
 {{- $_ := set $cfg "schema.history.internal.store.only.captured.tables.ddl" "false" }}
@@ -82,6 +85,8 @@ spec:
   class: org.apache.iceberg.connect.IcebergSinkConnector
   tasksMax: {{ .sinkTasks | default 1 }}
   autoRestart: {enabled: true}
+  {{- /* Snapshot saklama TEK sahipli: bakım işi expire_snapshots(--snapshot-days, vars. 7 gün). Auto-create'te
+     1 günlük history.expire.max-snapshot-age-ms bununla çelişiyordu -> kaldırıldı (iceberg_maintenance sahibi). */ -}}
   {{- $sinkCfg := dict
     "topics.regex" (printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." .signalTable))
     "key.converter" "org.apache.kafka.connect.json.JsonConverter"
@@ -97,7 +102,6 @@ spec:
     "iceberg.tables.evolve-schema-enabled" "true"
     "iceberg.tables.default-partition-by" "day(_cdc.ts)"
     "iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled" "true"
-    "iceberg.tables.auto-create-props.history.expire.max-snapshot-age-ms" "86400000"
     "iceberg.catalog.type" "rest"
     "iceberg.catalog.uri" $.Values.iceberg.catalogUri
     "iceberg.catalog.warehouse" $.Values.iceberg.warehouse
