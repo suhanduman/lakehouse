@@ -1,1 +1,2 @@
 pytest==8.4.1
+pyflakes==3.4.0
