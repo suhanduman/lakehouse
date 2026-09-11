@@ -18,7 +18,9 @@ kubectl -n lakehouse wait kafkaconnect/connect --for=condition=Ready --timeout=1
 kubectl -n lakehouse rollout status deploy/polaris --timeout=600s
 kubectl -n lakehouse wait keycloak/keycloak --for=condition=Ready --timeout=900s
 kubectl -n lakehouse wait keycloakrealmimport/lakehouse-realm --for=condition=Done --timeout=600s
-python3 -m venv "$ROOT/.venv" >/dev/null 2>&1 || true; "$ROOT/.venv/bin/pip" install -q apache-polaris
+python3 -m venv "$ROOT/.venv" >/dev/null 2>&1 || true
+[[ -x "$ROOT/.venv/bin/pip" ]] || { echo "venv yok: python3 -m venv $ROOT/.venv başarısız"; exit 1; }
+"$ROOT/.venv/bin/pip" install -q 'apache-polaris==1.7.0'
 PATH="$ROOT/.venv/bin:$PATH" "$ROOT/runbooks/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml"
 # smoke: connect principal'ının credential'ıyla küme içinden yaz/oku
 CRED=$(kubectl -n lakehouse get secret polaris-connect -o jsonpath='{.data.credential}' | base64 -d)

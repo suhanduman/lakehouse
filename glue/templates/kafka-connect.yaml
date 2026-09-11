@@ -2,10 +2,16 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: connect-secrets-reader, namespace: {{ include "glue.ns" . }}}
+# En az yetki: yalnız okunması gereken Secret'lar (kaynak DB'ler + sink'in Polaris credential'ı), yalnız `get`
 rules:
 - apiGroups: [""]
   resources: [secrets]
-  verbs: [get, list, watch]
+  verbs: [get]
+  resourceNames:
+{{- range .Values.sources }}
+  - {{ printf "%s-db" .name | quote }}
+{{- end }}
+  - "polaris-connect"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -46,9 +52,10 @@ spec:
   build:
     output:
       type: docker
-      image: {{ .Values.connect.buildImage }}
+      # Git otoriter: imaj açıkça verilmeli (Strimzi `spec.build.output.image`'ı yeniden yazmaz; digest yalnız pod'da görünür)
+      image: {{ required "connect.buildImage gerekli (registry/repo:tag; dev için ttl.sh)" .Values.connect.buildImage | quote }}
 {{- if .Values.connect.buildPushSecret }}
-      pushSecret: {{ .Values.connect.buildPushSecret }}
+      pushSecret: {{ .Values.connect.buildPushSecret | quote }}
 {{- end }}
     plugins:
     - name: debezium-postgres

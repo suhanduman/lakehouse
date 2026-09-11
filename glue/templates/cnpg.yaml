@@ -6,7 +6,11 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "0"}
 spec:
   instances: {{ .Values.cnpg.polarisDb.instances }}
-  storage: {size: {{ .Values.cnpg.polarisDb.storageSize }}}
+  storage:
+    size: {{ .Values.cnpg.polarisDb.storageSize }}
+{{- with .Values.cnpg.polarisDb.storageClass }}
+    storageClass: {{ . | quote }}
+{{- end }}
   bootstrap:
     initdb: {database: polaris, owner: polaris}
 ---
@@ -18,6 +22,10 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "0"}
 spec:
   instances: {{ .Values.cnpg.keycloakDb.instances }}
-  storage: {size: {{ .Values.cnpg.keycloakDb.storageSize }}}
+  storage:
+    size: {{ .Values.cnpg.keycloakDb.storageSize }}
+{{- with .Values.cnpg.keycloakDb.storageClass }}
+    storageClass: {{ . | quote }}
+{{- end }}
   bootstrap:
     initdb: {database: keycloak, owner: keycloak}

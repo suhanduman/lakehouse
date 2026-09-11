@@ -9,9 +9,14 @@ command -v polaris >/dev/null || { echo "polaris CLI yok: pip install apache-pol
 CLIENT_ID=$(kubectl -n "$NS" get secret polaris-root -o jsonpath='{.data.clientId}' | base64 -d)
 CLIENT_SECRET=$(kubectl -n "$NS" get secret polaris-root -o jsonpath='{.data.clientSecret}' | base64 -d)
 export CLIENT_ID CLIENT_SECRET
-kubectl -n "$NS" port-forward svc/polaris 8181:8181 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
 LOG=$(mktemp)
-polaris setup apply "$SETUP" 2>&1 | tee "$LOG"
+kubectl -n "$NS" port-forward svc/polaris 8181:8181 >/dev/null 2>&1 & PF=$!
+trap 'kill $PF 2>/dev/null; rm -f "$LOG"' EXIT
+# port-forward hazır olana kadar bekle (API 8181; health 8182 forward EDİLMİYOR, herhangi bir HTTP yanıtı yeterli)
+for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:8181/ && break; sleep 1; done
+# stdout'ta principal credential'ları var -> terminale/CI log'una BASMA; yalnız filtrelenmiş özet gösterilir
+polaris setup apply "$SETUP" > "$LOG" 2>&1 || { grep -v '^{"clientId"' "$LOG"; exit 1; }
+grep -v '^{"clientId"' "$LOG" || true
 # setup apply yeni principal'lar için {"clientId","clientSecret"} basar (yaratma sırasıyla); root rotate EDEMEZ -> hemen Secret'a yaz
 python3 - "$LOG" "$NS" <<'PY'
 import sys, re, json, subprocess

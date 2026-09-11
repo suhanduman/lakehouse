@@ -4,8 +4,8 @@ apiVersion: v1
 kind: Secret
 metadata: {name: s3-creds, namespace: {{ include "glue.ns" . }}}
 stringData:
-  AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser }}
-  AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword }}
+  AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword | quote }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -18,11 +18,11 @@ spec:
     spec:
       containers:
       - name: minio
-        image: quay.io/minio/minio:latest
+        image: quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
         args: ["server", "/data", "--console-address", ":9001"]
         env:
-        - {name: MINIO_ROOT_USER, value: {{ .Values.minio.rootUser }}}
-        - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.rootPassword }}}
+        - {name: MINIO_ROOT_USER, value: {{ .Values.minio.rootUser | quote }}}
+        - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.rootPassword | quote }}}
         ports: [{containerPort: 9000}, {containerPort: 9001}]
         volumeMounts: [{name: data, mountPath: /data}]
       volumes: [{name: data, emptyDir: {}}]
@@ -47,11 +47,11 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: mc
-        image: quay.io/minio/mc:latest
+        image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
         command: ["/bin/sh","-c"]
         args:
         - |
-          until mc alias set m http://minio.{{ include "glue.ns" . }}.svc:9000 {{ .Values.minio.rootUser }} {{ .Values.minio.rootPassword }}; do sleep 3; done
+          until mc alias set m http://minio.{{ include "glue.ns" . }}.svc:9000 {{ .Values.minio.rootUser | quote }} {{ .Values.minio.rootPassword | quote }}; do sleep 3; done
           {{- range .Values.minio.buckets }}
           mc mb -p m/{{ . }}
           {{- end }}

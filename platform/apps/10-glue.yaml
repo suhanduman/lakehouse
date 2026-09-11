@@ -12,8 +12,6 @@ spec:
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
-    syncOptions: [CreateNamespace=true, ServerSideApply=true, RespectIgnoreDifferences=true]
-  ignoreDifferences:
-  - group: kafka.strimzi.io
-    kind: KafkaConnect
-    jsonPointers: [/spec/build/output/image]   # Strimzi digest ile yeniden yazar
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    # ignoreDifferences YOK: Strimzi `spec.build.output.image`'ı yeniden yazmaz (digest yalnız pod'un imajında görünür),
+    # imaj Git'te otoriter (connect.buildImage) -> drift gizlenmemeli.

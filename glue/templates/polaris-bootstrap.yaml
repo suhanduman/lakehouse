@@ -20,7 +20,7 @@ spec:
         # Credential env'den geldiği için shell genişletmesi gerekir; imajın java başlatıcısı /opt/jboss/container/java/run/run-java.sh
         # (F0'da doğrudan args ile çalıştı). Yol farklıysa: podman run --rm --entrypoint sh apache/polaris-admin-tool:1.7.0 -c 'ls /opt/jboss/container/java/run'
         command: ["/bin/sh", "-c"]
-        args: ["exec /opt/jboss/container/java/run/run-java.sh bootstrap --realm={{ .Values.polaris.realm }} --credential={{ .Values.polaris.realm }},${ROOT_ID},${ROOT_SECRET}"]
+        args: ["exec /opt/jboss/container/java/run/run-java.sh bootstrap --realm={{ .Values.polaris.realm }} --credential=\"{{ .Values.polaris.realm }},${ROOT_ID},${ROOT_SECRET}\""]
         env:
         - {name: POLARIS_PERSISTENCE_TYPE, value: relational-jdbc}
         - {name: QUARKUS_DATASOURCE_JDBC_URL, valueFrom: {secretKeyRef: {name: polaris-db-app, key: jdbc-uri}}}

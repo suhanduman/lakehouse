@@ -38,3 +38,40 @@ tests:
     documentIndex: 0
     asserts:
       - equal: {path: metadata.name, value: default-deny-ingress}
+  - it: openshift renders both Routes and no Ingress even if ingress.enabled
+    template: route.yaml
+    set: {platform: openshift, route.enabled: true, ingress.enabled: true}
+    asserts:
+      - hasDocuments: {count: 2}
+  - it: ingress is never rendered on openshift
+    template: ingress.yaml
+    set: {platform: openshift, route.enabled: true, ingress.enabled: true}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: vanilla renders the Ingress
+    template: ingress.yaml
+    set: {platform: vanilla, ingress.enabled: true}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: spec.ingressClassName, value: nginx}
+  - it: openshift networkpolicy allows both monitoring namespaces
+    template: networkpolicy.yaml
+    set: {platform: openshift}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-ingress}}}}
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}}}
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}}}
+      - equal: {path: spec.policyTypes, value: [Ingress]}
+  - it: CNPG storageClass omitted by default, emitted when set
+    template: cnpg.yaml
+    documentIndex: 0
+    asserts:
+      - isNull: {path: spec.storage.storageClass}
+      - equal: {path: spec.storage.size, value: 10Gi}
+  - it: CNPG storageClass emitted when set
+    template: cnpg.yaml
+    set: {cnpg.polarisDb.storageClass: fast-ssd}
+    documentIndex: 0
+    asserts:
+      - equal: {path: spec.storage.storageClass, value: fast-ssd}

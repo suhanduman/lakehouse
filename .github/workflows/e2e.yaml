@@ -7,15 +7,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      # Helm 4: git kaynaklı plugin'in provenance'ı yok -> doğrulama kapalı kurulur
-      - run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest && helm unittest glue
+      - uses: azure/setup-helm@v5
+        with: {version: v4.2.4}
+      # Helm 4: git kaynaklı plugin'in provenance'ı yok -> doğrulama kapalı kurulur (sürüm sabit)
+      - run: helm plugin install --verify=false --version 1.1.2 https://github.com/helm-unittest/helm-unittest && helm unittest glue
+      # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
+      - name: prod + dev değer dosyalarıyla render
+        run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
   e2e-kind:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
+        with: {version: v4.2.4}
       - uses: helm/kind-action@v1
         with: {version: v0.33.0, cluster_name: lakehouse, install_only: true}
       - name: e2e (ArgoCD, bu commit)

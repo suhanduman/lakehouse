@@ -3,3 +3,11 @@ platform: openshift
 route: {enabled: true}
 keycloak:
   hostname: keycloak.lakehouse.example.com
+connect:
+  # spec.build çıktısı Git'te otoriter: kurulumda gerçek registry/repo:tag ile değiştir; :latest KULLANMA (digest sabitlenemez)
+  buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0
+  buildPushSecret: connect-push        # kubernetes.io/dockerconfigjson; Git'e girmez, kurulumdan önce yaratılır
+cnpg:
+  # HA: primary + 1 replika (CNPG senkron/asenkron replikasyon); storageClass kurulumda ortamın sınıfıyla doldurulur
+  polarisDb: {instances: 2}
+  keycloakDb: {instances: 2}

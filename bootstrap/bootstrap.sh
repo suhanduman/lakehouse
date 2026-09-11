@@ -13,6 +13,7 @@ case "$ENV" in dev|prod) ;; *) echo "bilinmeyen --env: $ENV (dev|prod olmalı)";
 
 if [[ "$MODE" == "helm" ]]; then
   # ArgoCD'nin varsayılanı: prod glue.yaml kullanır (10-glue.yaml), sadece dev overlay'i glue-dev.yaml'a değiştirir.
+  # Job polaris-bootstrap düz Job: değerleri değişirse `kubectl delete job` gerekir (immutable template).
   GLUE_VALUES="$ROOT/platform/values/glue.yaml"; [[ "$ENV" == "dev" ]] && GLUE_VALUES="$ROOT/platform/values/glue-dev.yaml"
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.2.0 -n lakehouse --create-namespace --set watchNamespaces="{lakehouse}" --wait
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
@@ -45,13 +46,36 @@ stringData:
   type: helm
   enableOCI: "true"
 YAML
-# Kök Application: env yolu + repo/revizyon (fork/PR için). Alt Application'lar da aynı repo/revizyona baksın diye
-# kustomize çıktısı bir kez doğrudan uygulanır; sonraki senkronları kök Application yönetir.
-sed -e "s#path: platform/envs/dev#path: platform/envs/${ENV}#" \
-    -e "s#repoURL: https://github.com/suhanduman/lakehouse.git#repoURL: ${REPO}#" \
-    -e "s#targetRevision: v2#targetRevision: ${REVISION}#" "$ROOT/platform/root-app.yaml" | kubectl apply -f -
-kubectl kustomize "$ROOT/platform/envs/${ENV}" \
-  | sed -e "s#repoURL: https://github.com/suhanduman/lakehouse.git#repoURL: ${REPO}#" -e "s#targetRevision: v2#targetRevision: ${REVISION}#" \
-  | kubectl apply -f -
+# Kök Application (platform/root-app.yaml'ın --env/--repo/--revision ile parametrelenmiş hâli). YALNIZ kök uygulanır:
+# alt Application'lar kökün kustomize patch'leriyle her reconcile'da aynı repo/revizyona sabitlenir -> PR'da bootstrap
+# edilen revizyon test edilir (tek seferlik `kubectl apply` yerine kalıcı, self-heal'e dayanıklı).
+kubectl apply -f - <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: lakehouse-root, namespace: argocd, finalizers: [resources-finalizer.argocd.argoproj.io]}
+spec:
+  project: default
+  source:
+    repoURL: "${REPO}"
+    targetRevision: "${REVISION}"
+    path: platform/envs/${ENV}
+    kustomize:
+      patches:
+      - target: {kind: Application, name: glue}
+        patch: |-
+          - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/source/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: keycloak-operator}
+        patch: |-
+          - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/source/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: polaris}
+        patch: |-
+          - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+  destination: {server: https://kubernetes.default.svc, namespace: argocd}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+YAML
 echo "OK: ArgoCD ${ARGOCD_VERSION} + lakehouse-root (env=${ENV}, repo=${REPO}@${REVISION}) uygulandı"
 echo "İzle: kubectl -n argocd get applications"

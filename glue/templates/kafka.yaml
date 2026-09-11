@@ -10,7 +10,14 @@ spec:
   roles: [controller, broker]
   storage:
     type: jbod
-    volumes: [{id: 0, type: persistent-claim, size: {{ .Values.kafka.storageSize }}, kraftMetadata: shared}]
+    volumes:
+    - id: 0
+      type: persistent-claim
+      size: {{ .Values.kafka.storageSize }}
+      kraftMetadata: shared
+{{- with .Values.kafka.storageClass }}
+      class: {{ . | quote }}
+{{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka

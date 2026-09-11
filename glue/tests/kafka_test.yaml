@@ -3,6 +3,7 @@ templates: [kafka.yaml, kafka-connect.yaml, kafka-users.yaml]
 tests:
   - it: renders Kafka v1 with KRaft node pool
     template: kafka.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder
     asserts:
       - hasDocuments: {count: 2}
       - documentIndex: 1
@@ -11,12 +12,13 @@ tests:
         equal: {path: spec.kafka.version, value: "4.3.1"}
   - it: dev enables plain listener
     template: kafka.yaml
-    set: {kafka.plainListener: true}
+    set: {kafka.plainListener: true, connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
     asserts:
       - documentIndex: 1
         contains: {path: spec.kafka.listeners, content: {name: plain, port: 9092, type: internal, tls: false}}
   - it: KafkaConnect has v1 top-level storage topics, secrets provider and the F0 plugin list
     template: kafka-connect.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
     documentSelector: {path: kind, value: KafkaConnect}
     asserts:
       - equal: {path: spec.groupId, value: connect}
@@ -28,7 +30,49 @@ tests:
   - it: connect KafkaUser gets prefix ACLs per source
     template: kafka-users.yaml
     set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
       sources: [{name: shop, topicPrefix: shop}, {name: hr, topicPrefix: hr}]
     asserts:
       - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "shop.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
       - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "hr.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+  - it: build image is quoted, push secret only when set
+    template: kafka-connect.yaml
+    set: {connect.buildImage: "registry.example.com/lakehouse/connect:2.0.0", connect.buildPushSecret: "connect-push"}
+    documentSelector: {path: kind, value: KafkaConnect}
+    asserts:
+      - equal: {path: spec.build.output.image, value: "registry.example.com/lakehouse/connect:2.0.0"}
+      - equal: {path: spec.build.output.pushSecret, value: connect-push}
+  - it: push secret omitted when empty
+    template: kafka-connect.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    documentSelector: {path: kind, value: KafkaConnect}
+    asserts:
+      - isNull: {path: spec.build.output.pushSecret}
+  - it: connect build image is required
+    template: kafka-connect.yaml
+    set: {connect.buildImage: ""}
+    asserts:
+      - failedTemplate: {errorPattern: "connect.buildImage gerekli"}
+  - it: connect secret reader Role is least privilege
+    template: kafka-connect.yaml
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources: [{name: shop, topicPrefix: shop}, {name: hr, topicPrefix: hr}]
+    documentSelector: {path: kind, value: Role}
+    asserts:
+      - equal: {path: 'rules[0].verbs', value: [get]}
+      - contains: {path: 'rules[0].resourceNames', content: shop-db}
+      - contains: {path: 'rules[0].resourceNames', content: hr-db}
+      - contains: {path: 'rules[0].resourceNames', content: polaris-connect}
+  - it: kafka volume class only when storageClass is set
+    template: kafka.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h", kafka.storageClass: fast-ssd}
+    documentIndex: 0
+    asserts:
+      - equal: {path: 'spec.storage.volumes[0].class', value: fast-ssd}
+  - it: kafka volume has no class by default
+    template: kafka.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    documentIndex: 0
+    asserts:
+      - isNull: {path: 'spec.storage.volumes[0].class'}

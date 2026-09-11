@@ -1,4 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
+# Tüm politikalar YALNIZ Ingress (`policyTypes: [Ingress]`); egress kısıtlanmaz (Connect'in Maven/registry çekişi, S3, LDAP serbest).
+# Prod enforcement (OpenShift SDN/OVN) OpenShift pre-ship ortamında doğrulanacak; kind'ın varsayılan CNI'si enforce etmez.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: default-deny-ingress, namespace: {{ include "glue.ns" . }}}
@@ -11,6 +13,7 @@ kind: NetworkPolicy
 metadata: {name: allow-same-namespace, namespace: {{ include "glue.ns" . }}}
 spec:
   podSelector: {}
+  policyTypes: [Ingress]
   ingress:
   - from: [{podSelector: {}}]
 ---
@@ -20,10 +23,17 @@ kind: NetworkPolicy
 metadata: {name: allow-platform-namespaces, namespace: {{ include "glue.ns" . }}}
 spec:
   podSelector: {}
+  policyTypes: [Ingress]
   ingress:
   - from:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: cnpg-system}}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-ingress" "ingress-nginx" (eq (include "glue.isOpenShift" .) "true") }}}}
-    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-monitoring" "monitoring" (eq (include "glue.isOpenShift" .) "true") }}}}
+{{- if eq (include "glue.isOpenShift" .) "true" }}
+    # OpenShift'te platform izleme (openshift-monitoring) ve kullanıcı iş yükü izleme (openshift-user-workload-monitoring) ayrı ns'lerde
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}
+{{- else }}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+{{- end }}
 {{- end }}

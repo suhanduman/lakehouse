@@ -13,6 +13,7 @@ versions:
 kafka:
   replicas: 3
   storageSize: 100Gi
+  storageClass: ""              # boş = kümenin varsayılan StorageClass'ı (Strimzi volume alanı: class)
   plainListener: false          # dev/kind: true (9092, TLS'siz); prod: yalnız tls 9093 SCRAM
   externalListener: false       # Fluent Bit ajanları için (F3) — openshift: route, vanilla: nodeport
   config:
@@ -24,8 +25,9 @@ kafka:
 
 connect:
   replicas: 1
-  # spec.build çıktısı: küme registry'si (OpenShift: image-registry.openshift-image-registry.svc:5000/<ns>/connect:latest; dev: ttl.sh)
-  buildImage: ttl.sh/lakehouse-connect:24h
+  # spec.build çıktısı. Varsayılan YOK: prod'da zorunlu (registry/repo:tag, ör.
+  # image-registry.openshift-image-registry.svc:5000/<ns>/connect:2.0.0); dev: ttl.sh (platform/values/glue-dev.yaml)
+  buildImage: ""
   buildPushSecret: ""           # özel registry için docker-registry Secret adı; boş = anonim (ttl.sh)
   resources:
     requests: {cpu: 500m, memory: 1536Mi}
@@ -37,8 +39,9 @@ sources: []
 #    topicPrefix: shop
 
 cnpg:
-  polarisDb: {instances: 1, storageSize: 10Gi}
-  keycloakDb: {instances: 1, storageSize: 10Gi}
+  # storageClass boş = kümenin varsayılan StorageClass'ı; prod'da HA için instances: 2 (platform/values/glue.yaml)
+  polarisDb: {instances: 1, storageSize: 10Gi, storageClass: ""}
+  keycloakDb: {instances: 1, storageSize: 10Gi, storageClass: ""}
 
 polaris:
   realm: POLARIS
