@@ -4,7 +4,9 @@
 verify() {  # verify <ns.table> <min_rows> [ek argümanlar…]  -> küme içi pyiceberg Job
   local name; name="verify-$(date +%s)-$RANDOM"
   kubectl -n "$NS" create configmap lakehouse-verify --from-file="$ROOT/test/e2e/verify/verify.py" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  sed -e "s#JOBNAME#$name#" -e "s#VERIFY_ARGS#$*#" "$ROOT/test/e2e/verify/job.yaml" | kubectl apply -f - >/dev/null
+  # her argüman tek tırnakla: Job komutu /bin/sh -c ile çalışır, boşluklu koşul ('~ts=2026-09-11 13:52:24') bölünmesin (F3 canlı)
+  local q="" a; for a in "$@"; do q+="'$a' "; done
+  sed -e "s#JOBNAME#$name#" -e "s#VERIFY_ARGS#$q#" "$ROOT/test/e2e/verify/job.yaml" | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait --for=condition=complete "job/$name" --timeout=900s >/dev/null || { kubectl -n "$NS" logs "job/$name" --tail=40; return 1; }
   kubectl -n "$NS" logs "job/$name" | grep "^OK"
 }
@@ -22,7 +24,8 @@ run_spark_once() {  # run_spark_once <ScheduledSparkApplication adı> -> templat
   done
   # merge modu da log'a düşsün: incremental / FALLBACK bounded / FALLBACK full (artımlı yolun gerçekten koştuğunun kanıtı).
   # 'full' sözcük sınırıyla: Spark'ın "…successfully…" satırları tail -15'i doldurup asıl satırları kaydırmasın.
-  kubectl -n "$NS" logs "$app-driver" --tail=200 2>/dev/null | grep -E "MERGE_OK|MAINT_OK|MONGO_OK|HATA|Exception|->|incremental|FALLBACK|[^[:alpha:]]full[^[:alpha:]]" | tail -15 || true
+  # tail=2000: birden çok pipeline'da (shop + crm) ilk pipeline'ın satırı 200 satırlık Spark INFO'nun dışına kayıyordu (F3 canlı)
+  kubectl -n "$NS" logs "$app-driver" --tail=2000 2>/dev/null | grep -E "MERGE_OK|MAINT_OK|MONGO_OK|HATA|Exception|->|incremental|FALLBACK|[^[:alpha:]]full[^[:alpha:]]" | tail -15 || true
   [[ "$st" == "COMPLETED" ]] || { echo "SparkApplication $app: $st"; kubectl -n "$NS" describe sparkapplication "$app" | tail -20; return 1; }
   kubectl -n "$NS" delete sparkapplication "$app" --ignore-not-found >/dev/null
 }

@@ -38,3 +38,15 @@ tests:
       - equal: {path: 'spec.config["iceberg.kafka.session.timeout.ms"]', value: "120000"}
       - equal: {path: 'spec.config["errors.deadletterqueue.topic.name"]', value: nginx.dlq}
       - isNull: {path: 'spec.config["transforms.dbz.type"]'}
+  - it: connect user may read nginx.access and create nginx.dlq when enabled
+    template: kafka-users.yaml
+    set: {connect.buildImage: "x", nginx.enabled: true}
+    documentSelector: {path: metadata.name, value: connect}
+    asserts:
+      - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+  - it: connect user has no nginx ACL when disabled
+    template: kafka-users.yaml
+    set: {connect.buildImage: "x"}
+    documentSelector: {path: metadata.name, value: connect}
+    asserts:
+      - notContains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}

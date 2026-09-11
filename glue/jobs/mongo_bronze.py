@@ -53,13 +53,31 @@ QUAR_SCHEMA = StructType([
 ])
 
 
+def kafka_client_props() -> dict:
+    return {"bootstrap.servers": BOOTSTRAP, "security.protocol": "SASL_SSL", "sasl.mechanism": "SCRAM-SHA-512",
+            "sasl.jaas.config": os.environ["KAFKA_JAAS"], "ssl.truststore.type": "PEM", "ssl.truststore.location": CA_PATH}
+
+
 def kafka_reader(spark, topic, starting):
-    opts = {"kafka.bootstrap.servers": BOOTSTRAP, "subscribe": topic, "startingOffsets": starting, "endingOffsets": "latest",
-            "kafka.security.protocol": "SASL_SSL", "kafka.sasl.mechanism": "SCRAM-SHA-512",
-            "kafka.sasl.jaas.config": os.environ["KAFKA_JAAS"], "kafka.ssl.truststore.type": "PEM",
-            "kafka.ssl.truststore.location": CA_PATH, "kafka.group.id": f"spark-lakehouse-mongo-bronze-{topic}",
-            "failOnDataLoss": "false"}   # retention ile silinmiş offset -> hata değil, kalan veriden devam
+    opts = {"subscribe": topic, "startingOffsets": starting, "endingOffsets": "latest",
+            "kafka.group.id": f"spark-lakehouse-mongo-bronze-{topic}",
+            "failOnDataLoss": "false",   # retention ile silinmiş offset -> hata değil, kalan veriden devam
+            **{f"kafka.{k}": v for k, v in kafka_client_props().items()}}
     return spark.read.format("kafka").options(**opts).load()
+
+
+def topic_partitions(spark, topic: str) -> list[int]:
+    """Topic'in partition listesi — kafka-clients AdminClient (spark-sql-kafka paketiyle driver classpath'inde), Spark JVM'i
+    üzerinden. Spark batch startingOffsets JSON'u eksik partition kabul etmez; kayıt görmemiş partition da listelenmeli (F3 canlı)."""
+    jvm = spark._jvm
+    props = jvm.java.util.Properties()
+    for k, v in kafka_client_props().items():
+        props.setProperty(k, v)
+    admin = jvm.org.apache.kafka.clients.admin.AdminClient.create(props)
+    try:
+        return sorted(p.partition() for p in admin.describeTopics([topic]).allTopicNames().get()[topic].partitions())
+    finally:
+        admin.close()
 
 
 def run_topic(spark, topic: str, bronze: str) -> None:
@@ -68,7 +86,7 @@ def run_topic(spark, topic: str, bronze: str) -> None:
     spark.sql(BRONZE_DDL.format(t=bt))
     spark.sql(QUAR_DDL.format(t=qt))
     prev = tbl_property(spark, bt, OFFSETS_PROP)
-    starting = prev if prev else "earliest"
+    starting = mg.starting_offsets(prev, topic, topic_partitions(spark, topic)) if prev else "earliest"
     raw = kafka_reader(spark, topic, starting).selectExpr("CAST(key AS STRING) AS k", "CAST(value AS STRING) AS v",
                                                           "topic", "partition", "offset", "timestamp AS kafka_ts")
     rows = raw.collect()   # mikro-batch: 5 dk'lık mongo değişimi driver'a sığar (spec §5.3: ~150 satır kod)

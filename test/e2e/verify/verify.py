@@ -27,7 +27,13 @@ while rest and rest[0].startswith("--"):        # bayraklar koşullardan önce (
         print(f"bilinmeyen bayrak: {rest[0]}")
         sys.exit(2)
 def cond(c):                                    # "k=v:~k2=s" -> [(k, v, exact), (k2, s, contains)]
-    return [(kv.lstrip("~").split("=", 1)[0], kv.split("=", 1)[1], not kv.startswith("~")) for kv in c.split(":")]
+    parts = []                                  # '=' içermeyen parça bir önceki değerin devamıdır: "~ts=2026-09-11 13:52:24"
+    for kv in c.split(":"):
+        if "=" in kv or not parts:
+            parts.append(kv)
+        else:
+            parts[-1] += ":" + kv
+    return [(kv.lstrip("~").split("=", 1)[0], kv.split("=", 1)[1], not kv.startswith("~")) for kv in parts]
 
 
 must = [cond(c) for c in rest if not c.startswith("!")]

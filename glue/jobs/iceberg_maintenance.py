@@ -1,7 +1,7 @@
 """iceberg_maintenance — spec §6 bakım (D(f) deklaratif): 3 ScheduledSparkApplication aynı dosyayı farklı --mode ile koşturur.
   --mode position-deletes   Silver: rewrite_position_delete_files (MoR delete dosyalarını katla)         saatlik
   --mode compact            Silver+Bronze: rewrite_data_files(delete-file-threshold=5, remove-dangling-deletes, partial-progress)  6 saat
-  --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts < now-ttl  günlük
+  --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük
 Silver tabloları pipelines.json'dan (bronze'dan türetilir). Bronze tabloları KATALOGDAN: pipelines.json'daki
 bronze_namespaces için SHOW TABLES (+ pipelines'ın bronze adları) — Silver pipeline'ı olmayan (append-only) Bronze
 tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir)."""
@@ -72,8 +72,10 @@ def main() -> None:
                 # prefix_listing: Hadoop FS yerine FileIO (S3FileIO) ile listeler -> resmi Spark imajında s3a yok (F2 e2e: "No FileSystem for scheme s3")
                 call(spark, "remove_orphan_files", t, f", older_than => TIMESTAMP '{ts_days_ago(a.orphan_days)}', prefix_listing => true")
                 if t in bronze:
-                    # gün başına hizalı sınır: day(_cdc.ts) partition'ları tam düşer (kısmi gün = gereksiz delete dosyası)
-                    sql = (f"DELETE FROM {CATALOG}.{t} WHERE _cdc.ts < "
+                    # gün başına hizalı sınır: day(ts) partition'ları tam düşer (kısmi gün = gereksiz delete dosyası).
+                    # Zaman kolonu: CDC Bronze _cdc.ts; düz tablolar (mongo __quarantine: ts) üst düzey ts (F3 e2e)
+                    ts_col = "_cdc.ts" if "_cdc" in spark.table(f"{CATALOG}.{t}").columns else "ts"
+                    sql = (f"DELETE FROM {CATALOG}.{t} WHERE {ts_col} < "
                            f"date_trunc('DAY', current_timestamp() - INTERVAL {a.bronze_ttl_days} DAYS)")
                     print(sql)
                     spark.sql(sql)

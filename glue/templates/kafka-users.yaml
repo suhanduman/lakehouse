@@ -26,6 +26,10 @@ spec:
 {{- range .Values.sources }}
     - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- end }}
+{{- if .Values.nginx.enabled }}
+    # nginx yolu: sink-nginx nginx.access'i okur, nginx.dlq'yu yaratır/yazar (F3 canlı: aksi hâlde DLQ init TopicAuthorizationException)
+    - {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+{{- end }}
     - {resource: {type: transactionalId, name: "connect", patternType: prefix}, operations: [Write, Describe]}
     # Iceberg sink'in transactional producer'ları: coordinator-txn-<uuid> ve worker-txn-<uuid> (F2 e2e: aksi hâlde task
     # TransactionalIdAuthorizationException ile ölür)

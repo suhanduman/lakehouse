@@ -60,3 +60,10 @@ def test_offsets_json_shapes():
     assert merged == {"crm.crm.customers": {"0": 10, "1": 5, "2": 2}}
     assert mg.merge_offsets(None, nxt) == nxt
     assert json.loads(mg.offsets_json(merged)) == merged
+
+
+def test_starting_offsets_covers_all_partitions():
+    prev = mg.offsets_json({"crm.crm.customers": {"0": 2, "2": 1}})          # partition 1 hiç kayıt görmedi (F3 canlı)
+    assert json.loads(mg.starting_offsets(prev, "crm.crm.customers", [0, 1, 2])) == {"crm.crm.customers": {"0": 2, "1": -2, "2": 1}}
+    assert mg.starting_offsets(None, "crm.crm.customers", [0, 1]) == "earliest"
+    assert mg.starting_offsets(prev, "crm.crm.orders", [0]) == "earliest"

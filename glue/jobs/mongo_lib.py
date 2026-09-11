@@ -79,3 +79,12 @@ def merge_offsets(prev: dict | None, new: dict) -> dict:
 
 def offsets_json(offsets: dict) -> str:
     return json.dumps(offsets, sort_keys=True, separators=(",", ":"))
+
+
+def starting_offsets(prev_json: str | None, topic: str, partitions: list[int]) -> str:
+    """Spark batch startingOffsets: topic'in TÜM partition'ları zorunlu (F3 canlı: eksik partition ->
+    KafkaIllegalStateException "start offsets don't match what are assigned"). Kayıtlı offset'i olmayan partition -2 (earliest)."""
+    known = ((_loads(prev_json) if prev_json else None) or {}).get(topic) or {}
+    if not known:
+        return "earliest"
+    return offsets_json({topic: {str(p): int(known.get(str(p), -2)) for p in partitions}})
