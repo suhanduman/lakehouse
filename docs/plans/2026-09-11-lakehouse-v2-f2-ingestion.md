@@ -36,7 +36,7 @@
 | P5 | Watermark: Silver `TBLPROPERTIES('lakehouse.bronze.snapshot-id')`; okuma `start-snapshot-id/end-snapshot-id` (yalnız append snapshot'ları; delete/replace atlanır), hata → `snapshot-id=cur` ile tam okuma | Spec §6 "snapshot-id watermark"; MERGE idempotent olduğu için tam okuma güvenli |
 | P6 | Silver doğrulaması e2e'de **pyiceberg Job** ile (Trino F4) | F0 karar 9: doğrulama küme içinde |
 | P7 | Connector/SSA CR'ları glue içinde **sync-wave 3** | Connect (1) ve Keycloak realm (2) sonrası; KafkaConnector health Strimzi yerleşik denetimiyle |
-| P8 | Sink `topics.regex` = `<prefix>\.(?!dlq$).*` | Aynı prefix'li DLQ topic'ini sink'in kendisi tüketmesin |
+| P8 | Debezium `table.include.list` = tables + `signalTable` (Debezium 2.x+ sinyal tablosunu yakalamayı şart koşar); sink `topics.regex` = `<prefix>\.(?!dlq$)(?!<signal>$).*` | DLQ ve sinyal topic'lerini sink tüketmesin (Bronze'da `debezium_signal` tablosu oluşmasın) |
 | P9 | Dev'de zamanlanmış merge 30 dk / bakım günlük; e2e işleri **SSA `template`'inden tek seferlik `SparkApplication`** üretip koşturur | Deterministik e2e; kod tekrarı yok |
 | P10 | Casting: `pipelines[].casts: {col: type}` açık (ör. `updated_at: timestamp`); verilmeyen kolon Bronze tipiyle Silver'a geçer | Bronze'da timestamptz string gelir (S2d); hangi string'in zaman olduğu bilinemez → deklaratif |
 
@@ -657,7 +657,7 @@ tests:
       - documentIndex: 0
         equal: {path: spec.class, value: io.debezium.connector.postgresql.PostgresConnector}
       - documentIndex: 0
-        equal: {path: 'spec.config["table.include.list"]', value: "public.orders,public.items"}
+        equal: {path: 'spec.config["table.include.list"]', value: "public.orders,public.items,public.debezium_signal"}
       - documentIndex: 0
         equal: {path: 'spec.config["database.password"]', value: "${secrets:lakehouse/shop-db:password}"}
       - documentIndex: 0
@@ -675,7 +675,7 @@ tests:
       - documentIndex: 1
         equal: {path: spec.class, value: org.apache.iceberg.connect.IcebergSinkConnector}
       - documentIndex: 1
-        equal: {path: 'spec.config["topics.regex"]', value: 'shop\.(?!dlq$).*'}
+        equal: {path: 'spec.config["topics.regex"]', value: 'shop\.(?!dlq$)(?!public\.debezium_signal$).*'}
       - documentIndex: 1
         equal: {path: 'spec.config["transforms.dbz.cdc.target.pattern"]', value: "shop_raw.{table}"}
       - documentIndex: 1
@@ -801,7 +801,7 @@ spec:
     database.user: ${secrets:{{ $ns }}/{{ .name }}-db:username}
     database.password: ${secrets:{{ $ns }}/{{ .name }}-db:password}
     topic.prefix: {{ $prefix | quote }}
-    table.include.list: {{ join "," .tables | quote }}
+    table.include.list: {{ join "," (append .tables .signalTable) | quote }}   # sinyal tablosu da yakalanmalı (Debezium 2.x+)
     snapshot.mode: initial
     signal.data.collection: {{ required (printf "sources[%s].signalTable zorunlu (incremental snapshot)" .name) .signalTable | quote }}
     signal.enabled.channels: source
@@ -850,7 +850,7 @@ spec:
   class: org.apache.iceberg.connect.IcebergSinkConnector
   tasksMax: {{ .sinkTasks | default 1 }}
   config:
-    topics.regex: {{ printf "%s\\.(?!dlq$).*" $prefix | quote }}
+    topics.regex: {{ printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." .signalTable) | quote }}   # DLQ ve sinyal topic'i hariç
     key.converter: org.apache.kafka.connect.json.JsonConverter
     value.converter: org.apache.kafka.connect.json.JsonConverter
     key.converter.schemas.enable: "true"
