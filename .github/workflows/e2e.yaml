@@ -8,7 +8,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: helm plugin install https://github.com/helm-unittest/helm-unittest && helm unittest glue
+      # Helm 4: git kaynaklı plugin'in provenance'ı yok -> doğrulama kapalı kurulur
+      - run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest && helm unittest glue
   e2e-kind:
     runs-on: ubuntu-latest
     timeout-minutes: 60
