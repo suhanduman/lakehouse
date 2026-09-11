@@ -1,0 +1,74 @@
+# KubernetesSecretConfigProvider: Connect SA'nın Secret okuma izni (mount YOK) — F0 S2b
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: connect-secrets-reader, namespace: {{ include "glue.ns" . }}}
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: connect-secrets-reader, namespace: {{ include "glue.ns" . }}}
+subjects: [{kind: ServiceAccount, name: connect-connect, namespace: {{ include "glue.ns" . }}}]
+roleRef: {kind: Role, name: connect-secrets-reader, apiGroup: rbac.authorization.k8s.io}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: connect
+  namespace: {{ include "glue.ns" . }}
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  version: {{ .Values.versions.kafka | quote }}
+  replicas: {{ .Values.connect.replicas }}
+  bootstrapServers: lakehouse-kafka-bootstrap:9093
+  tls:
+    trustedCertificates:
+    - {secretName: lakehouse-cluster-ca-cert, pattern: "*.crt"}
+  authentication:
+    type: scram-sha-512
+    username: connect
+    passwordSecret: {secretName: connect, password: password}
+  # Strimzi v1: bu dört alan spec üst düzeyinde ZORUNLU (F0 S0c)
+  groupId: connect
+  configStorageTopic: connect-configs
+  offsetStorageTopic: connect-offsets
+  statusStorageTopic: connect-status
+  config:
+    config.storage.replication.factor: -1
+    offset.storage.replication.factor: -1
+    status.storage.replication.factor: -1
+    config.providers: secrets
+    config.providers.secrets.class: io.strimzi.kafka.KubernetesSecretConfigProvider
+  build:
+    output:
+      type: docker
+      image: {{ .Values.connect.buildImage }}
+{{- if .Values.connect.buildPushSecret }}
+      pushSecret: {{ .Values.connect.buildPushSecret }}
+{{- end }}
+    plugins:
+    - name: debezium-postgres
+      artifacts:
+      - {type: zip, url: "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/{{ .Values.versions.debezium }}/debezium-connector-postgres-{{ .Values.versions.debezium }}-plugin.zip"}
+    - name: debezium-sqlserver
+      artifacts:
+      - {type: zip, url: "https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/{{ .Values.versions.debezium }}/debezium-connector-sqlserver-{{ .Values.versions.debezium }}-plugin.zip"}
+    - name: debezium-mongodb
+      artifacts:
+      - {type: zip, url: "https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/{{ .Values.versions.debezium }}/debezium-connector-mongodb-{{ .Values.versions.debezium }}-plugin.zip"}
+    - name: iceberg   # F0 S2a ile sabitlenen nihai liste (Iceberg runtime zip'inin içeriğiyle örtüşür)
+      artifacts:
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-kafka-connect, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-kafka-connect-transforms, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-parquet, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-orc, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-aws, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.iceberg, artifact: iceberg-aws-bundle, version: {{ .Values.versions.iceberg | quote }}}
+      - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-api, version: {{ .Values.versions.hadoopClient | quote }}}
+      - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-runtime, version: {{ .Values.versions.hadoopClient | quote }}}
+  resources:
+{{ toYaml .Values.connect.resources | indent 4 }}

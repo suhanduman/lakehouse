@@ -1,0 +1,43 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  replicas: {{ .Values.kafka.replicas }}
+  roles: [controller, broker]
+  storage:
+    type: jbod
+    volumes: [{id: 0, type: persistent-claim, size: {{ .Values.kafka.storageSize }}, kraftMetadata: shared}]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: lakehouse
+  namespace: {{ include "glue.ns" . }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  kafka:
+    version: {{ .Values.versions.kafka | quote }}
+    metadataVersion: {{ .Values.versions.kafkaMetadata | quote }}
+    listeners:
+    - {name: tls, port: 9093, type: internal, tls: true, authentication: {type: scram-sha-512}}
+{{- if .Values.kafka.plainListener }}
+    - {name: plain, port: 9092, type: internal, tls: false}
+{{- end }}
+{{- if .Values.kafka.externalListener }}
+    - {name: external, port: 9094, type: {{ ternary "route" "nodeport" (eq (include "glue.isOpenShift" .) "true") }}, tls: true, authentication: {type: scram-sha-512}}
+{{- end }}
+    authorization:
+      type: simple
+{{- if .Values.kafka.plainListener }}
+      superUsers: [ANONYMOUS]      # yalnız dev: plain listener kimliksiz erişir
+{{- end }}
+    config:
+{{ toYaml .Values.kafka.config | indent 6 }}
+  entityOperator: {topicOperator: {}, userOperator: {}}

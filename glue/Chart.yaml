@@ -1,0 +1,6 @@
+apiVersion: v2
+name: glue
+description: Lakehouse v2 — yalnız CR'lardan oluşan ince chart (Kafka, Connect, CNPG, Keycloak, Polaris bootstrap, NetworkPolicy, Route/Ingress). Upstream bileşenler ArgoCD Application'larıyla ayrı kurulur.
+type: application
+version: 0.1.0
+appVersion: "2.0.0"

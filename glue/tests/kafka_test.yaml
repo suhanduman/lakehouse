@@ -1,0 +1,34 @@
+suite: kafka + connect
+templates: [kafka.yaml, kafka-connect.yaml, kafka-users.yaml]
+tests:
+  - it: renders Kafka v1 with KRaft node pool
+    template: kafka.yaml
+    asserts:
+      - hasDocuments: {count: 2}
+      - documentIndex: 1
+        equal: {path: apiVersion, value: kafka.strimzi.io/v1}
+      - documentIndex: 1
+        equal: {path: spec.kafka.version, value: "4.3.1"}
+  - it: dev enables plain listener
+    template: kafka.yaml
+    set: {kafka.plainListener: true}
+    asserts:
+      - documentIndex: 1
+        contains: {path: spec.kafka.listeners, content: {name: plain, port: 9092, type: internal, tls: false}}
+  - it: KafkaConnect has v1 top-level storage topics, secrets provider and the F0 plugin list
+    template: kafka-connect.yaml
+    documentSelector: {path: kind, value: KafkaConnect}
+    asserts:
+      - equal: {path: spec.groupId, value: connect}
+      - equal: {path: spec.configStorageTopic, value: connect-configs}
+      - equal: {path: 'spec.config["config.providers.secrets.class"]', value: io.strimzi.kafka.KubernetesSecretConfigProvider}
+      - lengthEqual: {path: 'spec.build.plugins[3].artifacts', count: 8}
+      - contains: {path: 'spec.build.plugins[3].artifacts', content: {type: maven, group: org.apache.iceberg, artifact: iceberg-orc, version: "1.11.0"}}
+      - contains: {path: 'spec.build.plugins[3].artifacts', content: {type: maven, group: org.apache.hadoop, artifact: hadoop-client-runtime, version: "3.4.3"}}
+  - it: connect KafkaUser gets prefix ACLs per source
+    template: kafka-users.yaml
+    set:
+      sources: [{name: shop, topicPrefix: shop}, {name: hr, topicPrefix: hr}]
+    asserts:
+      - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "shop.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+      - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "hr.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}

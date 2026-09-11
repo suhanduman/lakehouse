@@ -1,0 +1,78 @@
+# platform: vanilla | openshift  (Route <-> Ingress)
+platform: vanilla
+namespace: lakehouse
+
+versions:
+  kafka: "4.3.1"
+  kafkaMetadata: "4.3-IV0"
+  debezium: "3.6.2.Final"
+  iceberg: "1.11.0"
+  hadoopClient: "3.4.3"
+  polarisAdminTool: "1.7.0"
+
+kafka:
+  replicas: 3
+  storageSize: 100Gi
+  plainListener: false          # dev/kind: true (9092, TLS'siz); prod: yalnız tls 9093 SCRAM
+  externalListener: false       # Fluent Bit ajanları için (F3) — openshift: route, vanilla: nodeport
+  config:
+    default.replication.factor: 3
+    min.insync.replicas: 2
+    offsets.topic.replication.factor: 3
+    transaction.state.log.replication.factor: 3
+    transaction.state.log.min.isr: 2
+
+connect:
+  replicas: 1
+  # spec.build çıktısı: küme registry'si (OpenShift: image-registry.openshift-image-registry.svc:5000/<ns>/connect:latest; dev: ttl.sh)
+  buildImage: ttl.sh/lakehouse-connect:24h
+  buildPushSecret: ""           # özel registry için docker-registry Secret adı; boş = anonim (ttl.sh)
+  resources:
+    requests: {cpu: 500m, memory: 1536Mi}
+    limits: {memory: 2Gi}
+
+# Kaynak DB'ler: KafkaUser ACL'leri + (F2) KafkaConnector şablonları buradan türetilir. topicPrefix = Debezium topic.prefix
+sources: []
+#  - name: shop
+#    topicPrefix: shop
+
+cnpg:
+  polarisDb: {instances: 1, storageSize: 10Gi}
+  keycloakDb: {instances: 1, storageSize: 10Gi}
+
+polaris:
+  realm: POLARIS
+  rootCredentialSecret: polaris-root   # keys: clientId, clientSecret (Git'e girmez; kurulumdan önce yaratılır)
+
+keycloak:
+  hostname: keycloak.example.com
+  realm:
+    name: lakehouse
+  adminSecret: keycloak-admin          # keys: username, password
+  ldap:
+    enabled: false
+    connectionUrl: ldaps://ad.example.com:636
+    usersDn: "OU=Users,DC=example,DC=com"
+    bindDn: "CN=svc-lakehouse,OU=Service,DC=example,DC=com"
+    bindCredential: ""                 # realm import düz değer ister; Secret'tan almak için F4 notu
+  clients:                             # redirect URI'ler F4'te servis host'larıyla doldurulur
+    trino:      {redirectUris: []}
+    superset:   {redirectUris: []}
+    jupyterhub: {redirectUris: []}
+    polaris:    {redirectUris: []}
+
+components:
+  minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü
+minio:
+  rootUser: minioadmin
+  rootPassword: minioadmin
+  buckets: [lakehouse]
+
+networkPolicy:
+  enabled: true
+
+ingress:
+  enabled: false
+  className: nginx
+route:
+  enabled: false                # platform=openshift iken true

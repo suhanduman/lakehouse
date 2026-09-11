@@ -1,0 +1,28 @@
+# Connect'in Kafka kimliği. ACL'ler deklaratif: her kaynak (Debezium topic.prefix) için prefix ACL'i.
+# Yeni kaynak = values.sources'a bir satır (runbooks/add-source.md); runtime ACL mutasyonu YOK.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: connect
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+    # Connect'in kendi iç topic'leri ve grubu
+    - {resource: {type: topic, name: "connect-", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+    - {resource: {type: group, name: "connect", patternType: prefix}, operations: [Read]}
+    # Iceberg sink coordinator control topic'leri + consumer grupları
+    - {resource: {type: topic, name: "control-iceberg", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+    - {resource: {type: group, name: "cg-control-", patternType: prefix}, operations: [Read]}
+    # Debezium schema-history + signal/notification topic'leri
+    - {resource: {type: topic, name: "schema-history.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+    - {resource: {type: topic, name: "debezium-", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+{{- range .Values.sources }}
+    - {resource: {type: topic, name: "{{ .topicPrefix }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+{{- end }}
+    - {resource: {type: transactionalId, name: "connect", patternType: prefix}, operations: [Write, Describe]}
+    - {resource: {type: cluster}, operations: [IdempotentWrite]}
