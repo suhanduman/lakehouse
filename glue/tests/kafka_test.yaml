@@ -99,3 +99,4 @@ tests:
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
     asserts:
       - contains: {path: spec.authorization.acls, content: {resource: {type: transactionalId, name: "coordinator-txn-", patternType: prefix}, operations: [Write, Describe]}}
+      - contains: {path: spec.authorization.acls, content: {resource: {type: transactionalId, name: "worker-txn-", patternType: prefix}, operations: [Write, Describe]}}
