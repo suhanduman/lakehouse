@@ -218,8 +218,7 @@ spec:
     "errors.tolerance" "all"
     "errors.log.enable" "true"
     "errors.deadletterqueue.topic.name" "nginx.dlq"
-    "errors.deadletterqueue.topic.replication.factor" $rf
-    "errors.deadletterqueue.context.headers.enable" "true" }}
+    "errors.deadletterqueue.topic.replication.factor" $rf }}
   {{- if .Values.s3.vendedCredentials }}
   {{- $_ := set $nginxCfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "vended-credentials" }}
   {{- else }}
