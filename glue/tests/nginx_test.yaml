@@ -1,0 +1,40 @@
+suite: nginx path
+templates: [kafka-topics.yaml, kafka-users.yaml, connectors.yaml]
+tests:
+  - it: nothing renders when nginx disabled
+    template: kafka-topics.yaml
+    set: {connect.buildImage: "x"}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: topic renders when enabled
+    template: kafka-topics.yaml
+    set: {connect.buildImage: "x", nginx.enabled: true}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: metadata.name, value: nginx.access}
+      - equal: {path: spec.partitions, value: 6}
+      - equal: {path: spec.replicas, value: 3}
+  - it: fluentbit user may only write the nginx prefix
+    template: kafka-users.yaml
+    set: {connect.buildImage: "x", nginx.enabled: true}
+    documentSelector: {path: metadata.name, value: fluentbit}
+    asserts:
+      - equal: {path: spec.authorization.acls, value: [{resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Write, Describe]}]}
+  - it: nginx sink converts ts and partitions by day
+    template: connectors.yaml
+    set: {connect.buildImage: "x", nginx.enabled: true}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: metadata.name, value: sink-nginx}
+      - equal: {path: 'spec.config["topics"]', value: nginx.access}
+      - equal: {path: 'spec.config["iceberg.tables"]', value: nginx_raw.access_log}
+      - equal: {path: 'spec.config["value.converter.schemas.enable"]', value: "false"}
+      - equal: {path: 'spec.config["key.converter"]', value: org.apache.kafka.connect.storage.StringConverter}
+      - equal: {path: 'spec.config["transforms.ts.type"]', value: org.apache.kafka.connect.transforms.TimestampConverter$Value}
+      - equal: {path: 'spec.config["transforms.ts.field"]', value: ts}
+      - equal: {path: 'spec.config["transforms.ts.unix.precision"]', value: milliseconds}
+      - equal: {path: 'spec.config["transforms.ts.target.type"]', value: Timestamp}
+      - equal: {path: 'spec.config["iceberg.tables.default-partition-by"]', value: day(ts)}
+      - equal: {path: 'spec.config["iceberg.kafka.session.timeout.ms"]', value: "120000"}
+      - equal: {path: 'spec.config["errors.deadletterqueue.topic.name"]', value: nginx.dlq}
+      - isNull: {path: 'spec.config["transforms.dbz.type"]'}

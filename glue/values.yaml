@@ -57,6 +57,14 @@ sources: []
 #    signalCollection: crm.debezium_signal   # opsiyonel: incremental snapshot sinyal koleksiyonu
 #    extraConfig: {}
 
+nginx:
+  enabled: false                   # Fluent Bit ajanları (müşteri sunucusu) -> Kafka dış listener -> Iceberg sink
+  topic: nginx.access
+  partitions: 6
+  table: nginx_raw.access_log      # Polaris namespace nginx_raw setup.yaml'da (F1'de var)
+  sinkTasks: 1
+  sinkExtraConfig: {}
+
 cnpg:
   # storageClass boş = kümenin varsayılan StorageClass'ı; prod'da HA için instances: 2 (platform/values/glue.yaml)
   polarisDb: {instances: 1, storageSize: 10Gi, storageClass: ""}

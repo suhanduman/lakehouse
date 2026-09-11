@@ -173,3 +173,66 @@ spec:
     {{- end }}
 {{- end }}
 {{- end }}
+{{- if .Values.nginx.enabled }}
+---
+# Fluent Bit -> nginx.access -> Iceberg sink (Debezium yok: transforms yalnız ts; F3 spec §5.1)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: sink-nginx
+  namespace: {{ $ns }}
+  labels: {strimzi.io/cluster: connect}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  class: org.apache.iceberg.connect.IcebergSinkConnector
+  tasksMax: {{ .Values.nginx.sinkTasks }}
+  autoRestart: {enabled: true}
+  {{- $nginxCfg := dict
+    "topics" .Values.nginx.topic
+    "key.converter" "org.apache.kafka.connect.storage.StringConverter"
+    "value.converter" "org.apache.kafka.connect.json.JsonConverter"
+    "value.converter.schemas.enable" "false"
+    "transforms" "ts"
+    "transforms.ts.type" "org.apache.kafka.connect.transforms.TimestampConverter$Value"
+    "transforms.ts.field" "ts"
+    "transforms.ts.unix.precision" "milliseconds"
+    "transforms.ts.target.type" "Timestamp"
+    "iceberg.tables" .Values.nginx.table
+    "iceberg.tables.auto-create-enabled" "true"
+    "iceberg.tables.evolve-schema-enabled" "true"
+    "iceberg.tables.default-partition-by" "day(ts)"
+    "iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled" "true"
+    "iceberg.catalog.type" "rest"
+    "iceberg.catalog.uri" .Values.iceberg.catalogUri
+    "iceberg.catalog.warehouse" .Values.iceberg.warehouse
+    "iceberg.catalog.credential" (printf "${secrets:%s/polaris-connect:credential}" $ns)
+    "iceberg.catalog.scope" "PRINCIPAL_ROLE:ALL"
+    "iceberg.catalog.io-impl" "org.apache.iceberg.aws.s3.S3FileIO"
+    "iceberg.catalog.s3.endpoint" .Values.s3.endpoint
+    "iceberg.catalog.s3.path-style-access" .Values.s3.pathStyleAccess
+    "iceberg.catalog.client.region" .Values.s3.region
+    "iceberg.kafka.session.timeout.ms" "120000"
+    "iceberg.kafka.heartbeat.interval.ms" "15000"
+    "iceberg.kafka.max.poll.interval.ms" "300000"
+    "iceberg.kafka.request.timeout.ms" "130000"
+    "errors.tolerance" "all"
+    "errors.log.enable" "true"
+    "errors.deadletterqueue.topic.name" "nginx.dlq"
+    "errors.deadletterqueue.topic.replication.factor" $rf
+    "errors.deadletterqueue.context.headers.enable" "true" }}
+  {{- if .Values.s3.vendedCredentials }}
+  {{- $_ := set $nginxCfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "vended-credentials" }}
+  {{- else }}
+  {{- $_ := set $nginxCfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "none" }}
+  {{- $_ := set $nginxCfg "iceberg.catalog.s3.access-key-id" (printf "${secrets:%s/s3-creds:AWS_ACCESS_KEY_ID}" $ns) }}
+  {{- $_ := set $nginxCfg "iceberg.catalog.s3.secret-access-key" (printf "${secrets:%s/s3-creds:AWS_SECRET_ACCESS_KEY}" $ns) }}
+  {{- end }}
+  {{- with .Values.connect.sinkCommitIntervalMs }}
+  {{- $_ := set $nginxCfg "iceberg.control.commit.interval-ms" . }}
+  {{- end }}
+  {{- $_ := mergeOverwrite $nginxCfg (.Values.nginx.sinkExtraConfig | default (dict)) }}
+  config:
+    {{- range $k, $v := $nginxCfg }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+{{- end }}

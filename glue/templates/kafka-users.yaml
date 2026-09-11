@@ -54,3 +54,20 @@ spec:
 {{- end }}
     - {resource: {type: group, name: "spark-lakehouse", patternType: prefix}, operations: [Read]}
 {{- end }}
+{{- if .Values.nginx.enabled }}
+---
+# Müşteri sunucusundaki Fluent Bit ajanı: yalnız nginx.* prefix'ine yazabilir (topic'i yaratamaz — kafka-topics.yaml)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: fluentbit
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+    - {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Write, Describe]}
+{{- end }}

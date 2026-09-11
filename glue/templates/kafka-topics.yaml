@@ -1,0 +1,14 @@
+{{- if .Values.nginx.enabled }}
+# Fluent Bit topic yaratamaz (ACL: yalnız Write) -> sabit KafkaTopic (spec §5.1: KafkaTopic yalnız sabitler için)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ .Values.nginx.topic }}
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "1"}
+spec:
+  partitions: {{ .Values.nginx.partitions }}
+  replicas: {{ index .Values.kafka.config "default.replication.factor" }}
+  config: {retention.ms: "604800000"}   # 7 gün: sink duraklarsa kayıpsız yakalama penceresi
+{{- end }}
