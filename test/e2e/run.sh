@@ -9,7 +9,8 @@ if [[ "$MODE" == "argocd" ]]; then
   for app in strimzi cnpg keycloak-operator glue polaris; do
     echo "bekleniyor: application/$app"
     kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout=1800s
-    kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.sync.status}'=Synced --timeout=300s
+    # glue'nun sync işlemi dalga (wave) bekler: Connect build bitmeden Synced olmaz -> Healthy ile aynı bütçe
+    kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.sync.status}'=Synced --timeout=1800s
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s

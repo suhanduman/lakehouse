@@ -6,7 +6,7 @@ metadata:
   name: polaris-bootstrap
   namespace: {{ include "glue.ns" . }}
   annotations:
-    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-wave: "1"    # yalnız CNPG'ye (wave 0) bağlı; Connect build'ini (wave 1) beklememeli
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
