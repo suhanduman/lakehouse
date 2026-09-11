@@ -6,7 +6,8 @@ persistence:
 realmContext: {realms: [POLARIS]}
 extraEnv:
 - {name: AWS_REGION, value: us-east-1}
-# STS'siz S3 (sts_unavailable) için sunucunun kendi anahtarları (F0 S1c): kurulumda s3-creds Secret'ı (AWS_ACCESS_KEY_ID/SECRET)
+# STS'siz S3 (sts_unavailable) için sunucunun kendi anahtarları (F0 S1c). Secret adı her ortamda s3-creds (F3):
+# dev'de components.minio=true iken glue'nun MinIO şablonu (glue/templates/minio.yaml) üretir; prod'da kurulumdan önce elle yaratılır.
 - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
 - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
 storage:

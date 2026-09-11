@@ -2,7 +2,7 @@
 # DEV-ONLY (kind/PoC): tek replika MinIO. Prod'da müşterinin S3'ü kullanılır; components.minio=false ile render edilmez.
 apiVersion: v1
 kind: Secret
-metadata: {name: minio-creds, namespace: {{ include "glue.ns" . }}}
+metadata: {name: s3-creds, namespace: {{ include "glue.ns" . }}}
 stringData:
   AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser }}
   AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword }}
