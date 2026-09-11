@@ -4,7 +4,43 @@
 {{- range .Values.sources }}
 {{- $prefix := .topicPrefix | default .name }}
 {{- $bronzeNs := .bronzeNamespace | default (printf "%s_raw" .name) }}
-{{- if not (or (eq .type "postgres") (eq .type "sqlserver")) }}{{ fail (printf "sources[%s].type = %q; postgres|sqlserver olmalı" .name .type) }}{{ end }}
+{{- if not (or (eq .type "postgres") (eq .type "sqlserver") (eq .type "mongodb")) }}{{ fail (printf "sources[%s].type = %q; postgres|sqlserver|mongodb olmalı" .name .type) }}{{ end }}
+{{- if eq .type "mongodb" }}
+{{- $cfg := dict
+  "mongodb.connection.string" .connectionString
+  "mongodb.user" (printf "${secrets:%s/%s-db:username}" $ns .name)
+  "mongodb.password" (printf "${secrets:%s/%s-db:password}" $ns .name)
+  "topic.prefix" $prefix
+  "collection.include.list" (join "," .collections)
+  "capture.mode" "change_streams_update_full"
+  "snapshot.mode" "initial"
+  "tombstones.on.delete" "false"
+  "heartbeat.interval.ms" "10000"
+  "key.converter" "org.apache.kafka.connect.json.JsonConverter"
+  "value.converter" "org.apache.kafka.connect.json.JsonConverter"
+  "key.converter.schemas.enable" "false"
+  "value.converter.schemas.enable" "false"
+  "topic.creation.default.replication.factor" $rf
+  "topic.creation.default.partitions" $.Values.connect.topicPartitions }}
+{{- with .signalCollection }}{{ $_ := set $cfg "signal.data.collection" . }}{{ $_ := set $cfg "signal.enabled.channels" "source" }}{{ end }}
+{{- $_ := mergeOverwrite $cfg (.extraConfig | default (dict)) }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: dbz-{{ .name }}
+  namespace: {{ $ns }}
+  labels: {strimzi.io/cluster: connect}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  class: io.debezium.connector.mongodb.MongoDbConnector
+  tasksMax: 1
+  autoRestart: {enabled: true}
+  config:
+    {{- range $k, $v := $cfg }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+{{- else }}
 {{- /* config bir dict olarak kurulur (literal YAML satırları değil): extraConfig/sinkExtraConfig statik anahtarları
    gerçekten EZEBİLSİN (values.yaml'daki "ek/ezen" sözü) — iki kez aynı anahtarı yazmak geçersiz YAML üretir. */ -}}
 {{- $cfg := dict
@@ -135,4 +171,5 @@ spec:
     {{- range $k, $v := $sinkCfg }}
     {{ $k }}: {{ $v | quote }}
     {{- end }}
+{{- end }}
 {{- end }}

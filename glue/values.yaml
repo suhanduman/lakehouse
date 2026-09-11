@@ -50,6 +50,12 @@ sources: []
 #    sinkTasks: 1
 #    extraConfig: {}                  # Debezium'a ek/ezen anahtarlar
 #    sinkExtraConfig: {}              # sink'e ek/ezen anahtarlar
+#  - name: crm                        # mongodb: topic.prefix; topic'ler <prefix>.<db>.<coll>; Bronze <name>_raw.<coll>
+#    type: mongodb
+#    connectionString: mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0   # kimlik bilgisi YOK: Secret <name>-db (username,password)
+#    collections: [crm.customers]     # collection.include.list (db.coll)
+#    signalCollection: crm.debezium_signal   # opsiyonel: incremental snapshot sinyal koleksiyonu
+#    extraConfig: {}
 
 cnpg:
   # storageClass boş = kümenin varsayılan StorageClass'ı; prod'da HA için instances: 2 (platform/values/glue.yaml)
@@ -123,9 +129,11 @@ spark:
   driver:   {cores: 1, memory: 2g, memoryOverhead: 512m}
   executor: {instances: 1, cores: 1, memory: 2g, memoryOverhead: 512m}
   shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
+  kafkaSecret: spark                 # KafkaUser spark'ın Secret'ı (sasl.jaas.config) — mongo-bronze Kafka okuması
   schedules:
     silverMerge: "*/15 * * * *"
     positionDeletes: "0 * * * *"
     compact: "0 */6 * * *"
     expireOrphanTtl: "30 3 * * *"
+    mongoBronze: "*/5 * * * *"
   maintenance: {snapshotDays: 7, orphanDays: 3, bronzeTtlDays: 30}

@@ -1,0 +1,73 @@
+suite: mongodb source
+templates: [connectors.yaml, kafka-users.yaml, spark-jobs.yaml]
+tests:
+  - it: mongodb source renders a Debezium connector and no sink
+    template: connectors.yaml
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources:
+        - {name: crm, type: mongodb, connectionString: "mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0", collections: [crm.customers, crm.orders]}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: metadata.name, value: dbz-crm}
+      - equal: {path: spec.class, value: io.debezium.connector.mongodb.MongoDbConnector}
+      - equal: {path: 'spec.config["mongodb.connection.string"]', value: "mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0"}
+      - equal: {path: 'spec.config["mongodb.user"]', value: "${secrets:lakehouse/crm-db:username}"}
+      - equal: {path: 'spec.config["collection.include.list"]', value: "crm.customers,crm.orders"}
+      - equal: {path: 'spec.config["capture.mode"]', value: change_streams_update_full}
+      - equal: {path: 'spec.config["value.converter.schemas.enable"]', value: "false"}
+      - equal: {path: 'spec.config["topic.prefix"]', value: crm}
+      - isNull: {path: 'spec.config["signal.data.collection"]'}
+  - it: mongodb signal collection when given
+    template: connectors.yaml
+    set:
+      connect.buildImage: "x"
+      sources:
+        - {name: crm, type: mongodb, connectionString: "mongodb://h/?replicaSet=rs0", collections: [crm.customers], signalCollection: crm.debezium_signal}
+    asserts:
+      - equal: {path: 'spec.config["signal.data.collection"]', value: crm.debezium_signal}
+      - equal: {path: 'spec.config["signal.enabled.channels"]', value: source}
+  - it: spark KafkaUser exists only with a mongodb source and reads its topics
+    template: kafka-users.yaml
+    set:
+      connect.buildImage: "x"
+      sources:
+        - {name: crm, type: mongodb, connectionString: "mongodb://h/?replicaSet=rs0", collections: [crm.customers]}
+    asserts:
+      - hasDocuments: {count: 2}
+      - documentIndex: 1
+        equal: {path: metadata.name, value: spark}
+      - documentIndex: 1
+        contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "crm.", patternType: prefix}, operations: [Read, Describe]}}
+      - documentIndex: 1
+        contains: {path: spec.authorization.acls, content: {resource: {type: group, name: "spark-lakehouse", patternType: prefix}, operations: [Read]}}
+  - it: no spark KafkaUser without mongodb sources
+    template: kafka-users.yaml
+    set: {connect.buildImage: "x", sources: [{name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.debezium_signal}]}
+    asserts:
+      - hasDocuments: {count: 1}
+  - it: pipelines.json carries mongo topics and mongo-bronze SSA renders with kafka package and secret
+    template: spark-jobs.yaml
+    set:
+      connect.buildImage: "x"
+      sources:
+        - {name: crm, type: mongodb, connectionString: "mongodb://h/?replicaSet=rs0", collections: [crm.customers]}
+      pipelines: [{bronze: crm_raw.customers, keys: [_id], bucket_count: 4}]
+    asserts:
+      - documentSelector: {path: kind, value: ConfigMap}
+        matchRegex: {path: 'data["pipelines.json"]', pattern: '"mongo":\[\{"bronze":"crm_raw.customers","topic":"crm.crm.customers"\}\]'}
+      - documentSelector: {path: metadata.name, value: mongo-bronze}
+        equal: {path: spec.schedule, value: "*/5 * * * *"}
+      - documentSelector: {path: metadata.name, value: mongo-bronze}
+        matchRegex: {path: 'spec.template.sparkConf["spark.jars.packages"]', pattern: 'spark-sql-kafka-0-10_2.13:4.1.0'}
+      - documentSelector: {path: metadata.name, value: mongo-bronze}
+        contains: {path: spec.template.driver.env, content: {name: KAFKA_JAAS, valueFrom: {secretKeyRef: {name: spark, key: sasl.jaas.config}}}}
+      - documentSelector: {path: metadata.name, value: mongo-bronze}
+        contains: {path: spec.template.volumes, content: {name: kafka-ca, secret: {secretName: lakehouse-cluster-ca-cert, items: [{key: ca.crt, path: ca.crt}]}}}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        notContains: {path: spec.template.driver.env, content: {name: KAFKA_JAAS, valueFrom: {secretKeyRef: {name: spark, key: sasl.jaas.config}}}}
+  - it: no mongo-bronze SSA without mongodb sources
+    template: spark-jobs.yaml
+    set: {connect.buildImage: "x", pipelines: [{bronze: shop_raw.orders, keys: [id]}]}
+    asserts:
+      - hasDocuments: {count: 5}

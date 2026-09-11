@@ -32,3 +32,25 @@ spec:
     - {resource: {type: transactionalId, name: "coordinator-txn-", patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: transactionalId, name: "worker-txn-", patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: cluster}, operations: [IdempotentWrite]}
+{{- $mongo := list }}
+{{- range .Values.sources }}{{ if eq .type "mongodb" }}{{ $mongo = append $mongo . }}{{ end }}{{ end }}
+{{- if $mongo }}
+---
+# mongo-bronze Spark işinin Kafka kimliği: yalnız mongo prefix'lerini okur (plan Q4)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: spark
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+{{- range $mongo }}
+    - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Describe]}
+{{- end }}
+    - {resource: {type: group, name: "spark-lakehouse", patternType: prefix}, operations: [Read]}
+{{- end }}
