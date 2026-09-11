@@ -64,6 +64,24 @@ tests:
       - contains: {path: 'rules[0].resourceNames', content: shop-db}
       - contains: {path: 'rules[0].resourceNames', content: hr-db}
       - contains: {path: 'rules[0].resourceNames', content: polaris-connect}
+      - contains: {path: 'rules[0].resourceNames', content: connect}
+      - notContains: {path: 'rules[0].resourceNames', content: s3-creds}
+  - it: role reads s3-creds only in no-STS mode
+    template: kafka-connect.yaml
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources: [{name: shop, topicPrefix: shop}]
+      s3.vendedCredentials: false
+    documentSelector: {path: kind, value: Role}
+    asserts:
+      - contains: {path: 'rules[0].resourceNames', content: s3-creds}
+  - it: connect user ACL prefix defaults to source name
+    template: kafka-users.yaml
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources: [{name: shop}]
+    asserts:
+      - contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "shop.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
   - it: kafka volume class only when storageClass is set
     template: kafka.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h", kafka.storageClass: fast-ssd}
