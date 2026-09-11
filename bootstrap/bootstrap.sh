@@ -9,13 +9,16 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --env) ENV="$2"; shift 2;; --repo) REPO="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --mode) MODE="$2"; shift 2;;
   *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+case "$ENV" in dev|prod) ;; *) echo "bilinmeyen --env: $ENV (dev|prod olmalı)"; exit 2;; esac
 
 if [[ "$MODE" == "helm" ]]; then
+  # ArgoCD'nin varsayılanı: prod glue.yaml kullanır (10-glue.yaml), sadece dev overlay'i glue-dev.yaml'a değiştirir.
+  GLUE_VALUES="$ROOT/platform/values/glue.yaml"; [[ "$ENV" == "dev" ]] && GLUE_VALUES="$ROOT/platform/values/glue-dev.yaml"
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.2.0 -n lakehouse --create-namespace --set watchNamespaces="{lakehouse}" --wait
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
   helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.0 -n cnpg-system --create-namespace --wait
   kubectl apply -k "$ROOT/platform/keycloak-operator"
-  helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$ROOT/platform/values/glue-${ENV}.yaml" --wait --timeout 25m
+  helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 25m
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
   kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=600s
   helm repo add polaris https://downloads.apache.org/polaris/helm-chart >/dev/null 2>&1 || true; helm repo update polaris >/dev/null
