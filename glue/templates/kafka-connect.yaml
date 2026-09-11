@@ -12,6 +12,10 @@ rules:
   - {{ printf "%s-db" .name | quote }}
 {{- end }}
   - "polaris-connect"
+  - connect                       # sqlserver schema-history istemcileri: KafkaUser Secret'ındaki sasl.jaas.config
+{{- if not .Values.s3.vendedCredentials }}
+  - s3-creds                      # STS'siz S3: sink kendi anahtarlarını okur
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -1,0 +1,86 @@
+suite: connectors
+templates: [connectors.yaml]
+tests:
+  - it: no sources renders nothing
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: postgres source renders debezium + sink pair
+    set:
+      connect.topicPartitions: 3
+      sources:
+        - {name: shop, type: postgres, host: demo-pg-rw.lakehouse.svc, port: 5432, database: shop, tables: [public.orders, public.items], signalTable: public.debezium_signal}
+    asserts:
+      - hasDocuments: {count: 2}
+      - documentIndex: 0
+        equal: {path: metadata.name, value: dbz-shop}
+      - documentIndex: 0
+        equal: {path: spec.class, value: io.debezium.connector.postgresql.PostgresConnector}
+      - documentIndex: 0
+        equal: {path: 'spec.config["table.include.list"]', value: "public.orders,public.items,public.debezium_signal"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["database.password"]', value: "${secrets:lakehouse/shop-db:password}"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["publication.autocreate.mode"]', value: filtered}
+      - documentIndex: 0
+        equal: {path: 'spec.config["signal.data.collection"]', value: public.debezium_signal}
+      - documentIndex: 0
+        equal: {path: 'spec.config["decimal.handling.mode"]', value: precise}
+      - documentIndex: 0
+        equal: {path: 'spec.config["topic.creation.default.partitions"]', value: "3"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["slot.name"]', value: debezium_shop}
+      - documentIndex: 1
+        equal: {path: metadata.name, value: sink-shop}
+      - documentIndex: 1
+        equal: {path: spec.class, value: org.apache.iceberg.connect.IcebergSinkConnector}
+      - documentIndex: 1
+        equal: {path: 'spec.config["topics.regex"]', value: 'shop\.(?!dlq$)(?!public\.debezium_signal$).*'}
+      - documentIndex: 1
+        equal: {path: 'spec.config["transforms.dbz.cdc.target.pattern"]', value: "shop_raw.{table}"}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.tables.default-partition-by"]', value: day(_cdc.ts)}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.kafka.session.timeout.ms"]', value: "120000"}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.catalog.credential"]', value: "${secrets:lakehouse/polaris-connect:credential}"}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.catalog.header.X-Iceberg-Access-Delegation"]', value: vended-credentials}
+      - documentIndex: 1
+        equal: {path: 'spec.config["errors.deadletterqueue.topic.name"]', value: shop.dlq}
+      - documentIndex: 1
+        isNull: {path: 'spec.config["iceberg.control.commit.interval-ms"]'}
+  - it: dev commit interval and no-STS mode
+    set:
+      connect.sinkCommitIntervalMs: "30000"
+      s3.vendedCredentials: false
+      sources:
+        - {name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.debezium_signal}
+    asserts:
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.control.commit.interval-ms"]', value: "30000"}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.catalog.header.X-Iceberg-Access-Delegation"]', value: none}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.catalog.s3.access-key-id"]', value: "${secrets:lakehouse/s3-creds:AWS_ACCESS_KEY_ID}"}
+  - it: sqlserver source
+    set:
+      sources:
+        - {name: erp, type: sqlserver, host: mssql.example.com, port: 1433, database: ERP, tables: [dbo.Orders], signalTable: dbo.debezium_signal, extraConfig: {database.encrypt: "true"}}
+    asserts:
+      - documentIndex: 0
+        equal: {path: spec.class, value: io.debezium.connector.sqlserver.SqlServerConnector}
+      - documentIndex: 0
+        equal: {path: 'spec.config["database.names"]', value: ERP}
+      - documentIndex: 0
+        equal: {path: 'spec.config["schema.history.internal.kafka.topic"]', value: schema-history.erp}
+      - documentIndex: 0
+        equal: {path: 'spec.config["schema.history.internal.store.only.captured.tables.ddl"]', value: "false"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["schema.history.internal.producer.sasl.jaas.config"]', value: "${secrets:lakehouse/connect:sasl.jaas.config}"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["database.encrypt"]', value: "true"}
+  - it: unknown type fails
+    set:
+      sources: [{name: x, type: oracle, host: h, port: 1, database: d, tables: [a.b], signalTable: a.s}]
+    asserts:
+      - failedTemplate: {errorPattern: "postgres\\|sqlserver"}

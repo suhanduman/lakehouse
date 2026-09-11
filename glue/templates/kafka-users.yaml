@@ -22,7 +22,7 @@ spec:
     - {resource: {type: topic, name: "schema-history.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
     - {resource: {type: topic, name: "debezium-", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- range .Values.sources }}
-    - {resource: {type: topic, name: "{{ .topicPrefix }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+    - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- end }}
     - {resource: {type: transactionalId, name: "connect", patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: cluster}, operations: [IdempotentWrite]}

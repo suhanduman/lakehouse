@@ -1,0 +1,132 @@
+{{- /* Kaynak-DB başına 1 Debezium + 1 Iceberg sink (spec §5.2). Ayarlar spec §12 korunan bilgi + F0 S2/S2d/S3. Runtime mutasyon yok. */ -}}
+{{- $ns := include "glue.ns" . }}
+{{- $rf := index .Values.kafka.config "default.replication.factor" }}
+{{- range .Values.sources }}
+{{- $prefix := .topicPrefix | default .name }}
+{{- $bronzeNs := .bronzeNamespace | default (printf "%s_raw" .name) }}
+{{- if not (or (eq .type "postgres") (eq .type "sqlserver")) }}{{ fail (printf "sources[%s].type = %q; postgres|sqlserver olmalı" .name .type) }}{{ end }}
+{{- /* config bir dict olarak kurulur (literal YAML satırları değil): extraConfig/sinkExtraConfig statik anahtarları
+   gerçekten EZEBİLSİN (values.yaml'daki "ek/ezen" sözü) — iki kez aynı anahtarı yazmak geçersiz YAML üretir. */ -}}
+{{- $cfg := dict
+  "database.hostname" .host
+  "database.port" .port
+  "database.user" (printf "${secrets:%s/%s-db:username}" $ns .name)
+  "database.password" (printf "${secrets:%s/%s-db:password}" $ns .name)
+  "topic.prefix" $prefix
+  "table.include.list" (join "," (append .tables .signalTable))
+  "snapshot.mode" "initial"
+  "signal.data.collection" (required (printf "sources[%s].signalTable zorunlu (incremental snapshot)" .name) .signalTable)
+  "signal.enabled.channels" "source"
+  "time.precision.mode" "connect"
+  "decimal.handling.mode" "precise"
+  "tombstones.on.delete" "false"
+  "key.converter" "org.apache.kafka.connect.json.JsonConverter"
+  "value.converter" "org.apache.kafka.connect.json.JsonConverter"
+  "key.converter.schemas.enable" "true"
+  "value.converter.schemas.enable" "true"
+  "topic.creation.default.replication.factor" $rf
+  "topic.creation.default.partitions" $.Values.connect.topicPartitions }}
+{{- if eq .type "postgres" }}
+{{- $_ := set $cfg "database.dbname" .database }}
+{{- $_ := set $cfg "plugin.name" "pgoutput" }}
+{{- $_ := set $cfg "slot.name" (printf "debezium_%s" .name) }}
+{{- $_ := set $cfg "publication.name" (printf "dbz_%s_pub" .name) }}
+{{- $_ := set $cfg "publication.autocreate.mode" "filtered" }}
+{{- /* publication.autocreate.mode=filtered: superuser gerekmez; tablo sahibi dbz rolü (runbooks/add-source.md) */ -}}
+{{- else }}
+{{- $_ := set $cfg "database.names" .database }}
+{{- $_ := set $cfg "database.encrypt" "false" }}
+{{- /* database.encrypt=false varsayılan; prod: extraConfig ile "true" (+ database.trustServerCertificate gerekiyorsa) */ -}}
+{{- $_ := set $cfg "schema.history.internal.kafka.topic" (printf "schema-history.%s" .name) }}
+{{- $_ := set $cfg "schema.history.internal.kafka.bootstrap.servers" "lakehouse-kafka-bootstrap:9093" }}
+{{- $_ := set $cfg "schema.history.internal.store.only.captured.tables.ddl" "false" }}
+{{- range $c := list "producer" "consumer" }}
+{{- /* Debezium'un kendi Kafka istemcileri worker ayarlarını devralmaz: Connect KafkaUser Secret'ı + Strimzi CA (PEM). Canlı doğrulama: pre-ship (kind'da SQL Server yok) */ -}}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.security.protocol" $c) "SASL_SSL" }}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.sasl.mechanism" $c) "SCRAM-SHA-512" }}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.sasl.jaas.config" $c) (printf "${secrets:%s/connect:sasl.jaas.config}" $ns) }}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.ssl.truststore.type" $c) "PEM" }}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.ssl.truststore.location" $c) "/opt/kafka/connect-certs/lakehouse-cluster-ca-cert/ca.crt" }}
+{{- end }}
+{{- end }}
+{{- $_ := mergeOverwrite $cfg (.extraConfig | default (dict)) }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: dbz-{{ .name }}
+  namespace: {{ $ns }}
+  labels: {strimzi.io/cluster: connect}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  {{- if eq .type "postgres" }}
+  class: io.debezium.connector.postgresql.PostgresConnector
+  {{- else }}
+  class: io.debezium.connector.sqlserver.SqlServerConnector
+  {{- end }}
+  tasksMax: 1
+  config:
+    {{- range $k, $v := $cfg }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: sink-{{ .name }}
+  namespace: {{ $ns }}
+  labels: {strimzi.io/cluster: connect}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  class: org.apache.iceberg.connect.IcebergSinkConnector
+  tasksMax: {{ .sinkTasks | default 1 }}
+  {{- $sinkCfg := dict
+    "topics.regex" (printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." .signalTable))
+    "key.converter" "org.apache.kafka.connect.json.JsonConverter"
+    "value.converter" "org.apache.kafka.connect.json.JsonConverter"
+    "key.converter.schemas.enable" "true"
+    "value.converter.schemas.enable" "true"
+    "transforms" "dbz"
+    "transforms.dbz.type" "org.apache.iceberg.connect.transforms.DebeziumTransform"
+    "transforms.dbz.cdc.target.pattern" (printf "%s.{table}" $bronzeNs)
+    "iceberg.tables.dynamic-enabled" "true"
+    "iceberg.tables.route-field" "_cdc.target"
+    "iceberg.tables.auto-create-enabled" "true"
+    "iceberg.tables.evolve-schema-enabled" "true"
+    "iceberg.tables.default-partition-by" "day(_cdc.ts)"
+    "iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled" "true"
+    "iceberg.tables.auto-create-props.history.expire.max-snapshot-age-ms" "86400000"
+    "iceberg.catalog.type" "rest"
+    "iceberg.catalog.uri" $.Values.iceberg.catalogUri
+    "iceberg.catalog.warehouse" $.Values.iceberg.warehouse
+    "iceberg.catalog.credential" (printf "${secrets:%s/polaris-connect:credential}" $ns)
+    "iceberg.catalog.scope" "PRINCIPAL_ROLE:ALL"
+    "iceberg.catalog.io-impl" "org.apache.iceberg.aws.s3.S3FileIO"
+    "iceberg.catalog.s3.endpoint" $.Values.s3.endpoint
+    "iceberg.catalog.s3.path-style-access" $.Values.s3.pathStyleAccess
+    "iceberg.catalog.client.region" $.Values.s3.region
+    "iceberg.kafka.session.timeout.ms" "120000"
+    "iceberg.kafka.heartbeat.interval.ms" "15000"
+    "iceberg.kafka.max.poll.interval.ms" "300000"
+    "iceberg.kafka.request.timeout.ms" "130000"
+    "errors.tolerance" "all"
+    "errors.log.enable" "true"
+    "errors.deadletterqueue.topic.name" (printf "%s.dlq" $prefix)
+    "errors.deadletterqueue.topic.replication.factor" $rf }}
+  {{- if $.Values.s3.vendedCredentials }}
+  {{- $_ := set $sinkCfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "vended-credentials" }}
+  {{- else }}
+  {{- $_ := set $sinkCfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "none" }}
+  {{- $_ := set $sinkCfg "iceberg.catalog.s3.access-key-id" (printf "${secrets:%s/s3-creds:AWS_ACCESS_KEY_ID}" $ns) }}
+  {{- $_ := set $sinkCfg "iceberg.catalog.s3.secret-access-key" (printf "${secrets:%s/s3-creds:AWS_SECRET_ACCESS_KEY}" $ns) }}
+  {{- end }}
+  {{- /* F0 S2: control consumer flap'ına karşı ZORUNLU (veri yokken put() 60 s bloke -> 45 s session düşer -> "committed to 0 table(s)") */ -}}
+  {{- with $.Values.connect.sinkCommitIntervalMs }}
+  {{- $_ := set $sinkCfg "iceberg.control.commit.interval-ms" . }}
+  {{- end }}
+  {{- $_ := mergeOverwrite $sinkCfg (.sinkExtraConfig | default (dict)) }}
+  config:
+    {{- range $k, $v := $sinkCfg }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+{{- end }}

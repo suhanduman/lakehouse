@@ -29,14 +29,27 @@ connect:
   # image-registry.openshift-image-registry.svc:5000/<ns>/connect:2.0.0); dev: ttl.sh (platform/values/glue-dev.yaml)
   buildImage: ""
   buildPushSecret: ""           # özel registry için docker-registry Secret adı; boş = anonim (ttl.sh)
+  topicPartitions: 6            # Debezium topic.creation.default.partitions (dev: 3)
+  sinkCommitIntervalMs: ""      # Iceberg sink commit aralığı; BOŞ = upstream 300 s (prod). Yalnız dev/e2e: "30000"
   resources:
     requests: {cpu: 500m, memory: 1536Mi}
     limits: {memory: 2Gi}
 
-# Kaynak DB'ler: KafkaUser ACL'leri + (F2) KafkaConnector şablonları buradan türetilir. topicPrefix = Debezium topic.prefix
+# Kaynak DB'ler → KafkaUser ACL'leri + KafkaConnector çifti (dbz-<name>, sink-<name>). Secret: <name>-db (username, password).
+# Bronze namespace <name>_raw (Polaris setup.yaml'da yaratılmış olmalı — runbooks/add-source.md)
 sources: []
-#  - name: shop
-#    topicPrefix: shop
+#  - name: shop                       # topic.prefix, slot/publication adı, Secret <name>-db
+#    type: postgres                   # postgres | sqlserver
+#    host: demo-pg-rw.lakehouse.svc
+#    port: 5432
+#    database: shop                   # pg: database.dbname; sqlserver: database.names
+#    tables: [public.orders]          # table.include.list
+#    signalTable: public.debezium_signal   # zorunlu: incremental snapshot sinyal tablosu (kaynakta yaratılır)
+#    topicPrefix: shop                # opsiyonel, varsayılan name
+#    bronzeNamespace: shop_raw        # opsiyonel, varsayılan <name>_raw
+#    sinkTasks: 1
+#    extraConfig: {}                  # Debezium'a ek/ezen anahtarlar
+#    sinkExtraConfig: {}              # sink'e ek/ezen anahtarlar
 
 cnpg:
   # storageClass boş = kümenin varsayılan StorageClass'ı; prod'da HA için instances: 2 (platform/values/glue.yaml)
@@ -81,3 +94,37 @@ ingress:
   className: nginx
 route:
   enabled: false                # platform=openshift iken true
+
+iceberg:
+  catalogUri: http://polaris.lakehouse.svc:8181/api/catalog
+  warehouse: lakehouse
+
+s3:                                   # istemciler (sink, Spark) için; Polaris sunucusu için platform/polaris/setup.yaml
+  endpoint: http://minio.lakehouse.svc:9000     # prod: müşteri S3 endpoint'i
+  region: us-east-1
+  pathStyleAccess: true
+  vendedCredentials: true             # STS'siz S3'te false → istemciler s3-creds Secret'ını kullanır, delegation header none (F0 S1c)
+
+# Silver pipeline'ları (yalnız entity/upsert tabloları; append-only tablolar listelenmez). ConfigMap lakehouse-jobs/pipelines.json
+pipelines: []
+#  - bronze: shop_raw.orders
+#    keys: [id]
+#    write_mode: merge-on-read         # | copy-on-write (küçük tablo)
+#    bucket_count: 16
+#    casts: {updated_at: timestamp}    # Bronze'da string gelen timestamptz kolonları (F0 S2d)
+
+spark:
+  image: apache/spark:4.1.0-java21-python3
+  version: "4.1.0"
+  packages: org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0
+  serviceAccount: spark-operator-spark          # spark-operator chart'ının jobNamespaces'ta yarattığı SA
+  credentialSecret: polaris-spark               # key: credential (polaris-setup.sh yazar)
+  driver:   {cores: 1, memory: 2g, memoryOverhead: 512m}
+  executor: {instances: 1, cores: 1, memory: 2g, memoryOverhead: 512m}
+  shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
+  schedules:
+    silverMerge: "*/15 * * * *"
+    positionDeletes: "0 * * * *"
+    compact: "0 */6 * * *"
+    expireOrphanTtl: "30 3 * * *"
+  maintenance: {snapshotDays: 7, orphanDays: 3, bronzeTtlDays: 30}

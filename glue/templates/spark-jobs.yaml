@@ -1,0 +1,91 @@
+{{- /* jobs kodu + pipelines.json tek ConfigMap; 4 ScheduledSparkApplication (spec §6). Credential: Secret -> env (plan P4). */ -}}
+{{- $ns := include "glue.ns" . }}
+{{- $s := .Values.spark }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lakehouse-jobs
+  namespace: {{ $ns }}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+data:
+{{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
+  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines) | quote }}
+{{- $m := $s.maintenance }}
+{{- $jobs := list
+  (dict "name" "silver-merge"            "file" "merge_cdc.py"           "schedule" $s.schedules.silverMerge     "args" list)
+  (dict "name" "maint-position-deletes"  "file" "iceberg_maintenance.py" "schedule" $s.schedules.positionDeletes "args" (list "--mode" "position-deletes"))
+  (dict "name" "maint-compact"           "file" "iceberg_maintenance.py" "schedule" $s.schedules.compact         "args" (list "--mode" "compact"))
+  (dict "name" "maint-expire-orphan-ttl" "file" "iceberg_maintenance.py" "schedule" $s.schedules.expireOrphanTtl "args" (list "--mode" "expire-orphan-ttl" "--snapshot-days" (toString $m.snapshotDays) "--orphan-days" (toString $m.orphanDays) "--bronze-ttl-days" (toString $m.bronzeTtlDays))) }}
+{{- range $job := $jobs }}
+---
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: {{ $job.name }}
+  namespace: {{ $ns }}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulRunHistoryLimit: 3
+  failedRunHistoryLimit: 3
+  template:
+    type: Python
+    pythonVersion: "3"
+    mode: cluster
+    image: {{ $s.image }}
+    imagePullPolicy: IfNotPresent
+    mainApplicationFile: local:///opt/job/{{ $job.file }}
+    {{- if $job.args }}
+    arguments: {{ toJson $job.args }}
+    {{- end }}
+    sparkVersion: {{ $s.version | quote }}
+    restartPolicy: {type: Never}
+    timeToLiveSeconds: 86400
+    sparkConf:
+      spark.jars.packages: {{ $s.packages | quote }}
+      spark.jars.ivy: /tmp/.ivy2
+      spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+      spark.sql.catalog.lakehouse: org.apache.iceberg.spark.SparkCatalog
+      spark.sql.catalog.lakehouse.type: rest
+      spark.sql.catalog.lakehouse.uri: {{ $.Values.iceberg.catalogUri | quote }}
+      spark.sql.catalog.lakehouse.warehouse: {{ $.Values.iceberg.warehouse | quote }}
+      spark.sql.catalog.lakehouse.scope: PRINCIPAL_ROLE:ALL
+      spark.sql.catalog.lakehouse.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+      spark.sql.catalog.lakehouse.s3.endpoint: {{ $.Values.s3.endpoint | quote }}
+      spark.sql.catalog.lakehouse.s3.path-style-access: {{ $.Values.s3.pathStyleAccess | quote }}
+      spark.sql.catalog.lakehouse.client.region: {{ $.Values.s3.region | quote }}
+      spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation: {{ ternary "vended-credentials" "none" $.Values.s3.vendedCredentials }}
+      spark.sql.defaultCatalog: lakehouse
+      spark.sql.session.timeZone: UTC            # bakım TIMESTAMP literal'leri ve _cdc.ts karşılaştırmaları UTC (F2-B)
+      spark.sql.shuffle.partitions: {{ $s.shufflePartitions | quote }}
+      spark.default.parallelism: {{ $s.shufflePartitions | quote }}
+      spark.driver.memoryOverhead: {{ $s.driver.memoryOverhead }}
+      spark.executor.memoryOverhead: {{ $s.executor.memoryOverhead }}
+    driver:
+      cores: {{ $s.driver.cores }}
+      memory: {{ $s.driver.memory }}
+      serviceAccount: {{ $s.serviceAccount }}
+      env:
+      - {name: AWS_REGION, value: {{ $.Values.s3.region | quote }}}
+      - {name: POLARIS_CREDENTIAL, valueFrom: {secretKeyRef: {name: {{ $s.credentialSecret }}, key: credential}}}
+      {{- if not $.Values.s3.vendedCredentials }}
+      - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
+      {{- end }}
+      volumeMounts: [{name: job, mountPath: /opt/job}]
+    executor:
+      cores: {{ $s.executor.cores }}
+      instances: {{ $s.executor.instances }}
+      memory: {{ $s.executor.memory }}
+      env:
+      - {name: AWS_REGION, value: {{ $.Values.s3.region | quote }}}
+      {{- if not $.Values.s3.vendedCredentials }}
+      - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
+      - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
+      {{- end }}
+      volumeMounts: [{name: job, mountPath: /opt/job}]
+    volumes:
+    - name: job
+      configMap: {name: lakehouse-jobs}
+{{- end }}

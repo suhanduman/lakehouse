@@ -1,0 +1,39 @@
+suite: spark jobs
+templates: [spark-jobs.yaml]
+tests:
+  - it: configmap carries job code and pipelines.json
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}]
+    documentSelector: {path: kind, value: ConfigMap}
+    asserts:
+      - equal: {path: metadata.name, value: lakehouse-jobs}
+      - isNotNull: {path: 'data["merge_cdc.py"]'}
+      - isNotNull: {path: 'data["merge_lib.py"]'}
+      - isNotNull: {path: 'data["iceberg_maintenance.py"]'}
+      - matchRegex: {path: 'data["pipelines.json"]', pattern: '"bronze":"shop_raw.orders"'}
+      - matchRegex: {path: 'data["pipelines.json"]', pattern: '"casts":\{"updated_at":"timestamp"\}'}
+  - it: four scheduled spark applications with schedules and args
+    asserts:
+      - hasDocuments: {count: 5}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: spec.schedule, value: "*/15 * * * *"}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: spec.template.mainApplicationFile, value: local:///opt/job/merge_cdc.py}
+      - documentSelector: {path: metadata.name, value: maint-compact}
+        equal: {path: spec.template.arguments, value: ["--mode", "compact"]}
+      - documentSelector: {path: metadata.name, value: maint-expire-orphan-ttl}
+        equal: {path: spec.template.arguments, value: ["--mode", "expire-orphan-ttl", "--snapshot-days", "7", "--orphan-days", "3", "--bronze-ttl-days", "30"]}
+      - documentSelector: {path: metadata.name, value: maint-position-deletes}
+        equal: {path: spec.concurrencyPolicy, value: Forbid}
+  - it: credential comes from Secret via env, never from sparkConf
+    documentSelector: {path: metadata.name, value: silver-merge}
+    asserts:
+      - contains:
+          path: spec.template.driver.env
+          content: {name: POLARIS_CREDENTIAL, valueFrom: {secretKeyRef: {name: polaris-spark, key: credential}}}
+      - isNull: {path: 'spec.template.sparkConf["spark.sql.catalog.lakehouse.credential"]'}
+      - equal: {path: 'spec.template.sparkConf["spark.jars.packages"]', value: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0"}
+      - equal: {path: 'spec.template.sparkConf["spark.sql.shuffle.partitions"]', value: "8"}
+      - equal: {path: 'spec.template.sparkConf["spark.sql.session.timeZone"]', value: UTC}
+      - equal: {path: spec.template.image, value: apache/spark:4.1.0-java21-python3}
+      - equal: {path: spec.template.driver.serviceAccount, value: spark-operator-spark}
