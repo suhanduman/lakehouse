@@ -8,7 +8,7 @@ while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) R
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun
   kubectl -n argocd wait application/lakehouse-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
-  for app in strimzi cnpg keycloak-operator glue polaris; do
+  for app in strimzi cnpg keycloak-operator spark-operator glue polaris; do
     echo "bekleniyor: application/$app"
     for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
     kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout=1800s

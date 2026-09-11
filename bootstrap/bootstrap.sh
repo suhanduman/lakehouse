@@ -19,6 +19,8 @@ if [[ "$MODE" == "helm" ]]; then
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
   helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.0 -n cnpg-system --create-namespace --wait
   kubectl apply -k "$ROOT/platform/keycloak-operator"
+  helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
+  helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --wait --timeout 5m
   helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 25m
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
   kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=600s

@@ -1,0 +1,18 @@
+# Kubeflow spark-operator (spec §3): ScheduledSparkApplication; işler lakehouse ns'inde, driver SA spark-operator-spark
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: spark-operator, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+spec:
+  project: default
+  source:
+    repoURL: https://kubeflow.github.io/spark-operator
+    chart: spark-operator
+    targetRevision: 2.5.2
+    helm:
+      valuesObject:
+        spark:
+          jobNamespaces: [lakehouse]
+  destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

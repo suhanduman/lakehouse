@@ -4,5 +4,6 @@ resources:
 - 00-strimzi.yaml
 - 00-cnpg.yaml
 - 00-keycloak-operator.yaml
+- 00-spark-operator.yaml
 - 10-glue.yaml
 - 20-polaris.yaml

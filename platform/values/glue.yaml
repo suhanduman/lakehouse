@@ -11,3 +11,9 @@ cnpg:
   # HA: primary + 1 replika (CNPG senkron/asenkron replikasyon); storageClass kurulumda ortamın sınıfıyla doldurulur
   polarisDb: {instances: 2}
   keycloakDb: {instances: 2}
+# Ingestion (F2): kaynaklar ve pipeline'lar kurulumda doldurulur — runbooks/add-source.md
+s3:
+  endpoint: https://s3.example.com     # müşteri S3 endpoint'i (platform/polaris/setup.yaml ile aynı)
+  vendedCredentials: true              # STS yoksa false (F0 S1c)
+sources: []
+pipelines: []
