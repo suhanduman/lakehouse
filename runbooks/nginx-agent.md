@@ -8,6 +8,6 @@ Akış: `tail` → `parser nginx` (zaman ayrıştırması ajanda) → `lua` (`ts
    - CA: `kubectl -n lakehouse get secret lakehouse-cluster-ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/fluent-bit/lakehouse-ca.crt`
    - parola: `kubectl -n lakehouse get secret fluentbit -o jsonpath='{.data.password}' | base64 -d`
 3. Sunucuda: Fluent Bit 5.1 paketi (fluentbit.io/install); `agents/fluent-bit/fluent-bit.conf` + `parsers.conf` → `/etc/fluent-bit/`; `/etc/default/fluent-bit`:
-   `KAFKA_BOOTSTRAP=<host:port>` `KAFKA_PASSWORD=<parola>` `KAFKA_CA=/etc/fluent-bit/lakehouse-ca.crt` `NGINX_ACCESS_LOG=/var/log/nginx/access.log` `READ_FROM_HEAD=off`; `systemctl enable --now fluent-bit`.
+   `KAFKA_BOOTSTRAP=<host:port>` `KAFKA_PASSWORD=<parola>` `KAFKA_CA=/etc/fluent-bit/lakehouse-ca.crt` `NGINX_ACCESS_LOG=/var/log/nginx/access.log` `READ_FROM_HEAD=off`; `chmod 600 /etc/default/fluent-bit` (root); `systemctl enable --now fluent-bit`.
 4. Doğrulama: `kubectl -n lakehouse get kafkaconnector sink-nginx` Ready; ≤ 5 dk içinde `nginx_raw.access_log` (Trino F4 / pyiceberg). Ajan logu: `journalctl -u fluent-bit`.
-Notlar: disk tamponu `storage.type filesystem` (Kafka kesintisinde 1G'a kadar); log formatı `combined` dışındaysa `parsers.conf` regex'i güncelle; TR-locale sorunu yok (ay adları ajanda `%b` ile çözülür).
+Notlar: disk tamponu `storage.type filesystem` (Kafka kesintisinde 1G'a kadar); log formatı `combined` dışındaysa `parsers.conf` regex'i güncelle; TR-locale sorunu yok (ay adları ajanda `%b` ile çözülür); `_fb_ts` = ajan alım zamanı (float s), `ts` = log satırı zamanı (ms); proxy/LB arkasında `$remote_addr` proxy IP'sidir → nginx `real_ip` modülü ya da XFF'li `log_format` + `parsers.conf` regex güncellemesi.

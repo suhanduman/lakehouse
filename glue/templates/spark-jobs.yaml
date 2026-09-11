@@ -1,4 +1,5 @@
-{{- /* jobs kodu + pipelines.json tek ConfigMap; 4 ScheduledSparkApplication (spec §6). Credential: Secret -> env (plan P4). */ -}}
+{{- /* jobs kodu + pipelines.json tek ConfigMap; ScheduledSparkApplication'lar koşullu: silver-merge (pipelines), 3 bakım (pipelines|mongo|nginx),
+       mongo-bronze (mongodb kaynağı) (spec §6). Credential: Secret -> env (plan P4). */ -}}
 {{- $ns := include "glue.ns" . }}
 {{- $s := .Values.spark }}
 {{- /* Bakım işi Bronze tablolarını katalogdan bulur: her kaynağın Bronze namespace'i (pipeline'ı olmayan append-only tablolar da). */ -}}
@@ -13,6 +14,11 @@
 {{- $bn := .bronzeNamespace | default (printf "%s_raw" .name) }}{{ $pfx := .topicPrefix | default .name }}
 {{- range .collections }}{{ $mongoList = append $mongoList (dict "topic" (printf "%s.%s" $pfx .) "bronze" (printf "%s.%s" $bn (last (splitList "." .)))) }}{{ end }}
 {{- end }}{{ end }}
+{{- /* Bakım kapsamına giren ama pipeline/mongo dışı namespace'ler (şimdilik yalnız nginx_raw) — TTL YOK, saklama F5 */ -}}
+{{- $maintList := list }}
+{{- if .Values.nginx.enabled }}
+{{- $maintList = append $maintList (first (splitList "." .Values.nginx.table)) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,20 +27,20 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "3"}
 data:
 {{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
-  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList) | quote }}
+  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList "maintain_namespaces" $maintList) | quote }}
 {{- $m := $s.maintenance }}
+{{- /* bakım SSA'ları (maint-*) pipeline, mongo ya da nginx'ten HERHANGİ biri varsa çalışır: nginx_raw da bakım görsün (TTL hariç, F5) */ -}}
+{{- $maintGate := or .Values.pipelines $mongoList .Values.nginx.enabled }}
 {{- $jobs := list
-  (dict "name" "silver-merge"            "file" "merge_cdc.py"           "schedule" $s.schedules.silverMerge     "args" list)
-  (dict "name" "maint-position-deletes"  "file" "iceberg_maintenance.py" "schedule" $s.schedules.positionDeletes "args" (list "--mode" "position-deletes"))
-  (dict "name" "maint-compact"           "file" "iceberg_maintenance.py" "schedule" $s.schedules.compact         "args" (list "--mode" "compact"))
-  (dict "name" "maint-expire-orphan-ttl" "file" "iceberg_maintenance.py" "schedule" $s.schedules.expireOrphanTtl "args" (list "--mode" "expire-orphan-ttl" "--snapshot-days" (toString $m.snapshotDays) "--orphan-days" (toString $m.orphanDays) "--bronze-ttl-days" (toString $m.bronzeTtlDays))) }}
-{{- $mongoJobs := list }}
-{{- if $mongoList }}
-{{- $mongoJobs = list (dict "name" "mongo-bronze" "file" "mongo_bronze.py" "schedule" $s.schedules.mongoBronze "args" list "kafka" true) }}
-{{- end }}
+  (dict "name" "silver-merge"            "file" "merge_cdc.py"           "schedule" $s.schedules.silverMerge     "args" list                                                                                                                                     "when" .Values.pipelines)
+  (dict "name" "maint-position-deletes"  "file" "iceberg_maintenance.py" "schedule" $s.schedules.positionDeletes "args" (list "--mode" "position-deletes")                                                                                                       "when" $maintGate)
+  (dict "name" "maint-compact"           "file" "iceberg_maintenance.py" "schedule" $s.schedules.compact         "args" (list "--mode" "compact")                                                                                                                "when" $maintGate)
+  (dict "name" "maint-expire-orphan-ttl" "file" "iceberg_maintenance.py" "schedule" $s.schedules.expireOrphanTtl "args" (list "--mode" "expire-orphan-ttl" "--snapshot-days" (toString $m.snapshotDays) "--orphan-days" (toString $m.orphanDays) "--bronze-ttl-days" (toString $m.bronzeTtlDays)) "when" $maintGate)
+  (dict "name" "mongo-bronze"            "file" "mongo_bronze.py"        "schedule" $s.schedules.mongoBronze     "args" list                                                                                                                                     "kafka" true "when" $mongoList) }}
 {{- /* pipelines boşken (F1 kurulumu, kaynak eklenmeden) zamanlanmış iş üretme: her koşu "atlandı" logundan ibaret olurdu. ConfigMap hep render edilir.
-   mongo-bronze ayrı koşulludur: pipelines boş olsa da mongo kaynağı varsa yalnız o SSA çıkar. */ -}}
-{{- range $job := (concat (ternary $jobs list (gt (len .Values.pipelines) 0)) $mongoJobs) }}
+   her iş kendi "when"ini taşır: mongo-bronze mongo kaynağına, silver-merge pipelines'a, bakım işleri üçünün BİRLEŞİMİNE bağlı. */ -}}
+{{- range $job := $jobs }}
+{{- if $job.when }}
 ---
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
@@ -130,4 +136,5 @@ spec:
     - name: kafka-ca
       secret: {secretName: lakehouse-cluster-ca-cert, items: [{key: ca.crt, path: ca.crt}]}
     {{- end }}
+{{- end }}
 {{- end }}

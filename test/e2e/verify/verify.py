@@ -26,13 +26,16 @@ while rest and rest[0].startswith("--"):        # bayraklar koşullardan önce (
     else:
         print(f"bilinmeyen bayrak: {rest[0]}")
         sys.exit(2)
-def cond(c):                                    # "k=v:~k2=s" -> [(k, v, exact), (k2, s, contains)]
+def cond(c):                                    # "k=v:~k2=s" -> [(k, v, is_eq), (k2, s, contains)]
     parts = []                                  # '=' içermeyen parça bir önceki değerin devamıdır: "~ts=2026-09-11 13:52:24"
     for kv in c.split(":"):
         if "=" in kv or not parts:
             parts.append(kv)
         else:
             parts[-1] += ":" + kv
+    if "=" not in parts[0]:                     # ilk parçada '=' yok -> geçersiz koşul, IndexError yerine düzgün hata
+        print(f"bilinmeyen koşul: {c}")
+        sys.exit(2)
     return [(kv.lstrip("~").split("=", 1)[0], kv.split("=", 1)[1], not kv.startswith("~")) for kv in parts]
 
 
@@ -45,7 +48,7 @@ cat = load_catalog("lakehouse", type="rest", uri=os.environ["POLARIS_URI"], ware
 
 
 def match(row, parts):
-    return all(str(row.get(k)) == v if exact else v in str(row.get(k) or "") for k, v, exact in parts)
+    return all(str(row.get(k)) == v if is_eq else v in str(row.get(k) or "") for k, v, is_eq in parts)
 
 
 deadline = time.time() + wait

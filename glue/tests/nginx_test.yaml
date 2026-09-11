@@ -1,5 +1,5 @@
 suite: nginx path
-templates: [kafka-topics.yaml, kafka-users.yaml, connectors.yaml]
+templates: [kafka-topics.yaml, kafka-users.yaml, connectors.yaml, spark-jobs.yaml]
 tests:
   - it: nothing renders when nginx disabled
     template: kafka-topics.yaml
@@ -50,3 +50,22 @@ tests:
     documentSelector: {path: metadata.name, value: connect}
     asserts:
       - notContains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+  - it: nginx_raw bakım kapsamına girer, pipelines/mongo yokken de 3 bakım SSA'sı çıkar ve silver-merge yok
+    template: spark-jobs.yaml
+    set: {nginx.enabled: true}
+    asserts:
+      - hasDocuments: {count: 4}
+      - documentSelector: {path: kind, value: ConfigMap}
+        matchRegex: {path: 'data["pipelines.json"]', pattern: '"maintain_namespaces":\["nginx_raw"\]'}
+      - documentIndex: 1
+        equal: {path: metadata.name, value: maint-position-deletes}
+      - documentIndex: 2
+        equal: {path: metadata.name, value: maint-compact}
+      - documentIndex: 3
+        equal: {path: metadata.name, value: maint-expire-orphan-ttl}
+  - it: nginx kapalı ve pipelines/mongo yokken yalnız ConfigMap render edilir
+    template: spark-jobs.yaml
+    set: {}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: kind, value: ConfigMap}

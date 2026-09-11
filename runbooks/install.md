@@ -29,4 +29,5 @@ Podman: kind ≥ 0.33 (Podman 6 uyumu); `kind.sh` düğüm pids limitini yüksel
 - Spark işi FAILED: `kubectl -n lakehouse get sparkapplication`; `kubectl -n lakehouse logs <ad>-driver`.
 - `silver-merge` `SchemaConflict`: Silver kolon tipi güvenli genişletilemiyor → manuel `ALTER TABLE` ya da yeni kolon.
 - `mongo-bronze` `KAFKA_JAAS` yok → KafkaUser spark yalnız mongodb kaynağı varken oluşur.
+- mongo-bronze OOM/GC uzun kesinti sonrası (backlog `collect()` ile driver'a sığmaz): tek koşu için `spark.driver.memory` artır ya da `lakehouse.kafka.offsets` özelliğini elle ilerlet; offsets yalnız başarıda ilerler.
 - nginx: `nginx.dlq` doluysa `ts` dönüşümü başarısız (Fluent Bit lua filtresi eksik).

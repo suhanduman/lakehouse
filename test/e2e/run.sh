@@ -10,6 +10,7 @@ while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) R
 for _ in $(seq 1 60); do kubectl apply -f "$ROOT/test/e2e/pg-fixture.yaml" >/dev/null 2>&1 && break; sleep 5; done
 kubectl -n lakehouse get cluster/demo-pg >/dev/null
 # Mongo fixture'ı da connector'lardan önce (dbz-crm Secret crm-db'yi bekler — aksi glue Degraded, F2 notu 8); idempotent
+# namespace/CRD beklemesini üstteki pg döngüsünden miras alır
 kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun

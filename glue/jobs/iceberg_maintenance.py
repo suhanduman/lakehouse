@@ -1,7 +1,7 @@
 """iceberg_maintenance — spec §6 bakım (D(f) deklaratif): 3 ScheduledSparkApplication aynı dosyayı farklı --mode ile koşturur.
   --mode position-deletes   Silver: rewrite_position_delete_files (MoR delete dosyalarını katla)         saatlik
   --mode compact            Silver+Bronze: rewrite_data_files(delete-file-threshold=5, remove-dangling-deletes, partial-progress)  6 saat
-  --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük
+  --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük; maintain_namespaces: bakım var, TTL yok — saklama kararı F5
 Silver tabloları pipelines.json'dan (bronze'dan türetilir). Bronze tabloları KATALOGDAN: pipelines.json'daki
 bronze_namespaces için SHOW TABLES (+ pipelines'ın bronze adları) — Silver pipeline'ı olmayan (append-only) Bronze
 tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir)."""
@@ -55,8 +55,10 @@ def main() -> None:
     silver = [p.silver or ml.silver_name(p.bronze) for p in pipes]
     spark = session(f"maint-{a.mode}")
     bronze = bronze_tables(spark, list(doc.get("bronze_namespaces") or []), [p.bronze for p in pipes])
+    # pipeline/mongo dışı bakım kapsamı (nginx_raw): bakım var ama TTL yok (aşağıda "if t in bronze" extra'yı hariç tutar)
+    extra = bronze_tables(spark, list(doc.get("maintain_namespaces") or []), [])
     failed = []
-    for t in (silver if a.mode == "position-deletes" else silver + bronze):
+    for t in (silver if a.mode == "position-deletes" else silver + bronze + extra):
         try:
             # table_exists try İÇİNDE: tek bir bozuk/erişilemeyen tablo döngünün kalanını kesmesin (sonda fail-loud)
             if not table_exists(spark, f"{CATALOG}.{t}"):

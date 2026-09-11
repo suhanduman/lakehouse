@@ -21,7 +21,14 @@ verify crm.customers 3 --exact --wait 60 '_id=000000000000000000000002' '~_doc=A
 echo "== mongo update/delete/insert"
 # shellcheck disable=SC2016  # $set mongosh operatörü, kabuk değişkeni değil
 MONGO 'const c = db.getSiblingDB("crm").customers; c.updateOne({_id: ObjectId("000000000000000000000001")}, {$set: {tier: "platinum", tags: ["x"]}}); c.deleteOne({_id: ObjectId("000000000000000000000002")}); c.insertOne({_id: ObjectId("000000000000000000000004"), name: "Deniz", nested: {deep: {v: 1}}});' >/dev/null
-sleep 20
+# sabit sleep yerine bariyer: 3 mutasyon (U/D/I) topic'e düşene kadar end-offset toplamını yokla (F3-K)
+sum=0
+for _ in $(seq 1 60); do
+  sum=$(kubectl -n "$NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic crm.crm.customers 2>/dev/null | awk -F: '{s+=$3} END {print s+0}')
+  [[ "$sum" -ge 6 ]] && break
+  sleep 2
+done
+[[ "$sum" -ge 6 ]] || { echo "crm.crm.customers end-offset toplamı 120 s içinde 6'ya ulaşmadı (görülen: $sum)"; exit 1; }
 echo "== mongo-bronze #2"
 run_spark_once mongo-bronze
 verify crm_raw.customers 6 --exact --wait 60 '~_doc=platinum' '_id=000000000000000000000004'
