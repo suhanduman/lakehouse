@@ -1,0 +1,25 @@
+suite: keycloak
+templates: [keycloak.yaml, keycloak-realm.yaml]
+tests:
+  - it: Keycloak CR uses CNPG secret and hostname
+    template: keycloak.yaml
+    asserts:
+      - equal: {path: spec.db.vendor, value: postgres}
+      - equal: {path: spec.db.usernameSecret.name, value: keycloak-db-app}
+      - equal: {path: spec.hostname.hostname, value: keycloak.example.com}
+  - it: realm import carries the four platform clients
+    template: keycloak-realm.yaml
+    asserts:
+      - contains: {path: spec.realm.clients, content: {clientId: trino}, any: true}
+      - contains: {path: spec.realm.clients, content: {clientId: superset}, any: true}
+      - contains: {path: spec.realm.clients, content: {clientId: jupyterhub}, any: true}
+      - contains: {path: spec.realm.clients, content: {clientId: polaris}, any: true}
+  - it: ldap federation only when enabled
+    template: keycloak-realm.yaml
+    asserts:
+      - isNull: {path: spec.realm.components}
+  - it: ldap federation renders when enabled
+    template: keycloak-realm.yaml
+    set: {keycloak.ldap.enabled: true}
+    asserts:
+      - isNotNull: {path: spec.realm.components}

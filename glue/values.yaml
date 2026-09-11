@@ -48,11 +48,13 @@ keycloak:
   hostname: keycloak.example.com
   realm:
     name: lakehouse
+    displayName: Lakehouse             # v1 realm value'nün yeni values.yaml'da karşılığı yoktu (task 3); nötr varsayılan eklendi
   adminSecret: keycloak-admin          # keys: username, password
   ldap:
     enabled: false
     connectionUrl: ldaps://ad.example.com:636
     usersDn: "OU=Users,DC=example,DC=com"
+    groupsDn: "OU=Groups,DC=example,DC=com"   # v1'in ayrı groupSearchBase'inin karşılığı yoktu (task 3); nötr varsayılan eklendi
     bindDn: "CN=svc-lakehouse,OU=Service,DC=example,DC=com"
     bindCredential: ""                 # realm import düz değer ister; Secret'tan almak için F4 notu
   clients:                             # redirect URI'ler F4'te servis host'larıyla doldurulur

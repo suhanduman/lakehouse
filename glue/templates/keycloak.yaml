@@ -1,0 +1,23 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "1"}
+spec:
+  instances: 1
+  db:
+    vendor: postgres
+    host: keycloak-db-rw
+    port: 5432
+    database: keycloak
+    usernameSecret: {name: keycloak-db-app, key: username}
+    passwordSecret: {name: keycloak-db-app, key: password}
+  hostname:
+    hostname: {{ .Values.keycloak.hostname }}
+    strict: {{ eq (include "glue.isOpenShift" .) "true" }}
+  http:
+    httpEnabled: true            # TLS kenarda (Route edge / Ingress); kind'da düz HTTP
+  proxy: {headers: xforwarded}
+  bootstrapAdmin:
+    user: {secret: {{ .Values.keycloak.adminSecret }}}   # keys: username, password

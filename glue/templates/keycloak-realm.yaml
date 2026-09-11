@@ -1,0 +1,152 @@
+# Realm import — AD/LDAP federation + OIDC clients in a single YAML. Ported
+# from v1 chart/templates/10-keycloak.yaml (KeycloakRealmImport block); realm
+# content (LDAP storage-provider component + its mappers, roles, groups)
+# preserved as-is. Client set narrowed to F1 platform scope (trino, superset,
+# jupyterhub, polaris) per keycloak.clients.* — v1's downstream-app clients
+# (console, kafka-ui, grafana, sandbox, dbt, zeppelin, nessie machine-auth,
+# ai-ui, device-flow) belong to subsystems not yet built in this chart and
+# will get their own clients when those tasks land.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: {{ printf "%s-realm" .Values.keycloak.realm.name }}
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "2"}
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: {{ .Values.keycloak.realm.name }}
+    displayName: {{ .Values.keycloak.realm.displayName | quote }}
+    enabled: true
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    sslRequired: "external"
+
+    {{- if .Values.keycloak.ldap.enabled }}
+    # --- AD/LDAP Federation ---
+    components:
+      "org.keycloak.storage.UserStorageProvider":
+      - name: "Kurumsal AD"
+        providerId: "ldap"
+        config:
+          enabled: ["true"]
+          priority: ["0"]
+          editMode: ["READ_ONLY"]
+          vendor: ["ad"]
+          connectionUrl: [{{ .Values.keycloak.ldap.connectionUrl | quote }}]
+          bindDn: [{{ .Values.keycloak.ldap.bindDn | quote }}]
+          bindCredential: [{{ .Values.keycloak.ldap.bindCredential | quote }}]
+          usersDn: [{{ .Values.keycloak.ldap.usersDn | quote }}]
+          userObjectClasses: ["person,organizationalPerson,user"]
+          usernameLDAPAttribute: ["sAMAccountName"]
+          rdnLDAPAttribute: ["cn"]
+          uuidLDAPAttribute: ["objectGUID"]
+          searchScope: ["2"]
+          useTruststoreSpi: ["ldapsOnly"]
+          connectionPooling: ["true"]
+          pagination: ["true"]
+          batchSizeForSync: ["1000"]
+          fullSyncPeriod: ["86400"]
+          changedSyncPeriod: ["3600"]
+          importEnabled: ["true"]
+          syncRegistrations: ["false"]
+
+      "org.keycloak.storage.ldap.mappers.LDAPStorageMapper":
+      - name: "email-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["email"]
+          ldap.attribute: ["mail"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["false"]
+      - name: "last-name-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["lastName"]
+          ldap.attribute: ["sn"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["true"]
+      - name: "first-name-mapper"
+        providerId: "user-attribute-ldap-mapper"
+        config:
+          user.model.attribute: ["firstName"]
+          ldap.attribute: ["givenName"]
+          read.only: ["true"]
+          is.mandatory.in.ldap: ["true"]
+      - name: "group-mapper"
+        providerId: "group-ldap-mapper"
+        config:
+          groups.dn: [{{ .Values.keycloak.ldap.groupsDn | quote }}]
+          group.name.ldap.attribute: ["cn"]
+          group.object.classes: ["group"]
+          preserve.group.inheritance: ["false"]
+          membership.ldap.attribute: ["member"]
+          membership.attribute.type: ["DN"]
+          membership.user.ldap.attribute: ["sAMAccountName"]
+          mode: ["READ_ONLY"]
+    {{- end }}
+
+    # --- OIDC Clients (F1 platform scope) ---
+    clients:
+    - clientId: trino
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: {{ toJson .Values.keycloak.clients.trino.redirectUris }}
+      webOrigins: ["+"]
+      attributes:
+        access.token.lifespan: "3600"
+    - clientId: superset
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: {{ toJson .Values.keycloak.clients.superset.redirectUris }}
+      webOrigins: ["+"]
+    - clientId: jupyterhub
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: {{ toJson .Values.keycloak.clients.jupyterhub.redirectUris }}
+      webOrigins: ["+"]
+      # `groups` claim mapper — without it Keycloak's userinfo response has no
+      # `groups` key at all; jupyterhub_config.py's GenericOAuthenticator
+      # (`claim_groups_key = "groups"`) reads this exact claim to gate
+      # login/spawn on AD group membership.
+      protocolMappers:
+      - name: groups
+        protocol: "openid-connect"
+        protocolMapper: "oidc-group-membership-mapper"
+        config:
+          "claim.name": "groups"
+          "full.path": "false"
+          "id.token.claim": "true"
+          "access.token.claim": "true"
+          "userinfo.token.claim": "true"
+    - clientId: polaris
+      enabled: true
+      protocol: "openid-connect"
+      publicClient: false
+      standardFlowEnabled: true
+      redirectUris: {{ toJson .Values.keycloak.clients.polaris.redirectUris }}
+      webOrigins: ["+"]
+
+    # Realm roles — assigned at runtime based on AD group membership
+    roles:
+      realm:
+      - name: admin
+        description: "Lakehouse yöneticisi"
+      - name: analyst
+        description: "Veri analisti / Araştırmacı"
+      - name: student
+        description: "Öğrenci (salt-okunur)"
+
+    groups:
+    - name: lakehouse-admins
+      realmRoles: [admin]
+    - name: lakehouse-analysts
+      realmRoles: [analyst]
+    - name: lakehouse-students
+      realmRoles: [student]
