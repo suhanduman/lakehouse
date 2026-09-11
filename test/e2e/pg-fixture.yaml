@@ -1,0 +1,29 @@
+# e2e kaynak DB (F0 10-cnpg.sh'ten): CNPG, wal_level=logical, dbz rolü postInitApplicationSQL'de (managed.roles initdb'den SONRA — S0b),
+# orders + debezium_signal tabloları dbz'nin. Secret adı <name>-db (Role resourceNames ile uyumlu).
+apiVersion: v1
+kind: Secret
+metadata: {name: shop-db, namespace: lakehouse}
+type: kubernetes.io/basic-auth
+stringData: {username: dbz, password: dbz}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: {name: demo-pg, namespace: lakehouse}
+spec:
+  instances: 1
+  storage: {size: 2Gi}
+  postgresql:
+    parameters: {wal_level: logical, max_wal_senders: "10", max_replication_slots: "10"}
+  bootstrap:
+    initdb:
+      database: shop
+      owner: app
+      postInitApplicationSQL:
+      - CREATE ROLE dbz LOGIN REPLICATION PASSWORD 'dbz';
+      - CREATE TABLE public.orders (id bigserial PRIMARY KEY, status text NOT NULL, amount numeric(10,2) NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+      - INSERT INTO public.orders (status, amount) VALUES ('new', 10.50), ('paid', 99.99), ('new', 3.00);
+      - CREATE TABLE public.debezium_signal (id varchar(42) PRIMARY KEY, type varchar(32) NOT NULL, data varchar(2048));
+      - ALTER TABLE public.orders OWNER TO dbz;
+      - ALTER TABLE public.debezium_signal OWNER TO dbz;
+      - GRANT CREATE ON DATABASE shop TO dbz;
+      - GRANT USAGE, CREATE ON SCHEMA public TO dbz;

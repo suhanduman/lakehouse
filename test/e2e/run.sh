@@ -34,3 +34,4 @@ kubectl apply -f "$ROOT/test/e2e/polaris-smoke/job.yaml"
 kubectl -n lakehouse wait --for=condition=complete job/polaris-smoke --timeout=600s || { kubectl -n lakehouse logs job/polaris-smoke --tail=30; exit 1; }
 kubectl -n lakehouse logs job/polaris-smoke | grep "^OK"
 echo "E2E F1 OK"
+"$ROOT/test/e2e/pg-path.sh"
