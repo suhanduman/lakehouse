@@ -17,3 +17,8 @@ s3:
   vendedCredentials: true              # STS yoksa false (F0 S1c)
 sources: []
 pipelines: []
+# Büyük tier (F0 S4): tablo/veri hacmi büyüdüğünde yorumu kaldır — küçük tier varsayılanları glue/values.yaml'da
+#spark:
+#  driver:   {cores: 2, memory: 4g, memoryOverhead: 1g}
+#  executor: {instances: 2, cores: 2, memory: 4g, memoryOverhead: 1g}
+#  shufflePartitions: 200
