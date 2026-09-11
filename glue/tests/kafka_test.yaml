@@ -94,3 +94,8 @@ tests:
     documentIndex: 0
     asserts:
       - isNull: {path: 'spec.storage.volumes[0].class'}
+  - it: connect user may use the Iceberg sink coordinator transactional id
+    template: kafka-users.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    asserts:
+      - contains: {path: spec.authorization.acls, content: {resource: {type: transactionalId, name: "coordinator-txn-", patternType: prefix}, operations: [Write, Describe]}}

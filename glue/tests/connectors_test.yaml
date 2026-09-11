@@ -84,3 +84,12 @@ tests:
       sources: [{name: x, type: oracle, host: h, port: 1, database: d, tables: [a.b], signalTable: a.s}]
     asserts:
       - failedTemplate: {errorPattern: "postgres\\|sqlserver"}
+  - it: connectors auto-restart failed tasks
+    set:
+      sources:
+        - {name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.debezium_signal}
+    asserts:
+      - documentIndex: 0
+        equal: {path: spec.autoRestart.enabled, value: true}
+      - documentIndex: 1
+        equal: {path: spec.autoRestart.enabled, value: true}

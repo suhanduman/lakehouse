@@ -65,6 +65,7 @@ spec:
   class: io.debezium.connector.sqlserver.SqlServerConnector
   {{- end }}
   tasksMax: 1
+  autoRestart: {enabled: true}     # Strimzi: FAILED task/connector'ı geri-çekilmeli yeniden başlatır (deklaratif; F5 alarmı kalır)
   config:
     {{- range $k, $v := $cfg }}
     {{ $k }}: {{ $v | quote }}
@@ -80,6 +81,7 @@ metadata:
 spec:
   class: org.apache.iceberg.connect.IcebergSinkConnector
   tasksMax: {{ .sinkTasks | default 1 }}
+  autoRestart: {enabled: true}
   {{- $sinkCfg := dict
     "topics.regex" (printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." .signalTable))
     "key.converter" "org.apache.kafka.connect.json.JsonConverter"

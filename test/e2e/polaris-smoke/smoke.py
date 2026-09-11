@@ -28,7 +28,11 @@ ns = "smoke_static" if static else "smoke_vended"
 cat.create_namespace_if_not_exists(ns)
 schema = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("name", pa.string())])
 ident = f"{ns}.t"
-if cat.table_exists(ident):
+try:
+    exists = cat.table_exists(ident)
+except Exception as e:  # noqa: BLE001 — katalogda kayıt var ama metadata dosyası yok (dev MinIO kalıcı değil): yine de düşür
+    print("table_exists hata:", type(e).__name__, "-> drop deneniyor"); exists = True
+if exists:
     cat.drop_table(ident)
 t = cat.create_table(ident, schema=schema)
 t.append(pa.Table.from_pylist([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}], schema=schema))

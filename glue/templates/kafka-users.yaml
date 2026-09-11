@@ -25,4 +25,7 @@ spec:
     - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- end }}
     - {resource: {type: transactionalId, name: "connect", patternType: prefix}, operations: [Write, Describe]}
+    # Iceberg sink coordinator'ının transactional producer'ı: transactional.id = coordinator-txn-<uuid> (F2 e2e: aksi hâlde task
+    # TransactionalIdAuthorizationException ile ölür)
+    - {resource: {type: transactionalId, name: "coordinator-txn-", patternType: prefix}, operations: [Write, Describe]}
     - {resource: {type: cluster}, operations: [IdempotentWrite]}
