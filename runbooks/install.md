@@ -15,6 +15,7 @@
 
 ## Lokal geliştirme (kind + Podman/Docker)
 `test/e2e/kind.sh && bootstrap/bootstrap.sh --env dev --mode helm` (yerel chart, ArgoCD'siz) veya `--mode argocd --revision <dal>` (ArgoCD GitHub'dan çeker → değişiklikler push'lu olmalı).
+Not: `--repo/--revision` kök Application'a uygulanır; alt Application'lar `platform/apps/*.yaml`'daki `repoURL`/`targetRevision: v2` ile kök tarafından yeniden üretilir, yani dalın **son commit'ini** izler (standart app-of-apps). PR'da farklı bir revizyonu alt uygulamalarla test etmek için `platform/apps/*.yaml`'daki `targetRevision`'ı o dalda değiştir.
 Podman: kind ≥ 0.33 (Podman 6 uyumu); `kind.sh` düğüm pids limitini yükseltir (Spark için).
 
 ## Sorun giderme

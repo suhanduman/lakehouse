@@ -14,3 +14,9 @@ spec:
   syncPolicy:
     automated: {prune: true, selfHeal: true}
     syncOptions: [CreateNamespace=true, ServerSideApply=true]
+  # API sunucusu Kafka CRD şemasındaki boş `properties: {}`'i (status.clusterSecurity) düşürür -> kalıcı OutOfSync (F1 e2e, ArgoCD 3.5.2)
+  ignoreDifferences:
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+    name: kafkas.kafka.strimzi.io
+    jsonPointers: [/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/clusterSecurity/properties]
