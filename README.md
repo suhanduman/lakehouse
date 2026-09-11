@@ -4,4 +4,4 @@ Deklaratif, minimal-kod açık kaynak data lakehouse: Debezium (Strimzi Kafka Co
 
 - Tasarım: `docs/specs/2026-09-10-lakehouse-v2-design.md`
 - Neden v2: `docs/reviews/2026-09-10-architecture-reassessment/00-KARAR.md`
-- Şu an: F1 platform (bootstrap + ArgoCD app-of-apps + glue) — plan `docs/plans/2026-09-11-lakehouse-v2-f1-platform.md`; F0 bulguları `docs/plans/2026-09-10-f0-findings.md`
+- Şu an: F2 ingestion (pg/mssql CDC → Bronze → Silver MERGE + bakım) — plan `docs/plans/2026-09-11-lakehouse-v2-f2-ingestion.md`; bulgular `docs/plans/2026-09-10-f0-findings.md`
