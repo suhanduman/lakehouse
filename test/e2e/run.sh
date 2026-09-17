@@ -12,6 +12,25 @@ kubectl -n lakehouse get cluster/demo-pg >/dev/null
 # Mongo fixture'ı da connector'lardan önce (dbz-crm Secret crm-db'yi bekler — aksi glue Degraded, F2 notu 8); idempotent
 # namespace/CRD beklemesini üstteki pg döngüsünden miras alır
 kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
+# ArgoCD Application'ı bekle: wait_app <ad> <revizyon_kontrolü 0|1> [zaman aşımı]. Revizyon kontrolü $EXPECT'i kullanır.
+wait_app() {
+  local app="$1" chk="$2" to="${3:-1800s}" seen="" rev=""
+  echo "bekleniyor: application/$app"
+  for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
+  # Yeniden koşuda eski revizyonun "Synced" durumu yanıltır: git kaynaklı uygulamalar yeni revizyonu görmüş olsun
+  if [[ "$chk" == 1 ]]; then
+    for _ in $(seq 1 120); do
+      rev=$(kubectl -n argocd get application/"$app" -o jsonpath='{.status.sync.revision}{.status.sync.revisions}' 2>/dev/null)
+      [[ "$rev" == *"$EXPECT"* ]] && { seen=1; break; }; sleep 5
+    done
+    # sessizce düşmek eski revizyonla test etmek demekti: zaman aşımında yüksek sesle başarısız ol
+    [[ -n "$seen" ]] || { echo "application/$app 10 dk içinde $EXPECT revizyonuna gelmedi (görülen: ${rev:-yok})"; exit 1; }
+  fi
+  kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout="$to"
+  # glue'nun sync işlemi dalga (wave) bekler: Connect build bitmeden Synced olmaz -> Healthy ile aynı bütçe
+  kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.sync.status}'=Synced --timeout="$to"
+}
+
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun
   kubectl -n argocd wait application/lakehouse-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
@@ -22,21 +41,8 @@ if [[ "$MODE" == "argocd" ]]; then
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
   for app in cert-manager strimzi cnpg keycloak-operator spark-operator glue polaris; do
-    echo "bekleniyor: application/$app"
-    for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
-    # Yeniden koşuda eski revizyonun "Synced" durumu yanıltır: git kaynaklı uygulamalar yeni revizyonu görmüş olsun
-    case "$app" in keycloak-operator|glue|polaris)
-      seen="" rev=""
-      for _ in $(seq 1 120); do
-        rev=$(kubectl -n argocd get application/"$app" -o jsonpath='{.status.sync.revision}{.status.sync.revisions}' 2>/dev/null)
-        [[ "$rev" == *"$EXPECT"* ]] && { seen=1; break; }; sleep 5
-      done
-      # sessizce düşmek eski revizyonla test etmek demekti: zaman aşımında yüksek sesle başarısız ol
-      [[ -n "$seen" ]] || { echo "application/$app 10 dk içinde $EXPECT revizyonuna gelmedi (görülen: ${rev:-yok})"; exit 1; };;
-    esac
-    kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.health.status}'=Healthy --timeout=1800s
-    # glue'nun sync işlemi dalga (wave) bekler: Connect build bitmeden Synced olmaz -> Healthy ile aynı bütçe
-    kubectl -n argocd wait application/"$app" --for=jsonpath='{.status.sync.status}'=Synced --timeout=1800s
+    # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
+    case "$app" in keycloak-operator|glue|polaris) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s
@@ -48,8 +54,9 @@ python3 -m venv "$ROOT/.venv" >/dev/null 2>&1 || true
 [[ -x "$ROOT/.venv/bin/pip" ]] || { echo "venv yok: python3 -m venv $ROOT/.venv başarısız"; exit 1; }
 "$ROOT/.venv/bin/pip" install -q 'apache-polaris==1.7.0'
 PATH="$ROOT/.venv/bin:$PATH" "$ROOT/runbooks/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml"
-# Trino app döngüde DEĞİL: pod polaris-trino Secret'ını bekler -> ancak polaris-setup'tan sonra Healthy olabilir
-[[ "$MODE" == "argocd" ]] && kubectl -n argocd wait application/trino --for=jsonpath='{.status.health.status}'=Healthy --timeout=900s
+# Trino app döngüde DEĞİL: pod polaris-trino Secret'ını bekler -> ancak polaris-setup'tan sonra Healthy olabilir.
+# Değerleri aynı git kaynağından geldiği için revizyon kontrolü diğer git kaynaklı uygulamalarla aynı (eski rules.json'a karşı test etmemek için).
+[[ "$MODE" == "argocd" ]] && wait_app trino 1 900s
 # smoke: connect principal'ının credential'ıyla küme içinden yaz/oku
 CRED=$(kubectl -n lakehouse get secret polaris-connect -o jsonpath='{.data.credential}' | base64 -d)
 kubectl -n lakehouse create secret generic polaris-smoke-cred --from-literal=CLIENT_ID="${CRED%%:*}" --from-literal=CLIENT_SECRET="${CRED#*:}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
