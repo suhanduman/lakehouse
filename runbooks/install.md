@@ -70,7 +70,7 @@ sed -e "s|{{ .url }}|jdbc:trino://trino.lakehouse.svc:8443/lakehouse?SSL=true\&S
     -e 's|{{ .Values.zeppelin.trinoJdbcVersion }}|483|' \
     -e 's|{{ "{{applicationId}}" }}|{{applicationId}}|' \
     glue/files/zeppelin/interpreter.json > interpreter.json
-python3 -c 'import json,sys; json.load(open("interpreter.json"))'   # doğrula: düz JSON, {{ }} kalmadı
+python3 -c 'import json; json.load(open("interpreter.json"))'   # geçerli JSON mu? (kalan tek {{ }} Zeppelin'in kendi {{applicationId}} yer tutucusudur)
 kubectl -n lakehouse create secret generic zeppelin-interpreter --from-file=interpreter.json
 rm -f interpreter.json shiro.ini
 
@@ -126,7 +126,8 @@ kubectl -n lakehouse exec keycloak-0 -- /opt/keycloak/bin/kcadm.sh config creden
   --server http://localhost:8080 --realm master --user "$KC_ADMIN" --password "$KC_PASS"
 kubectl -n lakehouse exec keycloak-0 -- /opt/keycloak/bin/kcadm.sh delete realms/lakehouse
 # ArgoCD (ya da helm upgrade) CR'ı yeniden uygular:
-kubectl -n argocd app sync glue   # veya: helm upgrade --install glue ./glue -n lakehouse -f <values>
+argocd app sync glue    # ya da CLI'sız: kubectl -n argocd patch app glue --type merge -p '{"operation":{"sync":{}}}'
+                        # helm modunda: helm upgrade --install glue ./glue -n lakehouse -f <values>
 kubectl -n lakehouse wait keycloakrealmimport/lakehouse-realm --for=condition=Done --timeout=600s
 ```
 Not: `kcadm.sh` oturumu pod yeniden başlatıldığında kaybolur (`config credentials`'ı tekrar çalıştırın). `KC_ADMIN/KC_PASS` = `keycloak-admin` Secret'ı.
