@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; TOK=e2e-dev-token-012
 kubectl -n "$NS" rollout status deploy/hub --timeout=600s; kubectl -n "$NS" rollout status deploy/proxy --timeout=600s
 kubectl -n "$NS" port-forward svc/proxy-public 18080:80 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
 H() { curl -sS -H "Authorization: token $TOK" "$@"; }
-[[ "$(curl -s -o /dev/null -w '%{http_code}' localhost:18080/hub/health)" == "200" ]] && echo "OK hub health"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' localhost:18080/hub/health)" == "200" ]] || { echo "HATA hub health"; exit 1; }; echo "OK hub health"
 H -X POST localhost:18080/hub/api/users/e2e -o /dev/null -w 'user create %{http_code}\n'
 H -X POST localhost:18080/hub/api/users/e2e/server -o /dev/null -w 'server start %{http_code}\n'
 for _ in $(seq 1 90); do [[ "$(H localhost:18080/hub/api/users/e2e | jq -r '.servers[""].ready')" == "true" ]] && break; sleep 10; done

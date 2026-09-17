@@ -18,5 +18,16 @@ singleuser:
   cpu: {guarantee: 0.2, limit: 1}
   storage: {capacity: 1Gi}
   extraEnv: {S3_ENDPOINT: http://minio.lakehouse.svc:9000}
+  # Helm değer birleştirmede liste TAMAMEN üzerine yazılır (eklenmez) -> jupyterhub.yaml'daki Trino/Polaris kuralları
+  # burada TEKRARLANIYOR + dev'e özgü MinIO kuralı eklendi (vended S3 credentials ile pyiceberg/Trino MinIO'ya
+  # doğrudan okur/yazar; prod'da S3 harici olduğundan nonPrivateIPs varsayılanıyla zaten kapsanır).
+  networkPolicy:
+    egress:
+    - to: [{podSelector: {matchLabels: {app.kubernetes.io/name: trino, app.kubernetes.io/instance: trino, app.kubernetes.io/component: coordinator}}}]
+      ports: [{port: 8443}]
+    - to: [{podSelector: {matchLabels: {app.kubernetes.io/name: polaris, app.kubernetes.io/instance: polaris}}}]
+      ports: [{port: 8181}]
+    - to: [{podSelector: {matchLabels: {app: minio}}}]
+      ports: [{port: 9000}]
 scheduling: {userScheduler: {enabled: false}}
 prePuller: {hook: {enabled: false}, continuous: {enabled: false}}   # kind: sync'i imaj çekişine bağlama; spawn'da çekilir

@@ -44,11 +44,17 @@ singleuser:
     S3_ENDPOINT: https://s3.example.com
     TRINO_HOST: trino.lakehouse.svc
     REQUESTS_CA_BUNDLE: /etc/lakehouse-ca/tls.crt
-  # z2jh varsayılanı singleuser egress'te private IP'leri (RFC1918) engeller (yalnız hub/proxy/DNS/genel internet
-  # serbest) -> Polaris (polaris.lakehouse.svc:8181) ve Trino (trino.lakehouse.svc:8443) küme-içi ClusterIP olduğundan
-  # canlı doğrulamada (kind, kindnetd NetworkPolicy uygular) bağlantı zaman aşımına uğradı. Not defterinin temel işlevi
-  # bu iki servise erişim olduğundan private IP'lere izin şart (namespace bazında zaten default-deny + izin listesi var).
-  networkPolicy: {egressAllowRules: {privateIPs: true}}
+  # singleuser netpol z2jh tarafından; egress yalnız Trino/Polaris (+dev MinIO), dış ağ (PyPI/S3) nonPrivateIPs
+  # varsayılanı. glue'nun NetworkPolicy'leri yalnız Ingress'tir (glue/templates/networkpolicy.yaml: "egress
+  # kısıtlanmaz") -> tek egress kontrolü budur; öğrenciler dahil TÜM özel IP'lere izin vermek yerine podSelector ile
+  # yalnız Trino (8443) ve Polaris (8181) pod'larına daraltıldı (etiketler canlı doğrulandı: kubectl -n lakehouse
+  # get svc trino/polaris -o jsonpath='{.spec.selector}').
+  networkPolicy:
+    egress:
+    - to: [{podSelector: {matchLabels: {app.kubernetes.io/name: trino, app.kubernetes.io/instance: trino, app.kubernetes.io/component: coordinator}}}]
+      ports: [{port: 8443}]
+    - to: [{podSelector: {matchLabels: {app.kubernetes.io/name: polaris, app.kubernetes.io/instance: polaris}}}]
+      ports: [{port: 8181}]
 scheduling: {userScheduler: {enabled: true}}
 prePuller: {hook: {enabled: true}, continuous: {enabled: true}}
 ingress: {enabled: false}
