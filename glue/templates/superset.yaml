@@ -82,6 +82,8 @@ spec:
       volumes:
       - {name: datasources, configMap: {name: superset-datasources}}
   lifecycle:
-    migrate: {}
+    # Operator varsayılanı 3 deneme (~15 s içinde tükenir) ve CNPG'nin hazır olmasını BEKLEYEMEZ: taze kümede
+    # superset-db ~4-5 dk sonra bağlantı kabul ediyor, migrate kalıcı "TaskFailed"e düşüyordu (2026-09-17 canlı).
+    migrate: {maxRetries: 120}
     init: {}                       # admin kullanıcı YOK (CRD CEL: init.adminUser yalnız Development): yönetici AUTH_ROLES_MAPPING (lakehouse-admins -> Admin) ile OIDC'den gelir
 {{- end }}

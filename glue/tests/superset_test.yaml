@@ -39,7 +39,9 @@ tests:
     asserts:
       - isNull: {path: spec.lifecycle.init.adminUser}
       - equal: {path: spec.lifecycle.init, value: {}}
-      - equal: {path: spec.lifecycle.migrate, value: {}}
+      # operator varsayılanı 3 deneme -> CNPG'yi bekleyemez (2026-09-17 canlı)
+      - equal: {path: spec.lifecycle.migrate.maxRetries, value: 120}
+      - isNull: {path: spec.lifecycle.migrate.command}
   - it: datasources file targets trino over https
     documentIndex: 0
     asserts:

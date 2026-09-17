@@ -10,7 +10,8 @@ metadata:
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
-  backoffLimit: 6
+  # CNPG Cluster'ının hazır olması taze kümede ~4-5 dk sürebilir; 6 deneme F4 yığınında yetmedi (2026-09-17 canlı)
+  backoffLimit: 12
   template:
     spec:
       restartPolicy: OnFailure

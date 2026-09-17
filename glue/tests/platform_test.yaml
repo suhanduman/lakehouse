@@ -24,6 +24,8 @@ tests:
       - equal: {path: 'spec.template.spec.containers[0].image', value: apache/polaris-admin-tool:1.7.0}
       - contains: {path: 'spec.template.spec.containers[0].env', content: {name: QUARKUS_DATASOURCE_JDBC_URL, valueFrom: {secretKeyRef: {name: polaris-db-app, key: jdbc-uri}}}}
       - equal: {path: 'metadata.annotations["argocd.argoproj.io/sync-wave"]', value: "1"}
+      # CNPG taze kümede ~4-5 dk sonra hazır: 6 deneme yetmiyordu (2026-09-17 canlı)
+      - equal: {path: spec.backoffLimit, value: 12}
   - it: minio is absent unless components.minio
     template: minio.yaml
     asserts:
