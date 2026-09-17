@@ -3,7 +3,21 @@
 set -euo pipefail
 CLUSTER="${KIND_CLUSTER:-lakehouse}"
 PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-}"
-if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then kind create cluster --name "$CLUSTER" --wait 120s; fi
+# Taze kind düğümünde imaj önbelleği boştur ve kubelet varsayılanı imajları SIRAYLA çeker: 2,7 GB'lık Zeppelin
+# kuyruğun önüne geçip CNPG postgres imajını 11 dk beklet(ti), glue kurulumu zaman aşımına uğradı (2026-09-17 canlı).
+if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
+  kind create cluster --name "$CLUSTER" --wait 120s --config - <<'YAML'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    serializeImagePulls: false
+    maxParallelImagePulls: 4
+YAML
+fi
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 if [[ "$PROVIDER" == "podman" ]]; then
   podman update --pids-limit 8192 "${CLUSTER}-control-plane" >/dev/null 2>&1 || true

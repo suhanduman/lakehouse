@@ -23,9 +23,10 @@ if [[ "$MODE" == "helm" ]]; then
   helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
   helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --wait --timeout 5m
   helm upgrade --install superset-operator oci://ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator --version 0.2.0 -n lakehouse --wait --timeout 5m
-  helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 25m
+  # 40m: taze düğümde imaj çekimi (Zeppelin 2,7 GB, pyspark-notebook ~2 GB) + Connect build + CNPG initdb (2026-09-17 canlı)
+  helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 40m
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
-  kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=600s
+  kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=900s
   helm repo add polaris https://downloads.apache.org/polaris/helm-chart >/dev/null 2>&1 || true; helm repo update polaris >/dev/null
   helm upgrade --install polaris polaris/polaris --version 1.7.0 -n lakehouse -f "$ROOT/platform/values/polaris.yaml" --wait --timeout 10m
   helm repo add trino https://trinodb.github.io/charts >/dev/null 2>&1 || true; helm repo update trino >/dev/null

@@ -42,7 +42,8 @@ if [[ "$MODE" == "argocd" ]]; then
   echo "beklenen revizyon: $EXPECT"
   for app in cert-manager strimzi cnpg keycloak-operator spark-operator superset-operator glue polaris jupyterhub; do
     # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
-    case "$app" in keycloak-operator|glue|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
+    # glue en ağır uygulama (Connect build + CNPG x3 + Keycloak + Zeppelin/Superset imajları): varsayılan 1800s yetmedi (CI 35267164775)
+    case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s
