@@ -44,6 +44,10 @@ jobs:
           kubectl -n lakehouse logs deploy/trino-coordinator --tail=60 || true
           kubectl -n lakehouse logs deploy/hub --tail=40 || true
           kubectl -n lakehouse logs deploy/zeppelin --tail=40 || true
+          kubectl -n argocd get app glue -o jsonpath='{.status.operationState.phase} {.status.operationState.message}{"\n"}' || true
+          kubectl -n argocd get app glue -o json | jq -r '.status.conditions[]? | "\(.type): \(.message)"' || true
+          kubectl -n argocd get app glue -o json | jq -r '.status.resources[]? | select((.status != "Synced") or ((.health.status // "Healthy") != "Healthy")) | "\(.kind)/\(.name) sync=\(.status) health=\(.health.status // "-")"' || true
+          kubectl -n argocd logs statefulset/argocd-application-controller --tail=200 | grep -iE 'glue|webhook|error' | tail -40 || true
       - name: kaynak fotoğrafı (F5 boyutlandırma girdisi)
         if: always()
         run: |

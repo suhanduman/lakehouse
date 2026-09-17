@@ -13,5 +13,8 @@ spec:
   syncPolicy:
     automated: {prune: true, selfHeal: true}
     syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    # İlk sync cert-manager'ın webhook'u/CRD'leri tam hazır olmadan Certificate/Issuer'ı uygulamaya kalkabilir;
+    # başarısız sync yeniden denenmezse uygulama OutOfSync/Progressing'de takılı kalır (CI 35271184420, 2026-09-17).
+    retry: {limit: 10, backoff: {duration: 20s, factor: 2, maxDuration: 3m}}
     # ignoreDifferences YOK: Strimzi `spec.build.output.image`'ı yeniden yazmaz (digest yalnız pod'un imajında görünür),
     # imaj Git'te otoriter (connect.buildImage) -> drift gizlenmemeli.
