@@ -1,0 +1,101 @@
+{{- if .Values.superset.enabled }}
+{{- $ns := include "glue.ns" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: superset-datasources, namespace: {{ $ns }}}
+data:
+  # superset legacy-import-datasources -p /app/configs/trino.yaml  (runbooks/user-facing.md; parola SQLALCHEMY_CUSTOM_PASSWORD_STORE ile env'den)
+  trino.yaml: |
+    databases:
+    - database_name: lakehouse
+      sqlalchemy_uri: trino://superset@trino.{{ $ns }}.svc:8443/lakehouse
+      expose_in_sqllab: true
+      allow_ctas: true
+      allow_cvas: true
+      allow_dml: false
+      extra: '{"engine_params": {"connect_args": {"http_scheme": "https", "verify": "/etc/lakehouse-ca/tls.crt"}}}'
+      tables: []
+---
+apiVersion: superset.apache.org/v1alpha1
+kind: Superset
+metadata:
+  name: superset
+  namespace: {{ $ns }}
+  annotations: {argocd.argoproj.io/sync-wave: "2"}
+spec:
+  environment: Production                  # sırlar yalnız *From Secret referansı (CRD CEL: secretKey/uri/password yalnız Development)
+  image: {tag: {{ .Values.superset.imageTag | quote }}}
+  replicas: {{ .Values.superset.replicas }}
+  secretKeyFrom: {name: {{ .Values.superset.secretName }}, key: secret-key}
+  metastore:
+    uriFrom: {name: superset-db-app, key: uri}      # CNPG: postgresql://superset:…@superset-db-rw:5432/superset
+  # Valkey/Redis YOK (plan R9): SimpleCache, worker/beat yok. Alerts&Reports için runbooks/user-facing.md
+  # Sürücüler imajda yok; özel imaj da yok -> pod açılışında pip (operator bunu hem web hem lifecycle komutundan ÖNCE source eder).
+  #   --target /app/pip-extra : imajın venv'i (/app/.venv) root'a ait, yazılamaz; venv içinde user-site (~/.local)
+  #                             sys.path'e GİRMEZ (site.ENABLE_USER_SITE=False) -> yazılabilir emptyDir + PYTHONPATH
+  #   --no-deps               : tam çözümleme imajın SQLAlchemy 1.4.54'ünü 2.0 ile gölgeler ve Superset'i kırar;
+  #                             yalnız imajda GERÇEKTEN olmayanlar kurulur (tzlocal, lz4, orjson, joserfc)
+  #   REQUESTS_CA_BUNDLE=     : env yalnız lakehouse-ca'yı gösterir, pip'in PyPI TLS doğrulamasını kırar -> bu komut için boşalt
+  #   psycopg2-binary         : 6.1.0 imajında HİÇBİR postgres sürücüsü yok -> CNPG metastore'u olmadan açılmaz
+  bootstrapScript: |
+    #!/bin/bash
+    REQUESTS_CA_BUNDLE= pip install --no-cache-dir --no-deps --target /app/pip-extra \
+      'psycopg2-binary>=2.9,<3' 'trino[sqlalchemy]>=0.339,<0.340' 'authlib>=1.6,<2' \
+      'tzlocal>=5,<6' 'lz4>=4,<5' 'orjson>=3.11,<4' 'joserfc>=1.6.1,<2'
+  config: |
+    import os
+    from flask_appbuilder.security.manager import AUTH_OAUTH
+    ENABLE_PROXY_FIX = True
+    CACHE_CONFIG = {"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300}
+    DATA_CACHE_CONFIG = CACHE_CONFIG
+    FILTER_STATE_CACHE_CONFIG = CACHE_CONFIG
+    EXPLORE_FORM_DATA_CACHE_CONFIG = CACHE_CONFIG
+    AUTH_TYPE = AUTH_OAUTH
+    AUTH_USER_REGISTRATION = True
+    AUTH_USER_REGISTRATION_ROLE = "Public"
+    AUTH_ROLES_SYNC_AT_LOGIN = True
+    AUTH_ROLES_MAPPING = {{ toJson .Values.superset.roleMapping }}
+    _KC = os.environ["KEYCLOAK_URL"] + "/realms/" + os.environ["KEYCLOAK_REALM"]
+    OAUTH_PROVIDERS = [{
+        "name": "keycloak", "icon": "fa-key", "token_key": "access_token",
+        "remote_app": {
+            "client_id": "superset", "client_secret": os.environ["OIDC_CLIENT_SECRET"],
+            "api_base_url": _KC + "/protocol/",                 # FAB: GET openid-connect/userinfo (göreli yol)
+            "server_metadata_url": _KC + "/.well-known/openid-configuration",
+            "client_kwargs": {"scope": "openid email profile"},
+        }}]
+    def _trino_password(url):                                 # URI'de parola yok; Trino servis hesabı env'den
+        return os.environ["TRINO_PASSWORD"] if url.drivername.startswith("trino") else None
+    SQLALCHEMY_CUSTOM_PASSWORD_STORE = _trino_password
+  # GENEL podTemplate (operator 0.2.0: webServer.podTemplate ile toplanarak birleşir): lifecycle
+  # (migrate/init) Job'ları da bu env'i alır — spec.config onların superset_config.py'sine de yazılır
+  # ve oradaki os.environ[...] okumaları da çözülmek zorunda.
+  podTemplate:
+    container:
+      env:
+      - {name: KEYCLOAK_URL, value: {{ .Values.keycloak.hostname | quote }}}
+      - {name: KEYCLOAK_REALM, value: {{ .Values.keycloak.realm.name | quote }}}
+      - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.clientsSecret }}, key: superset}}}
+      - {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}
+      - {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}
+      - {name: PYTHONPATH, value: /app/pythonpath:/app/pip-extra}   # imaj varsayılanı /app/pythonpath + bootstrapScript hedefi
+      volumeMounts:
+      - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
+      - {name: pip-extra, mountPath: /app/pip-extra}
+    volumes:
+    - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
+    - {name: pip-extra, emptyDir: {}}
+  webServer:
+    podTemplate:
+      container:
+        resources: {{ toJson .Values.superset.resources }}
+        # bootstrapScript'in pip kurulumu gunicorn'u geciktirir: startupProbe geçene kadar liveness/readiness askıda
+        startupProbe: {httpGet: {path: /health, port: 8088}, periodSeconds: 10, failureThreshold: 60}
+        volumeMounts:
+        - {name: datasources, mountPath: /app/configs, readOnly: true}
+      volumes:
+      - {name: datasources, configMap: {name: superset-datasources}}
+  lifecycle:
+    migrate: {}
+    init: {}                       # admin kullanıcı YOK (CRD CEL: init.adminUser yalnız Development): yönetici AUTH_ROLES_MAPPING (lakehouse-admins -> Admin) ile OIDC'den gelir
+{{- end }}

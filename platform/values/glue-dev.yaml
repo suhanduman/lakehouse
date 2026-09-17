@@ -18,6 +18,7 @@ connect:
 cnpg:
   polarisDb: {instances: 1, storageSize: 2Gi}
   keycloakDb: {instances: 1, storageSize: 2Gi}
+  supersetDb: {instances: 1, storageSize: 2Gi}
 components: {minio: true, devSecrets: true}
 tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
@@ -28,7 +29,9 @@ keycloak:
   - {username: admin1,   password: admin1-dev,   group: lakehouse-admins}
   - {username: analyst1, password: analyst1-dev, group: lakehouse-analysts}
   - {username: student1, password: student1-dev, group: lakehouse-students}
-superset:   {hostname: superset.127.0.0.1.nip.io}
+superset:
+  hostname: superset.127.0.0.1.nip.io
+  resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {memory: 1536Mi}}
 jupyterhub: {hostname: jupyterhub.127.0.0.1.nip.io}
 zeppelin:   {hostname: zeppelin.127.0.0.1.nip.io}
 sources:

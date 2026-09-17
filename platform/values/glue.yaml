@@ -11,6 +11,7 @@ cnpg:
   # HA: primary + 1 replika (CNPG senkron/asenkron replikasyon); storageClass kurulumda ortamın sınıfıyla doldurulur
   polarisDb: {instances: 2}
   keycloakDb: {instances: 2}
+  supersetDb: {instances: 2}
 # Ingestion (F2): kaynaklar ve pipeline'lar kurulumda doldurulur — runbooks/add-source.md
 # nginx erişim logu (F3): Fluent Bit ajanları müşteri sunucusunda -> Kafka dış listener (Route). Açmadan önce ikisini de doldur:
 #kafka: {externalListener: true}

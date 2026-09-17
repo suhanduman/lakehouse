@@ -1,0 +1,56 @@
+suite: superset
+templates: [superset.yaml]
+tests:
+  - it: renders exactly the datasources ConfigMap and the Superset CR
+    asserts:
+      - hasDocuments: {count: 2}
+  - it: renders Superset CR in Production mode with secret refs
+    documentIndex: 1
+    asserts:
+      - containsDocument: {kind: Superset, apiVersion: superset.apache.org/v1alpha1, name: superset}
+      - equal: {path: spec.environment, value: Production}
+      - equal: {path: spec.image.tag, value: "6.1.0"}
+      - equal: {path: spec.replicas, value: 1}
+      - equal: {path: spec.secretKeyFrom, value: {name: superset-secret, key: secret-key}}
+      - equal: {path: spec.metastore.uriFrom.name, value: superset-db-app}
+      - equal: {path: spec.metastore.uriFrom.key, value: uri}
+      - isNull: {path: spec.valkey}                  # Redis/Valkey yok: SimpleCache (plan R9)
+      - isNull: {path: spec.networking}              # Route/Ingress glue'dan gelir, operator'den değil
+      - matchRegex: {path: spec.bootstrapScript, pattern: "psycopg2-binary>=2.9,<3"}   # 6.1.0 imajında postgres sürücüsü yok
+      - matchRegex: {path: spec.bootstrapScript, pattern: "--no-deps --target /app/pip-extra"}   # venv yazılamaz + SQLAlchemy 1.4 gölgelenmemeli
+      - matchRegex: {path: spec.bootstrapScript, pattern: "trino\\[sqlalchemy\\]>=0.339,<0.340"}
+      - matchRegex: {path: spec.bootstrapScript, pattern: "authlib>=1.6,<2"}
+      - matchRegex: {path: spec.config, pattern: "AUTH_TYPE = AUTH_OAUTH"}
+      - matchRegex: {path: spec.config, pattern: 'AUTH_ROLES_MAPPING = \{"lakehouse-admins":\["Admin"\]'}
+      - matchRegex: {path: spec.config, pattern: "SQLALCHEMY_CUSTOM_PASSWORD_STORE = _trino_password"}
+      - matchRegex: {path: spec.config, pattern: '"CACHE_TYPE": "SimpleCache"'}
+  - it: OIDC and Trino credentials reach the lifecycle jobs too (global podTemplate)
+    documentIndex: 1
+    asserts:
+      - contains: {path: spec.podTemplate.container.env, content: {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: superset}}}}
+      - contains: {path: spec.podTemplate.container.env, content: {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}}
+      - contains: {path: spec.podTemplate.container.env, content: {name: KEYCLOAK_URL, value: https://keycloak.lakehouse.example.com}}
+      - contains: {path: spec.podTemplate.container.env, content: {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}}
+      - contains: {path: spec.podTemplate.container.env, content: {name: PYTHONPATH, value: /app/pythonpath:/app/pip-extra}}
+      - contains: {path: spec.podTemplate.volumes, content: {name: pip-extra, emptyDir: {}}}
+      - contains: {path: spec.podTemplate.volumes, content: {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}}
+      - equal: {path: spec.webServer.podTemplate.container.resources, value: {requests: {cpu: 250m, memory: 768Mi}, limits: {memory: 2Gi}}}
+      - equal: {path: spec.webServer.podTemplate.container.startupProbe.failureThreshold, value: 60}
+      - contains: {path: spec.webServer.podTemplate.volumes, content: {name: datasources, configMap: {name: superset-datasources}}}
+  - it: lifecycle runs migrate and init without an admin user (Production)
+    documentIndex: 1
+    asserts:
+      - isNull: {path: spec.lifecycle.init.adminUser}
+      - equal: {path: spec.lifecycle.init, value: {}}
+      - equal: {path: spec.lifecycle.migrate, value: {}}
+  - it: datasources file targets trino over https
+    documentIndex: 0
+    asserts:
+      - containsDocument: {kind: ConfigMap, apiVersion: v1, name: superset-datasources}
+      - matchRegex: {path: 'data["trino.yaml"]', pattern: "trino://superset@trino.lakehouse.svc:8443/lakehouse"}
+      - matchRegex: {path: 'data["trino.yaml"]', pattern: '"verify": "/etc/lakehouse-ca/tls.crt"'}
+      - matchRegex: {path: 'data["trino.yaml"]', pattern: "allow_dml: false"}
+  - it: disabled renders nothing
+    set: {superset.enabled: false}
+    asserts:
+      - hasDocuments: {count: 0}

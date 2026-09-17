@@ -29,3 +29,21 @@ spec:
 {{- end }}
   bootstrap:
     initdb: {database: keycloak, owner: keycloak}
+{{- if .Values.superset.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: superset-db
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  instances: {{ .Values.cnpg.supersetDb.instances }}
+  storage:
+    size: {{ .Values.cnpg.supersetDb.storageSize }}
+{{- with .Values.cnpg.supersetDb.storageClass }}
+    storageClass: {{ . | quote }}
+{{- end }}
+  bootstrap:
+    initdb: {database: superset, owner: superset}
+{{- end }}

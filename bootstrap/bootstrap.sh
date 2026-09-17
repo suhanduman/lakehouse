@@ -22,6 +22,7 @@ if [[ "$MODE" == "helm" ]]; then
   kubectl apply -k "$ROOT/platform/keycloak-operator"
   helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
   helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --wait --timeout 5m
+  helm upgrade --install superset-operator oci://ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator --version 0.2.0 -n lakehouse --wait --timeout 5m
   helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 25m
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
   kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=600s

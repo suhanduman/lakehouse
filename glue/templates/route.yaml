@@ -31,4 +31,16 @@ spec:
   {{- else }}
     termination: passthrough        # tarayıcı lakehouse-ca'ya güvenmeli (runbooks/install.md)
   {{- end }}
+{{- if .Values.superset.enabled }}
+---
+# Superset kendi TLS'ini sonlandırmaz (operator Service'i düz HTTP 8088): edge.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: superset, namespace: {{ include "glue.ns" . }}}
+spec:
+  host: {{ .Values.superset.hostname }}
+  to: {kind: Service, name: superset-web-server}   # operator adlandırması: <CR adı>-web-server
+  port: {targetPort: http}
+  tls: {termination: edge}
+{{- end }}
 {{- end }}
