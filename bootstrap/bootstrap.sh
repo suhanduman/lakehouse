@@ -34,6 +34,9 @@ if [[ "$MODE" == "helm" ]]; then
   if [[ "$ENV" == "dev" ]]; then TRINO_VALUES+=(-f "$ROOT/platform/values/trino-dev.yaml"); else TRINO_VALUES+=(-f "$ROOT/platform/values/trino-ldap.yaml"); fi
   # --wait YOK: pod polaris-trino Secret'ını bekler (polaris-setup.sh sonrası hazır olur)
   helm upgrade --install trino trino/trino --version 1.42.2 -n lakehouse "${TRINO_VALUES[@]}"
+  helm repo add jupyterhub https://hub.jupyter.org/helm-chart/ >/dev/null 2>&1 || true; helm repo update jupyterhub >/dev/null
+  JH_VALUES=(-f "$ROOT/platform/values/jupyterhub.yaml"); [[ "$ENV" == "dev" ]] && JH_VALUES+=(-f "$ROOT/platform/values/jupyterhub-dev.yaml")
+  helm upgrade --install jupyterhub jupyterhub/jupyterhub --version 4.4.2 -n lakehouse "${JH_VALUES[@]}" --wait --timeout 10m
   echo "OK: helm modunda kuruldu (env=$ENV)"; exit 0
 fi
 
@@ -110,6 +113,10 @@ spec:
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
       - target: {kind: Application, name: trino}
+        patch: |-
+          - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: jupyterhub}
         patch: |-
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}

@@ -1,0 +1,54 @@
+# Keycloak OAuth (client secret env'den), pyspark-notebook + PyIceberg/Trino, kişisel PVC (F.1.2).
+# Hostname KOPYALARI (runbooks/install.md): oauth_callback_url <- glue jupyterhub.hostname; authorize/token/userdata_url <- glue keycloak.hostname
+hub:
+  config:
+    JupyterHub: {authenticator_class: generic-oauth}
+    Authenticator: {enable_auth_state: true}
+    GenericOAuthenticator:
+      oauth_callback_url: https://jupyterhub.lakehouse.example.com/hub/oauth_callback
+      authorize_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/auth
+      token_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/token
+      userdata_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/userinfo
+      login_service: Keycloak
+      username_claim: preferred_username
+      scope: [openid, profile, email]
+      manage_groups: true
+      auth_state_groups_key: oauth_user.groups
+      allowed_groups: [lakehouse-admins, lakehouse-analysts, lakehouse-students]
+      admin_groups: [lakehouse-admins]
+  extraEnv:
+    OAUTH_CLIENT_ID: {value: jupyterhub}
+    OAUTH_CLIENT_SECRET: {valueFrom: {secretKeyRef: {name: keycloak-clients, key: jupyterhub}}}
+  resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 1Gi}}
+proxy:
+  service: {type: ClusterIP}          # dış erişim glue Route/Ingress (proxy-public:80)
+  chp: {resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}}
+singleuser:
+  image: {name: quay.io/jupyter/pyspark-notebook, tag: spark-4.1.2}
+  lifecycleHooks:
+    postStart:
+      exec: {command: ["sh", "-c", "pip install -q 'pyiceberg[s3fs,pyarrow]>=0.10,<0.11' 'trino>=0.339,<0.340'"]}   # her spawn'da (~1 dk, PyPI egress) — özel imaj yok
+  # z2jh varsayılanı (KubeSpawner.start_timeout) 300s: ilk soğuk imaj çekimi (~3-4 GB) + postStart pip bunu aşar
+  # (canlı ölçüm: yalnız imaj çekimi 274s) -> Hub 300s'de spawn'ı öldürür ("failed to start in 300 seconds, giving up").
+  startTimeout: 1200
+  storage:
+    type: dynamic
+    capacity: 10Gi
+    extraVolumes: [{name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}]
+    extraVolumeMounts: [{name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}]
+  memory: {guarantee: 1G, limit: 4G}
+  cpu: {guarantee: 0.5, limit: 2}
+  extraEnv:
+    POLARIS_URI: http://polaris.lakehouse.svc:8181/api/catalog
+    POLARIS_CREDENTIAL: {valueFrom: {secretKeyRef: {name: polaris-notebooks, key: credential}}}   # paylaşımlı notebooks principal (spec §14)
+    S3_ENDPOINT: https://s3.example.com
+    TRINO_HOST: trino.lakehouse.svc
+    REQUESTS_CA_BUNDLE: /etc/lakehouse-ca/tls.crt
+  # z2jh varsayılanı singleuser egress'te private IP'leri (RFC1918) engeller (yalnız hub/proxy/DNS/genel internet
+  # serbest) -> Polaris (polaris.lakehouse.svc:8181) ve Trino (trino.lakehouse.svc:8443) küme-içi ClusterIP olduğundan
+  # canlı doğrulamada (kind, kindnetd NetworkPolicy uygular) bağlantı zaman aşımına uğradı. Not defterinin temel işlevi
+  # bu iki servise erişim olduğundan private IP'lere izin şart (namespace bazında zaten default-deny + izin listesi var).
+  networkPolicy: {egressAllowRules: {privateIPs: true}}
+scheduling: {userScheduler: {enabled: true}}
+prePuller: {hook: {enabled: true}, continuous: {enabled: true}}
+ingress: {enabled: false}

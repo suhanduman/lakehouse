@@ -43,4 +43,17 @@ spec:
         pathType: Prefix
         backend: {service: {name: superset-web-server, port: {number: 8088}}}   # operator adlandırması: <CR adı>-web-server
 {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: jupyterhub, namespace: {{ include "glue.ns" . }}}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+  - host: {{ .Values.jupyterhub.hostname }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: proxy-public, port: {number: 80}}}
 {{- end }}

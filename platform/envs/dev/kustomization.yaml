@@ -13,3 +13,8 @@ patches:
     - op: replace
       path: /spec/sources/0/helm/valueFiles
       value: [$values/platform/values/trino.yaml, $values/platform/values/trino-dev.yaml]
+- target: {kind: Application, name: jupyterhub}
+  patch: |-
+    - op: add
+      path: /spec/sources/0/helm/valueFiles/-
+      value: $values/platform/values/jupyterhub-dev.yaml

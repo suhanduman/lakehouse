@@ -40,9 +40,9 @@ if [[ "$MODE" == "argocd" ]]; then
   else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
-  for app in cert-manager strimzi cnpg keycloak-operator spark-operator superset-operator glue polaris; do
+  for app in cert-manager strimzi cnpg keycloak-operator spark-operator superset-operator glue polaris jupyterhub; do
     # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
-    case "$app" in keycloak-operator|glue|polaris) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
+    case "$app" in keycloak-operator|glue|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s
@@ -71,3 +71,4 @@ echo "E2E F1 OK"
 "$ROOT/test/e2e/nginx-path.sh"
 "$ROOT/test/e2e/trino-path.sh"
 "$ROOT/test/e2e/superset-path.sh"
+"$ROOT/test/e2e/jupyterhub-path.sh"

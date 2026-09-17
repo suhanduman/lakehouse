@@ -43,4 +43,14 @@ spec:
   port: {targetPort: http}
   tls: {termination: edge}
 {{- end }}
+---
+# z2jh kendi TLS'ini sonlandırmaz (proxy-public düz HTTP 80): edge.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: jupyterhub, namespace: {{ include "glue.ns" . }}}
+spec:
+  host: {{ .Values.jupyterhub.hostname }}
+  to: {kind: Service, name: proxy-public}
+  port: {targetPort: http}
+  tls: {termination: edge}
 {{- end }}
