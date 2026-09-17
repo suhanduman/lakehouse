@@ -58,9 +58,13 @@ nginx: {enabled: true, partitions: 3}
 spark:
   driver:   {cores: 1, memory: 1536m, memoryOverhead: 512m}
   executor: {instances: 1, cores: 1, memory: 1g, memoryOverhead: 512m}
-  schedules:                            # dev: seyrek; e2e işleri tek seferlik SparkApplication ile koşturur (plan P9)
-    silverMerge: "*/30 * * * *"
+  # dev: HEPSİ gecelik; e2e işleri `run_spark_once` ile tek seferlik koşturur (plan P9). Sık cron taze kurulumda
+  # zararlı: polaris-spark Secret'ı (polaris-setup.sh) gelmeden fırlayan silver-merge/mongo-bronze driver'ları
+  # CreateContainerConfigError'da 2×2 GiB rezerve edip Connect/Trino'yu schedule-dışı bırakıyordu (2026-09-17 canlı);
+  # F3 notu 4'teki "e2e koşusu :00/:30 cron'uyla çakışırsa Bronze çift satır" riski de böylece kapanır.
+  schedules:
+    silverMerge: "0 3 * * *"
     positionDeletes: "15 2 * * *"
     compact: "30 2 * * *"
     expireOrphanTtl: "45 2 * * *"
-    mongoBronze: "*/30 * * * *"        # e2e tek seferlik koşturur
+    mongoBronze: "5 3 * * *"           # e2e tek seferlik koşturur
