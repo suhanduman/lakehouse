@@ -44,10 +44,11 @@ Kapsam dışı (şartnamede yok, YAGNI): Camel http/mqtt/rabbitmq lane'leri, sch
 | CloudNativePG | 1.30.x | Apache-2.0 | operatör + `Cluster` CR (Polaris, Keycloak, Superset DB'leri) |
 | Apache Spark | 4.1.x | Apache-2.0 | resmi `apache/spark:4.1.x-python3` imajı; Iceberg runtime `spark.jars.packages=org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0` |
 | Kubeflow spark-operator | 2.5.x | Apache-2.0 | resmi chart; `ScheduledSparkApplication` |
-| Trino | 483 | Apache-2.0 | resmi `trinodb/charts` |
-| Apache Superset | 6.1.x | Apache-2.0 | resmi chart |
-| JupyterHub (z2jh) | 4.4.x | BSD-3 | resmi chart; singleuser = resmi `quay.io/jupyter/pyspark-notebook` + `postStart pip install pyiceberg trino` |
-| Apache Zeppelin | 0.12.x | Apache-2.0 | resmi imaj, tek Deployment (chart yok) |
+| Trino | 483 | Apache-2.0 | resmi `trinodb/charts` **1.42.2**; HTTPS 8443 zorunlu (cert-manager `trino-tls`, `CombinedPEM`) — kimlik doğrulama TLS ister; `OAUTH2,PASSWORD` |
+| Apache Superset | 6.1.0-dev | Apache-2.0 | **Superset Kubernetes Operator 0.2.0** + `Superset` CR (resmi Helm chart `deprecated`); resmi `-dev` etiketi sürücüleri (psycopg2/trino/authlib) içerir |
+| JupyterHub (z2jh) | 4.4.2 | BSD-3 | resmi chart; singleuser = resmi `quay.io/jupyter/pyspark-notebook:spark-4.1.2` + `postStart pip install pyiceberg trino`; `startTimeout 1200` (soğuk imaj ~4,5 dk), singleuser egress yalnız Trino/Polaris |
+| Apache Zeppelin | 0.12.1 | Apache-2.0 | resmi imaj, tek **Deployment + PVC** (chart yok); `ZEPPELIN_CONFIG_FS_DIR=/data/conf` + interpreter.json tohumu, `ZEPPELIN_RUN_MODE=local` |
+| cert-manager | v1.21.2 | Apache-2.0 | `Application` (OCI chart, `cert-manager` ns); `ClusterIssuer`/`Issuer` + `Certificate` glue'da (iç kök `lakehouse-ca`) |
 | Keycloak | 26.7.x | Apache-2.0 | operatör + `Keycloak`/`KeycloakRealmImport` |
 | Fluent Bit | 5.1.x | Apache-2.0 | müşteri sunucusunda ajan (config dosyası teslim) |
 | ArgoCD (OpenShift GitOps) | platformun | Apache-2.0 | app-of-apps |
@@ -146,11 +147,11 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
 ## 7. Katalog, sorgu, kullanıcı yüzü
 
 - **Polaris 1.7** (**F0 S1 ile doğrulandı — kalır**): resmi chart (`persistence.type=relational-jdbc` → CNPG `-app` secret'ı; health 8182/API 8181) + `polaris-admin-tool bootstrap` Job; katalog/namespace/rol/grant/principal **tek YAML** ile `polaris setup apply setup.yaml` (credential'lar apply stdout'undan Secret'a; root principal `ROTATE_CREDENTIALS` yapamaz). Tek `lakehouse` katalog, `default_base_location s3://lakehouse/`; katalog konumları çakışamaz. **İki S3 modu (runbook):** STS'li (MinIO/AWS) → vended-credentials; STS'siz → `sts_unavailable: true` + Polaris pod'una `AWS_ACCESS_KEY_ID/SECRET` (`extraEnv`) + istemcilerde delegation header kapalı (`header.X-Iceberg-Access-Delegation=none`, Trino `iceberg.rest-catalog.vended-credentials-enabled=false`) + istemci `s3.*` anahtarları. Principal'lar `connect`, `spark`, `trino`, `notebooks`. Lakekeeper yedeği gerekmedi.
-- **Trino 483** chart: `iceberg.catalog.type=rest`, `iceberg.rest-catalog.security=OAUTH2`; Keycloak OIDC; `accessControl.type=file` + `rules.json` values'tan (mevcut satır-filtre/kolon-maske modeli taşınır); resource groups values; HA coordinator = chart değerleri.
-- **Superset 6.1** chart: `configOverrides` ile Keycloak OAuth + Trino URI; CNPG metadata DB; Alerts&Reports opsiyonel değer.
-- **JupyterHub** z2jh: `hub.config.GenericOAuthenticator` Keycloak; `singleuser.image` resmi pyspark-notebook; `lifecycleHooks.postStart` `pip install pyiceberg[s3fs] trino`; kişisel PVC (F.1.2).
-- **Zeppelin**: `apache/zeppelin` imajı, Deployment + PVC + interpreter ConfigMap (Trino JDBC), Shiro LDAPS (G.1.1).
-- **Keycloak**: mevcut realm import (AD federasyonu, client'lar) aynen taşınır — zaten config.
+- **Trino 483** (chart 1.42.2): `iceberg.catalog.type=rest`, `iceberg.rest-catalog.security=OAUTH2` (`fs.s3.enabled`); `accessControl.type=configmap` + `rules.json` values'tan (satır-filtre/kolon-maske modeli taşındı, `refreshPeriod 60s`). **TLS zorunlu**: kimlik doğrulama yalnız HTTPS 8443'te (`tls-combined.pem`, cert-manager); `http-server.authentication.type=OAUTH2,PASSWORD` (son kullanıcı Keycloak Bearer/JWT, servis hesapları htpasswd `password.db`); `principal-field=preferred_username`; **gruplar group provider'dan** — dev dosya, prod LDAP (`platform/values/trino-ldap.yaml`); OAuth2'de grup talebi okunamaz. `oauth2.issuer` = `keycloak.hostname` + `/realms/lakehouse` (values kopyası, `runbooks/install.md`). Keycloak `trino` client'ında **audience mapper** şart. Resource groups **eklenmedi** (ihtiyaç kanıtlanmadı — F5). HA coordinator = chart değerleri.
+- **Superset 6.1.0-dev**: **Superset Kubernetes Operator 0.2.0** + `Superset` CR (chart deprecated); `spec.config` ile Keycloak OAuth (`AUTH_ROLES_MAPPING` grup→rol) + Trino datasource deklaratif dosyadan (`legacy-import-datasources`, parola `SQLALCHEMY_CUSTOM_PASSWORD_STORE`); CNPG metadata DB (`metastore.uriFrom`); **Redis/Valkey YOK** (`SimpleCache`, worker/beat yok) — Alerts&Reports isteniyorsa Valkey + `celeryWorker` (`runbooks/user-facing.md`). `REQUESTS_CA_BUNDLE` yok: Keycloak sistem kökleriyle, Trino `connect_args.verify` ile doğrulanır.
+- **JupyterHub** z2jh 4.4.2: `hub.config.GenericOAuthenticator` Keycloak (`allowed_groups`+`manage_groups`); `singleuser.image` resmi pyspark-notebook; `lifecycleHooks.postStart` `pip install pyiceberg[s3fs,pyarrow] trino`; kişisel PVC (F.1.2); singleuser egress **podSelector ile Trino/Polaris'e daraltıldı** (+dev MinIO).
+- **Zeppelin 0.12.1**: `apache/zeppelin` imajı, Deployment + PVC; interpreter.json **Secret'tan tohumlanır** (`ZEPPELIN_CONFIG_FS_DIR=/data/conf`; Zeppelin dosyayı her açılışta yeniden yazar → ConfigMap/subPath olmaz), Trino JDBC bağımlılığı Maven Central'dan; `ZEPPELIN_RUN_MODE=local`; kimlik **Shiro + AD (LDAPS)**, OIDC yok (G.1.1).
+- **Keycloak**: realm import (AD federasyonu, client'lar) taşınır. `hostname` **tam URL** (v2 API); realm sırları `spec.placeholders` ile Secret `keycloak-clients`'tan; redirect URI'ler bileşen hostname'lerinden türetilir. **Realm import mevcut realm'i GÜNCELLEMEZ** → değişiklik = realm sil + CR'ı yeniden uygula (`runbooks/install.md`).
 
 ## 8. İzleme, DR, güvenlik
 
