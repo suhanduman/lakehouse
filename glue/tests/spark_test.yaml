@@ -15,6 +15,26 @@ tests:
       - matchRegex: {path: 'data["pipelines.json"]', pattern: '"casts":\{"updated_at":"timestamp"\}'}
       # bakım işi Bronze tablolarını bu namespace listesinden katalogda arar (pipeline'ı olmayan tablolar dahil)
       - matchRegex: {path: 'data["pipelines.json"]', pattern: '"bronze_namespaces":\["shop_raw"\]'}
+  - it: coreRequest only renders when set (dar düğümlerde kesirli CPU isteği)
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
+    asserts:
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        isNull: {path: spec.template.driver.coreRequest}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        isNull: {path: spec.template.executor.coreRequest}
+  - it: coreRequest renders for driver and executor when values set it
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
+      spark.driver.coreRequest: "500m"
+      spark.executor.coreRequest: "500m"
+    asserts:
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: spec.template.driver.coreRequest, value: "500m"}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: spec.template.driver.cores, value: 1}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: spec.template.executor.coreRequest, value: "500m"}
   - it: four scheduled spark applications with schedules and args
     set:
       pipelines: [{bronze: shop_raw.orders, keys: [id]}]

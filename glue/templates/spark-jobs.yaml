@@ -90,6 +90,9 @@ spec:
       spark.executor.memoryOverhead: {{ $s.executor.memoryOverhead }}
     driver:
       cores: {{ $s.driver.cores }}
+      {{- with $s.driver.coreRequest }}
+      coreRequest: {{ . | quote }}
+      {{- end }}
       memory: {{ $s.driver.memory }}
       serviceAccount: {{ $s.serviceAccount }}
       env:
@@ -111,6 +114,9 @@ spec:
       {{- end }}
     executor:
       cores: {{ $s.executor.cores }}
+      {{- with $s.executor.coreRequest }}
+      coreRequest: {{ . | quote }}
+      {{- end }}
       instances: {{ $s.executor.instances }}
       memory: {{ $s.executor.memory }}
       env:

@@ -31,14 +31,14 @@ keycloak:
   - {username: student1, password: student1-dev, group: lakehouse-students}
 superset:
   hostname: superset.127.0.0.1.nip.io
-  resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {memory: 1536Mi}}
+  resources: {requests: {cpu: 100m, memory: 512Mi}, limits: {memory: 1536Mi}}     # CI 4 vCPU: istek düşük, limit aynı
 jupyterhub: {hostname: jupyterhub.127.0.0.1.nip.io}
 zeppelin:
   hostname: zeppelin.127.0.0.1.nip.io
   mem: "-Xmx768m"
   intpMem: "-Xmx512m"
   storageSize: 2Gi
-  resources: {requests: {cpu: 200m, memory: 768Mi}, limits: {memory: 1536Mi}}
+  resources: {requests: {cpu: 100m, memory: 768Mi}, limits: {memory: 1536Mi}}     # CI 4 vCPU: istek düşük, limit aynı
 sources:
 - name: shop
   type: postgres
@@ -56,8 +56,10 @@ pipelines:
 - {bronze: crm_raw.customers, keys: [_id], bucket_count: 4}
 nginx: {enabled: true, partitions: 3}
 spark:
-  driver:   {cores: 1, memory: 1536m, memoryOverhead: 512m}
-  executor: {instances: 1, cores: 1, memory: 1g, memoryOverhead: 512m}
+  # CI runner'ı 4 vCPU: F4 bileşenleri gelince düğüm CPU İSTEKLERİ %76'ya çıktı ve 1 CPU isteyen Spark driver'ı
+  # schedule olamadı (run 35281673277, 2026-09-17). cores (Spark çekirdeği) 1 kalıyor, k8s isteği 500m'ye iniyor.
+  driver:   {cores: 1, coreRequest: "500m", memory: 1536m, memoryOverhead: 512m}
+  executor: {instances: 1, cores: 1, coreRequest: "500m", memory: 1g, memoryOverhead: 512m}
   # dev: HEPSİ gecelik; e2e işleri `run_spark_once` ile tek seferlik koşturur (plan P9). Sık cron taze kurulumda
   # zararlı: polaris-spark Secret'ı (polaris-setup.sh) gelmeden fırlayan silver-merge/mongo-bronze driver'ları
   # CreateContainerConfigError'da 2×2 GiB rezerve edip Connect/Trino'yu schedule-dışı bırakıyordu (2026-09-17 canlı);

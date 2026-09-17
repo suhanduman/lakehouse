@@ -163,8 +163,10 @@ spark:
   # spark.jars.packages şablonda versions.iceberg'den üretilir (iki yerde sürüm tutulmaz)
   serviceAccount: spark-operator-spark          # spark-operator chart'ının jobNamespaces'ta yarattığı SA
   credentialSecret: polaris-spark               # key: credential (polaris-setup.sh yazar)
-  driver:   {cores: 1, memory: 2g, memoryOverhead: 512m}
-  executor: {instances: 1, cores: 1, memory: 2g, memoryOverhead: 512m}
+  # cores tam sayıdır (Spark çekirdek sayısı); coreRequest kesirli CPU İSTEĞİ'dir (k8s request; boş = cores kadar).
+  # Dar düğümlerde (CI 4 vCPU) driver/executor'ın schedule olabilmesi için dev'de düşürülür.
+  driver:   {cores: 1, coreRequest: "", memory: 2g, memoryOverhead: 512m}
+  executor: {instances: 1, cores: 1, coreRequest: "", memory: 2g, memoryOverhead: 512m}
   shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
   kafkaSecret: spark                 # KafkaUser spark'ın Secret'ı (sasl.jaas.config) — mongo-bronze Kafka okuması
   schedules:
