@@ -16,7 +16,8 @@ jobs:
         run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
   e2e-kind:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v5
@@ -38,3 +39,14 @@ jobs:
           kubectl -n lakehouse get kafkatopic,kafkauser || true
           kubectl -n lakehouse logs deploy/fluent-bit --tail=40 || true
           kubectl -n lakehouse logs deploy/demo-mongo --tail=20 || true
+          kubectl -n lakehouse get superset,certificate,issuer -o wide || true
+          kubectl -n lakehouse describe superset superset | tail -30 || true
+          kubectl -n lakehouse logs deploy/trino-coordinator --tail=60 || true
+          kubectl -n lakehouse logs deploy/hub --tail=40 || true
+          kubectl -n lakehouse logs deploy/zeppelin --tail=40 || true
+      - name: kaynak fotoğrafı (F5 boyutlandırma girdisi)
+        if: always()
+        run: |
+          free -m; df -h /
+          kubectl describe node | sed -n '/Allocated resources/,/Events/p'
+          kubectl -n lakehouse get pods -o wide | wc -l

@@ -24,7 +24,13 @@ spec:
     # Debezium heartbeat (heartbeat.interval.ms): __debezium-heartbeat.<topic.prefix>
     - {resource: {type: topic, name: "__debezium-heartbeat.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- range .Values.sources }}
+{{- if eq .type "mongodb" }}
+    # mongodb: Connect bu prefix'e yalnız YAZAR (Debezium kaynak connector'ı; Iceberg sink yok — Bronze'u Spark
+    # `mongo-bronze` işi kendi KafkaUser'ı (spark) ile okur). En az yetki: Read verilmez (F3 kalanı, R15).
+    - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Write, Describe, Create]}
+{{- else }}
     - {resource: {type: topic, name: "{{ .topicPrefix | default .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+{{- end }}
 {{- end }}
 {{- if .Values.nginx.enabled }}
     # nginx yolu: sink-nginx nginx.access'i okur, nginx.dlq'yu yaratır/yazar (F3 canlı: aksi hâlde DLQ init TopicAuthorizationException)

@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
 # Tüm politikalar YALNIZ Ingress (`policyTypes: [Ingress]`); egress kısıtlanmaz (Connect'in Maven/registry çekişi, S3, LDAP serbest).
-# Prod enforcement (OpenShift SDN/OVN) OpenShift pre-ship ortamında doğrulanacak; kind'ın varsayılan CNI'si enforce etmez.
+# Prod enforcement (OpenShift SDN/OVN) OpenShift pre-ship ortamında doğrulanacak; kind'ın kindnetd'si (F4 canlı) NetworkPolicy'yi ENFORCE EDER.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: default-deny-ingress, namespace: {{ include "glue.ns" . }}}

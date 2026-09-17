@@ -22,7 +22,7 @@ cnpg:
 components: {minio: true, devSecrets: true}
 tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
-networkPolicy: {enabled: false}      # kind'ın varsayılan CNI'si NetworkPolicy enforce etmez; prod'da true
+networkPolicy: {enabled: false}      # dev'de kapalı (e2e port-forward/fixture trafiği); kindnetd enforce EDER (F4 canlı, z2jh singleuser netpol) — prod'da true
 keycloak:
   hostname: http://keycloak-service.lakehouse.svc:8080   # dev: iss küme içinden çözülür (Trino OIDC discovery); tarayıcı akışı küme dışından çalışmaz
   devUsers:

@@ -27,6 +27,23 @@ tests:
     asserts:
       - equal: {path: 'spec.config["signal.data.collection"]', value: crm.debezium_signal}
       - equal: {path: 'spec.config["signal.enabled.channels"]', value: source}
+  - it: connect KafkaUser only writes mongodb topic prefixes (no Read — no sink reads that prefix)
+    template: kafka-users.yaml
+    set:
+      connect.buildImage: "x"
+      sources:
+        - {name: crm, type: mongodb, connectionString: "mongodb://h/?replicaSet=rs0", collections: [crm.customers]}
+        - {name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.debezium_signal}
+    asserts:
+      - documentIndex: 0
+        equal: {path: metadata.name, value: connect}
+      - documentIndex: 0
+        contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "crm.", patternType: prefix}, operations: [Write, Describe, Create]}}
+      - documentIndex: 0
+        notContains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "crm.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+      # pg kaynağına dokunulmadı: sink onun prefix'ini okur
+      - documentIndex: 0
+        contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "shop.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
   - it: spark KafkaUser exists only with a mongodb source and reads its topics
     template: kafka-users.yaml
     set:
