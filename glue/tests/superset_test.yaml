@@ -27,7 +27,9 @@ tests:
       - contains: {path: spec.podTemplate.container.env, content: {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: superset}}}}
       - contains: {path: spec.podTemplate.container.env, content: {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}}
       - contains: {path: spec.podTemplate.container.env, content: {name: KEYCLOAK_URL, value: https://keycloak.lakehouse.example.com}}
-      - contains: {path: spec.podTemplate.container.env, content: {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}}
+      # Keycloak sistem kökleriyle doğrulanır (prod'da edge Route sertifikası lakehouse-ca imzalı DEĞİL);
+      # Trino'nun CA'sı datasource extra.connect_args.verify ile pinlenir
+      - notContains: {path: spec.podTemplate.container.env, content: {name: REQUESTS_CA_BUNDLE}, any: true}
       - contains: {path: spec.podTemplate.volumes, content: {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}}
       - equal: {path: spec.webServer.podTemplate.container.resources, value: {requests: {cpu: 250m, memory: 768Mi}, limits: {memory: 2Gi}}}
       - isNull: {path: spec.webServer.podTemplate.container.startupProbe}   # ezilmiyor: -dev imajı anında açılıyor, operator varsayılanı yeter

@@ -65,8 +65,9 @@ spec:
       - {name: KEYCLOAK_REALM, value: {{ .Values.keycloak.realm.name | quote }}}
       - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.clientsSecret }}, key: superset}}}
       - {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}
-      - {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}
       volumeMounts:
+      # REQUESTS_CA_BUNDLE YOK: tek kök olarak lakehouse-ca'yı dayatmak prod'da Keycloak'ı (edge Route, router
+      # sertifikası) doğrulanamaz yapardı. Keycloak sistem kökleriyle; Trino datasource'un connect_args.verify'ı ile.
       - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
     volumes:
     - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
