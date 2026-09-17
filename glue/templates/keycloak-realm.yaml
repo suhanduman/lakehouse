@@ -2,10 +2,11 @@
 # from v1 chart/templates/10-keycloak.yaml (KeycloakRealmImport block); realm
 # content (LDAP storage-provider component + its mappers, roles, groups)
 # preserved as-is. Client set narrowed to F1 platform scope (trino, superset,
-# jupyterhub, polaris) per keycloak.clients.* — v1's downstream-app clients
-# (console, kafka-ui, grafana, sandbox, dbt, zeppelin, nessie machine-auth,
-# ai-ui, device-flow) belong to subsystems not yet built in this chart and
-# will get their own clients when those tasks land.
+# jupyterhub, polaris); redirectUris türetilir (servis hostname + sabit yol) +
+# keycloak.extraRedirectUris.* — v1's downstream-app clients (console, kafka-ui,
+# grafana, sandbox, dbt, zeppelin, nessie machine-auth, ai-ui, device-flow)
+# belong to subsystems not yet built in this chart and will get their own
+# clients when those tasks land.
 apiVersion: k8s.keycloak.org/v2alpha1
 kind: KeycloakRealmImport
 metadata:
@@ -14,6 +15,12 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "2"}
 spec:
   keycloakCRName: keycloak
+  # Realm secret'ları düz metin DEĞİL: Secret keycloak.clientsSecret'tan placeholder ile enjekte edilir (${NAME} -> realm içinde kullanılır)
+  placeholders:
+    TRINO_CLIENT_SECRET:      {secret: {name: {{ .Values.keycloak.clientsSecret }}, key: trino}}
+    SUPERSET_CLIENT_SECRET:   {secret: {name: {{ .Values.keycloak.clientsSecret }}, key: superset}}
+    JUPYTERHUB_CLIENT_SECRET: {secret: {name: {{ .Values.keycloak.clientsSecret }}, key: jupyterhub}}
+    LDAP_BIND_CREDENTIAL:     {secret: {name: {{ .Values.keycloak.clientsSecret }}, key: ldap-bind}}
   realm:
     realm: {{ .Values.keycloak.realm.name }}
     displayName: {{ .Values.keycloak.realm.displayName | quote }}
@@ -35,7 +42,7 @@ spec:
           vendor: ["ad"]
           connectionUrl: [{{ .Values.keycloak.ldap.connectionUrl | quote }}]
           bindDn: [{{ .Values.keycloak.ldap.bindDn | quote }}]
-          bindCredential: [{{ .Values.keycloak.ldap.bindCredential | quote }}]
+          bindCredential: ["${LDAP_BIND_CREDENTIAL}"]
           usersDn: [{{ .Values.keycloak.ldap.usersDn | quote }}]
           userObjectClasses: ["person,organizationalPerson,user"]
           usernameLDAPAttribute: ["sAMAccountName"]
@@ -86,30 +93,45 @@ spec:
           mode: ["READ_ONLY"]
     {{- end }}
 
-    # --- OIDC Clients (F1 platform scope) ---
+    # --- OIDC Clients (F1 platform scope) --- redirectUris türetilir: ilgili
+    # servisin hostname'i + sabit callback yolu, artı keycloak.extraRedirectUris.*
+    # (lokal port-forward vb. ek URI'ler)
     clients:
     - clientId: trino
       enabled: true
       protocol: "openid-connect"
       publicClient: false
+      secret: "${TRINO_CLIENT_SECRET}"
       standardFlowEnabled: true
-      redirectUris: {{ toJson .Values.keycloak.clients.trino.redirectUris }}
+      directAccessGrantsEnabled: {{ if .Values.keycloak.devUsers }}true{{ else }}false{{ end }}   # yalnız dev: e2e password grant
+      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth2/callback" .Values.trino.hostname)) .Values.keycloak.extraRedirectUris.trino) }}
       webOrigins: ["+"]
-      attributes:
-        access.token.lifespan: "3600"
+      attributes: {access.token.lifespan: "3600"}
+      protocolMappers:
+      - name: trino-audience          # Trino OAuth2: aud içinde client-id olmalı (Bearer JWT doğrulaması)
+        protocol: "openid-connect"
+        protocolMapper: "oidc-audience-mapper"
+        config: {"included.client.audience": "trino", "access.token.claim": "true", "id.token.claim": "false"}
     - clientId: superset
       enabled: true
       protocol: "openid-connect"
       publicClient: false
+      secret: "${SUPERSET_CLIENT_SECRET}"
       standardFlowEnabled: true
-      redirectUris: {{ toJson .Values.keycloak.clients.superset.redirectUris }}
+      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth-authorized/keycloak" .Values.superset.hostname)) .Values.keycloak.extraRedirectUris.superset) }}
       webOrigins: ["+"]
+      protocolMappers:
+      - name: groups                  # FAB keycloak provider: role_keys = userinfo.groups
+        protocol: "openid-connect"
+        protocolMapper: "oidc-group-membership-mapper"
+        config: {"claim.name": "groups", "full.path": "false", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}
     - clientId: jupyterhub
       enabled: true
       protocol: "openid-connect"
       publicClient: false
+      secret: "${JUPYTERHUB_CLIENT_SECRET}"
       standardFlowEnabled: true
-      redirectUris: {{ toJson .Values.keycloak.clients.jupyterhub.redirectUris }}
+      redirectUris: {{ toJson (concat (list (printf "https://%s/hub/oauth_callback" .Values.jupyterhub.hostname)) .Values.keycloak.extraRedirectUris.jupyterhub) }}
       webOrigins: ["+"]
       # `groups` claim mapper — without it Keycloak's userinfo response has no
       # `groups` key at all; jupyterhub_config.py's GenericOAuthenticator
@@ -130,7 +152,7 @@ spec:
       protocol: "openid-connect"
       publicClient: false
       standardFlowEnabled: true
-      redirectUris: {{ toJson .Values.keycloak.clients.polaris.redirectUris }}
+      redirectUris: {{ toJson .Values.keycloak.extraRedirectUris.polaris }}
       webOrigins: ["+"]
 
     # Realm roles — assigned at runtime based on AD group membership
@@ -150,3 +172,18 @@ spec:
       realmRoles: [analyst]
     - name: lakehouse-students
       realmRoles: [student]
+
+    {{- with .Values.keycloak.devUsers }}
+    # DEV-ONLY statik kullanıcılar (e2e password grant); prod'da kullanıcılar AD federasyonundan gelir
+    users:
+    {{- range . }}
+    - username: {{ .username }}
+      enabled: true
+      email: {{ printf "%s@example.com" .username }}
+      firstName: {{ .username | title }}
+      lastName: Dev
+      emailVerified: true
+      credentials: [{type: password, value: {{ .password | quote }}, temporary: false}]
+      groups: [{{ printf "/%s" .group | quote }}]
+    {{- end }}
+    {{- end }}

@@ -2,7 +2,7 @@
 platform: openshift
 route: {enabled: true}
 keycloak:
-  hostname: keycloak.lakehouse.example.com
+  hostname: https://keycloak.lakehouse.example.com
 connect:
   # spec.build çıktısı Git'te otoriter: kurulumda gerçek registry/repo:tag ile değiştir; :latest KULLANMA (digest sabitlenemez)
   buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0

@@ -1,12 +1,12 @@
 suite: keycloak
-templates: [keycloak.yaml, keycloak-realm.yaml]
+templates: [keycloak.yaml, keycloak-realm.yaml, ingress.yaml]
 tests:
   - it: Keycloak CR uses CNPG secret and hostname
     template: keycloak.yaml
     asserts:
       - equal: {path: spec.db.vendor, value: postgres}
       - equal: {path: spec.db.usernameSecret.name, value: keycloak-db-app}
-      - equal: {path: spec.hostname.hostname, value: keycloak.example.com}
+      - equal: {path: spec.hostname.hostname, value: https://keycloak.lakehouse.example.com}
   - it: realm import carries the four platform clients
     template: keycloak-realm.yaml
     asserts:
@@ -23,3 +23,22 @@ tests:
     set: {keycloak.ldap.enabled: true}
     asserts:
       - isNotNull: {path: spec.realm.components}
+      - equal: {path: 'spec.realm.components["org.keycloak.storage.UserStorageProvider"][0].config.bindCredential[0]', value: "${LDAP_BIND_CREDENTIAL}"}
+  - it: realm import carries placeholders and trino audience mapper
+    template: keycloak-realm.yaml
+    asserts:
+      - equal: {path: spec.placeholders.TRINO_CLIENT_SECRET.secret.key, value: trino}
+      - contains: {path: 'spec.realm.clients[0].protocolMappers', content: {name: trino-audience}, any: true}
+      - equal: {path: 'spec.realm.clients[0].directAccessGrantsEnabled', value: false}
+      - contains: {path: 'spec.realm.clients[0].redirectUris', content: https://trino.lakehouse.example.com/oauth2/callback}
+  - it: dev users enable password grant
+    template: keycloak-realm.yaml
+    set: {keycloak.devUsers: [{username: u1, password: p1, group: lakehouse-students}]}
+    asserts:
+      - equal: {path: 'spec.realm.clients[0].directAccessGrantsEnabled', value: true}
+      - equal: {path: 'spec.realm.users[0].groups[0]', value: /lakehouse-students}
+  - it: ingress host strips scheme
+    template: ingress.yaml
+    set: {ingress.enabled: true}
+    asserts:
+      - equal: {path: 'spec.rules[0].host', value: keycloak.lakehouse.example.com}

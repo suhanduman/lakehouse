@@ -23,7 +23,14 @@ tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
 networkPolicy: {enabled: false}      # kind'ın varsayılan CNI'si NetworkPolicy enforce etmez; prod'da true
 keycloak:
-  hostname: keycloak.127.0.0.1.nip.io
+  hostname: http://keycloak-service.lakehouse.svc:8080   # dev: iss küme içinden çözülür (Trino OIDC discovery); tarayıcı akışı küme dışından çalışmaz
+  devUsers:
+  - {username: admin1,   password: admin1-dev,   group: lakehouse-admins}
+  - {username: analyst1, password: analyst1-dev, group: lakehouse-analysts}
+  - {username: student1, password: student1-dev, group: lakehouse-students}
+superset:   {hostname: superset.127.0.0.1.nip.io}
+jupyterhub: {hostname: jupyterhub.127.0.0.1.nip.io}
+zeppelin:   {hostname: zeppelin.127.0.0.1.nip.io}
 sources:
 - name: shop
   type: postgres

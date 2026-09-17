@@ -75,29 +75,31 @@ polaris:
   rootCredentialSecret: polaris-root   # keys: clientId, clientSecret (Git'e girmez; kurulumdan önce yaratılır)
 
 keycloak:
-  hostname: keycloak.example.com
-  realm:
-    name: lakehouse
-    displayName: Lakehouse             # v1 realm value'nün yeni values.yaml'da karşılığı yoktu (task 3); nötr varsayılan eklendi
+  hostname: https://keycloak.lakehouse.example.com   # TAM URL (hostname v2): token iss = bu değer; Trino oauth2.issuer (platform/values/trino.yaml) ile aynı olmalı
+  realm: {name: lakehouse, displayName: Lakehouse}
   adminSecret: keycloak-admin          # keys: username, password
+  clientsSecret: keycloak-clients      # keys: trino, superset, jupyterhub, ldap-bind -> realm import placeholders (spec.placeholders)
   ldap:
     enabled: false
     connectionUrl: ldaps://ad.example.com:636
     usersDn: "OU=Users,DC=example,DC=com"
     groupsDn: "OU=Groups,DC=example,DC=com"   # v1'in ayrı groupSearchBase'inin karşılığı yoktu (task 3); nötr varsayılan eklendi
     bindDn: "CN=svc-lakehouse,OU=Service,DC=example,DC=com"
-    bindCredential: ""                 # realm import düz değer ister; Secret'tan almak için F4 notu
-  clients:                             # redirect URI'ler F4'te servis host'larıyla doldurulur
-    trino:      {redirectUris: []}
-    superset:   {redirectUris: []}
-    jupyterhub: {redirectUris: []}
-    polaris:    {redirectUris: []}
+    # bindCredential values'ta DEĞİL: keycloak-clients Secret'ının ldap-bind anahtarı (${LDAP_BIND_CREDENTIAL})
+  extraRedirectUris: {trino: [], superset: [], jupyterhub: [], polaris: []}   # türetilenlere ek (ör. lokal port-forward)
+  devUsers: []                         # DEV-ONLY: [{username, password, group}] -> statik parolalı kullanıcılar + trino client'ında password grant
 
 tls:
   selfSignedCA: false          # dev/kind: true -> ClusterIssuer selfsigned + CA Certificate -> Secret lakehouse-ca. Prod: false, lakehouse-ca (tls.crt, tls.key) kurulumdan önce
   caBundle: ""                 # prod: Route reencrypt destinationCACertificate (PEM, lakehouse-ca tls.crt). Boş -> passthrough
 trino:
   hostname: trino.lakehouse.example.com
+superset:
+  hostname: superset.lakehouse.example.com
+jupyterhub:
+  hostname: jupyterhub.lakehouse.example.com
+zeppelin:
+  hostname: zeppelin.lakehouse.example.com
 
 components:
   minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü
