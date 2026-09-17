@@ -19,6 +19,11 @@ tests:
     template: zeppelin.yaml
     asserts:
       - hasDocuments: {count: 3}
+      # PVC, Deployment ile aynı wave'de olmalı (WaitForFirstConsumer kilitlenmesi — CI 35276782791)
+      - documentIndex: 0
+        equal: {path: 'metadata.annotations["argocd.argoproj.io/sync-wave"]', value: "2"}
+      - documentIndex: 1
+        equal: {path: 'metadata.annotations["argocd.argoproj.io/sync-wave"]', value: "2"}
       - containsDocument: {kind: PersistentVolumeClaim, apiVersion: v1, name: zeppelin-data, any: true}
       - documentIndex: 0
         equal: {path: 'spec.resources.requests.storage', value: 10Gi}

@@ -2,7 +2,10 @@
 {{- $ns := include "glue.ns" . }}{{ $z := .Values.zeppelin }}
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: {name: zeppelin-data, namespace: {{ $ns }}}
+# sync-wave Deployment ile AYNI olmalı: StorageClass WaitForFirstConsumer ise PVC ancak tüketici pod yaratılınca
+# Bound olur; PVC daha erken bir wave'de olursa ArgoCD "Healthy" beklerken sonraki wave'i (Deployment'ı) hiç
+# uygulamaz -> kilitlenme (CI 35276782791: glue 45 dk OutOfSync/Progressing, wave 1+ hiç koşmadı).
+metadata: {name: zeppelin-data, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
 spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: {{ $z.storageSize }}}}
