@@ -56,4 +56,19 @@ spec:
       - path: /
         pathType: Prefix
         backend: {service: {name: proxy-public, port: {number: 80}}}
+{{- if .Values.zeppelin.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: zeppelin, namespace: {{ include "glue.ns" . }}}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+  - host: {{ .Values.zeppelin.hostname }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: zeppelin, port: {number: 8080}}}
+{{- end }}
 {{- end }}

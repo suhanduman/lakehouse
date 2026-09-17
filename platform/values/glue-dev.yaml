@@ -33,7 +33,12 @@ superset:
   hostname: superset.127.0.0.1.nip.io
   resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {memory: 1536Mi}}
 jupyterhub: {hostname: jupyterhub.127.0.0.1.nip.io}
-zeppelin:   {hostname: zeppelin.127.0.0.1.nip.io}
+zeppelin:
+  hostname: zeppelin.127.0.0.1.nip.io
+  mem: "-Xmx768m"
+  intpMem: "-Xmx512m"
+  storageSize: 2Gi
+  resources: {requests: {cpu: 200m, memory: 768Mi}, limits: {memory: 1536Mi}}
 sources:
 - name: shop
   type: postgres

@@ -109,7 +109,17 @@ superset:
 jupyterhub:
   hostname: jupyterhub.lakehouse.example.com
 zeppelin:
+  enabled: true
   hostname: zeppelin.lakehouse.example.com
+  image: apache/zeppelin:0.12.1
+  storageSize: 10Gi
+  storageClass: ""                 # boş = kümenin varsayılan StorageClass'ı
+  mem: "-Xmx1024m"                 # ZEPPELIN_MEM (sunucu JVM); dev: -Xmx768m
+  intpMem: "-Xmx1024m"             # ZEPPELIN_INTP_MEM (interpreter JVM); dev: -Xmx512m
+  trinoJdbcVersion: "483"          # interpreter dependencies (Maven Central, ilk çalıştırmada indirilir)
+  shiroSecret: zeppelin-shiro                # key shiro.ini — prod: runbooks/zeppelin/shiro-ad.ini (AD LDAPS), dev: dev-secrets
+  interpreterSecret: zeppelin-interpreter    # key interpreter.json — Trino JDBC url/user/password (files/zeppelin/interpreter.json şablonu)
+  resources: {requests: {cpu: 250m, memory: 1Gi}, limits: {memory: 2560Mi}}
 
 components:
   minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü

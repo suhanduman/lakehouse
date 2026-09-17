@@ -1,0 +1,65 @@
+{{- if .Values.zeppelin.enabled }}
+{{- $ns := include "glue.ns" . }}{{ $z := .Values.zeppelin }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: zeppelin-data, namespace: {{ $ns }}}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ $z.storageSize }}}}
+{{- with $z.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: zeppelin, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}                 # RWO PVC
+  selector: {matchLabels: {app: zeppelin}}
+  template:
+    metadata: {labels: {app: zeppelin}}
+    spec:
+      {{- if ne (include "glue.isOpenShift" .) "true" }}
+      securityContext: {fsGroup: 1000}       # imaj uid 1000 / gid 0; OpenShift SCC kendi gid'ini verir
+      {{- end }}
+      # interpreter.json her açılışta Zeppelin tarafından YENİDEN YAZILIR (atomik temp+rename) -> salt-okunur mount olmaz;
+      # ZEPPELIN_CONFIG_FS_DIR PVC'de, tohum yalnız dosya yokken kopyalanır (plan R6). Tohumu değiştirmek: PVC'deki dosyayı sil ya da UI.
+      initContainers:
+      - name: seed
+        image: {{ $z.image }}
+        command: ["sh", "-c", "mkdir -p /data/conf /data/notebook /data/local-repo && ([ -f /data/conf/interpreter.json ] || cp /seed/interpreter.json /data/conf/interpreter.json)"]
+        volumeMounts: [{name: data, mountPath: /data}, {name: seed, mountPath: /seed, readOnly: true}]
+      containers:
+      - name: zeppelin
+        image: {{ $z.image }}
+        ports: [{name: http, containerPort: 8080}]
+        env:
+        - {name: ZEPPELIN_ADDR, value: "0.0.0.0"}
+        # auto, küme içinde k8s modunu seçer ve her interpreter için AYRI POD açar (default SA'da pod RBAC'ı yok,
+        # "pods ... is forbidden" ile düşer). Yorumlayıcılar bu pod içinde yerel süreç olarak koşar (ZEPPELIN_INTP_MEM).
+        - {name: ZEPPELIN_RUN_MODE, value: local}
+        - {name: ZEPPELIN_PORT, value: "8080"}
+        - {name: ZEPPELIN_NOTEBOOK_DIR, value: /data/notebook}
+        - {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}
+        - {name: ZEPPELIN_DEP_LOCALREPO, value: /data/local-repo}
+        - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
+        - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
+        resources: {{ toJson $z.resources }}
+        readinessProbe: {httpGet: {path: /api/version, port: http}, initialDelaySeconds: 20, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /api/version, port: http}, initialDelaySeconds: 90, periodSeconds: 20}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: shiro, mountPath: /opt/zeppelin/conf/shiro.ini, subPath: shiro.ini, readOnly: true}
+        - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
+      volumes:
+      - {name: data, persistentVolumeClaim: {claimName: zeppelin-data}}
+      - {name: seed, secret: {secretName: {{ $z.interpreterSecret }}}}
+      - {name: shiro, secret: {secretName: {{ $z.shiroSecret }}}}
+      - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: zeppelin, namespace: {{ $ns }}}
+spec: {selector: {app: zeppelin}, ports: [{name: http, port: 8080, targetPort: http}]}
+{{- end }}

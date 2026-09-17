@@ -37,13 +37,15 @@ tests:
     template: route.yaml
     set: {platform: openshift, route.enabled: true}
     asserts:
-      - hasDocuments: {count: 5}
+      - hasDocuments: {count: 6}
       - documentIndex: 2
         containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: trino}
       - documentIndex: 3
         containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: superset}
       - documentIndex: 4
         containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: jupyterhub}
+      - documentIndex: 5
+        containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: zeppelin}
   - it: jupyterhub Route terminates TLS at the edge onto proxy-public
     template: route.yaml
     set: {platform: openshift, route.enabled: true}
@@ -51,6 +53,15 @@ tests:
     asserts:
       - equal: {path: spec.host, value: jupyterhub.lakehouse.example.com}
       - equal: {path: spec.to, value: {kind: Service, name: proxy-public}}
+      - equal: {path: spec.port.targetPort, value: http}
+      - equal: {path: spec.tls.termination, value: edge}
+  - it: zeppelin Route terminates TLS at the edge onto the zeppelin Service
+    template: route.yaml
+    set: {platform: openshift, route.enabled: true}
+    documentSelector: {path: metadata.name, value: zeppelin}
+    asserts:
+      - equal: {path: spec.host, value: zeppelin.lakehouse.example.com}
+      - equal: {path: spec.to, value: {kind: Service, name: zeppelin}}
       - equal: {path: spec.port.targetPort, value: http}
       - equal: {path: spec.tls.termination, value: edge}
   - it: superset Route terminates TLS at the edge onto the operator web Service
@@ -91,17 +102,17 @@ tests:
     template: route.yaml
     set: {platform: openshift, route.enabled: true, ingress.enabled: true}
     asserts:
-      - hasDocuments: {count: 5}
+      - hasDocuments: {count: 6}
   - it: ingress is never rendered on openshift
     template: ingress.yaml
     set: {platform: openshift, route.enabled: true, ingress.enabled: true}
     asserts:
       - hasDocuments: {count: 0}
-  - it: vanilla renders the Ingresses (keycloak first, then trino over HTTPS, then superset, then jupyterhub)
+  - it: vanilla renders the Ingresses (keycloak first, then trino over HTTPS, then superset, jupyterhub, zeppelin)
     template: ingress.yaml
     set: {platform: vanilla, ingress.enabled: true}
     asserts:
-      - hasDocuments: {count: 4}
+      - hasDocuments: {count: 5}
       - equal: {path: spec.ingressClassName, value: nginx}
       - documentIndex: 0
         equal: {path: metadata.name, value: keycloak}
@@ -123,6 +134,12 @@ tests:
         equal: {path: 'spec.rules[0].host', value: jupyterhub.lakehouse.example.com}
       - documentIndex: 3
         equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: proxy-public, port: {number: 80}}}
+      - documentIndex: 4
+        equal: {path: metadata.name, value: zeppelin}
+      - documentIndex: 4
+        equal: {path: 'spec.rules[0].host', value: zeppelin.lakehouse.example.com}
+      - documentIndex: 4
+        equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: zeppelin, port: {number: 8080}}}
   - it: openshift networkpolicy allows both monitoring namespaces
     template: networkpolicy.yaml
     set: {platform: openshift}

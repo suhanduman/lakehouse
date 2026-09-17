@@ -53,4 +53,16 @@ spec:
   to: {kind: Service, name: proxy-public}
   port: {targetPort: http}
   tls: {termination: edge}
+{{- if .Values.zeppelin.enabled }}
+---
+# Zeppelin kendi TLS'ini sonlandırmaz (düz HTTP 8080): edge.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: zeppelin, namespace: {{ include "glue.ns" . }}}
+spec:
+  host: {{ .Values.zeppelin.hostname }}
+  to: {kind: Service, name: zeppelin}
+  port: {targetPort: http}
+  tls: {termination: edge}
+{{- end }}
 {{- end }}

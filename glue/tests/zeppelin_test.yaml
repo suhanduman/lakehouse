@@ -1,0 +1,53 @@
+suite: zeppelin
+templates: [zeppelin.yaml, dev-secrets.yaml]
+tests:
+  - it: deployment seeds interpreter.json into writable config dir
+    template: zeppelin.yaml
+    documentIndex: 1
+    asserts:
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: zeppelin}
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}}
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_RUN_MODE, value: local}}
+      - equal: {path: 'spec.template.spec.initContainers[0].name', value: seed}
+      - equal: {path: 'spec.template.spec.securityContext.fsGroup', value: 1000}
+      - equal: {path: 'spec.template.spec.containers[0].image', value: apache/zeppelin:0.12.1}
+      - equal: {path: 'spec.strategy.type', value: Recreate}
+      - contains: {path: 'spec.template.spec.containers[0].volumeMounts', content: {name: shiro, mountPath: /opt/zeppelin/conf/shiro.ini, subPath: shiro.ini, readOnly: true}}
+      - contains: {path: 'spec.template.spec.volumes', content: {name: seed, secret: {secretName: zeppelin-interpreter}}}
+      - contains: {path: 'spec.template.spec.volumes', content: {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}}
+  - it: pvc and service back the deployment
+    template: zeppelin.yaml
+    asserts:
+      - hasDocuments: {count: 3}
+      - containsDocument: {kind: PersistentVolumeClaim, apiVersion: v1, name: zeppelin-data, any: true}
+      - documentIndex: 0
+        equal: {path: 'spec.resources.requests.storage', value: 10Gi}
+      - documentIndex: 0
+        isNull: {path: 'spec.storageClassName'}
+      - documentIndex: 2
+        equal: {path: 'spec.ports', value: [{name: http, port: 8080, targetPort: http}]}
+  - it: openshift leaves fsGroup to SCC
+    template: zeppelin.yaml
+    set: {platform: openshift}
+    documentIndex: 1
+    asserts:
+      - isNull: {path: 'spec.template.spec.securityContext'}
+  - it: disabled renders nothing
+    template: zeppelin.yaml
+    set: {zeppelin.enabled: false}
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: dev interpreter seed targets trino jdbc over TLS
+    template: dev-secrets.yaml
+    set: {components.devSecrets: true}
+    documentIndex: 5
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-interpreter}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: "io.trino:trino-jdbc:483"}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: "SSL=true"}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: 'jdbc:trino://trino\.lakehouse\.svc:8443/lakehouse'}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: 'io\.trino\.jdbc\.TrinoDriver'}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: 'SSLTrustStorePath=/etc/lakehouse-ca/tls\.crt'}
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: '"default\.user":\s*\{[^}]*"value": "zeppelin"'}
+      # Zeppelin'in kendi {{applicationId}} yer tutucusu tpl'de kaçırılmış olmalı (aksi halde render boşaltır)
+      - matchRegex: {path: 'stringData["interpreter.json"]', pattern: '\{\{applicationId\}\}'}
