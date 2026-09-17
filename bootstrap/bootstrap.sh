@@ -27,6 +27,12 @@ if [[ "$MODE" == "helm" ]]; then
   kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=600s
   helm repo add polaris https://downloads.apache.org/polaris/helm-chart >/dev/null 2>&1 || true; helm repo update polaris >/dev/null
   helm upgrade --install polaris polaris/polaris --version 1.7.0 -n lakehouse -f "$ROOT/platform/values/polaris.yaml" --wait --timeout 10m
+  helm repo add trino https://trinodb.github.io/charts >/dev/null 2>&1 || true; helm repo update trino >/dev/null
+  # dev: trino-dev.yaml (dosya tabanlı gruplar); prod: trino-ldap.yaml (AD group provider) — ikisi birbirini dışlar
+  TRINO_VALUES=(-f "$ROOT/platform/values/trino.yaml")
+  if [[ "$ENV" == "dev" ]]; then TRINO_VALUES+=(-f "$ROOT/platform/values/trino-dev.yaml"); else TRINO_VALUES+=(-f "$ROOT/platform/values/trino-ldap.yaml"); fi
+  # --wait YOK: pod polaris-trino Secret'ını bekler (polaris-setup.sh sonrası hazır olur)
+  helm upgrade --install trino trino/trino --version 1.42.2 -n lakehouse "${TRINO_VALUES[@]}"
   echo "OK: helm modunda kuruldu (env=$ENV)"; exit 0
 fi
 
@@ -99,6 +105,10 @@ spec:
           - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/source/targetRevision, value: "${REVISION}"}
       - target: {kind: Application, name: polaris}
+        patch: |-
+          - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: trino}
         patch: |-
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}

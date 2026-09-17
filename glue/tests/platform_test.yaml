@@ -28,7 +28,25 @@ tests:
     template: route.yaml
     set: {platform: openshift, route.enabled: true}
     asserts:
-      - hasDocuments: {count: 2}
+      - hasDocuments: {count: 3}
+      - documentIndex: 2
+        containsDocument: {kind: Route, apiVersion: route.openshift.io/v1, name: trino}
+  - it: trino route is passthrough without a CA bundle, reencrypt with one
+    template: route.yaml
+    set: {platform: openshift, route.enabled: true}
+    documentSelector: {path: metadata.name, value: trino}
+    asserts:
+      - equal: {path: spec.tls.termination, value: passthrough}
+      - isNull: {path: spec.tls.destinationCACertificate}
+      - equal: {path: spec.host, value: trino.lakehouse.example.com}
+      - equal: {path: spec.port.targetPort, value: https}
+  - it: trino route reencrypts when tls.caBundle is set
+    template: route.yaml
+    set: {platform: openshift, route.enabled: true, tls.caBundle: PEM}
+    documentSelector: {path: metadata.name, value: trino}
+    asserts:
+      - equal: {path: spec.tls.termination, value: reencrypt}
+      - equal: {path: spec.tls.destinationCACertificate, value: PEM}
   - it: ingress absent by default
     template: ingress.yaml
     asserts:
@@ -38,22 +56,30 @@ tests:
     documentIndex: 0
     asserts:
       - equal: {path: metadata.name, value: default-deny-ingress}
-  - it: openshift renders both Routes and no Ingress even if ingress.enabled
+  - it: openshift renders all Routes and no Ingress even if ingress.enabled
     template: route.yaml
     set: {platform: openshift, route.enabled: true, ingress.enabled: true}
     asserts:
-      - hasDocuments: {count: 2}
+      - hasDocuments: {count: 3}
   - it: ingress is never rendered on openshift
     template: ingress.yaml
     set: {platform: openshift, route.enabled: true, ingress.enabled: true}
     asserts:
       - hasDocuments: {count: 0}
-  - it: vanilla renders the Ingress
+  - it: vanilla renders the Ingresses (keycloak first, then trino over HTTPS)
     template: ingress.yaml
     set: {platform: vanilla, ingress.enabled: true}
     asserts:
-      - hasDocuments: {count: 1}
+      - hasDocuments: {count: 2}
       - equal: {path: spec.ingressClassName, value: nginx}
+      - documentIndex: 0
+        equal: {path: metadata.name, value: keycloak}
+      - documentIndex: 1
+        equal: {path: metadata.name, value: trino}
+      - documentIndex: 1
+        equal: {path: 'metadata.annotations["nginx.ingress.kubernetes.io/backend-protocol"]', value: HTTPS}
+      - documentIndex: 1
+        equal: {path: 'spec.rules[0].http.paths[0].backend.service.port.number', value: 8443}
   - it: openshift networkpolicy allows both monitoring namespaces
     template: networkpolicy.yaml
     set: {platform: openshift}

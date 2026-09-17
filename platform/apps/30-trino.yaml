@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: trino, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+spec:
+  project: default
+  sources:
+  - repoURL: https://trinodb.github.io/charts
+    chart: trino
+    targetRevision: 1.42.2
+    helm:
+      # trino-ldap.yaml YALNIZ prod: dev overlay'i bu listeyi trino.yaml + trino-dev.yaml ile DEĞİŞTİRİR (envs/dev)
+      valueFiles: [$values/platform/values/trino.yaml, $values/platform/values/trino-ldap.yaml]
+  - repoURL: https://github.com/suhanduman/lakehouse.git
+    targetRevision: v2
+    ref: values
+  destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

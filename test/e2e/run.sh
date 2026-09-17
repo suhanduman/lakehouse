@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) yolları. CI ve lokal aynı.
+# e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) -> trino (F4) yolları. CI ve lokal aynı.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; MODE=argocd; REVISION="${REVISION:-v2}"; REPO="${REPO:-https://github.com/suhanduman/lakehouse.git}"
 while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --repo) REPO="$2"; shift 2;; *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
@@ -48,6 +48,8 @@ python3 -m venv "$ROOT/.venv" >/dev/null 2>&1 || true
 [[ -x "$ROOT/.venv/bin/pip" ]] || { echo "venv yok: python3 -m venv $ROOT/.venv başarısız"; exit 1; }
 "$ROOT/.venv/bin/pip" install -q 'apache-polaris==1.7.0'
 PATH="$ROOT/.venv/bin:$PATH" "$ROOT/runbooks/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml"
+# Trino app döngüde DEĞİL: pod polaris-trino Secret'ını bekler -> ancak polaris-setup'tan sonra Healthy olabilir
+[[ "$MODE" == "argocd" ]] && kubectl -n argocd wait application/trino --for=jsonpath='{.status.health.status}'=Healthy --timeout=900s
 # smoke: connect principal'ının credential'ıyla küme içinden yaz/oku
 CRED=$(kubectl -n lakehouse get secret polaris-connect -o jsonpath='{.data.credential}' | base64 -d)
 kubectl -n lakehouse create secret generic polaris-smoke-cred --from-literal=CLIENT_ID="${CRED%%:*}" --from-literal=CLIENT_SECRET="${CRED#*:}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -60,3 +62,4 @@ echo "E2E F1 OK"
 "$ROOT/test/e2e/pg-path.sh"
 "$ROOT/test/e2e/mongo-path.sh"
 "$ROOT/test/e2e/nginx-path.sh"
+"$ROOT/test/e2e/trino-path.sh"

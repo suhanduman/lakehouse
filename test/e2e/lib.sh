@@ -12,6 +12,16 @@ verify() {  # verify <ns.table> <min_rows> [ek argümanlar…]  -> küme içi py
   kubectl -n "$NS" logs "job/$name" | grep "^OK"
 }
 
+run_check_job() {  # run_check_job <dizin> <ad> [argümanlar…] -> dizin/check.py ConfigMap lakehouse-<ad>, dizin/job.yaml (JOBNAME, CHECK_ARGS) Job; "^OK" satırları
+  local dir="$1" base="$2"; shift 2; local q="" a name; name="$base-$(date +%s)-$RANDOM"
+  kubectl -n "$NS" create configmap "lakehouse-$base" --from-file="$dir/check.py" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # her argüman tek tırnakla (verify ile aynı kalıp): Job komutu /bin/sh -c ile çalışır
+  for a in "$@"; do q+="'$a' "; done
+  sed -e "s#JOBNAME#$name#" -e "s#CHECK_ARGS#$q#" "$dir/job.yaml" | kubectl apply -f - >/dev/null
+  kubectl -n "$NS" wait --for=condition=complete "job/$name" --timeout=900s >/dev/null || { kubectl -n "$NS" logs "job/$name" --tail=60; return 1; }
+  kubectl -n "$NS" logs "job/$name" | grep "^OK"
+}
+
 run_spark_once() {  # run_spark_once <ScheduledSparkApplication adı> -> template'ten tek seferlik SparkApplication (plan P9)
   local ssa="$1" app="e2e-$1" st=""
   # e2e tek seferlik koşusu dev cron'la (:00/:30) çakışmasın — mongo-bronze append idempotent değil (F3 notu 4)

@@ -15,4 +15,20 @@ spec:
   to: {kind: Service, name: polaris}
   port: {targetPort: 8181}
   tls: {termination: edge}
+---
+# Trino kendi TLS'ini sonlandırır (kimlik doğrulama TLS ister): edge YOK.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: trino, namespace: {{ include "glue.ns" . }}}
+spec:
+  host: {{ .Values.trino.hostname }}
+  to: {kind: Service, name: trino}
+  port: {targetPort: https}
+  tls:
+  {{- if .Values.tls.caBundle }}
+    termination: reencrypt
+    destinationCACertificate: {{ .Values.tls.caBundle | quote }}
+  {{- else }}
+    termination: passthrough        # tarayıcı lakehouse-ca'ya güvenmeli (runbooks/install.md)
+  {{- end }}
 {{- end }}

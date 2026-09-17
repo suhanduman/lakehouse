@@ -40,5 +40,6 @@ tests:
   - it: ingress host strips scheme
     template: ingress.yaml
     set: {ingress.enabled: true}
+    documentIndex: 0
     asserts:
       - equal: {path: 'spec.rules[0].host', value: keycloak.lakehouse.example.com}

@@ -1,11 +1,11 @@
 # `polaris setup apply` (apache-polaris CLI 1.7.0) — katalog/namespace/rol/grant/principal tek YAML. Şema = `setup export`.
 # S3 modu: STS varsa (MinIO/AWS) bu hâliyle; STS yoksa `sts_unavailable: true` ekle (F0 S1c) ve istemcilerde delegation header'ı kapat.
-principal_roles: [writers, readers]
+principal_roles: [writers, readers, sandbox_writers]
 principals:
   connect:   {type: service, roles: [writers]}
   spark:     {type: service, roles: [writers]}
-  trino:     {type: service, roles: [readers]}
-  notebooks: {type: service, roles: [readers]}
+  trino:     {type: service, roles: [readers, sandbox_writers]}
+  notebooks: {type: service, roles: [readers, sandbox_writers]}
 catalogs:
   - name: lakehouse
     type: internal
@@ -23,9 +23,16 @@ catalogs:
       lakehouse_read:
         assign_to: [readers]
         privileges: {catalog: [CATALOG_READ_PROPERTIES, NAMESPACE_LIST, TABLE_LIST, TABLE_READ_PROPERTIES, TABLE_READ_DATA, VIEW_LIST, VIEW_READ_PROPERTIES]}
+      # motor bazlı yazma yalnız sandbox namespace'inde; analist/öğrenci ayrımı Trino rules.json'da yapılır
+      lakehouse_sandbox:
+        assign_to: [sandbox_writers]
+        privileges:
+          namespace:
+            sandbox: [NAMESPACE_READ_PROPERTIES, TABLE_LIST, TABLE_CREATE, TABLE_DROP, TABLE_READ_PROPERTIES, TABLE_WRITE_PROPERTIES, TABLE_READ_DATA, TABLE_WRITE_DATA]
     namespaces:
       - name: shop_raw
       - name: shop
       - name: nginx_raw
       - name: crm_raw
       - name: crm
+      - name: sandbox          # analist/öğrenci çalışma alanı (Trino sandbox_writers)

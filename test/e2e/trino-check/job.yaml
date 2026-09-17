@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: JOBNAME, namespace: lakehouse}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 900
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: check
+        image: python:3.13-slim
+        command: ["/bin/sh","-c"]
+        args: ["set -e; pip install -q 'trino>=0.339,<0.340' 'requests>=2.32,<3'; python /work/check.py CHECK_ARGS"]
+        env:
+        - {name: TRINO_HOST, value: trino.lakehouse.svc}
+        - {name: CA_FILE, value: /etc/lakehouse-ca/tls.crt}
+        - {name: KC_TOKEN_URL, value: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token}
+        - {name: KC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: trino}}}
+        - {name: E2E_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: e2e}}}
+        volumeMounts: [{name: work, mountPath: /work}, {name: ca, mountPath: /etc/lakehouse-ca, readOnly: true}]
+      volumes:
+      - {name: work, configMap: {name: lakehouse-trino-check}}
+      - {name: ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}

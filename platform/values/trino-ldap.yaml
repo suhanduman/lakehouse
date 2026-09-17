@@ -1,0 +1,14 @@
+# Prod-only: gruplar AD'den (Trino >= 473 LDAP group provider). Bağlama parolası keycloak-clients/ldap-bind (LDAP_BIND_PASSWORD, trino.yaml env).
+# AYRI DOSYA: Helm map birleştirmesinde `additionalConfigFiles: {}` prod anahtarını SİLMEZ -> dev bu dosyayı hiç yüklemez,
+# yerine auth.groups (dosya provider'ı) devreye girer (platform/values/trino-dev.yaml).
+coordinator:
+  additionalConfigFiles:
+    group-provider.properties: |
+      group-provider.name=ldap
+      ldap.url=ldaps://ad.example.com:636
+      ldap.admin-user=CN=svc-lakehouse,OU=Service,DC=example,DC=com
+      ldap.admin-password=${ENV:LDAP_BIND_PASSWORD}
+      ldap.user-base-dn=OU=Users,DC=example,DC=com
+      ldap.user-search-filter=(sAMAccountName={0})
+      ldap.user-member-of-attribute=memberOf
+      ldap.group-name-attribute=cn

@@ -1,0 +1,76 @@
+# Trino 483 (chart 1.42.2) — kimlik doğrulama TLS ister: HTTPS 8443 + OAUTH2 (Keycloak) + PASSWORD (servis hesapları).
+image: {tag: "483"}
+server:
+  workers: 2
+  config:
+    authenticationType: OAUTH2,PASSWORD
+    https: {enabled: true, port: 8443, keystore: {path: /etc/trino/tls/tls-combined.pem}}   # cert-manager trino-tls (glue tls.yaml)
+    query: {maxMemory: 4GB}
+  # yalnız coordinator: OAuth2 (Keycloak). issuer = glue keycloak.hostname + /realms/<realm> (KOPYA — runbooks/install.md)
+  coordinatorExtraConfig: |
+    http-server.authentication.oauth2.issuer=https://keycloak.lakehouse.example.com/realms/lakehouse
+    http-server.authentication.oauth2.client-id=trino
+    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
+    http-server.authentication.oauth2.principal-field=preferred_username
+    http-server.authentication.oauth2.scopes=openid
+    web-ui.authentication.type=oauth2
+additionalConfigProperties:
+- internal-communication.shared-secret=${ENV:TRINO_SHARED_SECRET}
+env:
+- {name: TRINO_SHARED_SECRET, valueFrom: {secretKeyRef: {name: trino-shared-secret, key: secret}}}
+- {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: trino}}}
+- {name: POLARIS_CREDENTIAL, valueFrom: {secretKeyRef: {name: polaris-trino, key: credential}}}   # polaris-setup.sh yazar; yoksa pod CreateContainerConfigError ile bekler
+- {name: LDAP_BIND_PASSWORD, valueFrom: {secretKeyRef: {name: keycloak-clients, key: ldap-bind}}}
+coordinator:
+  jvm: {maxHeapSize: 8G}
+  config: {query: {maxMemoryPerNode: 1GB}, nodeScheduler: {includeCoordinator: false}}
+  secretMounts:
+  - {name: trino-tls, secretName: trino-tls, path: /etc/trino/tls}
+worker:
+  jvm: {maxHeapSize: 8G}
+  config: {query: {maxMemoryPerNode: 1GB}}
+auth:
+  passwordAuthSecret: trino-service-accounts     # key password.db (htpasswd bcrypt): superset, zeppelin (+ dev: e2e)
+catalogs:
+  lakehouse: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://polaris.lakehouse.svc:8181/api/catalog
+    iceberg.rest-catalog.warehouse=lakehouse
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CREDENTIAL}
+    iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL
+    iceberg.rest-catalog.vended-credentials-enabled=true
+    fs.s3.enabled=true
+    s3.endpoint=https://s3.example.com
+    s3.region=us-east-1
+    s3.path-style-access=true
+accessControl:
+  type: configmap
+  refreshPeriod: 60s
+  # İlk eşleşen kural kazanır: özel (öğrenci filtre/maske) kurallar genel SELECT kuralından ÖNCE.
+  rules:
+    rules.json: |-
+      {
+        "catalogs": [
+          {"group": "lakehouse-admins|lakehouse-analysts", "catalog": "lakehouse|system", "allow": "all"},
+          {"group": "lakehouse-students", "catalog": "lakehouse|system", "allow": "read-only"},
+          {"user": "superset|zeppelin|e2e", "catalog": "lakehouse|system", "allow": "read-only"}
+        ],
+        "schemas": [
+          {"group": "lakehouse-admins", "owner": true},
+          {"group": "lakehouse-analysts", "schema": "sandbox", "owner": true},
+          {"owner": false}
+        ],
+        "tables": [
+          {"group": "lakehouse-admins", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"]},
+          {"group": "lakehouse-analysts", "schema": "sandbox", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"]},
+          {"group": "lakehouse-analysts", "privileges": ["SELECT"]},
+          {"group": "lakehouse-students", "schema": "shop", "table": "orders", "privileges": ["SELECT"], "filter": "status <> 'shipped'"},
+          {"group": "lakehouse-students", "schema": "nginx_raw", "table": "access_log", "privileges": ["SELECT"],
+           "columns": [{"name": "remote", "mask": "'x.x.x.x'"}]},
+          {"group": "lakehouse-students", "privileges": ["SELECT"]},
+          {"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]},
+          {"catalog": "system", "privileges": ["SELECT"]}
+        ]
+      }

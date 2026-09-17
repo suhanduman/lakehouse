@@ -11,4 +11,21 @@ spec:
       - path: /
         pathType: Prefix
         backend: {service: {name: keycloak-service, port: {number: 8080}}}
+---
+# keycloak Ingress'i İLK belge kalmalı (glue/tests: documentIndex 0). Trino'ya trafik HTTPS olarak iletilir (uçtan uca TLS).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trino
+  namespace: {{ include "glue.ns" . }}
+  annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTPS}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+  - host: {{ .Values.trino.hostname }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: trino, port: {number: 8443}}}
 {{- end }}

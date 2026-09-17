@@ -1,0 +1,34 @@
+# kind / lokal geliştirme: tek düğüm (coordinator=worker), MinIO, küme içi Keycloak issuer'ı, dosya tabanlı gruplar.
+server:
+  workers: 0
+  config: {query: {maxMemory: 1GB}}
+  coordinatorExtraConfig: |
+    http-server.authentication.oauth2.issuer=http://keycloak-service.lakehouse.svc:8080/realms/lakehouse
+    http-server.authentication.oauth2.client-id=trino
+    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
+    http-server.authentication.oauth2.principal-field=preferred_username
+    http-server.authentication.oauth2.scopes=openid
+    web-ui.authentication.type=oauth2
+coordinator:
+  jvm: {maxHeapSize: 1536M}
+  config: {query: {maxMemoryPerNode: 512MB}, nodeScheduler: {includeCoordinator: true}}
+  resources: {requests: {cpu: 500m, memory: 1536Mi}, limits: {memory: 2560Mi}}
+auth:
+  groups: |
+    lakehouse-admins:admin1
+    lakehouse-analysts:analyst1
+    lakehouse-students:student1
+catalogs:
+  lakehouse: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://polaris.lakehouse.svc:8181/api/catalog
+    iceberg.rest-catalog.warehouse=lakehouse
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CREDENTIAL}
+    iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL
+    iceberg.rest-catalog.vended-credentials-enabled=true
+    fs.s3.enabled=true
+    s3.endpoint=http://minio.lakehouse.svc:9000
+    s3.region=us-east-1
+    s3.path-style-access=true

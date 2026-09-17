@@ -8,3 +8,8 @@ patches:
     - op: replace
       path: /spec/source/helm/valueFiles
       value: [../platform/values/glue-dev.yaml]
+- target: {kind: Application, name: trino}
+  patch: |-
+    - op: replace
+      path: /spec/sources/0/helm/valueFiles
+      value: [$values/platform/values/trino.yaml, $values/platform/values/trino-dev.yaml]

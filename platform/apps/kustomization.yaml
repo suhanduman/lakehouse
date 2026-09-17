@@ -8,3 +8,4 @@ resources:
 - 00-spark-operator.yaml
 - 10-glue.yaml
 - 20-polaris.yaml
+- 30-trino.yaml
