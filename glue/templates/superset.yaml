@@ -30,18 +30,6 @@ spec:
   metastore:
     uriFrom: {name: superset-db-app, key: uri}      # CNPG: postgresql://superset:…@superset-db-rw:5432/superset
   # Valkey/Redis YOK (plan R9): SimpleCache, worker/beat yok. Alerts&Reports için runbooks/user-facing.md
-  # Sürücüler imajda yok; özel imaj da yok -> pod açılışında pip (operator bunu hem web hem lifecycle komutundan ÖNCE source eder).
-  #   --target /app/pip-extra : imajın venv'i (/app/.venv) root'a ait, yazılamaz; venv içinde user-site (~/.local)
-  #                             sys.path'e GİRMEZ (site.ENABLE_USER_SITE=False) -> yazılabilir emptyDir + PYTHONPATH
-  #   --no-deps               : tam çözümleme imajın SQLAlchemy 1.4.54'ünü 2.0 ile gölgeler ve Superset'i kırar;
-  #                             yalnız imajda GERÇEKTEN olmayanlar kurulur (tzlocal, lz4, orjson, joserfc)
-  #   REQUESTS_CA_BUNDLE=     : env yalnız lakehouse-ca'yı gösterir, pip'in PyPI TLS doğrulamasını kırar -> bu komut için boşalt
-  #   psycopg2-binary         : 6.1.0 imajında HİÇBİR postgres sürücüsü yok -> CNPG metastore'u olmadan açılmaz
-  bootstrapScript: |
-    #!/bin/bash
-    REQUESTS_CA_BUNDLE= pip install --no-cache-dir --no-deps --target /app/pip-extra \
-      'psycopg2-binary>=2.9,<3' 'trino[sqlalchemy]>=0.339,<0.340' 'authlib>=1.6,<2' \
-      'tzlocal>=5,<6' 'lz4>=4,<5' 'orjson>=3.11,<4' 'joserfc>=1.6.1,<2'
   config: |
     import os
     from flask_appbuilder.security.manager import AUTH_OAUTH
@@ -78,19 +66,16 @@ spec:
       - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.clientsSecret }}, key: superset}}}
       - {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}
       - {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}
-      - {name: PYTHONPATH, value: /app/pythonpath:/app/pip-extra}   # imaj varsayılanı /app/pythonpath + bootstrapScript hedefi
       volumeMounts:
       - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
-      - {name: pip-extra, mountPath: /app/pip-extra}
     volumes:
     - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
-    - {name: pip-extra, emptyDir: {}}
   webServer:
     podTemplate:
       container:
         resources: {{ toJson .Values.superset.resources }}
-        # bootstrapScript'in pip kurulumu gunicorn'u geciktirir: startupProbe geçene kadar liveness/readiness askıda
-        startupProbe: {httpGet: {path: /health, port: 8088}, periodSeconds: 10, failureThreshold: 60}
+        # startupProbe EZİLMİYOR: -dev imajında açılışta pip kurulumu yok, gunicorn anında dinlemeye geçiyor
+        # (ölçüm: konteyner başlangıcı == "Listening at" aynı saniye) -> operator'ün /health varsayılanı (15s+3x10s) fazlasıyla yeter
         volumeMounts:
         - {name: datasources, mountPath: /app/configs, readOnly: true}
       volumes:

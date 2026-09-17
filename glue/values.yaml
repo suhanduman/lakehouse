@@ -98,7 +98,9 @@ trino:
 superset:
   enabled: true
   hostname: superset.lakehouse.example.com
-  imageTag: "6.1.0"
+  # resmi -dev etiketi sürücüleri (psycopg2, trino, authlib) İÇERİR; düz 6.1.0 içermez ve
+  # site-packages salt-okunur -> açılışta pip yok, PyPI erişimi gerekmez
+  imageTag: "6.1.0-dev"
   replicas: 1
   secretName: superset-secret          # key: secret-key (Superset SECRET_KEY; Git'e girmez)
   resources: {requests: {cpu: 250m, memory: 768Mi}, limits: {memory: 2Gi}}

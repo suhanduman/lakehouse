@@ -6,7 +6,8 @@ echo "== Superset CR"
 for _ in $(seq 1 90); do [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}' 2>/dev/null)" == "Running" ]] && break; sleep 10; done
 [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}')" == "Running" ]] || { kubectl -n "$NS" describe superset superset | tail -30; exit 1; }
 # Etiketler operator 0.2.0'dan doğrulandı (Task 4 Step 2): web Deployment/Service <CR adı>-web-server, pod etiketi instance=<CR adı>
-POD=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=superset,app.kubernetes.io/instance=superset,app.kubernetes.io/component=web-server -o jsonpath='{.items[0].metadata.name}')
+# --field-selector: rollout sırasında sonlanmakta olan eski pod items[0] olabiliyor
+POD=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=superset,app.kubernetes.io/instance=superset,app.kubernetes.io/component=web-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
 kubectl -n "$NS" wait --for=condition=Ready "pod/$POD" --timeout=600s
 echo "== health + login"
 kubectl -n "$NS" exec "$POD" -- python -c "

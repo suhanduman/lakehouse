@@ -9,17 +9,14 @@ tests:
     asserts:
       - containsDocument: {kind: Superset, apiVersion: superset.apache.org/v1alpha1, name: superset}
       - equal: {path: spec.environment, value: Production}
-      - equal: {path: spec.image.tag, value: "6.1.0"}
+      - equal: {path: spec.image.tag, value: "6.1.0-dev"}   # resmi -dev etiketi: psycopg2/trino/authlib imajda hazır
+      - isNull: {path: spec.bootstrapScript}                 # açılışta pip YOK (sürücüler imajda)
       - equal: {path: spec.replicas, value: 1}
       - equal: {path: spec.secretKeyFrom, value: {name: superset-secret, key: secret-key}}
       - equal: {path: spec.metastore.uriFrom.name, value: superset-db-app}
       - equal: {path: spec.metastore.uriFrom.key, value: uri}
       - isNull: {path: spec.valkey}                  # Redis/Valkey yok: SimpleCache (plan R9)
       - isNull: {path: spec.networking}              # Route/Ingress glue'dan gelir, operator'den değil
-      - matchRegex: {path: spec.bootstrapScript, pattern: "psycopg2-binary>=2.9,<3"}   # 6.1.0 imajında postgres sürücüsü yok
-      - matchRegex: {path: spec.bootstrapScript, pattern: "--no-deps --target /app/pip-extra"}   # venv yazılamaz + SQLAlchemy 1.4 gölgelenmemeli
-      - matchRegex: {path: spec.bootstrapScript, pattern: "trino\\[sqlalchemy\\]>=0.339,<0.340"}
-      - matchRegex: {path: spec.bootstrapScript, pattern: "authlib>=1.6,<2"}
       - matchRegex: {path: spec.config, pattern: "AUTH_TYPE = AUTH_OAUTH"}
       - matchRegex: {path: spec.config, pattern: 'AUTH_ROLES_MAPPING = \{"lakehouse-admins":\["Admin"\]'}
       - matchRegex: {path: spec.config, pattern: "SQLALCHEMY_CUSTOM_PASSWORD_STORE = _trino_password"}
@@ -31,11 +28,9 @@ tests:
       - contains: {path: spec.podTemplate.container.env, content: {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}}
       - contains: {path: spec.podTemplate.container.env, content: {name: KEYCLOAK_URL, value: https://keycloak.lakehouse.example.com}}
       - contains: {path: spec.podTemplate.container.env, content: {name: REQUESTS_CA_BUNDLE, value: /etc/lakehouse-ca/tls.crt}}
-      - contains: {path: spec.podTemplate.container.env, content: {name: PYTHONPATH, value: /app/pythonpath:/app/pip-extra}}
-      - contains: {path: spec.podTemplate.volumes, content: {name: pip-extra, emptyDir: {}}}
       - contains: {path: spec.podTemplate.volumes, content: {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}}
       - equal: {path: spec.webServer.podTemplate.container.resources, value: {requests: {cpu: 250m, memory: 768Mi}, limits: {memory: 2Gi}}}
-      - equal: {path: spec.webServer.podTemplate.container.startupProbe.failureThreshold, value: 60}
+      - isNull: {path: spec.webServer.podTemplate.container.startupProbe}   # ezilmiyor: -dev imajı anında açılıyor, operator varsayılanı yeter
       - contains: {path: spec.webServer.podTemplate.volumes, content: {name: datasources, configMap: {name: superset-datasources}}}
   - it: lifecycle runs migrate and init without an admin user (Production)
     documentIndex: 1
