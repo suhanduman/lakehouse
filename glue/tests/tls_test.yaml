@@ -1,0 +1,28 @@
+suite: tls + dev secrets
+templates: [tls.yaml, dev-secrets.yaml]
+tests:
+  - it: prod renders only Issuer and trino Certificate
+    template: tls.yaml
+    asserts:
+      - hasDocuments: {count: 2}
+      - containsDocument: {kind: Issuer, apiVersion: cert-manager.io/v1, name: lakehouse-ca, any: true}
+      - containsDocument: {kind: Certificate, apiVersion: cert-manager.io/v1, name: trino-tls, any: true}
+  - it: dev adds selfsigned bootstrap and combined PEM
+    template: tls.yaml
+    set: {tls.selfSignedCA: true}
+    asserts:
+      - hasDocuments: {count: 4}
+      - containsDocument: {kind: ClusterIssuer, apiVersion: cert-manager.io/v1, name: lakehouse-selfsigned, any: true}
+      - documentIndex: 3
+        equal: {path: "spec.additionalOutputFormats[0].type", value: CombinedPEM}
+  - it: dev secrets off by default
+    template: dev-secrets.yaml
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: dev secrets render password.db
+    template: dev-secrets.yaml
+    set: {components.devSecrets: true}
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: trino-service-accounts, any: true}
+      - documentIndex: 1
+        matchRegex: {path: 'stringData["password.db"]', pattern: "e2e:\\$2y\\$10\\$"}

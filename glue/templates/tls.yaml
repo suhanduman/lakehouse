@@ -1,0 +1,36 @@
+{{- $ns := include "glue.ns" . }}
+{{- if .Values.tls.selfSignedCA }}
+# DEV-ONLY: kendinden imzalı kök -> lakehouse-ca Secret'ı (prod'da bu Secret kurulumdan önce yaratılır, runbooks/install.md)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata: {name: lakehouse-selfsigned}
+spec: {selfSigned: {}}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: lakehouse-ca, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+spec:
+  isCA: true
+  commonName: lakehouse-ca
+  secretName: lakehouse-ca
+  duration: 87600h
+  privateKey: {algorithm: ECDSA, size: 256}
+  issuerRef: {name: lakehouse-selfsigned, kind: ClusterIssuer, group: cert-manager.io}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: {name: lakehouse-ca, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+spec: {ca: {secretName: lakehouse-ca}}
+---
+# Trino HTTPS (kimlik doğrulama TLS ister; plan R2). tls-combined.pem = key + cert tek PEM (Trino keystore.path)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: trino-tls, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "1"}}
+spec:
+  secretName: trino-tls
+  duration: 2160h
+  renewBefore: 360h
+  dnsNames: [trino, trino.{{ $ns }}.svc, trino.{{ $ns }}.svc.cluster.local, {{ .Values.trino.hostname }}]
+  additionalOutputFormats: [{type: CombinedPEM}]
+  issuerRef: {name: lakehouse-ca, kind: Issuer}

@@ -18,7 +18,9 @@ connect:
 cnpg:
   polarisDb: {instances: 1, storageSize: 2Gi}
   keycloakDb: {instances: 1, storageSize: 2Gi}
-components: {minio: true}
+components: {minio: true, devSecrets: true}
+tls: {selfSignedCA: true}
+trino: {hostname: trino.127.0.0.1.nip.io}
 networkPolicy: {enabled: false}      # kind'ın varsayılan CNI'si NetworkPolicy enforce etmez; prod'da true
 keycloak:
   hostname: keycloak.127.0.0.1.nip.io

@@ -15,6 +15,7 @@ if [[ "$MODE" == "helm" ]]; then
   # ArgoCD'nin varsayılanı: prod glue.yaml kullanır (10-glue.yaml), sadece dev overlay'i glue-dev.yaml'a değiştirir.
   # Job polaris-bootstrap düz Job: değerleri değişirse `kubectl delete job` gerekir (immutable template).
   GLUE_VALUES="$ROOT/platform/values/glue.yaml"; [[ "$ENV" == "dev" ]] && GLUE_VALUES="$ROOT/platform/values/glue-dev.yaml"
+  helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.21.2 -n cert-manager --create-namespace --set crds.enabled=true --wait --timeout 5m
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.2.0 -n lakehouse --create-namespace --set watchNamespaces="{lakehouse}" --wait
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
   helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.0 -n cnpg-system --create-namespace --wait
@@ -45,6 +46,32 @@ metadata:
 stringData:
   name: strimzi-helm
   url: quay.io/strimzi-helm
+  type: helm
+  enableOCI: "true"
+YAML
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jetstack-helm
+  namespace: argocd
+  labels: {argocd.argoproj.io/secret-type: repository}
+stringData:
+  name: jetstack-helm
+  url: quay.io/jetstack/charts
+  type: helm
+  enableOCI: "true"
+YAML
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-operator-helm
+  namespace: argocd
+  labels: {argocd.argoproj.io/secret-type: repository}
+stringData:
+  name: superset-operator-helm
+  url: ghcr.io/apache/superset-kubernetes-operator/charts
   type: helm
   enableOCI: "true"
 YAML

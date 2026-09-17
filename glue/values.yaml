@@ -93,8 +93,15 @@ keycloak:
     jupyterhub: {redirectUris: []}
     polaris:    {redirectUris: []}
 
+tls:
+  selfSignedCA: false          # dev/kind: true -> ClusterIssuer selfsigned + CA Certificate -> Secret lakehouse-ca. Prod: false, lakehouse-ca (tls.crt, tls.key) kurulumdan önce
+  caBundle: ""                 # prod: Route reencrypt destinationCACertificate (PEM, lakehouse-ca tls.crt). Boş -> passthrough
+trino:
+  hostname: trino.lakehouse.example.com
+
 components:
   minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü
+  devSecrets: false             # DEV-ONLY: keycloak-clients, trino-service-accounts, trino-shared-secret, superset-secret, zeppelin-shiro, zeppelin-interpreter (sentetik)
 minio:
   rootUser: minioadmin
   rootPassword: minioadmin

@@ -21,7 +21,7 @@ if [[ "$MODE" == "argocd" ]]; then
   else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
-  for app in strimzi cnpg keycloak-operator spark-operator glue polaris; do
+  for app in cert-manager strimzi cnpg keycloak-operator spark-operator glue polaris; do
     echo "bekleniyor: application/$app"
     for _ in $(seq 1 60); do kubectl -n argocd get application/"$app" >/dev/null 2>&1 && break; sleep 5; done
     # Yeniden koşuda eski revizyonun "Synced" durumu yanıltır: git kaynaklı uygulamalar yeni revizyonu görmüş olsun
