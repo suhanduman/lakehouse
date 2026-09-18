@@ -7,7 +7,7 @@
 - `backup-s3-creds` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) — **CNPG yedeklerinin** S3 kimliği (F5, `backup.s3.secret`). Veri bucket'ından AYRI hedef/hesap olmalı; dev'de `components.minio=true` iken MinIO şablonu üretir, prod'da kurulumdan ÖNCE yaratılır:
   `kubectl -n lakehouse create secret generic backup-s3-creds --from-literal=AWS_ACCESS_KEY_ID=… --from-literal=AWS_SECRET_ACCESS_KEY=…`
 - Kaynak DB kimlik bilgileri (F2): `<source>-db` Secret'ları (`username`, `password`).
-- **Spark işleri her koşuda `spark.jars.packages`'i Maven Central'dan (`repo1.maven.org`) çözer** (Iceberg runtime + AWS bundle; driver/executor pod'ları `/tmp/.ivy2`'ye indirir, pod ömürlük). Yani `silver-merge`, `mongo-bronze` ve 3 bakım işi için **sürekli dışarı erişim** gerekir; kapalı ağda işler `UnresolvedAddressException`/`Ivy` hatasıyla FAILED olur. Kısıtlı ağ seçenekleri (F5 işi, bu sürümde uygulanmadı): iç Maven aynası (`spark.jars.ivySettings` ile) ya da `spark.jars.ivy`'yi kalıcı bir PVC'ye alıp tek seferlik ısıtma.
+- **Spark işleri her koşuda `spark.jars.packages`'i Maven Central'dan (`repo1.maven.org`) çözer** (Iceberg runtime + AWS bundle; driver/executor pod'ları `/tmp/.ivy2`'ye indirir, pod ömürlük). Yani `silver-merge`, `mongo-bronze` ve 3 bakım işi için **sürekli dışarı erişim** gerekir; kapalı ağda işler `UnresolvedAddressException`/`Ivy` hatasıyla FAILED olur. Kısıtlı ağda **iç Maven aynası** tanımlayın: `glue/values.yaml` → `spark.ivySettingsXml` (dolu olduğunda glue `ConfigMap/spark-ivysettings` üretir, tüm Spark işlerine `/opt/ivy/ivysettings.xml` olarak mount eder ve `spark.jars.ivySettings` onu gösterir) — örnek ve doğrulama: `runbooks/troubleshooting.md#maven`. Aynı sınıftan PyPI ihtiyaçları (JupyterHub `postStart`, dbt örneği) için iç PyPI aynası gerekir.
 
 ## Adımlar
 1. Ortama göre düzenlenecek dosyalar (hepsi; biri atlanırsa ilgili bileşen `*.lakehouse.example.com` ile açılır):
@@ -23,10 +23,15 @@
 2. **F4 Secret'ları** (aşağıdaki bölüm) kurulumdan ÖNCE yaratılmalı — `components.devSecrets` yalnız dev'de `true`; prod'da chart bunları üretmez ve eksik Secret pod'u `CreateContainerConfigError`'da bırakır.
 3. `bootstrap/bootstrap.sh --env prod` (ArgoCD `v3.5.2` kurar; `quay.io/strimzi-helm`, `quay.io/jetstack/charts` ve `ghcr.io/apache/superset-kubernetes-operator/charts` OCI Helm repository'lerini ArgoCD'ye kaydeder; kök + alt Application'ları — **cert-manager**, Strimzi, CNPG, **cnpg-barman** (Barman Cloud yedek eklentisi), keycloak-operator, spark-operator, **superset-operator**, glue, Polaris, **Trino**, **JupyterHub** — uygular). İzle: `kubectl -n argocd get applications` → hepsi `Synced/Healthy`. Connect imaj build'i ~10 dk.
    `trino` Application'ı polaris-setup'tan ÖNCE Healthy olamaz: pod `polaris-trino` Secret'ını bekler (bu normaldir, adım 4'ten sonra kendiliğinden düzelir).
+   **İzleme/DR Application'ları (F5):** `platform/apps/dev/40-monitoring.yaml` (kube-prometheus-stack 91.4.1, ns `monitoring`, sync-wave `-1`) ve `platform/apps/dev/40-velero.yaml` (Velero chart 12.1.0, ns `velero`) **yalnız dev overlay'inde** vardır (`platform/apps/dev/`); prod overlay'i ikisini de içermez.
+   - **OpenShift'te izleme:** kube-prometheus-stack KURULMAZ; platformun **user-workload monitoring**'i açılır (`openshift-monitoring` ns'indeki `cluster-monitoring-config` ConfigMap'inde `enableUserWorkload: true`). glue'nun `lakehouse` ns'ine yazdığı PodMonitor/ServiceMonitor/PrometheusRule nesneleri otomatik alınır; Alertmanager/bildirim platformundur. `monitoring.enabled` (glue) açık kalır — yalnız CRD'lerin kaynağı değişir.
+   - **OpenShift'te yedek:** Velero chart'ı yerine **OADP** operatörü kurulur (ns `openshift-adp`), `DataProtectionApplication` uygulanır ve ancak ondan sonra glue'da `velero: {enabled: true, namespace: openshift-adp}` açılır (aksi hâlde `Schedule` CRD'si yokken glue Degraded olur). Ayrıntı ve alan eşlemesi: `runbooks/dr.md` §6.
+   - **CNPG yedekleri** her iki ortamda da `cnpg-barman` Application'ı (Barman Cloud eklentisi) + `backup.*` değerleriyle çalışır.
 4. Polaris kataloğu: `pip install 'apache-polaris==1.7.0'` → `runbooks/scripts/polaris-setup.sh` (katalog `lakehouse`, namespace'ler — `sandbox` dâhil —, roller — `writers`/`readers`/**`sandbox_writers`** + katalog rolü **`lakehouse_sandbox`** —, principal'lar; `polaris-connect/-spark/-trino/-notebooks` Secret'ları yazılır). İdempotent; var olan katalogda yalnız EKSİK nesneler yaratılır (katalog `properties` GÜNCELLENMEZ).
    - S3'te STS yoksa `setup.yaml`'da `sts_unavailable: true`; istemcilerde vending kapalı (Connect `iceberg.catalog.header.X-Iceberg-Access-Delegation=none` + `s3.*` anahtarları; Trino `iceberg.rest-catalog.vended-credentials-enabled=false`; Spark `header.X-Iceberg-Access-Delegation=none`).
 5. Doğrulama: `test/e2e/polaris-smoke/job.yaml` (küme içi pyiceberg yaz/oku) — `test/e2e/run.sh` aynı adımları otomatik yapar.
 6. Kaynak ekleme: `runbooks/add-source.md`; kullanıcı yüzü (Superset/notebook/Zeppelin) `runbooks/user-facing.md`; yetkilendirme `runbooks/access-control.md`
+7. Kabul kanıtı: `runbooks/scripts/acceptance.sh` + `runbooks/acceptance-tests.md`. Ayrıca: sürüm/lisans listesi `runbooks/versions.md` · yükseltme `runbooks/upgrade.md` · yedek/DR `runbooks/dr.md` · sorun giderme `runbooks/troubleshooting.md` · dbt örneği `runbooks/dbt/`
 
 ## Lokal geliştirme (kind + Podman/Docker)
 `test/e2e/kind.sh && bootstrap/bootstrap.sh --env dev --mode helm` (yerel chart, ArgoCD'siz) veya `--mode argocd --revision <dal>` (ArgoCD GitHub'dan çeker → değişiklikler push'lu olmalı).
@@ -121,7 +126,7 @@ OpenShift'te `route.enabled=true` ile Route TLS'i kendisi sonlandırır (`edge`,
 düz HTTP gelir. Bu, üretimde kabul edilemez — Zeppelin/Superset form parolaları ve oturum çerezleri (`cookie.secure = true`
 olduğundan çerez HTTP'de hiç gönderilmez, giriş döngüye girer) açık akar. Kurulum sırasında TLS'i **operatör** sağlar:
 ingress controller'da varsayılan sertifika, ya da her host için bir `Secret` + controller'a özgü annotation'lar
-(cert-manager `cert-manager.io/cluster-issuer` + `ingressClassName`). Şablona `ingress.tls` bloğu eklemek **F5 işidir**
+(cert-manager `cert-manager.io/cluster-issuer` + `ingressClassName`). Şablona `ingress.tls` bloğu eklemek **hâlâ açık kalemdir** (F5'te yapılmadı; pre-ship)
 (şu an kurulumda Ingress objeleri elle `kubectl edit` ile değil, controller/varsayılan sertifika ile TLS'lenmelidir).
 
 ## İlk giriş
@@ -196,22 +201,12 @@ kubectl -n lakehouse wait keycloakrealmimport/lakehouse-realm --for=condition=Do
 Not: `kcadm.sh` oturumu pod yeniden başlatıldığında kaybolur (`config credentials`'ı tekrar çalıştırın). `KC_ADMIN/KC_PASS` = `keycloak-admin` Secret'ı.
 
 ## Sorun giderme
-- Connect `Build` uzun/başarısız: `kubectl -n lakehouse logs -l strimzi.io/kind=KafkaConnect --tail=100`.
-- Connector task FAILED / Bronze boş: `kubectl -n lakehouse get kafkaconnector <ad> -o jsonpath='{.status.connectorStatus.tasks[0].trace}'`; task başarısızlığından sonra consumer konumu ileri kalabilir → `spec.state: stopped` → `kafka-consumer-groups.sh --group connect-<sink> --reset-offsets --to-earliest --execute` → `running`.
-- NetworkPolicy prod'da açık; pre-ship OpenShift'te doğrulanmadan önce `networkPolicy.enabled=false` ile kur, sonra aç.
-- Polaris health `:8182/q/health`, API `:8181`; bootstrap Job log'u `kubectl -n lakehouse logs job/polaris-bootstrap`.
-- Spark işi FAILED: `kubectl -n lakehouse get sparkapplication`; `kubectl -n lakehouse logs <ad>-driver`.
-- `silver-merge` `SchemaConflict`: Silver kolon tipi güvenli genişletilemiyor → manuel `ALTER TABLE` ya da yeni kolon.
-- `mongo-bronze` `KAFKA_JAAS` yok → KafkaUser spark yalnız mongodb kaynağı varken oluşur.
-- mongo-bronze OOM/GC uzun kesinti sonrası (backlog `collect()` ile driver'a sığmaz): tek koşu için `spark.driver.memory` artır ya da `lakehouse.kafka.offsets` özelliğini elle ilerlet; offsets yalnız başarıda ilerler.
-- nginx: `nginx.dlq` doluysa `ts` dönüşümü başarısız (Fluent Bit lua filtresi eksik).
 
-### F4 (kullanıcı yüzü)
-- Trino pod'u `CreateContainerConfigError`: `polaris-trino` Secret'ı yok → `runbooks/scripts/polaris-setup.sh` koşmamış.
-- Trino `401`/`Authentication failed`: HTTP 8080'de kimlik doğrulama YOK (yalnız probe/iç); istemciler **8443 HTTPS** kullanmalı ve `lakehouse-ca`'ya güvenmeli. Bearer reddediliyorsa `aud` içinde `trino` yoktur → realm'in `trino` client'ındaki audience mapper (realm değişikliği bölümü).
-- Trino `Access Denied`: `rules.json` ilk eşleşen kurala bakar — `runbooks/access-control.md`. Kullanıcının grubu görünmüyorsa group provider (dev: `auth.groups`; prod: `platform/values/trino-ldap.yaml`).
-- Superset `phase: Initializing` + `LifecycleComplete=False (TaskFailed: Migrate)`: `superset-migrate` Job'ı CNPG hazır olmadan koştu (`psycopg2.OperationalError: connection refused`). Şablon bunu `lifecycle.migrate.maxRetries: 120` ile karşılar (operator varsayılanı 3 deneme ≈ 15 s); kalıcı düşmüşse CR'ı yeniden tetikle (`spec.lifecycle.migrate.trigger` değerini değiştir) — `forceReload` benzeri bir alan yoktur. Diğer durumlarda: `kubectl -n lakehouse describe superset superset` + `kubectl -n lakehouse logs job/superset-migrate`.
-- `job/polaris-bootstrap` `BackoffLimitExceeded`: aynı yarış (CNPG ~4-5 dk). `backoffLimit: 12` bunun içindir; yine de tükenmişse `kubectl -n lakehouse delete job polaris-bootstrap` + glue sync (Job idempotent, mevcut realm'de no-op).
-- JupyterHub spawn zaman aşımı: soğuk `pyspark-notebook` çekimi ~4,5 dk (ölçüm) — `singleuser.startTimeout: 1200` bunun içindir; NetworkPolicy uygulayan CNI'da notebook yalnız Trino 8443 / Polaris 8181 (+dev MinIO 9000) + genel internete çıkabilir.
-- Zeppelin paragrafı `Interpreter Setting 'jdbc' is not ready … DOWNLOADING_DEPENDENCIES`: açılışta Maven Central'dan `io.trino:trino-jdbc` indiriliyor (~1 dk, PVC'de kalıcı). Kapalı ağda bu adım BAŞARISIZ olur (jar'ı PVC'ye koyup `local: true` gerekir).
-- Zeppelin interpreter ayarı/parola değişmiyor: `zeppelin-interpreter` Secret'ı yalnız TOHUM'dur; PVC'de dosya varsa etkisizdir → `kubectl -n lakehouse exec deploy/zeppelin -- rm /data/conf/interpreter.json && kubectl -n lakehouse rollout restart deploy/zeppelin` (UI'daki tüm interpreter değişiklikleri sıfırlanır).
+Kurulum, boru hattı, kullanıcı yüzü, izleme ve DR sorunlarının tamamı tek yerde: **`runbooks/troubleshooting.md`**
+(PrometheusRule'ların `runbook` annotation'ları da oraya işaret eder). Sık başlıklar:
+
+- Connect build/task hataları, offset reset → `runbooks/troubleshooting.md#connect`
+- Iceberg sink lag'i → `#sink` · Spark işleri → `#spark`, `#spark-duration` · silver-merge eskimesi → `#silver-merge`
+- Polaris/S3 403 (vended credentials) → `#polaris-403` · iç Maven aynası → `#maven`
+- ArgoCD PVC wave kilidi, imaj çekim süreleri, NetworkPolicy → "Kurulum / ArgoCD" bölümü
+- Trino/Superset/JupyterHub/Zeppelin → "Kullanıcı yüzü" bölümü · yedekler → `#dr` · loglar (Loki) → `#loki`

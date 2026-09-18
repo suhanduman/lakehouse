@@ -20,7 +20,7 @@ kubectl -n lakehouse exec "$POD" -- superset legacy-import-datasources -p /app/c
 Sonuç: SQL Lab'da `lakehouse` veritabanı (`allow_dml: false`; CTAS/CVAS açık — hedef şema **`sandbox`** olmalı). `legacy-import-datasources` v0 importer'dır (deprecated ama 6.1'de çalışır); 6.x'in `import-datasources` komutu yalnız v1 ZIP kabul eder. Komut idempotenttir (aynı `database_name` güncellenir); bağlantı ayarı değişince tekrar çalıştırın.
 
 ### Alerts & Reports (varsayılan KAPALI)
-Kurulum Redis/Valkey'siz çalışır (`SimpleCache`; worker/beat yok). Alerts & Reports için CR'a **`valkey`** bloğu + **`celeryWorker`** (zamanlama için beat) eklenmeli, `CELERY_CONFIG`/`SCREENSHOT_*` yapılandırılmalı ve ekran görüntüsü için headless tarayıcı sağlanmalıdır — özel imaj gerekebileceğinden F5 kararıdır. Dış bildirim (Slack/SMTP) genel internete HTTPS ister; sistem kökleri kullanıldığı için bu yönüyle sorun yoktur.
+Kurulum Redis/Valkey'siz çalışır (`SimpleCache`; worker/beat yok). Alerts & Reports için CR'a **`valkey`** bloğu + **`celeryWorker`** (zamanlama için beat) eklenmeli, `CELERY_CONFIG`/`SCREENSHOT_*` yapılandırılmalı ve ekran görüntüsü için headless tarayıcı sağlanmalıdır — ekran görüntüsü için headless tarayıcı özel imaj gerektirebileceğinden **F5'te uygulanmadı**, açık kalemdir (pre-ship). Dış bildirim (Slack/SMTP) genel internete HTTPS ister; sistem kökleri kullanıldığı için bu yönüyle sorun yoktur.
 
 ## JupyterHub (z2jh)
 
@@ -60,7 +60,7 @@ Tarayıcısız/otomatik işlerde `trino.auth.BasicAuthentication("<servis hesab�
 - **Tohum semantiği (önemli):** `Secret zeppelin-interpreter` yalnız bir TOHUM'dur. initContainer dosyayı PVC'ye (`/data/conf/interpreter.json`, `ZEPPELIN_CONFIG_FS_DIR`) **yalnız orada dosya yokken** kopyalar; Zeppelin her açılışta bu dosyayı kendisi yeniden yazar (kalan 23 interpreter'ı şablonlardan tamamlar). Yani Secret'ı güncellemek TEK BAŞINA etkisizdir. Parola/URL değiştirmek için:
   - UI → Interpreter → `jdbc` ayarını düzenle (önerilen; kullanıcı ayarlarını korur), **ya da**
   - `kubectl -n lakehouse exec deploy/zeppelin -- rm /data/conf/interpreter.json && kubectl -n lakehouse rollout restart deploy/zeppelin` — bu, UI'da yapılmış TÜM interpreter değişikliklerini sıfırlar.
-- İlk açılışta `io.trino:trino-jdbc:483` Maven Central'dan indirilir (ölçüm ~64 s; `/data/local-repo` PVC'de kalıcı, sonraki açılışlarda indirilmez). O sırada paragraf çalıştırılırsa `Interpreter Setting 'jdbc' is not ready … DOWNLOADING_DEPENDENCIES` alınır — bekleyin. Kapalı ağda jar'ı PVC'ye koyup bağımlılığı `local: true` yapmak gerekir (F5).
+- İlk açılışta `io.trino:trino-jdbc:483` Maven Central'dan indirilir (ölçüm ~64 s; `/data/local-repo` PVC'de kalıcı, sonraki açılışlarda indirilmez). O sırada paragraf çalıştırılırsa `Interpreter Setting 'jdbc' is not ready … DOWNLOADING_DEPENDENCIES` alınır — bekleyin. Kapalı ağda jar'ı PVC'ye koyup bağımlılığı `local: true` yapmak gerekir (`runbooks/troubleshooting.md#maven`).
 - Yorumlayıcılar aynı pod'da yerel süreç olarak koşar (`ZEPPELIN_RUN_MODE=local`); varsayılan `auto`, küme içinde her interpreter için ayrı pod açmayı dener ve RBAC olmadığından düşer.
 
 ## Dev/kind sınırı (tarayıcı akışları)
@@ -75,5 +75,13 @@ Dev'de `keycloak.hostname` **küme içi** bir URL'dir (`http://keycloak-service.
 | Trino Route **reencrypt** (`tls.caBundle` dolu) | Şablon render ediliyor; dev'de Route yok | Router'ın `destinationCACertificate` ile bağlanması |
 | LDAP group provider (prod grupları) | Dev'de dosya provider'ı canlı | AD'ye bağlanıp `memberOf`/CN eşlemesi |
 | Sertifika yenileme (`http-server.https.ssl-context.refresh-time`, **Trino varsayılanı 1m** — biz ayarlamıyoruz) | cert-manager `trino-tls`'i üretiyor | Yenilemenin kesintisiz olduğunun gözlenmesi |
-| Alerts & Reports | Kapalı (Valkey/worker yok) | Valkey + celeryWorker + tarayıcı kararı (F5) |
+| Alerts & Reports | Kapalı (Valkey/worker yok) | Valkey + celeryWorker + headless tarayıcı kararı (F5'te yapılmadı; pre-ship) |
 | Superset imaj kaynağı | Varsayılan `apachesuperset.docker.scarf.sh/apache/superset` (Scarf yönlendiricisi) | Müşteri aynasına `spec.image.repository` (+ digest) sabitleme |
+
+## dbt ile Gold katmanı (referans)
+
+Gold modelleri isteyen ekipler için çalışan bir referans proje + CronJob örneği: `runbooks/dbt/`.
+Resmi `dbt-trino` imajı olmadığından örnek, resmi `python:3.13-slim` imajını kullanır ve `dbt-trino==1.10.4`'ü
+çalışma anında kurar (PyPI erişimi gerekir). Trino'ya **servis hesabı** (`dbt`) ile bağlanır → satır
+filtresi/kolon maskesi uygulanmaz; kurulum adımları (password.db, `rules.json`, Polaris `gold` namespace'i)
+`runbooks/dbt/README.md`'de.
