@@ -98,7 +98,9 @@ spec:
 ---
 # Grafana dashboard ConfigMap'leri: sidecar etiketi grafana_dashboard, searchNamespace ALL (monitoring-dev.yaml) ->
 # bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.
-# Superset: /metrics yok (Task 1 sapma 2) -> Superset dashboard'u YOK.
+# Yalnız Strimzi (Kafka Connect pipeline sağlığı) — kapsam kontrolör kararıyla daraltıldı (2026-09-18): izleme
+# "pipeline health" odaklı, sunum bileşenleri (Trino dashboard'u) dışarıda bırakıldı; 4 PrometheusRule (Connect/
+# Spark tabanlı) etkilenmedi. Superset: /metrics yok (Task 1 sapma 2) -> Superset dashboard'u YOK.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: grafana-dashboard-strimzi-kafka, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
@@ -110,10 +112,4 @@ kind: ConfigMap
 metadata: {name: grafana-dashboard-strimzi-kafka-connect, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
 data:
   strimzi-kafka-connect.json: {{ .Files.Get "files/dashboards/strimzi-kafka-connect.json" | quote }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata: {name: grafana-dashboard-trino, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
-data:
-  trino.json: {{ .Files.Get "files/dashboards/trino-20208.json" | quote }}
 {{- end }}

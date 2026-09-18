@@ -5,7 +5,7 @@ tests:
   - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor, the rule and the hub/zeppelin ServiceMonitors
     template: monitoring.yaml
     asserts:
-      - hasDocuments: {count: 9}
+      - hasDocuments: {count: 8}
       - documentIndex: 0
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: kafka-metrics}
       - documentIndex: 1
@@ -18,8 +18,6 @@ tests:
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka}
       - documentIndex: 7
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka-connect}
-      - documentIndex: 8
-        containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-trino}
   - it: PodMonitor selects both Kafka and KafkaConnect pods on tcp-prometheus
     template: monitoring.yaml
     documentSelector: {path: kind, value: PodMonitor}
@@ -47,7 +45,7 @@ tests:
     template: monitoring.yaml
     set: {zeppelin.enabled: false}
     asserts:
-      - hasDocuments: {count: 8}
+      - hasDocuments: {count: 7}
   - it: PrometheusRule/lakehouse defines the 4 named lakehouse alerts
     template: monitoring.yaml
     documentSelector: {path: kind, value: PrometheusRule}
@@ -86,12 +84,6 @@ tests:
     asserts:
       - equal: {path: metadata.labels.grafana_dashboard, value: "1"}
       - isNotNull: {path: 'data["strimzi-kafka-connect.json"]'}
-  - it: grafana-dashboard-trino ConfigMap carries the sidecar label and a .json data key
-    template: monitoring.yaml
-    documentSelector: {path: metadata.name, value: grafana-dashboard-trino}
-    asserts:
-      - equal: {path: metadata.labels.grafana_dashboard, value: "1"}
-      - isNotNull: {path: 'data["trino.json"]'}
   - it: Kafka metricsConfig points at the kafka-metrics ConfigMap
     template: kafka.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}

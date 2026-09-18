@@ -78,8 +78,10 @@ else
 fi
 
 echo "== grafana dashboard'ları"
+# Yalnız Strimzi (kapsam kontrolör kararıyla daraltıldı: izleme pipeline health odaklı, sunum bileşeni
+# olan Trino dashboard'u (20208) kaldırıldı — glue/templates/monitoring.yaml, glue/files/dashboards/README.md).
 kubectl -n "$MON" port-forward svc/monitoring-grafana 13000:80 >/dev/null 2>&1 & PF2=$!; sleep 3
 GP=$(kubectl -n "$MON" get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
 titles=$(curl -sS -u "admin:$GP" 'localhost:13000/api/search?type=dash-db' | jq -r '.[].title'); kill $PF2 2>/dev/null || true
-for t in "Strimzi Kafka" "Strimzi Kafka Connect" "Trino"; do grep -qi "$t" <<<"$titles" || { echo "HATA dashboard yok: $t ($titles)"; exit 1; }; echo "OK dashboard $t"; done
+for t in "Strimzi Kafka" "Strimzi Kafka Connect"; do grep -qi "$t" <<<"$titles" || { echo "HATA dashboard yok: $t ($titles)"; exit 1; }; echo "OK dashboard $t"; done
 echo "E2E F5 MONITORING OK"
