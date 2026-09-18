@@ -7,7 +7,7 @@ spec:
     repoURL: https://github.com/suhanduman/lakehouse.git
     targetRevision: v2
     path: platform/envs/dev
-# Belgelenen statik varsayılan (dev, bu repo@v2). bootstrap.sh bunu doğrudan UYGULAMAZ: --env/--repo/--revision ile
+# Belgelenen statik varsayılan (dev, bu repo@main (cutover öncesi `v2`)). bootstrap.sh bunu doğrudan UYGULAMAZ: --env/--repo/--revision ile
 # eşdeğerini kendi heredoc'undan üretir ve alt Application'ları kustomize patch'leriyle aynı repo/revizyona sabitler.
   destination: {server: https://kubernetes.default.svc, namespace: argocd}
   syncPolicy:

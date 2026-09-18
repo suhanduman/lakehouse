@@ -4,7 +4,7 @@
 # --mode helm : ArgoCD'siz lokal döngü (aynı chart'lar helm ile; ArgoCD yolu CI'da doğrulanır)
 set -euo pipefail
 ARGOCD_VERSION=v3.5.2
-ENV=dev; REPO=https://github.com/suhanduman/lakehouse.git; REVISION=v2; MODE=argocd
+ENV=dev; REPO=https://github.com/suhanduman/lakehouse.git; REVISION=v2; MODE=argocd  # F6 T4: cutover sonrası main
 while [[ $# -gt 0 ]]; do case "$1" in
   --env) ENV="$2"; shift 2;; --repo) REPO="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --mode) MODE="$2"; shift 2;;
   *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done

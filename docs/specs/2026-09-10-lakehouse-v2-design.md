@@ -226,7 +226,7 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
 ## 11. Geçiş / cutover
 
 1. Yeni düzen **orphan branch `v2`**'de inşa edilir (eski `main` dokunulmaz).
-2. e2e yeşil + runbook'lar tam → `v2` → `main` (force-push); eski `main` GitHub'dan ve lokalden silinir. **Silmeden önce** repo dışına `git bundle create ~/lakehouse-v1-final.bundle --all` (geri dönüş sigortası, sıfır maliyet). Geçmiş-yeniden-yazma komutları bu ortamda gate'e takılırsa adımlar kullanıcıya betik olarak verilir (Foundation Phase 6 emsali).
+2. e2e yeşil + runbook'lar tam → **dal yeniden adlandırma** (force-push yerine; geçmiş yazılmaz, geri alınabilir): GitHub REST `POST /repos/{owner}/{repo}/branches/main/rename {new_name: v1-legacy}` → `POST .../branches/v2/rename {new_name: main}` (varsayılan dal ve açık PR'lar GitHub tarafından taşınır), lokalde `git branch -m main v1-legacy && git branch -m v2 main && git fetch -p && git branch -u origin/main main`. **Silmeden önce** repo dışına `git bundle create ~/lakehouse-v1-archive/lakehouse-v1-final-<tarih>.bundle --all` alınır ve `git bundle verify` ile doğrulanır; sonra `v1-legacy` (GitHub + lokal) ve `archive/*` dalları silinir. Geçmiş-yeniden-yazma/silme komutları bu ortamda gate'e takılırsa adımlar kullanıcıya betik olarak verilir (Foundation Phase 6 emsali).
 3. Hafıza/dokümanlar: eski spec/plan/kararlar silinir; `docs/reviews/2026-09-10-architecture-reassessment/` **kalır** (neden böyle yaptığımızın kanıtı); bu spec + runbook'lar tek otorite.
 4. Müşteri verisi/kurulumu yok → veri geçişi yok.
 
