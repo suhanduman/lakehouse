@@ -2,7 +2,13 @@
 {{- define "glue.cnpgBackup" -}}
 {{- if .Values.backup.enabled }}
   # Barman Cloud eklentisi (CNPG-I): WAL arşivi + base backup. isWALArchiver: en çok BİR eklenti olabilir.
-  plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters: {barmanObjectName: lakehouse-backups}}]
+  # `enabled: true` AÇIKÇA yazılır (CRD varsayılanı zaten true): `plugins` şemada x-kubernetes-list-type
+  # taşımayan DÜZ bir dizidir -> ServerSideApply onu ATOMİK değer olarak görür. Alanı yazmazsak API sunucusu
+  # `enabled: true`'yu default'layıp saklar, ArgoCD'nin desired'ı ise onsuz kalır -> Cluster SONSUZA DEK
+  # OutOfSync olur (selfHeal her seferinde "serverside-applied" der, diff kapanmaz). CI 35358635069'da
+  # application/glue tam da bu yüzden 45 dk boyunca Synced olamadı; helm modu diff yapmadığı için bu sınıf
+  # hata YALNIZ ArgoCD yolunda görünür.
+  plugins: [{name: barman-cloud.cloudnative-pg.io, enabled: true, isWALArchiver: true, parameters: {barmanObjectName: lakehouse-backups}}]
   # Velero (Task 4): pgdata PVC'si dosya-sistemi yedeğinden HARİÇ — Postgres verisi CNPG/Barman PITR ile korunur
   # (canlı doğrulandı: CNPG pod'unun veri volume adı `pgdata`). inheritedMetadata pod'lara/PVC'lere miras kalır.
   inheritedMetadata:

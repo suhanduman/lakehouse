@@ -50,6 +50,9 @@ tests:
     asserts:
       - equal: {path: 'spec.plugins[0].name', value: barman-cloud.cloudnative-pg.io}
       - equal: {path: 'spec.plugins[0].isWALArchiver', value: true}
+      # enabled AÇIKÇA render edilmeli: CRD default'u true ama SSA `plugins`i atomik gördüğü için
+      # yazılmazsa ArgoCD sonsuz OutOfSync döngüsüne girer (CI 35358635069).
+      - equal: {path: 'spec.plugins[0].enabled', value: true}
       - equal: {path: 'spec.plugins[0].parameters.barmanObjectName', value: lakehouse-backups}
       # Task 4 (Velero): pgdata volume'u dosya-sistemi yedeğinden hariç (volume adı canlı doğrulandı)
       - equal: {path: 'spec.inheritedMetadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: pgdata}
