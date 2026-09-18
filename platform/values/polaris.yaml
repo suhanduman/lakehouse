@@ -12,7 +12,5 @@ extraEnv:
 - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
 storage:
   secret: {name: s3-creds, awsAccessKeyId: AWS_ACCESS_KEY_ID, awsSecretAccessKey: AWS_SECRET_ACCESS_KEY}
-# Trino DROP TABLE, REST katalogda DELETE …?purgeRequested=true gönderir; bu bayrak kapalıyken Polaris 403 döner
-# ("Unable to purge entity … set DROP_WITH_PURGE_ENABLED", F4 canlı). Sandbox tablolarının silinebilmesi için gerekli.
-features:
-  DROP_WITH_PURGE_ENABLED: true
+# NOT: DROP_WITH_PURGE_ENABLED sunucu geneli olarak burada AÇILMAZ; `lakehouse` kataloğunun properties'inde
+# (`polaris.config.drop-with-purge.enabled`) katalog düzeyinde açılır — platform/polaris/setup.yaml.

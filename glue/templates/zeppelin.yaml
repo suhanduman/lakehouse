@@ -19,6 +19,10 @@ metadata: {name: zeppelin, namespace: {{ $ns }}, annotations: {argocd.argoproj.i
 spec:
   replicas: 1
   strategy: {type: Recreate}                 # RWO PVC
+  # apache/zeppelin:0.12.1 ~2,7 GB: soğuk çekim 13 dk 48 sn ölçüldü (2026-09-18, kubelet "Successfully pulled"),
+  # k8s varsayılanı 600 s ise aşılıyor -> Deployment Progressing=False/ProgressDeadlineExceeded olur ve
+  # `helm --wait` (bootstrap.sh) kurulumu "not ready" diye DÜŞÜRÜR (pod aslında sağlıklı, sonradan Ready oluyor).
+  progressDeadlineSeconds: 1800
   selector: {matchLabels: {app: zeppelin}}
   template:
     metadata: {labels: {app: zeppelin}}

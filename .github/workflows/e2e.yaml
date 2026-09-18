@@ -14,6 +14,16 @@ jobs:
       # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
       - name: prod + dev değer dosyalarıyla render
         run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
+      # Upstream chart'ların PROD değer dosyaları e2e'de hiç render edilmiyor (dev overlay'i farklı dosya kullanır):
+      # bu iki adım prod-only anahtarlarda (trino-ldap, jupyterhub Keycloak URL'leri) şema/şablon hatasını yakalar.
+      - name: prod Trino render (chart 1.42.2, AD/LDAP dâhil)
+        run: |
+          helm repo add trino https://trinodb.github.io/charts
+          helm template trino trino/trino --version 1.42.2 -f platform/values/trino.yaml -f platform/values/trino-ldap.yaml >/dev/null
+      - name: prod JupyterHub render (z2jh 4.4.2)
+        run: |
+          helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
+          helm template jupyterhub jupyterhub/jupyterhub --version 4.4.2 -f platform/values/jupyterhub.yaml >/dev/null
   e2e-kind:
     runs-on: ubuntu-latest
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
@@ -51,6 +61,8 @@ jobs:
       - name: kaynak fotoğrafı (F5 boyutlandırma girdisi)
         if: always()
         run: |
-          free -m; df -h /
-          kubectl describe node | sed -n '/Allocated resources/,/Events/p'
-          kubectl -n lakehouse get pods -o wide | wc -l
+          # `|| true`: bu adım `if: always()` ile koşar; e2e küme kurmadan düştüyse kubectl hata verir ve
+          # (set -e) fotoğraf adımı da kırmızı görünür -> asıl başarısızlığı gizler.
+          free -m || true; df -h / || true
+          kubectl describe node | sed -n '/Allocated resources/,/Events/p' || true
+          kubectl -n lakehouse get pods -o wide | wc -l || true

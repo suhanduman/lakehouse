@@ -43,7 +43,10 @@ singleuser:
     POLARIS_CREDENTIAL: {valueFrom: {secretKeyRef: {name: polaris-notebooks, key: credential}}}   # paylaşımlı notebooks principal (spec §14)
     S3_ENDPOINT: https://s3.example.com
     TRINO_HOST: trino.lakehouse.svc
-    REQUESTS_CA_BUNDLE: /etc/lakehouse-ca/tls.crt
+    # REQUESTS_CA_BUNDLE YOK (Superset'teki kararla aynı gerekçe, glue/templates/superset.yaml): bu env TEK kök
+    # dayatır ve not defterindeki HER `requests`/`urllib3` çağrısını (PyPI, müşteri API'leri, S3 HTTPS) yalnız
+    # lakehouse-ca ile doğrulatır -> hepsi SSLCertVerificationError. CA yine /etc/lakehouse-ca/tls.crt'te mount'lu;
+    # Trino'ya bağlanan örnekler açık `verify='/etc/lakehouse-ca/tls.crt'` verir (runbooks/user-facing.md).
   # singleuser netpol z2jh tarafından; egress yalnız Trino/Polaris (+dev MinIO), dış ağ (PyPI/S3) nonPrivateIPs
   # varsayılanı. glue'nun NetworkPolicy'leri yalnız Ingress'tir (glue/templates/networkpolicy.yaml: "egress
   # kısıtlanmaz") -> tek egress kontrolü budur; öğrenciler dahil TÜM özel IP'lere izin vermek yerine podSelector ile

@@ -16,6 +16,14 @@ catalogs:
     endpoint: http://minio.lakehouse.svc:9000            # prod: müşteri S3 endpoint'i (kurulumda değiştir)
     endpoint_internal: http://minio.lakehouse.svc:9000
     path_style_access: true
+    # Trino `DROP TABLE`, REST katalogda silme isteğini `purgeRequested=true` ile gönderir; bayrak kapalıyken
+    # Polaris 403 döner ("Unable to purge entity … set DROP_WITH_PURGE_ENABLED", F4 canlı bulgu 6). Sunucu geneli
+    # yerine KATALOG düzeyinde açılır (FeatureConfiguration DROP_WITH_PURGE_ENABLED -> catalogConfig anahtarı
+    # `drop-with-purge.enabled`; apache/polaris:1.7.0 polaris-core jar'ından doğrulandı) — böylece yalnız bu
+    # kataloğun tabloları purge ile silinebilir. UYARI: `polaris setup apply` katalog properties'ini yalnız
+    # katalog YARATILIRKEN yazar; var olan kurulumda `polaris catalogs update` ile ayrıca uygulanmalıdır.
+    properties:
+      polaris.config.drop-with-purge.enabled: "true"
     roles:
       lakehouse_admin:
         assign_to: [writers]
