@@ -13,6 +13,13 @@ jobs:
       - run: helm plugin install --verify=false --version 1.1.2 https://github.com/helm-unittest/helm-unittest && helm unittest glue
       # Spark job kodu (Spark'sız) sözdizimi kontrolü: import hatası/typo push edilmeden yakalanır
       - run: python3 -m py_compile glue/jobs/*.py
+      # Saf-python birim testleri (merge_lib, mongo_lib): pyspark GEREKTİRMEZ — `glue/jobs/tests/conftest.py`
+      # yalnız `glue/jobs`'ı sys.path'e ekler, test edilen modüller Spark import etmez (bu yüzden `-k`/marker
+      # filtresi de gerekmiyor). Sürümler `glue/jobs/requirements-dev.txt`te sabit (pytest 8.4.1).
+      - name: pytest (glue/jobs birim testleri)
+        run: |
+          pip install -r glue/jobs/requirements-dev.txt
+          python3 -m pytest glue/jobs/tests -q
       # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
       - name: prod + dev değer dosyalarıyla render
         run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
