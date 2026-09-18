@@ -26,6 +26,18 @@ jobs:
         run: |
           helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
           helm template jupyterhub jupyterhub/jupyterhub --version 4.4.2 -f platform/values/jupyterhub.yaml >/dev/null
+      # F5 upstream chart'ları: monitoring/velero DEV-ONLY overlay'de (platform/apps/dev) olduğu için e2e'nin
+      # ArgoCD yolu bunları dev'de render eder, ama bir şema/anahtar hatası ancak küme kurulurken (30+ dk sonra)
+      # görünürdü. Bu üç adım aynı hatayı 1 dk içinde yakalar. cnpg-barman değer dosyası yok (Application
+      # helm.valuesObject ile yalnız resources veriyor) -> varsayılan render'ı derlenir.
+      - name: F5 render (kube-prometheus-stack 91.4.1, velero 12.1.0, plugin-barman-cloud 0.8.0)
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+          helm repo add cnpg https://cloudnative-pg.github.io/charts
+          helm template monitoring prometheus-community/kube-prometheus-stack --version 91.4.1 -f platform/values/monitoring-dev.yaml >/dev/null
+          helm template velero vmware-tanzu/velero --version 12.1.0 -f platform/values/velero-dev.yaml >/dev/null
+          helm template plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 >/dev/null
   e2e-kind:
     runs-on: ubuntu-latest
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
@@ -60,6 +72,32 @@ jobs:
           kubectl -n argocd get app glue -o json | jq -r '.status.conditions[]? | "\(.type): \(.message)"' || true
           kubectl -n argocd get app glue -o json | jq -r '.status.resources[]? | select((.status != "Synced") or ((.health.status // "Healthy") != "Healthy")) | "\(.kind)/\(.name) sync=\(.status) health=\(.health.status // "-")"' || true
           kubectl -n argocd logs statefulset/argocd-application-controller --tail=200 | grep -iE 'glue|webhook|error' | tail -40 || true
+      - name: F5 teşhis — izleme + DR (başarısızlıkta)
+        if: failure()
+        run: |
+          # İzleme yığını (dev overlay, release "monitoring" ns "monitoring", sync-wave -1)
+          kubectl -n monitoring get pods,prometheus,servicemonitor,podmonitor -o wide || true
+          kubectl -n monitoring logs sts/prometheus-monitoring-kube-prometheus-prometheus -c prometheus --tail=60 || true
+          # lakehouse ns'indeki izleme/CNPG-yedek nesneleri (PodMonitor kafka-resources-metrics, 5 kurallı PrometheusRule,
+          # ObjectStore lakehouse-backups, 3 ScheduledBackup). "backup" KISA ADI CNPG'ye çözülür -> tam ad yazılıyor.
+          kubectl -n lakehouse get prometheusrule,podmonitor,servicemonitor,objectstore,scheduledbackup,backups.postgresql.cnpg.io || true
+          kubectl -n lakehouse get configmap -l grafana_dashboard=1 || true
+          kubectl -n lakehouse get cluster -o custom-columns='NAME:.metadata.name,ARCHIVING:.status.conditions[?(@.type=="ContinuousArchiving")].status' || true
+          # Velero: kısa ad çakışması nedeniyle TAM kaynak adları (backups.velero.io vb.)
+          kubectl -n velero get pods,backupstoragelocations,schedules -o wide || true
+          kubectl -n velero get backups.velero.io,restores.velero.io,podvolumebackups.velero.io || true
+          kubectl -n velero logs deploy/velero --tail=80 || true
+          kubectl -n velero logs -l name=node-agent --tail=40 || true
+          # Prometheus hedef/kural özeti: e2e'nin UP/M iddiaları düştüğünde hangi hedefin down olduğunu gösterir
+          kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 &
+          PF=$!; sleep 8
+          echo "== active targets (job health lastError)"
+          curl -sS --max-time 20 localhost:9090/api/v1/targets | jq -r '.data.activeTargets[]? | "\(.labels.job // "-")\t\(.health)\t\(.lastError // "")"' | sort | uniq -c || true
+          echo "== rules (name health state)"
+          curl -sS --max-time 20 localhost:9090/api/v1/rules | jq -r '.data.groups[]?.rules[]? | "\(.name)\t\(.health)\t\(.state // "-")"' || true
+          echo "== firing ALERTS"
+          curl -sS --max-time 20 --get --data-urlencode 'query=ALERTS{alertstate="firing"}' localhost:9090/api/v1/query | jq -r '.data.result[]? | .metric | tostring' || true
+          kill "$PF" 2>/dev/null || true
       - name: kaynak fotoğrafı (F5 boyutlandırma girdisi)
         if: always()
         run: |
