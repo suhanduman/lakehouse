@@ -12,7 +12,7 @@ kubeScheduler: {enabled: false}
 kubeProxy: {enabled: false}
 kubeStateMetrics: {enabled: true}
 kube-state-metrics:
-  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
   rbac:
     extraRules:
     - {apiGroups: [sparkoperator.k8s.io], resources: [sparkapplications, scheduledsparkapplications], verbs: [list, watch]}
@@ -51,11 +51,15 @@ kube-state-metrics:
               type: Gauge
               gauge: {path: [status, lastRun]}
 prometheusOperator:
-  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
 prometheus:
   prometheusSpec:
+    # retention 24h + ~2000 seri: canlı RSS ~150-200 MiB. Limitler DÜŞÜRÜLDÜ (Task 7 canlı bulgusu):
+    # F5 yığını eklenince kind düğümünün bellek LİMİT taahhüdü %108'e çıktı (8664Mi istek / 16150Mi limit,
+    # düğüm 14,8 GiB) ve Spark driver+executor aynı anda ayaktayken host OOM killer polaris/connect/
+    # operatörleri öldürdü (exit 137). Limit toplamını düğümün altına çekmek dev'de tek gerçek kaldıraçtır.
     retention: 24h
-    resources: {requests: {cpu: 50m, memory: 400Mi}, limits: {memory: 1Gi}}
+    resources: {requests: {cpu: 50m, memory: 400Mi}, limits: {memory: 640Mi}}
     serviceMonitorSelectorNilUsesHelmValues: false     # lakehouse ns'indeki ServiceMonitor'ler görülsün (tuzak!)
     podMonitorSelectorNilUsesHelmValues: false
     ruleSelectorNilUsesHelmValues: false
@@ -66,6 +70,6 @@ prometheus:
     # (Task 2b, izleme kapsamı daraltıldı), Prometheus'un artık hub netpol'ünü geçmesi gerekmiyor.
 grafana:
   enabled: true
-  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 384Mi}}
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 256Mi}}
   sidecar: {dashboards: {enabled: true, searchNamespace: ALL, label: grafana_dashboard}}
   defaultDashboardsEnabled: false
