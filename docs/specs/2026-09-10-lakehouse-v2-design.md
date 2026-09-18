@@ -52,7 +52,7 @@ Kapsam dışı (şartnamede yok, YAGNI): Camel http/mqtt/rabbitmq lane'leri, sch
 | Keycloak | 26.7.x | Apache-2.0 | operatör + `Keycloak`/`KeycloakRealmImport` |
 | Fluent Bit | 5.1.x | Apache-2.0 | müşteri sunucusunda ajan (config dosyası teslim) |
 | ArgoCD (OpenShift GitOps) | platformun | Apache-2.0 | app-of-apps |
-| Velero, kube-prometheus-stack, Loki | platformun | Apache-2.0 / AGPL(Loki) | CR/values |
+| Velero / OADP, kube-prometheus-stack, Loki | dev: Velero chart 12.1.0 (1.18.1) + kube-prometheus-stack 91.4.1; prod: OADP + OpenShift user-workload monitoring + OpenShift Logging (LokiStack) | Apache-2.0 (Grafana AGPL-3.0, yalnız dev) | CR/values; tam liste `runbooks/versions.md` |
 
 **Özel imaj: sıfır.** Kaldırılanlar: `images/connect` (Strimzi build), `images/spark-py` (resmi imaj + packages), `images/iceberg-tools`, `images/jupyterhub`, `images/jupyter`, `images/superset`, `images/dbt`, `images/zeppelin`, Console imajları.
 
@@ -66,7 +66,7 @@ glue/          Helm chart "lakehouse-glue": Kafka, KafkaConnect(spec.build), Kaf
                ConfigMap: jobs kodu + pipelines.yaml + Fluent Bit conf. `platform: openshift|vanilla` bayrağı Route↔Ingress seçer.
 pipelines/     KafkaConnector şablonları (pg-source.yaml, mssql-source.yaml, mongo-source.yaml, iceberg-sink.yaml, nginx-sink.yaml) + examples/
 jobs/          merge_cdc.py, merge_lib.py, iceberg_maintenance.py, mongo_bronze.py, s3_register_example.py + tests/ (Spark-siz pytest)
-runbooks/      install.md · add-source.md · add-table.md · nginx-agent.md · upgrade.md · dr.md · troubleshooting.md · versions.md · acceptance-tests.md
+runbooks/      install.md · add-source.md · add-table.md · nginx-agent.md · s3-register.md · access-control.md · user-facing.md · upgrade.md · dr.md · troubleshooting.md · versions.md · acceptance-tests.md · scripts/{polaris-setup.sh,acceptance.sh} · dbt/ (referans örnek)
 test/e2e/      kind: bootstrap→sync→pg fixture→CR apply→Bronze→merge→Trino assert→maintenance (GitHub Actions + lokal Podman/kind aynı script)
 ```
 Silinir: `console/`, `chart/` (yerine `glue/`), `images/`, `tools/`, `gitops/`(→platform), `manual-install/`, `operators/`(→bootstrap), `docs/superpowers`, `.superpowers`, `docs/egitim` (yeniden yazılacak), eski workflow'lar.
@@ -155,10 +155,54 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
 
 ## 8. İzleme, DR, güvenlik
 
-- Metrikler: her chart `metrics.enabled` + Strimzi `metricsConfig`. **PrometheusRule (3 kural):** Connect task FAILED / stalled (commit yok), silver-merge son başarı yaşı > 45 dk, herhangi bir `ScheduledSparkApplication` son çalışması failed. **Metrik adları kind'da canlı doğrulanır** (eski kuralların adları hiç doğrulanmamıştı — KARAR §5); kaynak: Strimzi kafka-connect metrics ConfigMap + spark-operator/`ScheduledSparkApplication` status. Upstream Grafana dashboard'ları (Strimzi, Trino) ConfigMap.
-- Loglar: platform Loki (G.5.2) — runbook.
-- **DR (G.6, kabul-kritik):** Velero `Schedule` (namespace); CNPG `ScheduledBackup` + `barmanObjectStore` **farklı bucket/endpoint** (Polaris/Keycloak/Superset DB'leri; PITR); Iceberg verisi S3'ün kendi çoğaltması. `runbooks/dr.md` restore provası.
-- Güvenlik: NetworkPolicy default-deny (glue), cert-manager TLS, Secret'lar Git'e girmez (`external-secrets` veya manuel — runbook), Strimzi ACL/SCRAM, Polaris RBAC.
+**(F5'te uygulandı; bu bölüm canlı doğrulanmış hâli anlatır — `runbooks/{versions,upgrade,dr,troubleshooting,acceptance-tests}.md`.)**
+
+- **İzleme kapsamı = boru hattı sağlığı** (kullanıcı kararı, 2026-09-18): Strimzi Kafka + Kafka Connect JMX
+  (`metricsConfig`, Strimzi 1.2.0 örnek kuralları) + `Kafka.spec.kafkaExporter` (consumer lag), spark-operator
+  (`prometheus.podMonitor.create`), **kube-state-metrics `customResourceState`** (SparkApplication `state` —
+  StateSet, `terminationTime`; ScheduledSparkApplication `lastRun`) ve Polaris mgmt (`:8182`). **Gösterim
+  bileşenlerinin uygulama metriği toplanmaz** (Trino/JupyterHub/Zeppelin ServiceMonitor'ları kaldırıldı;
+  Superset 6.1.0'da `/metrics` uç noktası zaten yok → kalıcı `down` hedef üretmemek için `spec.monitoring`
+  yazılmaz). Grafana dashboard'ları: yalnız Strimzi Kafka + Strimzi Kafka Connect.
+- **Yığın:** dev/vanilla'da kube-prometheus-stack 91.4.1 (`platform/apps/dev/40-monitoring.yaml`, ns
+  `monitoring`, sync-wave `-1`; node-exporter/kubelet/Alertmanager kapalı); OpenShift'te **user-workload
+  monitoring** (`enableUserWorkload: true`) — `lakehouse` ns'indeki PodMonitor/PrometheusRule otomatik alınır,
+  bildirim platformundur. Metrik adları kind'da canlı doğrulandı (KARAR §5'teki "hiç doğrulanmamış kural adı"
+  kusuru kapandı).
+- **PrometheusRule `lakehouse` — 5 kural** (`glue/templates/monitoring.yaml`; her birinin `runbook`
+  annotation'ı `runbooks/troubleshooting.md#…` bölümüne bağlanır):
+  `LakehouseConnectTaskFailed` (`kafka_connect_connector_task_status{status="failed"} == 1`, critical) ·
+  `LakehouseSinkStalled` (lag tabanlı: `kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}` >
+  `monitoring.sinkLagThreshold`, 15 dk) · `LakehouseSilverMergeStale` (`time() - max(sparkapp_termination_time …
+  COMPLETED)` > eşik; boş vektörde ateşlenmez) · `LakehouseSparkScheduledRunFailed`
+  (`kube_customresource_sparkapp_state{state="FAILED"} == 1`) · `LakehouseSparkRunTooLong`
+  (`rate(spark_application_success_execution_time_seconds_sum[6h]) / rate(…_count[6h])` — **küme geneli**,
+  çünkü spark-operator 2.5.2 exporter'ı per-app etiket vermiyor).
+- **Tablo düzeyi veri metrikleri** için Prometheus exporter'ı yoktur: Iceberg metadata tabloları
+  (`"tbl$snapshots"`, `"tbl$files"`, `"tbl$history"`) Trino'dan sorgulanır ve istenirse bir Superset
+  dashboard'una bağlanır (F6). Depolama (FlashBlade) metrikleri platformun exporter'ındadır.
+- **Loglar:** platform Loki (G.5.2) — OpenShift Logging/LokiStack; vanilla'da `grafana/loki` + `grafana/alloy`
+  (promtail EOL). Bu repo Loki dağıtmaz; sorgu örnekleri `runbooks/troubleshooting.md#loki`.
+- **DR (G.6, kabul-kritik) — CNPG:** in-tree `barmanObjectStore` yerine **Barman Cloud eklentisi (CNPG-I)**
+  (`plugin-barman-cloud` chart 0.8.0 = eklenti v0.15.0; in-tree alan CNPG 1.31'de kalkıyor). Tek
+  `ObjectStore/lakehouse-backups` (`destinationPath: s3://<backup.s3.bucket>/cnpg`, `spec.retentionPolicy: 30d`,
+  kimlik `backup-s3-creds`) + üç Cluster'da `plugins[isWALArchiver]` + üç `ScheduledBackup`
+  (6 alanlı cron `0 0 2 * * *`, `immediate: true`). Yedek hedefi veri bucket'ından AYRIDIR. Restore provası
+  `test/e2e/cnpg-restore.yaml` (PITR için `recoveryTarget.targetTime`).
+- **DR — Velero:** dev'de chart 12.1.0 (Velero 1.18.1, `platform/apps/dev/40-velero.yaml`, BSL aynı bucket'ın
+  `velero/` prefix'i), prod'da **OADP** (`velero.namespace: openshift-adp`, `DataProtectionApplication`).
+  `Schedule/lakehouse-daily` (`0 3 * * *`, `ttl 720h`, `defaultVolumesToFsBackup: true`,
+  `excludedResources: [replicasets, events, backups.postgresql.cnpg.io]` — **`pods` dışlanmaz**, aksi hâlde
+  fs-backup hiç tetiklenmez). Pod hacmi dışlamaları annotation ile: CNPG `pgdata` (kurtarma yolu Barman PITR),
+  Kafka `data-0` (kapsam dışı), dev MinIO `data`. **kind sınırı:** local-path PV = hostPath → fs-backup PVC
+  içeriğini atlar; gerçek CSI depolamada (OpenShift) PVC'ler alınır, tercih edilen yol CSI snapshot + Data
+  Mover'dır. Kapsam dışı: Kafka verisi (yeniden akıtma/MM2) ve Iceberg S3 verisi (S3 çoğaltması) — Polaris DB
+  yalnız katalog metadata'sıdır.
+- **Güvenlik:** NetworkPolicy default-deny (dev dâhil AÇIK; `allow-platform-namespaces` argocd/cert-manager/
+  cnpg-system/monitoring/**velero**), cert-manager TLS, Secret'lar Git'e girmez (manuel ya da external-secrets
+  — runbook), Strimzi ACL/SCRAM, Polaris RBAC, Trino `rules.json` (satır filtresi/kolon maskesi).
+- **Kabul:** `runbooks/scripts/acceptance.sh` kurulu kümede dokuz e2e yolunu koşturup "KABUL" özeti basar;
+  taze kümede aynı yollar `test/e2e/run.sh` (CI kapısı).
 
 ## 9. Test stratejisi (tersine dönüş)
 
@@ -191,5 +235,5 @@ Tek plan, 6 faz, her faz kind'da yeşil olmadan sonraki başlamaz: **F0** spike'
 
 ## 14. Kapatılan açık noktalar (kullanıcı, 2026-09-10)
 - **nginx IP: ham saklanır** — şartnamede KVKK/anonimleştirme/maskeleme maddesi yok (grep: kvkk|kişisel veri|anonim|maskele|ip adres → 0 eşleşme); istenirse sonradan Trino kolon-maskesi (`rules.json`). Lua filtresi yok.
-- **dbt: runbook + örnek proje** (resmi `dbt-trino` imajıyla CronJob örneği + Gold model örneği `runbooks/` altında); chart bileşeni değil.
+- **dbt: runbook + örnek proje** (`runbooks/dbt/`: Gold model + CronJob örneği); chart bileşeni değil. **Düzeltme (F5):** resmi bir `dbt-trino` imajı YOKTUR → örnek, resmi `python:3.13-slim` imajı + `pip install dbt-trino==1.10.4` ile koşar (özel imaj yok kuralı korunur, PyPI erişimi gerekir).
 - Superset/Zeppelin paylaşımlı servis hesabı kalır; satır/kolon güvenliği interaktif Trino (OIDC) kullanıcıları için.
