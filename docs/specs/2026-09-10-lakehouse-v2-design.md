@@ -181,8 +181,11 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
   (`rate(spark_application_success_execution_time_seconds_sum[6h]) / rate(…_count[6h])` — **küme geneli**,
   çünkü spark-operator 2.5.2 exporter'ı per-app etiket vermiyor).
 - **Tablo düzeyi veri metrikleri** için Prometheus exporter'ı yoktur: Iceberg metadata tabloları
-  (`"tbl$snapshots"`, `"tbl$files"`, `"tbl$history"`) Trino'dan sorgulanır ve istenirse bir Superset
-  dashboard'una bağlanır (F6). Depolama (FlashBlade) metrikleri platformun exporter'ındadır.
+  (`"tbl$snapshots"`, `"tbl$files"`, `"tbl$history"`) Trino'dan sorgulanır. F6'da teslim edildi: Superset
+  dashboard asset bundle'ı `glue/files/superset/iceberg-metadata/` (chart'ta `superset-assets` ConfigMap'i →
+  `/app/assets`) + SQL'ler ve import adımı `runbooks/data-metrics.md`; e2e iddiası `OK snapshots shop.orders`
+  (`test/e2e/trino-check/check.py`) ve `OK superset assets` (`test/e2e/superset-path.sh`).
+  Depolama (FlashBlade) metrikleri platformun exporter'ındadır.
 - **Loglar:** platform Loki (G.5.2) — OpenShift Logging/LokiStack; vanilla'da `grafana/loki` + `grafana/alloy`
   (promtail EOL). Bu repo Loki dağıtmaz; sorgu örnekleri `runbooks/troubleshooting.md#loki`.
 - **DR (G.6, kabul-kritik) — CNPG:** in-tree `barmanObjectStore` yerine **Barman Cloud eklentisi (CNPG-I)**

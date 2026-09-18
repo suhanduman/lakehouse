@@ -82,7 +82,19 @@ Bir yol düşerse script orada durur, çıkış kodu **1** olur ve özet `KABUL 
   davranıştır, yol yine geçer (`runbooks/dr.md` §5.4). PVC yedeği kanıtı gerçek CSI depolamada alınır.
 - **OpenShift:** `--velero-ns openshift-adp` zorunludur; `dr-path.sh`'in yedek/restore manifest'leri
   (`test/e2e/velero-*.yaml`) `metadata.namespace` TAŞIMAZ ve `kubectl -n "$VELERO_NS" apply` ile
-  uygulanır, yani bayrak gerçekten etkilidir. `monitoring-path.sh` dev kalıbındaki
-  `monitoring-kube-prometheus-prometheus` servisini beklediği için user-workload monitoring kullanan
-  kümelerde bu yol yerine platformun kendi konsolundan (Observe → Alerting/Targets) doğrulama yapılır;
-  kural/hedef adları aynıdır.
+  uygulanır, yani bayrak gerçekten etkilidir.
+
+## İzleme yolunun nesne adları (OpenShift UWM)
+
+`monitoring-path.sh` varsayılan olarak kube-prometheus-stack (dev/CI) nesne adlarını kullanır; adlar dört
+değişkenle ezilebilir ve varsayılanlar değişmediği için CI davranışı aynıdır: `PROM_STS`
+(varsayılan `prometheus-monitoring-kube-prometheus-prometheus`), `PROM_SVC`
+(`monitoring-kube-prometheus-prometheus`), `GRAFANA_SVC` ve `GRAFANA_SECRET` (ikisi de `monitoring-grafana`).
+OpenShift user-workload monitoring'de Grafana yoktur → `GRAFANA_SKIP=1` yalnız dashboard iddialarını atlar,
+hedef/metrik/kural/alarm iddiaları yüksek sesle koşmaya devam eder:
+```bash
+PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
+  runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
+```
+UWM'nin Prometheus servisi yetkilendirme ister; erişilemiyorsa izleme kanıtı thanos-querier üzerinden elle
+alınır (`runbooks/preship-openshift.md` §2.2/2.3) — kural/hedef adları aynıdır.

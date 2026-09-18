@@ -1,0 +1,18 @@
+database_name: lakehouse
+sqlalchemy_uri: trino://superset@trino.lakehouse.svc:8443/lakehouse
+cache_timeout: null
+expose_in_sqllab: true
+allow_run_async: false
+allow_ctas: true
+allow_cvas: true
+allow_dml: false
+allow_file_upload: false
+extra:
+  engine_params:
+    connect_args:
+      http_scheme: https
+      verify: /etc/lakehouse-ca/tls.crt
+impersonate_user: false
+configuration_method: sqlalchemy_form
+uuid: afaeffd8-4b5b-4987-a12a-3389dbad7e0d
+version: 1.0.0

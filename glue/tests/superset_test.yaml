@@ -1,11 +1,11 @@
 suite: superset
 templates: [superset.yaml]
 tests:
-  - it: renders exactly the datasources ConfigMap and the Superset CR
+  - it: renders exactly the datasources + assets ConfigMap'ları ve Superset CR
     asserts:
-      - hasDocuments: {count: 2}
+      - hasDocuments: {count: 3}
   - it: renders Superset CR in Production mode with secret refs
-    documentIndex: 1
+    documentSelector: {path: kind, value: Superset}
     asserts:
       - containsDocument: {kind: Superset, apiVersion: superset.apache.org/v1alpha1, name: superset}
       - equal: {path: spec.environment, value: Production}
@@ -22,7 +22,7 @@ tests:
       - matchRegex: {path: spec.config, pattern: "SQLALCHEMY_CUSTOM_PASSWORD_STORE = _trino_password"}
       - matchRegex: {path: spec.config, pattern: '"CACHE_TYPE": "SimpleCache"'}
   - it: OIDC and Trino credentials reach the lifecycle jobs too (global podTemplate)
-    documentIndex: 1
+    documentSelector: {path: kind, value: Superset}
     asserts:
       - contains: {path: spec.podTemplate.container.env, content: {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: superset}}}}
       - contains: {path: spec.podTemplate.container.env, content: {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}}
@@ -35,7 +35,7 @@ tests:
       - isNull: {path: spec.webServer.podTemplate.container.startupProbe}   # ezilmiyor: -dev imajı anında açılıyor, operator varsayılanı yeter
       - contains: {path: spec.webServer.podTemplate.volumes, content: {name: datasources, configMap: {name: superset-datasources}}}
   - it: lifecycle runs migrate and init without an admin user (Production)
-    documentIndex: 1
+    documentSelector: {path: kind, value: Superset}
     asserts:
       - isNull: {path: spec.lifecycle.init.adminUser}
       - equal: {path: spec.lifecycle.init, value: {}}
@@ -43,12 +43,29 @@ tests:
       - equal: {path: spec.lifecycle.migrate.maxRetries, value: 120}
       - isNull: {path: spec.lifecycle.migrate.command}
   - it: datasources file targets trino over https
-    documentIndex: 0
+    documentSelector: {path: metadata.name, value: superset-datasources}
     asserts:
       - containsDocument: {kind: ConfigMap, apiVersion: v1, name: superset-datasources}
       - matchRegex: {path: 'data["trino.yaml"]', pattern: "trino://superset@trino.lakehouse.svc:8443/lakehouse"}
       - matchRegex: {path: 'data["trino.yaml"]', pattern: '"verify": "/etc/lakehouse-ca/tls.crt"'}
       - matchRegex: {path: 'data["trino.yaml"]', pattern: "allow_dml: false"}
+  - it: superset-assets ConfigMap iceberg-metadata bundle dosyalarını taşır ve /app/assets'e mount edilir
+    asserts:
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        isKind: {of: ConfigMap}
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        exists: {path: 'data["iceberg-metadata__metadata.yaml"]'}
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        exists: {path: 'data["iceberg-metadata__databases__lakehouse.yaml"]'}
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        exists: {path: 'data["iceberg-metadata__datasets__lakehouse__iceberg_table_health.yaml"]'}
+      # SIR YOK: bundle'da parola/kimlik bilgisi taşıyan alan bulunmamalı (databases/lakehouse.yaml parolasız)
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        notMatchRegex: {path: 'data["iceberg-metadata__databases__lakehouse.yaml"]', pattern: "password"}
+      - documentSelector: {path: metadata.name, value: superset}
+        contains: {path: spec.webServer.podTemplate.volumes, content: {name: assets, configMap: {name: superset-assets}}}
+      - documentSelector: {path: metadata.name, value: superset}
+        contains: {path: spec.webServer.podTemplate.container.volumeMounts, content: {name: assets, mountPath: /app/assets, readOnly: true}}
   - it: disabled renders nothing
     set: {superset.enabled: false}
     asserts:

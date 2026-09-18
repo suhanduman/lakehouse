@@ -53,6 +53,11 @@ expect(q(svc, "select count(*) from shop.orders")[0][0] == shop_rows, f"e2e shop
 expect(q(svc, "select count(*) from crm.customers")[0][0] == crm_rows, f"e2e crm.customers == {crm_rows}")
 expect(q(svc, "select count(*) from nginx_raw.access_log")[0][0] >= 3, "e2e nginx_raw.access_log >= 3")
 expect_denied(svc, "create table sandbox.e2e_svc as select 1 x", "e2e servis hesabı sandbox yazma reddi")
+# Tablo düzeyi veri metrikleri (spec §8, runbooks/data-metrics.md): Iceberg metadata tabloları Trino'dan
+# okunabilir olmalı — dashboard'un (glue/files/superset/iceberg-metadata) TEK veri kaynağı budur.
+# MERGE #1/#2 sonrası shop.orders en az 2 snapshot taşır.
+snaps = q(svc, 'select count(*) from shop."orders$snapshots"')[0][0]
+expect(snaps >= 2, f"snapshots shop.orders {snaps} >= 2 (MERGE sonrası; metadata tablosu okunabilir)")
 
 an = conn(JWTAuthentication(token("analyst1", "analyst1-dev")))
 expect(q(an, "select count(*) from shop.orders")[0][0] == shop_rows, "analyst1 shop.orders filtresiz")

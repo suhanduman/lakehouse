@@ -185,11 +185,15 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   *Kaynak: F5 notu "Açık kalanlar (F6/pre-ship)"; `runbooks/troubleshooting.md` §Loglar (Loki).*
 
 - [ ] **2.6 e2e izleme yolunun UWM uyarlaması (script olduğu gibi koşmaz)**
-  `test/e2e/monitoring-path.sh` kube-prometheus-stack'in **kendi nesne adlarına** bağlıdır
-  (`statefulset/prometheus-monitoring-kube-prometheus-prometheus`, `svc/monitoring-kube-prometheus-prometheus`,
-  `svc/monitoring-grafana`). OpenShift'te bu adlar yoktur ve Grafana platform tarafındadır → `--mon-ns` vermek
-  **tek başına yetmez**. Pre-ship'te izleme kanıtı 2.2/2.3 maddeleriyle (thanos-querier üzerinden) elle alınır;
-  script uyarlanacaksa çekirdeği bu iki sorgudur.
+  `test/e2e/monitoring-path.sh` kube-prometheus-stack nesne adlarını **varsayılan** alır ama hepsi ezilebilir
+  (`PROM_STS`, `PROM_SVC`, `GRAFANA_SVC`, `GRAFANA_SECRET`) ve Grafana iddiaları `GRAFANA_SKIP=1` ile atlanır
+  (UWM'de Grafana platform tarafındadır):
+  ```bash
+  PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
+    runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
+  ```
+  UWM Prometheus'u yetkilendirme ister (port-forward'lu düz `curl` 401 alabilir): script bu hâlde düşerse
+  izleme kanıtı 2.2/2.3 maddeleriyle (thanos-querier + token) elle alınır — kural/hedef adları aynıdır.
   *Kaynak: canlı kod okuması (`test/e2e/monitoring-path.sh`) + F5 notu (kube-prometheus-stack DEV-ONLY).*
 
 ---

@@ -8,9 +8,19 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; MON="${MON_NS:-monito
 # Assert'i sessizce zayıflatmak yerine belgelenmiş bir değişkenle atlıyoruz; Task 7'nin taze kümesinde varsayılan
 # açık kalır ve gerçek anlamda "0 firing" doğrular.
 E2E_EXPECT_NO_FIRING="${E2E_EXPECT_NO_FIRING:-1}"
-kubectl -n "$MON" rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus --timeout=600s
+# İzleme yığınının NESNE ADLARI değişkenlerle ezilebilir: varsayılanlar kube-prometheus-stack (dev/CI) adlarıdır,
+# yani CI davranışı DEĞİŞMEZ. OpenShift user-workload monitoring'de adlar başkadır ve Grafana platform tarafındadır:
+#   PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
+#     runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring
+# GRAFANA_SKIP=1 yalnız Grafana dashboard iddialarını atlar; diğer tüm iddialar yüksek sesle koşmaya devam eder.
+PROM_STS="${PROM_STS:-prometheus-monitoring-kube-prometheus-prometheus}"
+PROM_SVC="${PROM_SVC:-monitoring-kube-prometheus-prometheus}"
+GRAFANA_SVC="${GRAFANA_SVC:-monitoring-grafana}"
+GRAFANA_SECRET="${GRAFANA_SECRET:-monitoring-grafana}"
+GRAFANA_SKIP="${GRAFANA_SKIP:-0}"
+kubectl -n "$MON" rollout status "statefulset/$PROM_STS" --timeout=600s
 PF2=""
-kubectl -n "$MON" port-forward svc/monitoring-kube-prometheus-prometheus 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF $PF2 2>/dev/null' EXIT; sleep 3
+kubectl -n "$MON" port-forward "svc/$PROM_SVC" 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF $PF2 2>/dev/null' EXIT; sleep 3
 Q() { curl -sS "localhost:19090/api/v1/query" --data-urlencode "query=$1" | jq -r '.data.result | length'; }
 UP() { local job="$1" n; for _ in $(seq 1 30); do n=$(Q "up{job=~\"$job\"} == 1"); [[ "$n" -ge 1 ]] && { echo "OK up $job ($n)"; return; }; sleep 10; done; echo "HATA up $job"; exit 1; }
 # Trino/hub/zeppelin BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (Task 2b, kullanıcı kararı
@@ -94,8 +104,12 @@ fi
 echo "== grafana dashboard'ları"
 # Yalnız Strimzi (kapsam kontrolör kararıyla daraltıldı: izleme pipeline health odaklı, sunum bileşeni
 # olan Trino dashboard'u (20208) kaldırıldı — glue/templates/monitoring.yaml, glue/files/dashboards/README.md).
-kubectl -n "$MON" port-forward svc/monitoring-grafana 13000:80 >/dev/null 2>&1 & PF2=$!; sleep 3
-GP=$(kubectl -n "$MON" get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
-titles=$(curl -sS -u "admin:$GP" 'localhost:13000/api/search?type=dash-db' | jq -r '.[].title'); kill $PF2 2>/dev/null || true
-for t in "Strimzi Kafka" "Strimzi Kafka Connect"; do grep -qi "$t" <<<"$titles" || { echo "HATA dashboard yok: $t ($titles)"; exit 1; }; echo "OK dashboard $t"; done
+if [[ "$GRAFANA_SKIP" == "1" ]]; then
+  echo "UYARI GRAFANA_SKIP=1 -> Grafana dashboard iddiaları ATLANDI (UWM'de Grafana platform tarafındadır)"
+else
+  kubectl -n "$MON" port-forward "svc/$GRAFANA_SVC" 13000:80 >/dev/null 2>&1 & PF2=$!; sleep 3
+  GP=$(kubectl -n "$MON" get secret "$GRAFANA_SECRET" -o jsonpath='{.data.admin-password}' | base64 -d)
+  titles=$(curl -sS -u "admin:$GP" 'localhost:13000/api/search?type=dash-db' | jq -r '.[].title'); kill $PF2 2>/dev/null || true
+  for t in "Strimzi Kafka" "Strimzi Kafka Connect"; do grep -qi "$t" <<<"$titles" || { echo "HATA dashboard yok: $t ($titles)"; exit 1; }; echo "OK dashboard $t"; done
+fi
 echo "E2E F5 MONITORING OK"

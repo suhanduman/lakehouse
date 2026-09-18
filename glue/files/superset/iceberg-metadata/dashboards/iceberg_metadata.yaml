@@ -1,0 +1,53 @@
+dashboard_title: Iceberg metadata
+description: null
+css: null
+slug: iceberg-metadata
+certified_by: null
+certification_details: null
+published: true
+uuid: 33f9ac39-c197-463d-b220-e4e123eac681
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-ice1
+    parents:
+    - ROOT_ID
+  HEADER_ID:
+    type: HEADER
+    id: HEADER_ID
+    meta:
+      text: Iceberg metadata
+  ROW-ice1:
+    type: ROW
+    id: ROW-ice1
+    children:
+    - CHART-ice1
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-ice1:
+    type: CHART
+    id: CHART-ice1
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-ice1
+    meta:
+      chartId: 1
+      uuid: 1ac11b03-83e9-4ebd-bba6-b92fc8dc6035
+      sliceName: "Iceberg tablo sa\u011Fl\u0131\u011F\u0131"
+      width: 12
+      height: 60
+theme_uuid: null
+version: 1.0.0

@@ -1,0 +1,22 @@
+slice_name: "Iceberg tablo sa\u011Fl\u0131\u011F\u0131"
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - tbl
+  - son_commit
+  - snapshot_sayisi
+  - kayit
+  - veri_dosyasi
+  - delete_dosyasi
+  - boyut_mib
+  row_limit: 100
+query_context: null
+cache_timeout: null
+uuid: 1ac11b03-83e9-4ebd-bba6-b92fc8dc6035
+version: 1.0.0
+dataset_uuid: ed543c35-d90b-4398-b1d0-32d901796027
