@@ -1,6 +1,9 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata: {name: cert-manager, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+# sync-wave "-1": plugin-barman-cloud chart'ı (00-cnpg-barman, wave 0) Issuer + 2 Certificate render eder;
+# AYNI dalgadaki Application'lar EŞZAMANLI sync edilir -> taze kümede `no matches for kind "Certificate"`.
+# Gerekli sıra: cert-manager (-1) < cnpg-barman (0) < glue (1). Dev'deki 40-monitoring de aynı nedenle -1'dir (bağımsız).
+metadata: {name: cert-manager, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "-1"}}
 spec:
   project: default
   source:

@@ -1,5 +1,6 @@
 # CNPG Barman Cloud eklentisi (CNPG-I): in-tree barmanObjectStore 1.31'de kalkıyor -> yedekler eklenti üzerinden.
-# chart 0.8.0 = plugin v0.15.0. cert-manager gerektirir (Issuer + sunucu/istemci sertifikaları) -> aynı dalga, cert-manager önce.
+# chart 0.8.0 = plugin v0.15.0. cert-manager gerektirir (Issuer + sunucu/istemci sertifikaları) -> cert-manager ÖNCEKİ
+# dalgadadır (00-cert-manager.yaml sync-wave "-1"); bu Application 0. dalgada kalır.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata: {name: cnpg-barman, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
