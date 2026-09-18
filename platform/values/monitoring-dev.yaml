@@ -16,7 +16,8 @@ kube-state-metrics:
   rbac:
     extraRules:
     - {apiGroups: [sparkoperator.k8s.io], resources: [sparkapplications, scheduledsparkapplications], verbs: [list, watch]}
-  # KOPYA: glue/files/ksm-custom-resource-state.yaml (tek kaynak; oradaki alan yolları canlı doğrulandı).
+  # CustomResourceStateMetrics tanımının TEK KAYNAĞI burasıdır (alan yolları kind'da canlı doğrulandı;
+  # eskiden glue/files/ altında kullanılmayan bir kopyası vardı, silindi).
   # KSM chart 8.5.0 yerel anahtarı -> ConfigMap + --custom-resource-state-config-file chart tarafından üretilir.
   customResourceState:
     enabled: true
@@ -77,6 +78,7 @@ grafana:
   # sürecin yanında ~14 `gpx_grafana-*` eklenti süreci var. VM kernel log'u bu pod'u 13 kez
   # `Memory cgroup out of memory` ile öldürdü — hem 384Mi hem de (d56fa48 ile düşürülen) 256Mi limitinde.
   # Yani F5'in TEK gerçek OOM'u buydu ve limiti düşürmek onu ağırlaştırdı; 768Mi ≈ 3x ölçülen marj.
-  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 768Mi}}
+  # request 256Mi: ölçülen boştaki RSS 235 MB — 128Mi'lik istek scheduler'a yalan söylüyordu.
+  resources: {requests: {cpu: 20m, memory: 256Mi}, limits: {memory: 768Mi}}
   sidecar: {dashboards: {enabled: true, searchNamespace: ALL, label: grafana_dashboard}}
   defaultDashboardsEnabled: false

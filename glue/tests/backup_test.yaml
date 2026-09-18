@@ -44,7 +44,7 @@ tests:
         equal: {path: spec.cluster.name, value: keycloak-db}
       - documentIndex: 6
         equal: {path: spec.cluster.name, value: superset-db}
-  - it: all three Clusters load the barman WAL archiver plugin and the Velero exclusion
+  - it: all three Clusters load the barman WAL archiver plugin
     template: cnpg.yaml
     documentSelector: {path: kind, value: Cluster, matchMany: true}
     asserts:
@@ -54,7 +54,21 @@ tests:
       # yazılmazsa ArgoCD sonsuz OutOfSync döngüsüne girer (CI 35358635069).
       - equal: {path: 'spec.plugins[0].enabled', value: true}
       - equal: {path: 'spec.plugins[0].parameters.barmanObjectName', value: lakehouse-backups}
+      # pgdata dışlaması velero.enabled'a bağlıdır (aşağıdaki üç vaka) -> prod varsayılanında YOK
+      - notExists: {path: spec.inheritedMetadata}
+  - it: pgdata fs-backup exclusion follows velero.enabled (kafka.yaml/minio.yaml ile aynı kapı)
+    template: cnpg.yaml
+    set: {velero.enabled: true}
+    documentSelector: {path: kind, value: Cluster, matchMany: true}
+    asserts:
       # Task 4 (Velero): pgdata volume'u dosya-sistemi yedeğinden hariç (volume adı canlı doğrulandı)
+      - equal: {path: 'spec.inheritedMetadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: pgdata}
+  - it: OADP açık + Barman kapalı bileşiminde bile pgdata dışlanır (canlı pgdata fs-backup'a GİRMEZ)
+    template: cnpg.yaml
+    set: {backup.enabled: false, velero.enabled: true}
+    documentSelector: {path: kind, value: Cluster, matchMany: true}
+    asserts:
+      - notExists: {path: spec.plugins}
       - equal: {path: 'spec.inheritedMetadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: pgdata}
   - it: backup.enabled=false renders NO ObjectStore, NO ScheduledBackup and NO plugins
     template: cnpg.yaml

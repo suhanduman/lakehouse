@@ -9,8 +9,13 @@
   # application/glue tam da bu yüzden 45 dk boyunca Synced olamadı; helm modu diff yapmadığı için bu sınıf
   # hata YALNIZ ArgoCD yolunda görünür.
   plugins: [{name: barman-cloud.cloudnative-pg.io, enabled: true, isWALArchiver: true, parameters: {barmanObjectName: lakehouse-backups}}]
+{{- end }}
+{{- if .Values.velero.enabled }}
   # Velero (Task 4): pgdata PVC'si dosya-sistemi yedeğinden HARİÇ — Postgres verisi CNPG/Barman PITR ile korunur
   # (canlı doğrulandı: CNPG pod'unun veri volume adı `pgdata`). inheritedMetadata pod'lara/PVC'lere miras kalır.
+  # Kapı `velero.enabled`'dır, `backup.enabled` DEĞİL (kafka.yaml/minio.yaml ile aynı kalıp): geçerli bir
+  # bileşimde (OADP açık + Barman kapalı) dışlama düşerdi ve Velero CANLI pgdata'yı fs-backup'a alırdı ->
+  # yırtık, geri yüklenemez Postgres kopyaları.
   inheritedMetadata:
     annotations: {backup.velero.io/backup-volumes-excludes: pgdata}
 {{- end }}

@@ -160,8 +160,10 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
 - **İzleme kapsamı = boru hattı sağlığı** (kullanıcı kararı, 2026-09-18): Strimzi Kafka + Kafka Connect JMX
   (`metricsConfig`, Strimzi 1.2.0 örnek kuralları) + `Kafka.spec.kafkaExporter` (consumer lag), spark-operator
   (`prometheus.podMonitor.create`), **kube-state-metrics `customResourceState`** (SparkApplication `state` —
-  StateSet, `terminationTime`; ScheduledSparkApplication `lastRun`) ve Polaris mgmt (`:8182`). **Gösterim
-  bileşenlerinin uygulama metriği toplanmaz** (Trino/JupyterHub/Zeppelin ServiceMonitor'ları kaldırıldı;
+  StateSet, `terminationTime`; ScheduledSparkApplication `lastRun`) ve Polaris mgmt
+  (`:8182` `/q/metrics` — Polaris chart'ının KENDİ `serviceMonitor`'ü; `platform/values/polaris.yaml`'da
+  açıkça açılır, e2e `up{job=~".*polaris.*"}` ile doğrular). **Gösterim bileşenlerinin uygulama metriği
+  toplanmaz** (Trino/JupyterHub/Zeppelin ServiceMonitor'ları kaldırıldı;
   Superset 6.1.0'da `/metrics` uç noktası zaten yok → kalıcı `down` hedef üretmemek için `spec.monitoring`
   yazılmaz). Grafana dashboard'ları: yalnız Strimzi Kafka + Strimzi Kafka Connect.
 - **Yığın:** dev/vanilla'da kube-prometheus-stack 91.4.1 (`platform/apps/dev/40-monitoring.yaml`, ns
@@ -198,8 +200,9 @@ Fluent Bit (ajan, müşteri sunucusu): `tail` → `parser nginx` (zaman ayrışt
   içeriğini atlar; gerçek CSI depolamada (OpenShift) PVC'ler alınır, tercih edilen yol CSI snapshot + Data
   Mover'dır. Kapsam dışı: Kafka verisi (yeniden akıtma/MM2) ve Iceberg S3 verisi (S3 çoğaltması) — Polaris DB
   yalnız katalog metadata'sıdır.
-- **Güvenlik:** NetworkPolicy default-deny (dev dâhil AÇIK; `allow-platform-namespaces` argocd/cert-manager/
-  cnpg-system/monitoring/**velero**), cert-manager TLS, Secret'lar Git'e girmez (manuel ya da external-secrets
+- **Güvenlik:** NetworkPolicy default-deny (dev dâhil AÇIK; `allow-platform-namespaces` argocd/cnpg-system/
+  ingress/monitoring/**velero** — cert-manager selector'ı YOK ve gerekmez: webhook çağrısı apiserver'ın host
+  ağından gelir), cert-manager TLS, Secret'lar Git'e girmez (manuel ya da external-secrets
   — runbook), Strimzi ACL/SCRAM, Polaris RBAC, Trino `rules.json` (satır filtresi/kolon maskesi).
 - **Kabul:** `runbooks/scripts/acceptance.sh` kurulu kümede dokuz e2e yolunu koşturup "KABUL" özeti basar;
   taze kümede aynı yollar `test/e2e/run.sh` (CI kapısı).

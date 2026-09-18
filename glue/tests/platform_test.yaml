@@ -142,6 +142,18 @@ tests:
         equal: {path: 'spec.rules[0].host', value: zeppelin.lakehouse.example.com}
       - documentIndex: 4
         equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: zeppelin, port: {number: 8080}}}
+  - it: vanilla networkpolicy takes the Prometheus ns from monitoring.namespace
+    template: networkpolicy.yaml
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}}
+  - it: monitoring.namespace override moves the scrape allowance (sabit "monitoring" YAZILMAZ)
+    template: networkpolicy.yaml
+    set: {monitoring.namespace: obs}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: obs}}}}
+      - notContains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}}
   - it: openshift networkpolicy allows both monitoring namespaces
     template: networkpolicy.yaml
     set: {platform: openshift}

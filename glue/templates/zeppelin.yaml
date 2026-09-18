@@ -74,7 +74,8 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-# label app: zeppelin ServiceMonitor selector'ı içindir (glue monitoring.yaml)
+# label app: zeppelin — Service'in kendi selector'ı ve NetworkPolicy/`kubectl -l` seçimleri içindir.
+# (ServiceMonitor DEĞİL: Zeppelin ServiceMonitor'ü Task 2b'de kaldırıldı — glue/templates/monitoring.yaml.)
 metadata: {name: zeppelin, namespace: {{ $ns }}, labels: {app: zeppelin}}
 spec: {selector: {app: zeppelin}, ports: [{name: http, port: 8080, targetPort: http}]}
 {{- end }}
