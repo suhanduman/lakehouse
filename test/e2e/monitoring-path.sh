@@ -31,7 +31,12 @@ kubectl -n "$NS" get scheduledsparkapplication maint-position-deletes -o json \
 RUN=""
 for _ in $(seq 1 24); do RUN=$(kubectl -n "$NS" get scheduledsparkapplication "$SSA" -o jsonpath='{.status.lastRunName}'); [[ -n "$RUN" ]] && break; sleep 10; done
 [[ -n "$RUN" ]] || { echo "HATA $SSA 4 dk içinde zamanlanmış koşu üretmedi"; kubectl -n "$NS" describe scheduledsparkapplication "$SSA" | tail -20; exit 1; }
-echo "OK zamanlanmış koşu: $RUN"
+# İLK koşu yakalanır yakalanmaz askıya al: aksi hâlde */1 cron'u iddialar sürerken dakikada bir driver+executor
+# çifti daha açar (4 vCPU CI düğümünde ~1 CPU / 2,5 GiB her biri) ve successfulRunHistoryLimit üç yeni başarılı
+# koşudan sonra iddiaların dayandığı $RUN SparkApplication'ını BUDAR. Tek koşu üç metrik ailesi için de yeter;
+# status.lastRun askıya almadan etkilenmez (ssa_last_run kalır).
+kubectl -n "$NS" patch scheduledsparkapplication "$SSA" --type=merge -p '{"spec":{"suspend":true}}' >/dev/null
+echo "OK zamanlanmış koşu: $RUN (SSA askıya alındı)"
 ST=""
 for _ in $(seq 1 90); do ST=$(kubectl -n "$NS" get sparkapplication "$RUN" -o jsonpath='{.status.applicationState.state}' 2>/dev/null || true); [[ "$ST" == COMPLETED || "$ST" == FAILED ]] && break; sleep 10; done
 [[ "$ST" == COMPLETED ]] || { echo "HATA $RUN durumu: $ST"; kubectl -n "$NS" logs "$RUN-driver" --tail=40 2>/dev/null || true; exit 1; }

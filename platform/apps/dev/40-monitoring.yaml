@@ -1,9 +1,12 @@
 # DEV-ONLY izleme yığını (kube-prometheus-stack). platform/apps/kustomization.yaml base listesine EKLENMEZ:
 # yalnız platform/envs/dev/kustomization.yaml bu dosyayı kaynak olarak alır. Prod (OpenShift) kendi
 # platform/user-workload monitoring'ini kullanır; lakehouse ns'indeki PodMonitor/ServiceMonitor/PrometheusRule'ları o toplar.
+# sync-wave -1: PodMonitor/ServiceMonitor/PrometheusRule CRD'leri wave 0'daki operatörlerden ÖNCE gelmeli.
+# 00-spark-operator.yaml (wave 0) artık prometheus.podMonitor.create: true diyor; AYNI wave'deki Application'lar
+# EŞZAMANLI sync edilir -> "no matches for kind PodMonitor" yarışı (selfHeal toparlar ama CI kapısında flake).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata: {name: monitoring, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+metadata: {name: monitoring, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "-1"}}
 spec:
   project: default
   sources:
