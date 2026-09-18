@@ -10,6 +10,14 @@ curl -sS -c "$CJ" -d 'userName=analyst1' -d 'password=analyst1-dev' localhost:18
 echo "OK zeppelin shiro login analyst1"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' -d 'userName=student1' -d 'password=wrong' localhost:18081/api/login)" == "403" ]] || { echo "HATA zeppelin wrong password 403 beklendi"; exit 1; }
 echo "OK zeppelin wrong password 403"
+# Rol kapısı ([urls] son kuralı anyofroles[admin, analyst, student]): kimlik doğrulamak YETMEZ. Rolsüz dev
+# kullanıcısı nogroup1 giriş yapabilir ama hiçbir veri uç noktasına erişemez (aksi halde paylaşımlı `zeppelin`
+# Trino servis hesabıyla tüm kataloğu okurdu — final review C1).
+NJ=$(mktemp)
+curl -sS -c "$NJ" -d 'userName=nogroup1' -d 'password=nogroup1-dev' localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin nogroup1 girişi başarısız (dev kullanıcısı eksik?)"; exit 1; }
+NC=$(curl -sS -b "$NJ" -o /dev/null -w '%{http_code}' localhost:18081/api/notebook)
+[[ "$NC" == "401" ]] || { echo "HATA zeppelin rol kapısı: rolsüz kullanıcı /api/notebook için 401 beklendi, gelen $NC"; exit 1; }
+echo "OK zeppelin rol kapısı: rolsüz kullanıcı 401 (giriş yapsa bile veri göremez)"
 # Bağımlılık indirmesi SUNUCU AÇILIŞINDA başlar ve asenkrondur; status READY olmadan paragraf
 # "Interpreter Setting 'jdbc' is not ready, its status is DOWNLOADING_DEPENDENCIES" ile düşer.
 ST=""

@@ -8,6 +8,8 @@ tests:
       - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: zeppelin}
       - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}}
       - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_RUN_MODE, value: local}}
+      # Not defterleri varsayılan olarak PRIVATE (zeppelin.notebook.public varsayılanı true'dur)
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_NOTEBOOK_PUBLIC, value: "false"}}
       - equal: {path: 'spec.template.spec.initContainers[0].name', value: seed}
       - equal: {path: 'spec.template.spec.securityContext.fsGroup', value: 1000}
       - equal: {path: 'spec.template.spec.containers[0].image', value: apache/zeppelin:0.12.1}
@@ -42,6 +44,20 @@ tests:
     set: {zeppelin.enabled: false}
     asserts:
       - hasDocuments: {count: 0}
+  - it: dev shiro gates every url behind a role (not merely authc)
+    template: dev-secrets.yaml
+    set: {components.devSecrets: true}
+    documentIndex: 4
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-shiro}
+      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: 'anyofroles = org\.apache\.zeppelin\.utils\.AnyOfRolesUserAuthorizationFilter'}
+      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: '/\*\* = authc, anyofroles\[admin, analyst, student\]'}
+      # giriş uç noktası rol kapısından MUAF olmalı (aksi halde Zeppelin'in filtresi NPE -> /api/login 500)
+      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: '(?m)^\s*/api/login = authc\s*$'}
+      # rol kapısının negatif kanıtı için rolsüz dev kullanıcısı
+      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: 'nogroup1 = nogroup1-dev, nogroup'}
+      # wildcard izin tanımı kalmamalı (footgun): `analyst = *` / `student = *`
+      - notMatchRegex: {path: 'stringData["shiro.ini"]', pattern: '(?m)^\s*(admin|analyst|student) = \*\s*$'}
   - it: dev interpreter seed targets trino jdbc over TLS
     template: dev-secrets.yaml
     set: {components.devSecrets: true}
