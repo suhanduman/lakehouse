@@ -19,9 +19,14 @@ Uçtan uca kanıt her kurulum/CI koşusunda alınır: `test/e2e/dr-path.sh` → 
 | **Kubernetes nesneleri** (`lakehouse` ns: CR'lar, ConfigMap, Secret, Deployment…) | ✅ | Velero `Schedule/lakehouse-daily` | `Restore` (§5) |
 | **Not defteri PVC'leri** (JupyterHub `hub-db-dir` + kullanıcı PVC'leri, Zeppelin `zeppelin-data`) | ✅ (gerçek CSI depolamada) | Velero node-agent fs-backup (Kopia) | `Restore` + PVC (§5.3); **kind'da çalışmaz** → §5.4 |
 | **Postgres PVC'leri (`pgdata`)** | ⛔ bilerek dışlandı | pod annotation `backup.velero.io/backup-volumes-excludes: pgdata` | Postgres'in dönüş yolu **Barman PITR**'dır (tutarlılık) |
-| **Kafka verisi** (`data-0`) | ❌ kapsam dışı | annotation ile fs-backup'tan dışlandı | Kaynaklardan **yeniden akıtma** (Debezium snapshot) ya da MirrorMaker 2 ile ikinci kümeye çoğaltma |
+| **Kafka verisi** (`data-0`) | ❌ kapsam dışı | annotation ile fs-backup'tan dışlandı | Kaynaklardan **yeniden akıtma** (Debezium snapshot — `runbooks/add-table.md`) |
 | **Iceberg verisi + metadata dosyaları** (`s3://lakehouse/`) | ❌ kapsam dışı | — | **S3'ün kendi çoğaltması** (müşteri S3'ü / FlashBlade replikasyonu) |
 | **MinIO verisi (dev)** | ❌ | annotation `…backup-volumes-excludes: data` | DEV-ONLY, yedeklenmez |
+
+> **Kafka verisi — karar (F6):** Kafka bu mimaride taşıyıcıdır, kayıt sistemi değil; broker verisi kaybolursa
+> dönüş yolu kaynaklardan **yeniden akıtmadır** ve **MirrorMaker 2 kurulmaz** — MM2 bir yedekleme aracı değil,
+> yalnız çoklu-site (ikinci aktif küme) çoğaltma aracıdır ve bu kapsam dışındadır (gerekçe:
+> `runbooks/preship-openshift.md` §5.2).
 
 > **Iceberg için kritik:** Polaris DB'yi geri yüklemek tabloları geri getirmez — tablo **dosyaları** S3'tedir.
 > Tersi de doğrudur: S3 duruyor ama Polaris DB kayıpsa tablolar "yok" görünür. İkisi **aynı zaman penceresine**

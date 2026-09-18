@@ -70,6 +70,25 @@ ile kümede üretilir (Dockerfile yok). Hızlı denetim:
 | Helm | 4.2.4 (CI) | Apache-2.0 | `azure/setup-helm` | `.github/workflows/e2e.yaml` | Yerelde ≥ 3.14 yeterli |
 | helm-unittest | 1.1.2 | MIT | GitHub plugin | `.github/workflows/e2e.yaml` | `glue/tests/` |
 
+## Replika sayıları ve PodDisruptionBudget (karar: PDB YOK)
+
+Kurulum hiçbir bileşen için `PodDisruptionBudget` üretmez. Gerekçe ve "ne zaman yeniden ele alınır" koşulu:
+`runbooks/preship-openshift.md` §5.1.
+
+| Bileşen | Prod replika | Kurulum yolu | PDB |
+|---|---|---|---|
+| Kafka (broker/controller) | 3 | `glue/values.yaml` → `kafka.replicas` (`min.insync.replicas: 2`) | **Strimzi yönetir** (elle eklenmez) |
+| CNPG `polaris-db` / `keycloak-db` / `superset-db` | 2 | `platform/values/glue.yaml` → `cnpg.*.instances` | **CNPG yönetir** (elle eklenmez) |
+| Kafka Connect | 1 | `glue/values.yaml` → `connect.replicas` | yok — tek replika, PDB drain'i kilitler |
+| Trino coordinator / worker | 1 / 2 | `platform/values/trino.yaml` → `server.workers` | yok — coordinator tekildir (chart), worker durumsuz |
+| Polaris | 1 | `platform/apps/20-polaris.yaml` + `platform/values/polaris.yaml` | yok — tek replika |
+| Superset | 1 | `glue/values.yaml` → `superset.replicas` | yok — tek replika |
+| JupyterHub hub / Zeppelin | 1 / 1 | `platform/values/jupyterhub.yaml`, `glue/templates/zeppelin.yaml` | yok — tek replika |
+
+Tek replikalı bir iş yüküne `minAvailable: 1` vermek düğüm boşaltmayı (`oc adm drain`) kalıcı kilitler;
+`maxUnavailable: 1` ise zaten mevcut davranıştır. HA gerekirse **önce replika sayısı** artırılır, PDB kararı o
+değişiklikle birlikte verilir.
+
 ## Lisans özeti (teslimat kapsamı)
 
 - Prod'a giden küme bileşenlerinin tamamı **Apache-2.0 / BSD-3-Clause / PostgreSQL License** (izin verici lisanslar).
