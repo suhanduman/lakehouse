@@ -27,7 +27,8 @@ Kurulum Redis/Valkey'siz çalışır (`SimpleCache`; worker/beat yok). Alerts & 
 - Giriş Keycloak ile; yalnız `lakehouse-*` gruplarının üyeleri (`allowed_groups`), `lakehouse-admins` hub yöneticisi. Her kullanıcıya kişisel PVC (dev 1Gi, prod 10Gi).
 - Not defteri imajı `quay.io/jupyter/pyspark-notebook:spark-4.1.2`; **her spawn'da** `postStart` ile `pyiceberg[s3fs,pyarrow]` + `trino` kurulur (~1 dk, PyPI erişimi gerekir — kapalı ağda iç PyPI aynası şart). Soğuk imaj çekimi ölçülen ~4,5 dk; bu yüzden `singleuser.startTimeout: 1200`.
 - Not defteri pod'unun çıkış trafiği **daraltılmıştır** (z2jh `singleuser.networkPolicy.egress`): küme içinde yalnız Trino 8443 ve Polaris 8181 (+dev MinIO 9000); genel internet (PyPI/S3) açık, diğer özel IP'ler kapalı. Yeni bir küme içi servise erişim gerekiyorsa kural `platform/values/jupyterhub.yaml`'a **ve** `jupyterhub-dev.yaml`'a eklenir (Helm listeleri birleştirmez, üzerine yazar → kurallar tekrarlanır).
-- Hazır env: `POLARIS_URI`, `POLARIS_CREDENTIAL` (paylaşımlı `notebooks` principal'ı), `TRINO_HOST`, `S3_ENDPOINT`, `REQUESTS_CA_BUNDLE=/etc/lakehouse-ca/tls.crt`.
+- Hazır env: `POLARIS_URI`, `POLARIS_CREDENTIAL` (paylaşımlı `notebooks` principal'ı), `TRINO_HOST`, `S3_ENDPOINT`.
+- **`REQUESTS_CA_BUNDLE` bilerek TANIMLI DEĞİL** (Superset'teki kararla aynı gerekçe): bu env `requests`/`urllib3`'e TEK kök dayatır ve not defterindeki her dış çağrıyı (PyPI, müşteri API'leri, HTTPS S3, Keycloak) yalnız `lakehouse-ca` ile doğrulatarak `SSLCertVerificationError`'a düşürürdü. CA yine `/etc/lakehouse-ca/tls.crt`'te mount'ludur; Trino'ya bağlanırken aşağıdaki örneklerdeki gibi **açıkça** `verify="/etc/lakehouse-ca/tls.crt"` verin (PyIceberg → Polaris düz HTTP olduğu için gerektirmez).
 
 ```python
 # PyIceberg -> Polaris (paylaşımlı notebooks principal'ı; yazma yalnız sandbox namespace'inde)
@@ -53,6 +54,8 @@ Tarayıcısız/otomatik işlerde `trino.auth.BasicAuthentication("<servis hesab�
 ## Zeppelin
 
 - Giriş **Shiro + AD (LDAPS)**, Keycloak DEĞİL (0.12'de OIDC/pac4j realm'i yok). Yapılandırma `Secret zeppelin-shiro` (`shiro.ini`; prod şablonu `runbooks/zeppelin/shiro-ad.ini`); değişiklikten sonra `kubectl -n lakehouse rollout restart deploy/zeppelin`.
+- **Rol kapısı:** `[urls]`'in son kuralı `/** = authc, anyofroles[admin, analyst, student]`'tır — yalnız kimlik doğrulamak YETMEZ, `groupRolesMap`'ten gelen üç rolden en az biri şarttır. `lakehouse-*` gruplarının hiçbirinde olmayan bir AD hesabı 401 alır (aksi hâlde paylaşımlı `zeppelin` Trino servis hesabıyla tüm kataloğu okuyabilirdi). Yeni bir grup eklenirse rol adı hem `groupRolesMap`'e hem bu listeye yazılır.
+- **Not defterleri varsayılan PRIVATE:** `ZEPPELIN_NOTEBOOK_PUBLIC=false` (Deployment env'i). Zeppelin'in varsayılanı `true`'dur ve her yeni not defterini tüm oturum açmış kullanıcılara açar; servis hesabı modelinde bu, bir analistin notundaki sonuçların öğrencilerce okunması demektir. Paylaşım not bazında UI'dan verilir (Note → permissions: `owners`/`readers`/`writers`). Değer değişirse pod yeniden başlar; var olan notların izinleri geriye dönük DEĞİŞMEZ.
 - Kullanım `%jdbc` ile: `%jdbc` ⏎ `select count(*) from shop.orders`. Bağlantı `jdbc:trino://trino.lakehouse.svc:8443/lakehouse?SSL=true&SSLTrustStorePath=/etc/lakehouse-ca/tls.crt`, kullanıcı `zeppelin` servis hesabı (SELECT-only).
 - **Tohum semantiği (önemli):** `Secret zeppelin-interpreter` yalnız bir TOHUM'dur. initContainer dosyayı PVC'ye (`/data/conf/interpreter.json`, `ZEPPELIN_CONFIG_FS_DIR`) **yalnız orada dosya yokken** kopyalar; Zeppelin her açılışta bu dosyayı kendisi yeniden yazar (kalan 23 interpreter'ı şablonlardan tamamlar). Yani Secret'ı güncellemek TEK BAŞINA etkisizdir. Parola/URL değiştirmek için:
   - UI → Interpreter → `jdbc` ayarını düzenle (önerilen; kullanıcı ayarlarını korur), **ya da**
@@ -71,6 +74,6 @@ Dev'de `keycloak.hostname` **küme içi** bir URL'dir (`http://keycloak-service.
 | Superset / Trino Web UI / JupyterHub tarayıcı OIDC akışı | e2e: password grant Bearer + provider/discovery/metadata kontrolleri | Gerçek redirect/callback, grup→rol senkronu |
 | Trino Route **reencrypt** (`tls.caBundle` dolu) | Şablon render ediliyor; dev'de Route yok | Router'ın `destinationCACertificate` ile bağlanması |
 | LDAP group provider (prod grupları) | Dev'de dosya provider'ı canlı | AD'ye bağlanıp `memberOf`/CN eşlemesi |
-| Sertifika yenileme (`ssl-context.refresh-time 1m`) | cert-manager `trino-tls`'i üretiyor | Yenilemenin kesintisiz olduğunun gözlenmesi |
+| Sertifika yenileme (`http-server.https.ssl-context.refresh-time`, **Trino varsayılanı 1m** — biz ayarlamıyoruz) | cert-manager `trino-tls`'i üretiyor | Yenilemenin kesintisiz olduğunun gözlenmesi |
 | Alerts & Reports | Kapalı (Valkey/worker yok) | Valkey + celeryWorker + tarayıcı kararı (F5) |
 | Superset imaj kaynağı | Varsayılan `apachesuperset.docker.scarf.sh/apache/superset` (Scarf yönlendiricisi) | Müşteri aynasına `spec.image.repository` (+ digest) sabitleme |

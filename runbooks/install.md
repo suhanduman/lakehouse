@@ -8,7 +8,14 @@
 - **Spark işleri her koşuda `spark.jars.packages`'i Maven Central'dan (`repo1.maven.org`) çözer** (Iceberg runtime + AWS bundle; driver/executor pod'ları `/tmp/.ivy2`'ye indirir, pod ömürlük). Yani `silver-merge`, `mongo-bronze` ve 3 bakım işi için **sürekli dışarı erişim** gerekir; kapalı ağda işler `UnresolvedAddressException`/`Ivy` hatasıyla FAILED olur. Kısıtlı ağ seçenekleri (F5 işi, bu sürümde uygulanmadı): iç Maven aynası (`spark.jars.ivySettings` ile) ya da `spark.jars.ivy`'yi kalıcı bir PVC'ye alıp tek seferlik ısıtma.
 
 ## Adımlar
-1. `platform/values/glue.yaml` ve `polaris.yaml`'ı ortama göre düzenle (hostname, S3 endpoint, `platform`, `route`, **`connect.buildImage`** = Connect build çıktısının gerçek `registry/repo:tag`'i — zorunlu, `:latest` kullanma; gerekiyorsa `connect.buildPushSecret`; HA/depolama için `cnpg.*.instances` ve `kafka.storageClass`/`cnpg.*.storageClass`); `platform/polaris/setup.yaml`'da S3 endpoint'i.
+1. Ortama göre düzenlenecek dosyalar (hepsi; biri atlanırsa ilgili bileşen `*.lakehouse.example.com` ile açılır):
+   - `platform/values/glue.yaml` — `keycloak.hostname` (tam URL) + `trino/superset/jupyterhub/zeppelin.hostname`, `tls.caBundle`, `s3.endpoint`, `platform`, `route`, **`connect.buildImage`** = Connect build çıktısının gerçek `registry/repo:tag`'i (zorunlu, `:latest` kullanma; gerekiyorsa `connect.buildPushSecret`), HA/depolama için `cnpg.*.instances` ve `kafka.storageClass`/`cnpg.*.storageClass`.
+   - `platform/values/polaris.yaml` — depolama/DB ayarları (S3 kimliği `s3-creds` Secret'ından gelir).
+   - `platform/polaris/setup.yaml` — katalog `endpoint`/`endpoint_internal` (S3 endpoint'i), gerekiyorsa `sts_unavailable`.
+   - `platform/values/trino.yaml` — `http-server.authentication.oauth2.issuer` (= `<keycloak.hostname>/realms/lakehouse`) ve `fs.s3.*` endpoint'i; ayrıca `accessControl.rules` (grup kuralları, `runbooks/access-control.md`).
+   - `platform/values/trino-ldap.yaml` — **yalnız prod**: AD group provider (`ldap.url`, bind DN, `user-base-dn`, `user-search-filter`, `memberOf`/`cn`).
+   - `platform/values/jupyterhub.yaml` — Keycloak URL'leri (`authorize_url`/`token_url`/`userdata_url`), `oauth_callback_url`, `S3_ENDPOINT`.
+   - `runbooks/zeppelin/shiro-ad.ini` — AD realm'i (bu dosya Secret olarak yaratılır, aşağıdaki "F4 Secret'ları" 4. adımı).
    Boyutlandırma: varsayılan `spark.*` değerleri küçük tier içindir (driver 2g/1 core, 1 executor, `shufflePartitions: 8`); tablolar/veri büyüdüğünde `platform/values/glue.yaml`'daki yorumlu büyük tier bloğunu aç (driver 4g/2 core, 2×4g executor, `shufflePartitions: 200`).
 2. **F4 Secret'ları** (aşağıdaki bölüm) kurulumdan ÖNCE yaratılmalı — `components.devSecrets` yalnız dev'de `true`; prod'da chart bunları üretmez ve eksik Secret pod'u `CreateContainerConfigError`'da bırakır.
 3. `bootstrap/bootstrap.sh --env prod` (ArgoCD `v3.5.2` kurar; `quay.io/strimzi-helm`, `quay.io/jetstack/charts` ve `ghcr.io/apache/superset-kubernetes-operator/charts` OCI Helm repository'lerini ArgoCD'ye kaydeder; kök + alt Application'ları — **cert-manager**, Strimzi, CNPG, keycloak-operator, spark-operator, **superset-operator**, glue, Polaris, **Trino**, **JupyterHub** — uygular). İzle: `kubectl -n argocd get applications` → hepsi `Synced/Healthy`. Connect imaj build'i ~10 dk.
@@ -100,8 +107,19 @@ ArgoCD çok-kaynaklı Application'larda values dosyaları arasında şablonlama 
 | glue `jupyterhub.hostname` | `oauth_callback_url` = `https://<jupyterhub.hostname>/hub/oauth_callback` | `platform/values/jupyterhub.yaml` |
 | glue `trino.hostname` | Trino Route/Ingress host + Keycloak `trino` client redirect URI (`/oauth2/callback`) | glue `route.yaml`/`ingress.yaml` + `keycloak-realm.yaml` (TÜRETİLİR, elle değil) |
 | glue `superset.hostname` / `zeppelin.hostname` | Route/Ingress host + `superset` client redirect URI (`/oauth-authorized/keycloak`) | aynı (TÜRETİLİR) |
+| **S3 endpoint** (tek doğru: müşteri S3'ü) | glue `s3.endpoint` (sink/Spark istemcileri) · Polaris katalog `endpoint`/`endpoint_internal` · Trino `fs.s3.*` endpoint'i · JupyterHub `S3_ENDPOINT` | `platform/values/glue.yaml` · `platform/polaris/setup.yaml` · `platform/values/trino.yaml` · `platform/values/jupyterhub.yaml` |
 
 Superset/Trino/JupyterHub redirect URI'leri realm şablonunda hostname'lerden türetilir; ek URI gerekiyorsa `keycloak.extraRedirectUris.<client>` listesine eklenir.
+
+### Vanilla Kubernetes'te Ingress TLS (operatörün sorumluluğu)
+
+OpenShift'te `route.enabled=true` ile Route TLS'i kendisi sonlandırır (`edge`, Trino'da `passthrough`/`reencrypt`).
+**Vanilla Kubernetes'te glue'nun ürettiği Ingress'lerde `spec.tls` YOKTUR** (`glue/templates/ingress.yaml`): trafik ingress controller'a
+düz HTTP gelir. Bu, üretimde kabul edilemez — Zeppelin/Superset form parolaları ve oturum çerezleri (`cookie.secure = true`
+olduğundan çerez HTTP'de hiç gönderilmez, giriş döngüye girer) açık akar. Kurulum sırasında TLS'i **operatör** sağlar:
+ingress controller'da varsayılan sertifika, ya da her host için bir `Secret` + controller'a özgü annotation'lar
+(cert-manager `cert-manager.io/cluster-issuer` + `ingressClassName`). Şablona `ingress.tls` bloğu eklemek **F5 işidir**
+(şu an kurulumda Ingress objeleri elle `kubectl edit` ile değil, controller/varsayılan sertifika ile TLS'lenmelidir).
 
 ## İlk giriş
 
@@ -115,6 +133,48 @@ Superset/Trino/JupyterHub redirect URI'leri realm şablonunda hostname'lerden t�
 | Zeppelin | `https://<zeppelin.hostname>/` | **Keycloak DEĞİL**: Shiro + AD (LDAPS) — kullanıcı adı/parola formu (`runbooks/zeppelin/shiro-ad.ini`) |
 
 Superset'te Trino bağlantısı tek seferlik bir komutla içe aktarılır — `runbooks/user-facing.md`.
+
+## F3 → F4 yükseltme sırası (var olan bir kurulumu güncellerken)
+
+Temiz kurulum değil, **çalışan bir F3 kümesini** F4'e taşıyorsanız sıra önemlidir; ArgoCD sync'i doğrudan tetiklemek
+pod'ları eksik Secret'la `CreateContainerConfigError`'a sokar ve realm/issuer değişiklikleri sessizce uygulanmaz.
+
+1. **Yedi yeni Secret, glue sync'inden ÖNCE.** Yukarıdaki "F4 Secret'ları" bölümünün 1–6 numaralı komutlarını çalıştırın
+   (`keycloak-clients`, `trino-service-accounts`, `trino-shared-secret`, `superset-secret`, `zeppelin-shiro`,
+   `zeppelin-interpreter`, `lakehouse-ca`). Eksik bir Secret'la sync edilirse Trino/Superset/Zeppelin pod'ları
+   `CreateContainerConfigError`'da bekler; Secret sonradan yaratılınca kubelet kendiliğinden toparlar
+   (`kubectl -n lakehouse get pods` ile doğrulayın).
+2. **Realm'i yeniden içe aktarın.** `KeycloakRealmImport` mevcut realm'i GÜNCELLEMEZ — F4'ün yeni client'ları
+   (`trino`, `superset`, `jupyterhub` + audience/groups mapper'ları) eski realm'e girmez. Aşağıdaki
+   "Realm değişikliği" bölümünü uygulayın. **Kullanıcıların Keycloak UI'ında elle yaptığı her şey gider**
+   (elle açılmış client'lar, kullanıcılar, rol eşlemeleri) — AD federasyonu varsa kullanıcılar tekrar akar,
+   yoksa önce `kcadm.sh get users -r lakehouse > users.json` ile yedek alın.
+3. **`keycloak.hostname` artık TAM URL'dir** (v2: `https://keycloak.<domain>`, eskiden yalnız host adı). Değeri
+   `platform/values/glue.yaml`'da güncelleyin; token `iss`'i değiştiği için Keycloak'ı yeniden başlatın ve
+   Trino'nun `oauth2.issuer`'ı (`platform/values/trino.yaml`) ile **birebir aynı** olduğunu doğrulayın:
+   ```bash
+   kubectl -n lakehouse rollout restart statefulset/keycloak
+   kubectl -n lakehouse rollout status statefulset/keycloak --timeout=600s
+   ```
+4. **`polaris-setup.sh`'i tekrar çalıştırın.** F4 `sandbox` namespace'ini, `lakehouse_sandbox` katalog rolünü,
+   `sandbox_writers` principal rolünü ve `notebooks` principal'ını ekler; script idempotenttir ve yalnız EKSİK
+   nesneleri yaratır. **Uyarı:** katalog `properties` (ör. `polaris.config.drop-with-purge.enabled`) yalnız katalog
+   YARATILIRKEN yazılır → var olan kurulumda ayrıca uygulanmalıdır:
+   ```bash
+   runbooks/scripts/polaris-setup.sh --setup platform/polaris/setup.yaml
+   polaris catalogs update --set-property polaris.config.drop-with-purge.enabled=true lakehouse
+   ```
+5. **Doğrulama:**
+   ```bash
+   kubectl -n argocd get applications                      # hepsi Synced/Healthy (trino, jupyterhub dâhil)
+   kubectl -n lakehouse get pods -o wide                   # CreateContainerConfigError kalmamalı
+   kubectl -n lakehouse get secret polaris-trino polaris-notebooks   # polaris-setup yazdı mı
+   kubectl -n lakehouse get certificate trino-tls          # READY=True (cert-manager)
+   kubectl -n lakehouse exec deploy/trino-coordinator -- \
+     curl -sk https://localhost:8443/v1/info | head -c 200 # Trino HTTPS ayakta
+   ```
+   Uçtan uca kanıt için `test/e2e/trino-path.sh`, `superset-path.sh`, `jupyterhub-path.sh`, `zeppelin-path.sh`
+   (dev/kind kalıbı; prod'da tarayıcı akışları elle doğrulanır — `runbooks/user-facing.md`).
 
 ## Realm değişikliği (KeycloakRealmImport mevcut realm'i GÜNCELLEMEZ)
 
