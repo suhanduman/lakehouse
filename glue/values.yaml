@@ -204,6 +204,9 @@ spark:
   executor: {instances: 1, cores: 1, coreRequest: "", memory: 2g, memoryOverhead: 512m}
   shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
   kafkaSecret: spark                 # KafkaUser spark'ın Secret'ı (sasl.jaas.config) — mongo-bronze Kafka okuması
+  # boş = Maven Central (varsayılan); doluysa ConfigMap spark-ivysettings + tüm SSA'larda /opt/ivy/ivysettings.xml
+  # mount edilir ve spark.jars.ivySettings o yolu gösterir (F5 backlog — iç Maven aynası: runbooks/troubleshooting.md, Task 6)
+  ivySettingsXml: ""
   schedules:
     silverMerge: "*/15 * * * *"
     positionDeletes: "0 * * * *"

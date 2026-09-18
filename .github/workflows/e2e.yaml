@@ -11,6 +11,8 @@ jobs:
         with: {version: v4.2.4}
       # Helm 4: git kaynaklı plugin'in provenance'ı yok -> doğrulama kapalı kurulur (sürüm sabit)
       - run: helm plugin install --verify=false --version 1.1.2 https://github.com/helm-unittest/helm-unittest && helm unittest glue
+      # Spark job kodu (Spark'sız) sözdizimi kontrolü: import hatası/typo push edilmeden yakalanır
+      - run: python3 -m py_compile glue/jobs/*.py
       # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
       - name: prod + dev değer dosyalarıyla render
         run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null

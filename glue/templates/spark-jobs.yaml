@@ -28,6 +28,18 @@ metadata:
 data:
 {{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
   pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList "maintain_namespaces" $maintList) | quote }}
+{{- if $s.ivySettingsXml }}
+---
+# iç Maven aynası (F5 backlog): boşsa bu ConfigMap render EDİLMEZ, driver/executor Maven Central'a çıkar (varsayılan)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-ivysettings
+  namespace: {{ $ns }}
+  annotations: {argocd.argoproj.io/sync-wave: "3"}
+data:
+  ivysettings.xml: {{ $s.ivySettingsXml | quote }}
+{{- end }}
 {{- $m := $s.maintenance }}
 {{- /* bakım SSA'ları (maint-*) pipeline, mongo ya da nginx'ten HERHANGİ biri varsa çalışır: nginx_raw da bakım görsün (TTL hariç, F5) */ -}}
 {{- $maintGate := or .Values.pipelines $mongoList .Values.nginx.enabled }}
@@ -70,6 +82,9 @@ spec:
       {{- /* Iceberg runtime + AWS bundle sürümü versions.iceberg'den (values'ta ikinci bir literal sürüm tutulmaz) */}}
       spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:{{ $.Values.versions.iceberg }},org.apache.iceberg:iceberg-aws-bundle:{{ $.Values.versions.iceberg }}{{ if $job.kafka }},org.apache.spark:spark-sql-kafka-0-10_2.13:{{ $s.version }}{{ end }}"
       spark.jars.ivy: /tmp/.ivy2
+      {{- if $s.ivySettingsXml }}
+      spark.jars.ivySettings: /opt/ivy/ivysettings.xml
+      {{- end }}
       spark.redaction.regex: "(?i)secret|password|token|credential"   # driver/executor log ve Spark UI'da sır sızdırma
       spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
       spark.sql.catalog.lakehouse: org.apache.iceberg.spark.SparkCatalog
@@ -109,6 +124,9 @@ spec:
       {{- end }}
       volumeMounts:
       - {name: job, mountPath: /opt/job}
+      {{- if $s.ivySettingsXml }}
+      - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
+      {{- end }}
       {{- if $job.kafka }}
       - {name: kafka-ca, mountPath: /etc/kafka-ca, readOnly: true}
       {{- end }}
@@ -132,12 +150,19 @@ spec:
       {{- end }}
       volumeMounts:
       - {name: job, mountPath: /opt/job}
+      {{- if $s.ivySettingsXml }}
+      - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
+      {{- end }}
       {{- if $job.kafka }}
       - {name: kafka-ca, mountPath: /etc/kafka-ca, readOnly: true}
       {{- end }}
     volumes:
     - name: job
       configMap: {name: lakehouse-jobs}
+    {{- if $s.ivySettingsXml }}
+    - name: ivysettings
+      configMap: {name: spark-ivysettings}
+    {{- end }}
     {{- if $job.kafka }}
     - name: kafka-ca
       secret: {secretName: lakehouse-cluster-ca-cert, items: [{key: ca.crt, path: ca.crt}]}

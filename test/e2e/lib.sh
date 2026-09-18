@@ -38,7 +38,7 @@ run_spark_once() {  # run_spark_once <ScheduledSparkApplication adı> -> templat
   # merge modu da log'a düşsün: incremental / FALLBACK bounded / FALLBACK full (artımlı yolun gerçekten koştuğunun kanıtı).
   # 'full' sözcük sınırıyla: Spark'ın "…successfully…" satırları tail -15'i doldurup asıl satırları kaydırmasın.
   # tail=2000: birden çok pipeline'da (shop + crm) ilk pipeline'ın satırı 200 satırlık Spark INFO'nun dışına kayıyordu (F3 canlı)
-  kubectl -n "$NS" logs "$app-driver" --tail=2000 2>/dev/null | grep -E "MERGE_OK|MAINT_OK|MONGO_OK|HATA|Exception|->|incremental|FALLBACK|[^[:alpha:]]full[^[:alpha:]]" | tail -15 || true
+  kubectl -n "$NS" logs "$app-driver" --tail=2000 2>/dev/null | grep -E "MERGE_OK|MAINT_OK|MONGO_OK|HATA|Exception|->|incremental|FALLBACK|rewrite_manifests|[^[:alpha:]]full[^[:alpha:]]" | tail -15 || true
   [[ "$st" == "COMPLETED" ]] || { echo "SparkApplication $app: $st"; kubectl -n "$NS" describe sparkapplication "$app" | tail -20; return 1; }
   kubectl -n "$NS" delete sparkapplication "$app" --ignore-not-found >/dev/null
 }

@@ -69,6 +69,9 @@ def main() -> None:
             elif a.mode == "compact":
                 call(spark, "rewrite_data_files", t,
                      ", options => map('delete-file-threshold','5','remove-dangling-deletes','true','partial-progress.enabled','true')")
+                # veri dosyaları katlandıktan sonra manifest'ler de katlanır (F5 backlog): çok sayıda küçük manifest
+                # metadata okuma/planlama maliyetini artırır — rewrite_data_files bunu otomatik yapmaz
+                call(spark, "rewrite_manifests", t)
             else:
                 call(spark, "expire_snapshots", t, f", older_than => TIMESTAMP '{ts_days_ago(a.snapshot_days)}', retain_last => 1")
                 # prefix_listing: Hadoop FS yerine FileIO (S3FileIO) ile listeler -> resmi Spark imajında s3a yok (F2 e2e: "No FileSystem for scheme s3")

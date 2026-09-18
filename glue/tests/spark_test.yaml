@@ -56,6 +56,33 @@ tests:
     asserts:
       - hasDocuments: {count: 1}
       - equal: {path: kind, value: ConfigMap}
+  - it: ivySettingsXml empty (default) — no spark-ivysettings ConfigMap, no mount, no sparkConf key
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
+    asserts:
+      - hasDocuments: {count: 5}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        isNull: {path: 'spec.template.sparkConf["spark.jars.ivySettings"]'}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        notContains: {path: spec.template.driver.volumeMounts, content: {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}}
+  - it: ivySettingsXml set — spark-ivysettings ConfigMap + mounts + sparkConf key present
+    set:
+      pipelines: [{bronze: shop_raw.orders, keys: [id]}]
+      spark.ivySettingsXml: |
+        <ivysettings><settings defaultResolver="mirror"/></ivysettings>
+    asserts:
+      - documentSelector: {path: metadata.name, value: spark-ivysettings}
+        equal: {path: kind, value: ConfigMap}
+      - documentSelector: {path: metadata.name, value: spark-ivysettings}
+        matchRegex: {path: 'data["ivysettings.xml"]', pattern: 'defaultResolver="mirror"'}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        equal: {path: 'spec.template.sparkConf["spark.jars.ivySettings"]', value: /opt/ivy/ivysettings.xml}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        contains: {path: spec.template.driver.volumeMounts, content: {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        contains: {path: spec.template.executor.volumeMounts, content: {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}}
+      - documentSelector: {path: metadata.name, value: silver-merge}
+        contains: {path: spec.template.volumes, content: {name: ivysettings, configMap: {name: spark-ivysettings}}}
   - it: credential comes from Secret via env, never from sparkConf
     set:
       pipelines: [{bronze: shop_raw.orders, keys: [id]}]
