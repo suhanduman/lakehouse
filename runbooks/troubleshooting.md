@@ -148,6 +148,16 @@ kubectl -n lakehouse logs <ad>-driver --tail=200 | grep -E 'incremental|FALLBACK
   Zeppelin `progressDeadlineSeconds: 1800`; JupyterHub `singleuser.startTimeout: 1200`; bootstrap'ta glue
   `--wait 40m`; e2e'de `wait_app glue 1 2700s`. "Pod sağlıklı ama Deployment `ProgressDeadlineExceeded`"
   durumu bu sınıftandır.
+- **Helm OCI çekimi `docker-credential-*: executable file not found` (yalnız geliştirici makinesi):**
+  `superset-operator` (`ghcr.io/apache/superset-kubernetes-operator/...`) gibi **OCI** kaynaklı chart'lar
+  `~/.docker/config.json` içindeki `credsStore` girdisini kullanır; kimlik yardımcı programı (ör. macOS'ta
+  `docker-credential-osxkeychain`) PATH'te yoksa `helm` anonim çekimde bile düşer ve `bootstrap.sh` orada durur.
+  Çözüm: kurulumu **boş bir docker config dizini** ile koşun — kimlik gerekmez, chart'lar zaten herkese açıktır:
+  ```bash
+  mkdir -p /tmp/emptydockercfg && echo '{}' > /tmp/emptydockercfg/config.json
+  DOCKER_CONFIG=/tmp/emptydockercfg bootstrap/bootstrap.sh --env dev --mode helm
+  ```
+  CI'da (Linux runner) ve küme içi imaj çekiminde görülmez; yalnız `helm`'in koştuğu makineyi ilgilendirir.
 - **`job/polaris-bootstrap` `BackoffLimitExceeded`:** taze kümede CNPG ~4-5 dk sürer; `backoffLimit: 12` bunun
   içindir. Tükenmişse `kubectl -n lakehouse delete job polaris-bootstrap` + glue sync (Job idempotent).
 - **NetworkPolicy:** prod'da açıktır; pre-ship OpenShift'te doğrulanana kadar `networkPolicy.enabled=false`
