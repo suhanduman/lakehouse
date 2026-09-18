@@ -5,9 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; VELERO_NS="${VELERO_NS:-velero}"
 
 echo "== CNPG sürekli WAL arşivi"
+# Bu dosyadaki TEK biçim: yoklama döngüsü SESSİZDİR (`2>/dev/null || true` — nesne/koşul henüz olmayabilir),
+# hemen ardından gelen iddia YÜKSEK SESLİDİR (kubectl hatası + conditions dökümü + exit 1). Aynı kalıp
+# CNPG Backup (satır ~21) ve Velero backup/restore yoklamalarında da kullanılıyor.
 for _ in $(seq 1 60); do
   ok=1; for c in polaris-db keycloak-db superset-db; do
-    [[ "$(kubectl -n "$NS" get cluster "$c" -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}' 2>/dev/null)" == "True" ]] || ok=""
+    [[ "$(kubectl -n "$NS" get cluster "$c" -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}' 2>/dev/null || true)" == "True" ]] || ok=""
   done; [[ -n "$ok" ]] && break; sleep 10
 done
 for c in polaris-db keycloak-db superset-db; do
@@ -59,7 +62,7 @@ for pod_vol in "lakehouse-dual-role-0=data-0" "polaris-db-1=pgdata"; do
   a=$(kubectl -n "$NS" get pod "${pod_vol%%=*}" -o jsonpath='{.metadata.annotations.backup\.velero\.io/backup-volumes-excludes}' 2>/dev/null)
   [[ "$a" == "${pod_vol##*=}" ]] || { echo "HATA ${pod_vol%%=*} dışlama annotation'ı '${a:-yok}' (beklenen ${pod_vol##*=})"; exit 1; }
 done; echo "OK Kafka/CNPG pod'larında fs-backup dışlama annotation'ı var"
-kubectl apply -f "$ROOT/test/e2e/velero-backup.yaml"
+kubectl -n "$VELERO_NS" apply -f "$ROOT/test/e2e/velero-backup.yaml"
 p=""; for _ in $(seq 1 60); do p=$(kubectl -n "$VELERO_NS" get backups.velero.io e2e-lakehouse -o jsonpath='{.status.phase}' 2>/dev/null || true); [[ "$p" =~ ^(Completed|PartiallyFailed|Failed|FailedValidation)$ ]] && break; sleep 10; done
 [[ "$p" == "Completed" ]] || { kubectl -n "$VELERO_NS" describe backups.velero.io e2e-lakehouse | tail -40; echo "HATA Velero backup ${p:-yok}"; exit 1; }; echo "OK Velero backup Completed"
 # .spec.volume = POD hacim adı (PVC adı değil). kind NOTU: local-path PV'leri hostPath'tir ve Velero fs-backup
@@ -73,7 +76,7 @@ if grep -qE '(^| )(pgdata|data-0)=' <<<"$pv"; then echo "HATA Kafka/CNPG hacmi y
 echo "== Velero restore provası (e2e-dr-marker)"
 kubectl -n "$NS" delete configmap e2e-dr-marker
 kubectl -n "$VELERO_NS" delete restores.velero.io e2e-marker --ignore-not-found >/dev/null
-kubectl apply -f "$ROOT/test/e2e/velero-restore.yaml"
+kubectl -n "$VELERO_NS" apply -f "$ROOT/test/e2e/velero-restore.yaml"
 r=""; for _ in $(seq 1 30); do r=$(kubectl -n "$VELERO_NS" get restores.velero.io e2e-marker -o jsonpath='{.status.phase}' 2>/dev/null || true); [[ "$r" =~ ^(Completed|PartiallyFailed|Failed|FailedValidation)$ ]] && break; sleep 5; done
 [[ "$r" == "Completed" ]] || { kubectl -n "$VELERO_NS" describe restores.velero.io e2e-marker | tail -30; echo "HATA restore ${r:-yok}"; exit 1; }
 kubectl -n "$NS" get configmap e2e-dr-marker -o name >/dev/null || { echo "HATA marker geri gelmedi"; exit 1; }; echo "OK Velero restore: e2e-dr-marker geri geldi"

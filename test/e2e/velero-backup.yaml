@@ -1,8 +1,11 @@
 # e2e: Schedule/lakehouse-daily şablonuyla AYNI alanlar (glue/templates/backup.yaml) — tek seferlik Backup.
 # `pods` BİLEREK dışlanmaz: fs-backup (PodVolumeBackup) pod öğesi yedeklenirken tetiklenir.
+# `metadata.namespace` YAZILMAZ: CR, Velero sunucusunun ns'inde yaşar ve bu ns ortamdan ortama değişir
+# (dev `velero`, OpenShift/OADP `openshift-adp`) -> uygulayan taraf `kubectl -n "$VELERO_NS" apply -f` der
+# (test/e2e/dr-path.sh; runbooks/scripts/acceptance.sh --velero-ns ile aktarır).
 apiVersion: velero.io/v1
 kind: Backup
-metadata: {name: e2e-lakehouse, namespace: velero}
+metadata: {name: e2e-lakehouse}
 spec:
   includedNamespaces: [lakehouse]
   defaultVolumesToFsBackup: true

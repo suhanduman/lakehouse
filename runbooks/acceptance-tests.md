@@ -80,7 +80,9 @@ Bir yol düşerse script orada durur, çıkış kodu **1** olur ve özet `KABUL 
   **kabul koşusunda kullanılmaz** (varsayılan `1`).
 - **`dr-path.sh` Velero adımı kind'da:** PVC içerikleri fs-backup'a girmez (hostPath sınırı) — beklenen
   davranıştır, yol yine geçer (`runbooks/dr.md` §5.4). PVC yedeği kanıtı gerçek CSI depolamada alınır.
-- **OpenShift:** `--velero-ns openshift-adp` zorunludur. `monitoring-path.sh` dev kalıbındaki
+- **OpenShift:** `--velero-ns openshift-adp` zorunludur; `dr-path.sh`'in yedek/restore manifest'leri
+  (`test/e2e/velero-*.yaml`) `metadata.namespace` TAŞIMAZ ve `kubectl -n "$VELERO_NS" apply` ile
+  uygulanır, yani bayrak gerçekten etkilidir. `monitoring-path.sh` dev kalıbındaki
   `monitoring-kube-prometheus-prometheus` servisini beklediği için user-workload monitoring kullanan
   kümelerde bu yol yerine platformun kendi konsolundan (Observe → Alerting/Targets) doğrulama yapılır;
   kural/hedef adları aynıdır.

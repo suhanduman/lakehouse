@@ -42,9 +42,13 @@ if [[ "$MODE" == "argocd" ]]; then
   echo "beklenen revizyon: $EXPECT"
   # monitoring ve velero YALNIZ dev overlay'inde var (platform/apps/dev); e2e her zaman --env dev ile bootstrap eder
   for app in cert-manager strimzi cnpg cnpg-barman keycloak-operator spark-operator superset-operator monitoring velero glue polaris jupyterhub; do
-    # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
+    # Revizyon kontrolü GIT KAYNAKLI her uygulama için: glue/polaris/jupyterhub/trino/keycloak-operator
+    # $values ref'i ile değer dosyası çeker; monitoring ve velero de öyle ($values/platform/values/
+    # {monitoring,velero}-dev.yaml — bootstrap.sh DEV_ONLY_PATCH'i o kaynağı repo/revizyona sabitler).
+    # Kontrolsüz bırakılırlarsa var olan bir kümede yeniden koşu ESKİ revizyonun değerlerini test edip
+    # yeşil raporlayabilirdi. Salt-chart olanlar (cert-manager, strimzi, cnpg, spark-operator, …) 0 alır.
     # glue en ağır uygulama (Connect build + CNPG x3 + Keycloak + Zeppelin/Superset imajları): varsayılan 1800s yetmedi (CI 35267164775)
-    case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
+    case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; monitoring|velero) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s
