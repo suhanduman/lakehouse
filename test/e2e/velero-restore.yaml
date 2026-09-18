@@ -1,0 +1,12 @@
+# e2e restore provası: yalnız işaret ConfigMap'i geri yüklenir. Velero Restore'da AD filtresi YOKTUR ->
+# labelSelector (e2e: dr-marker) + includedResources ile daraltılır; canlı iş yüklerine dokunulmaz.
+apiVersion: velero.io/v1
+kind: Restore
+metadata: {name: e2e-marker, namespace: velero}
+spec:
+  backupName: e2e-lakehouse
+  includedNamespaces: [lakehouse]
+  includedResources: [configmaps]
+  labelSelector: {matchLabels: {e2e: dr-marker}}
+  restorePVs: false
+  existingResourcePolicy: update

@@ -29,6 +29,9 @@ cnpg:
 #nginx: {enabled: true}
 # CNPG PITR yedekleri (F5): veri bucket'ından AYRI hedef. Endpoint/bucket kurulumda müşterinin değerleriyle
 # doldurulur; `backup-s3-creds` Secret'ı (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) kurulumdan ÖNCE yaratılır.
+# Velero/OADP: prod'da OADP operatörü kurulduktan SONRA açılır (Schedule CR ns openshift-adp'ye yazılır).
+# Kapalıyken Kafka/MinIO fs-backup dışlama annotation'ları da render edilmez — runbooks/dr.md.
+velero: {enabled: false, namespace: openshift-adp}
 backup:
   enabled: true
   s3: {endpoint: https://s3.example.com, bucket: lakehouse-backups, region: us-east-1, secret: backup-s3-creds}

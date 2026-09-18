@@ -40,7 +40,13 @@ spec:
   strategy: {type: Recreate}
   selector: {matchLabels: {app: minio}}
   template:
-    metadata: {labels: {app: minio}}
+    metadata:
+      labels: {app: minio}
+{{- if .Values.velero.enabled }}
+      # Velero fs-backup dışlaması: MinIO PVC'si lakehouse'un KENDİSİ (Iceberg dosyaları + CNPG yedekleri).
+      # Veri gölünü kendi yedek deposuna kopyalamak döngüseldir; Velero'nun kapsamı ns nesneleri + notebook PVC'leridir.
+      annotations: {backup.velero.io/backup-volumes-excludes: {{ .Values.velero.excludeVolumes.minio | quote }}}
+{{- end }}
     spec:
       containers:
       - name: minio

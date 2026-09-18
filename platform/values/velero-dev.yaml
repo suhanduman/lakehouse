@@ -1,0 +1,38 @@
+# DEV-ONLY Velero (kind). Prod (OpenShift): OADP operatörü AYNI velero.io/v1 CRD'lerini kurar (ns openshift-adp);
+# bu chart prod'da KURULMAZ — eşleme runbooks/dr.md'de (Task 6).
+# kind'da CSI snapshot sürücüsü YOK -> volume snapshot değil, node-agent dosya sistemi yedeği (Kopia).
+initContainers:
+# Uyumluluk matrisi (velero-plugin-for-aws README): plugin v1.14.x <-> Velero v1.18.x. chart 12.1.0 = appVersion 1.18.1.
+- name: velero-plugin-for-aws
+  image: velero/velero-plugin-for-aws:v1.14.2
+  imagePullPolicy: IfNotPresent
+  volumeMounts: [{mountPath: /target, name: plugins}]
+configuration:
+  backupStorageLocation:
+  # CNPG Barman ile AYNI bucket, AYRI prefix: barman yalnız s3://backups/cnpg/ altını yönetir (retention 30d),
+  # Velero s3://backups/velero/ altını. Prod'da müşteri S3'ünde de aynı ayrım geçerlidir.
+  - name: default
+    provider: aws
+    bucket: backups
+    prefix: velero
+    default: true
+    config: {region: us-east-1, s3ForcePathStyle: "true", s3Url: http://minio.lakehouse.svc:9000}
+  volumeSnapshotLocation: []
+  # Şemadan bağımsız güvenlik ağı: Backup/Schedule'da belirtilmese de PVC'ler fs-backup ile alınır
+  defaultVolumesToFsBackup: true
+snapshotsEnabled: false          # VolumeSnapshotLocation/CSI yok (kind)
+deployNodeAgent: true            # DaemonSet: /var/lib/kubelet/pods hostPath (upstream varsayılanı) — fs-backup şart
+# DEV-ONLY kimlik: MinIO root (glue/values.yaml minio.rootUser/rootPassword ile aynı sentetik değer).
+# Secret'ı chart YARATIR (glue DEĞİL): ArgoCD'de velero wave 0, glue wave 1 -> glue'dan Secret beklemek kilitlenme olurdu
+# (velero Healthy olmadan wave 1 başlamaz, Secret wave 1'de yaratılırdı). Prod'da OADP kendi Secret'ını alır.
+credentials:
+  useSecret: true
+  name: velero-s3-creds
+  secretContents:
+    cloud: |
+      [default]
+      aws_access_key_id=minioadmin
+      aws_secret_access_key=minioadmin
+resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 512Mi}}
+nodeAgent:
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 1Gi}}

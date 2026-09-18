@@ -18,6 +18,15 @@ spec:
 {{- with .Values.kafka.storageClass }}
       class: {{ . | quote }}
 {{- end }}
+{{- if .Values.velero.enabled }}
+  # Velero fs-backup dışlaması (pod annotation'ı): Kafka dayanıklılığı replikasyonla sağlanır; jbod hacmini
+  # Kopia'ya kopyalamak hem tutarsız (canlı segment/indeks dosyaları) hem de pahalıdır. Hacim adı jbod id'sinden
+  # türer: id 0 -> data-0 (canlı doğrulandı).
+  template:
+    pod:
+      metadata:
+        annotations: {backup.velero.io/backup-volumes-excludes: {{ .Values.velero.excludeVolumes.kafka | quote }}}
+{{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka

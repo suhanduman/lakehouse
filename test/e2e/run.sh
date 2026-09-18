@@ -40,8 +40,8 @@ if [[ "$MODE" == "argocd" ]]; then
   else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
-  # monitoring YALNIZ dev overlay'inde var (platform/apps/dev); e2e her zaman --env dev ile bootstrap eder
-  for app in cert-manager strimzi cnpg cnpg-barman keycloak-operator spark-operator superset-operator monitoring glue polaris jupyterhub; do
+  # monitoring ve velero YALNIZ dev overlay'inde var (platform/apps/dev); e2e her zaman --env dev ile bootstrap eder
+  for app in cert-manager strimzi cnpg cnpg-barman keycloak-operator spark-operator superset-operator monitoring velero glue polaris jupyterhub; do
     # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
     # glue en ağır uygulama (Connect build + CNPG x3 + Keycloak + Zeppelin/Superset imajları): varsayılan 1800s yetmedi (CI 35267164775)
     case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac

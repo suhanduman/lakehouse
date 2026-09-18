@@ -33,6 +33,13 @@ if [[ "$MODE" == "helm" ]]; then
   # podMonitor: ArgoCD yolunda platform/apps/00-spark-operator.yaml values'ından gelir; helm modunda --set ile
   helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --set prometheus.metrics.enable=true --set prometheus.podMonitor.create=true --wait --timeout 5m
   helm upgrade --install superset-operator oci://ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator --version 0.2.0 -n lakehouse --wait --timeout 5m
+  # Velero YALNIZ dev'de ve glue'dan ÖNCE: glue `Schedule/lakehouse-daily`i velero ns'ine yazar -> velero.io CRD'leri
+  # ve ns önce var olmalı. S3 Secret'ı chart üretir (velero-dev.yaml credentials.secretContents), glue'ya bağımlılık YOK.
+  # Prod OpenShift'te OADP operatörü kurulur; bu chart KURULMAZ.
+  if [[ "$ENV" == "dev" ]]; then
+    helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts >/dev/null 2>&1 || true; helm repo update vmware-tanzu >/dev/null
+    helm upgrade --install velero vmware-tanzu/velero --version 12.1.0 -n velero --create-namespace -f "$ROOT/platform/values/velero-dev.yaml" --wait --timeout 10m
+  fi
   # 40m: taze düğümde imaj çekimi (Zeppelin 2,7 GB, pyspark-notebook ~2 GB) + Connect build + CNPG initdb (2026-09-17 canlı)
   helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 40m
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
@@ -96,10 +103,14 @@ stringData:
   type: helm
   enableOCI: "true"
 YAML
-# monitoring Application'ı YALNIZ dev overlay'inde var: prod'da eşleşmeyen bir kustomize patch'i hata verir.
-MONITORING_PATCH=""
-if [[ "$ENV" == "dev" ]]; then MONITORING_PATCH=$(cat <<EOS
+# monitoring/velero Application'ları YALNIZ dev overlay'inde var: prod'da eşleşmeyen bir kustomize patch'i hata verir.
+DEV_ONLY_PATCH=""
+if [[ "$ENV" == "dev" ]]; then DEV_ONLY_PATCH=$(cat <<EOS
       - target: {kind: Application, name: monitoring}
+        patch: |-
+          - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: velero}
         patch: |-
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
@@ -140,7 +151,7 @@ spec:
         patch: |-
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
-${MONITORING_PATCH}
+${DEV_ONLY_PATCH}
   destination: {server: https://kubernetes.default.svc, namespace: argocd}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

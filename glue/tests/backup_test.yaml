@@ -1,5 +1,5 @@
-suite: CNPG yedekleri (Barman Cloud eklentisi, ObjectStore, ScheduledBackup)
-templates: [cnpg.yaml, minio.yaml]
+suite: Yedekler — CNPG (Barman Cloud, ObjectStore, ScheduledBackup) + Velero (Schedule, fs-backup dışlamaları)
+templates: [cnpg.yaml, minio.yaml, backup.yaml, kafka.yaml, networkpolicy.yaml]
 tests:
   - it: ObjectStore points at the SEPARATE backup bucket via backup-s3-creds
     template: cnpg.yaml
@@ -94,3 +94,65 @@ tests:
       - hasDocuments: {count: 5}
       - documentIndex: 1
         containsDocument: {kind: PersistentVolumeClaim, apiVersion: v1, name: minio-data}
+  - it: Velero Schedule is absent unless velero.enabled (prod varsayılanı)
+    template: backup.yaml
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: Velero Schedule backs up the lakehouse namespace with fs-backup
+    template: backup.yaml
+    set: {velero.enabled: true}
+    asserts:
+      - hasDocuments: {count: 1}
+      - containsDocument: {kind: Schedule, apiVersion: velero.io/v1, name: lakehouse-daily}
+      # CR Velero sunucusunun ns'inde yaşar (glue'nun hedef ns'i DEĞİL)
+      - equal: {path: metadata.namespace, value: velero}
+      # 5 alan: dakika saat gün ay haftagünü (CNPG ScheduledBackup'ın 6 alanı DEĞİL)
+      - matchRegex: {path: spec.schedule, pattern: '^\S+( \S+){4}$'}
+      - equal: {path: spec.schedule, value: "0 3 * * *"}
+      - equal: {path: spec.template.includedNamespaces, value: [lakehouse]}
+      - equal: {path: spec.template.defaultVolumesToFsBackup, value: true}
+      - equal: {path: spec.template.ttl, value: 720h}
+      # pods LİSTEDE YOK: dışlanırsa PodVolumeBackup hiç tetiklenmez (fs-backup pod öğesinde koşar)
+      - equal: {path: spec.template.excludedResources, value: [replicasets, events, backups.postgresql.cnpg.io]}
+      - notContains: {path: spec.template.excludedResources, content: pods}
+  - it: Velero Schedule follows namespace/schedule/ttl overrides (prod OADP)
+    template: backup.yaml
+    set: {velero: {enabled: true, namespace: openshift-adp, schedule: "30 1 * * *", ttl: 168h}}
+    asserts:
+      - equal: {path: metadata.namespace, value: openshift-adp}
+      - equal: {path: spec.schedule, value: "30 1 * * *"}
+      - equal: {path: spec.template.ttl, value: 168h}
+  - it: KafkaNodePool excludes the jbod data volume from fs-backup
+    template: kafka.yaml
+    set: {velero.enabled: true}
+    documentSelector: {path: kind, value: KafkaNodePool}
+    asserts:
+      - equal: {path: 'spec.template.pod.metadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: data-0}
+  - it: velero.enabled=false leaves the KafkaNodePool template untouched
+    template: kafka.yaml
+    documentSelector: {path: kind, value: KafkaNodePool}
+    asserts:
+      - notExists: {path: spec.template}
+  - it: dev MinIO pod is excluded from fs-backup (veri gölü kendi yedeğine kopyalanmaz)
+    template: minio.yaml
+    set: {components.minio: true, velero.enabled: true}
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - equal: {path: 'spec.template.metadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: data}
+  - it: velero.enabled=false leaves the MinIO pod unannotated
+    template: minio.yaml
+    set: {components.minio: true}
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - notExists: {path: spec.template.metadata.annotations}
+  - it: velero ns is allowed into lakehouse only when velero.enabled
+    template: networkpolicy.yaml
+    set: {velero.enabled: true}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: velero}}}}
+  - it: velero ns is not in the platform netpol by default
+    template: networkpolicy.yaml
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - notContains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: velero}}}}

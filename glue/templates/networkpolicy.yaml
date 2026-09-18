@@ -17,7 +17,7 @@ spec:
   ingress:
   - from: [{podSelector: {}}]
 ---
-# Operatörler (cnpg-system), ArgoCD, ingress/router ve izleme namespace'leri
+# Operatörler (cnpg-system), ArgoCD, ingress/router, izleme ve yedekleme namespace'leri
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: allow-platform-namespaces, namespace: {{ include "glue.ns" . }}}
@@ -28,6 +28,11 @@ spec:
   - from:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: cnpg-system}}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}
+{{- if .Values.velero.enabled }}
+    # Velero: node-agent pod hacimlerini hostPath (/var/lib/kubelet/pods) üzerinden okur, AĞ gerekmez; sunucu da
+    # yalnız kube-apiserver + S3 ile konuşur. Yine de yedek hook'ları (exec/HTTP) ileride eklenirse kapı kapalı kalmasın.
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.velero.namespace }}}}
+{{- end }}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-ingress" "ingress-nginx" (eq (include "glue.isOpenShift" .) "true") }}}}
 {{- if eq (include "glue.isOpenShift" .) "true" }}
     # OpenShift'te platform izleme (openshift-monitoring) ve kullanıcı iş yükü izleme (openshift-user-workload-monitoring) ayrı ns'lerde

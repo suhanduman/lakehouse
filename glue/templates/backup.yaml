@@ -1,0 +1,22 @@
+{{- if .Values.velero.enabled }}
+# Velero günlük namespace yedeği. CR velero'nun KENDİ ns'inde yaşamak zorundadır (sunucu yalnız orayı izler);
+# ns + CRD'ler dev'de velero chart'ından (platform/apps/dev/40-velero.yaml, sync-wave 0), prod'da OADP'den gelir.
+# Kalıcı veri: PVC'ler node-agent fs-backup'ı (Kopia) ile alınır; CNPG (pgdata) ve Kafka (data-0) hacimleri
+# pod annotation'ı ile HARİÇ — Postgres tutarlılığı Barman PITR'a, Kafka dayanıklılığı replikasyona bırakılır.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: lakehouse-daily
+  namespace: {{ .Values.velero.namespace }}
+  annotations: {argocd.argoproj.io/sync-wave: "1"}
+spec:
+  schedule: {{ .Values.velero.schedule | quote }}
+  template:
+    includedNamespaces: [{{ include "glue.ns" . }}]
+    defaultVolumesToFsBackup: true
+    ttl: {{ .Values.velero.ttl }}
+    excludedResources:
+{{- range .Values.velero.excludedResources }}
+    - {{ . }}
+{{- end }}
+{{- end }}

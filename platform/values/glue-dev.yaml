@@ -24,6 +24,9 @@ components: {minio: true, devSecrets: true}
 # prod'da farklı endpoint/bucket (platform/values/glue.yaml). MinIO artık PVC'li (minio.persistence) — emptyDir'de
 # pod yeniden başlayınca hem Iceberg dosyaları hem WAL arşivi kaybolurdu.
 minio: {persistence: {size: 5Gi}}
+# Velero: dev chart'ı platform/apps/dev/40-velero.yaml ile kurulur -> Schedule + fs-backup dışlamaları açılır.
+# Aynı `backups` bucket'ı, AYRI prefix (velero/ vs cnpg/).
+velero: {enabled: true}
 tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
 monitoring: {silverMergeStaleSeconds: 172800}   # dev: silver-merge cron gecelik (0 3 * * *) -> 48 saat

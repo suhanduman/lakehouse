@@ -141,6 +141,22 @@ backup:
   schedule: "0 0 2 * * *"                         # CNPG ScheduledBackup: 6 alan (saniye dâhil) -> her gün 02:00
   retentionPolicy: "30d"                          # ObjectStore spec.retentionPolicy (barman-cloud retention)
 
+# Velero namespace yedeği (dev: platform/apps/dev/40-velero.yaml chart'ı; prod: OADP — runbooks/dr.md).
+# Kapatmak: velero.enabled=false -> Schedule VE Kafka/MinIO fs-backup dışlama annotation'ları render EDİLMEZ.
+velero:
+  enabled: false                # dev overlay'de true (platform/values/glue-dev.yaml); prod: OADP kurulduktan sonra namespace: openshift-adp ile açılır
+  namespace: velero             # Schedule/Backup/Restore CR'leri Velero sunucusunun ns'inde yaşar
+  schedule: "0 3 * * *"         # 5 alan (Velero robfig/cron, saniyesiz) -> her gün 03:00; CNPG yedeği 02:00'da (backup.schedule)
+  ttl: 720h                     # yedek saklama: 30 gün
+  # pods HARİÇ TUTULMAZ: fs-backup (PodVolumeBackup) pod öğesi yedeklenirken tetiklenir -> pods dışlanırsa
+  # PVC'ler boş yedeklenir (canlı doğrulandı, task 4 raporu §Backup). replicasets/events gürültüdür;
+  # backups.postgresql.cnpg.io CNPG'nin kendi yedek nesneleridir (Barman tarafında zaten var).
+  excludedResources: [replicasets, events, backups.postgresql.cnpg.io]
+  # fs-backup'tan dışlanan pod hacimleri (backup.velero.io/backup-volumes-excludes)
+  excludeVolumes:
+    kafka: data-0               # KafkaNodePool jbod id 0 -> pod hacim adı data-0 (canlı doğrulandı)
+    minio: data                 # DEV-ONLY: MinIO PVC'si lakehouse'un KENDİSİ (Iceberg verisi) — Velero kapsamı dışı
+
 networkPolicy:
   enabled: true
 

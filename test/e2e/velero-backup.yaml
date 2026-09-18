@@ -1,0 +1,10 @@
+# e2e: Schedule/lakehouse-daily şablonuyla AYNI alanlar (glue/templates/backup.yaml) — tek seferlik Backup.
+# `pods` BİLEREK dışlanmaz: fs-backup (PodVolumeBackup) pod öğesi yedeklenirken tetiklenir.
+apiVersion: velero.io/v1
+kind: Backup
+metadata: {name: e2e-lakehouse, namespace: velero}
+spec:
+  includedNamespaces: [lakehouse]
+  defaultVolumesToFsBackup: true
+  ttl: 720h
+  excludedResources: [replicasets, events, backups.postgresql.cnpg.io]
