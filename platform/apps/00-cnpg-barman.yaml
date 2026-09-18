@@ -1,0 +1,19 @@
+# CNPG Barman Cloud eklentisi (CNPG-I): in-tree barmanObjectStore 1.31'de kalkıyor -> yedekler eklenti üzerinden.
+# chart 0.8.0 = plugin v0.15.0. cert-manager gerektirir (Issuer + sunucu/istemci sertifikaları) -> aynı dalga, cert-manager önce.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: cnpg-barman, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "0"}}
+spec:
+  project: default
+  source:
+    repoURL: https://cloudnative-pg.github.io/charts
+    chart: plugin-barman-cloud
+    targetRevision: 0.8.0
+    helm:
+      valuesObject:
+        # dar düğüm (CI 4 vCPU): eklenti tek replika, isteği düşük tut
+        resources: {requests: {cpu: 10m, memory: 64Mi}}
+  destination: {server: https://kubernetes.default.svc, namespace: cnpg-system}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

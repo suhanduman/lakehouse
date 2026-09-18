@@ -127,7 +127,19 @@ components:
 minio:
   rootUser: minioadmin
   rootPassword: minioadmin
-  buckets: [lakehouse]
+  buckets: [lakehouse, backups]        # backups: CNPG yedekleri (AYRI bucket, backup.s3.bucket ile aynı olmalı)
+  persistence: {enabled: true, size: 5Gi, storageClass: ""}   # emptyDir kaldırıldı: MinIO yeniden başlarsa veri kalmalı (Deployment strategy Recreate)
+
+# CNPG PITR yedekleri (Barman Cloud eklentisi, CNPG-I). Kapatmak: backup.enabled=false -> ObjectStore/ScheduledBackup/plugins render EDİLMEZ.
+backup:
+  enabled: true
+  s3:
+    endpoint: http://minio.lakehouse.svc:9000     # prod: FARKLI endpoint/bucket (spec §8) — kurulumda doldur
+    bucket: backups                               # veri bucket'ından (s3.* / iceberg.warehouse) AYRI olmalı
+    region: us-east-1
+    secret: backup-s3-creds                       # keys AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (dev: MinIO şablonu üretir; prod: kurulumdan ÖNCE)
+  schedule: "0 0 2 * * *"                         # CNPG ScheduledBackup: 6 alan (saniye dâhil) -> her gün 02:00
+  retentionPolicy: "30d"                          # ObjectStore spec.retentionPolicy (barman-cloud retention)
 
 networkPolicy:
   enabled: true

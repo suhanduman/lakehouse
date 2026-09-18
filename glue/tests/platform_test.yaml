@@ -1,10 +1,10 @@
 suite: platform pieces
 templates: [cnpg.yaml, polaris-bootstrap.yaml, minio.yaml, networkpolicy.yaml, route.yaml, ingress.yaml]
 tests:
-  - it: renders three CNPG clusters
+  - it: renders three CNPG clusters (+ ObjectStore + 3 ScheduledBackup, backup.enabled varsayılan)
     template: cnpg.yaml
     asserts:
-      - hasDocuments: {count: 3}
+      - hasDocuments: {count: 7}
       - documentIndex: 0
         equal: {path: metadata.name, value: polaris-db}
       - documentIndex: 1
@@ -13,11 +13,11 @@ tests:
         equal: {path: metadata.name, value: superset-db}
       - documentIndex: 2
         equal: {path: spec.bootstrap.initdb, value: {database: superset, owner: superset}}
-  - it: superset db is dropped when superset is disabled
+  - it: superset db is dropped when superset is disabled (ScheduledBackup'ı ile birlikte)
     template: cnpg.yaml
     set: {superset.enabled: false}
     asserts:
-      - hasDocuments: {count: 2}
+      - hasDocuments: {count: 5}
   - it: polaris bootstrap job reads CNPG app secret and root credential secret
     template: polaris-bootstrap.yaml
     asserts:
@@ -30,11 +30,11 @@ tests:
     template: minio.yaml
     asserts:
       - hasDocuments: {count: 0}
-  - it: minio renders in dev
+  - it: minio renders in dev (s3-creds + backup-s3-creds + PVC + Deployment + Service + bucket-init)
     template: minio.yaml
     set: {components.minio: true}
     asserts:
-      - hasDocuments: {count: 4}
+      - hasDocuments: {count: 6}
   - it: routes only on openshift
     template: route.yaml
     set: {platform: openshift, route.enabled: true}

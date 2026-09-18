@@ -1,0 +1,16 @@
+# e2e DR provası: polaris-db'nin Barman yedeğinden AYRI bir kümeye geri yükleme (kaynak kümeye dokunulmaz).
+# `plugins` BİLEREK YOK: bu küme WAL arşivlemez — aksi hâlde aynı serverName altına yazıp kaynağın yedeğini bozardı.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: {name: polaris-db-restore, namespace: lakehouse}
+spec:
+  instances: 1
+  storage: {size: 2Gi}
+  bootstrap:
+    recovery: {source: polaris-db}
+  externalClusters:
+  - name: polaris-db
+    plugin:
+      name: barman-cloud.cloudnative-pg.io
+      # serverName = ORİJİNAL küme adı (ObjectStore destinationPath altındaki klasör)
+      parameters: {barmanObjectName: lakehouse-backups, serverName: polaris-db}

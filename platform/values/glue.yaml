@@ -27,6 +27,12 @@ cnpg:
 # nginx erişim logu (F3): Fluent Bit ajanları müşteri sunucusunda -> Kafka dış listener (Route). Açmadan önce ikisini de doldur:
 #kafka: {externalListener: true}
 #nginx: {enabled: true}
+# CNPG PITR yedekleri (F5): veri bucket'ından AYRI hedef. Endpoint/bucket kurulumda müşterinin değerleriyle
+# doldurulur; `backup-s3-creds` Secret'ı (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) kurulumdan ÖNCE yaratılır.
+backup:
+  enabled: true
+  s3: {endpoint: https://s3.example.com, bucket: lakehouse-backups, region: us-east-1, secret: backup-s3-creds}
+  retentionPolicy: "30d"
 s3:
   endpoint: https://s3.example.com     # müşteri S3 endpoint'i (platform/polaris/setup.yaml ile aynı)
   vendedCredentials: true              # STS yoksa false (F0 S1c)

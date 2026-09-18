@@ -4,6 +4,7 @@ resources:
 - 00-cert-manager.yaml
 - 00-strimzi.yaml
 - 00-cnpg.yaml
+- 00-cnpg-barman.yaml
 - 00-keycloak-operator.yaml
 - 00-spark-operator.yaml
 - 00-superset-operator.yaml

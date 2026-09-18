@@ -6,12 +6,38 @@ metadata: {name: s3-creds, namespace: {{ include "glue.ns" . }}}
 stringData:
   AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser | quote }}
   AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword | quote }}
+{{- if .Values.backup.enabled }}
+---
+# DEV-ONLY: CNPG yedek bucket'ının kimliği = MinIO root kimliği. Prod'da bu Secret kurulumdan ÖNCE elle yaratılır
+# (ayrı S3 hesabı/anahtarı; runbooks/install.md) ve components.minio=false olduğu için burası render EDİLMEZ.
+apiVersion: v1
+kind: Secret
+metadata: {name: {{ .Values.backup.s3.secret }}, namespace: {{ include "glue.ns" . }}}
+stringData:
+  AWS_ACCESS_KEY_ID: {{ .Values.minio.rootUser | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.minio.rootPassword | quote }}
+{{- end }}
+{{- if .Values.minio.persistence.enabled }}
+---
+# PVC: emptyDir'de MinIO yeniden başlayınca Iceberg dosyaları VE CNPG yedekleri kaybolur (Polaris'te yetim kayıt kalır)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: minio-data, namespace: {{ include "glue.ns" . }}}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ .Values.minio.persistence.size }}}}
+{{- with .Values.minio.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: minio, namespace: {{ include "glue.ns" . }}}
 spec:
   replicas: 1
+  # RWO PVC tek pod'a bağlanır: rolling update'te yeni pod eskisini bekler -> Recreate
+  strategy: {type: Recreate}
   selector: {matchLabels: {app: minio}}
   template:
     metadata: {labels: {app: minio}}
@@ -25,7 +51,11 @@ spec:
         - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.rootPassword | quote }}}
         ports: [{containerPort: 9000}, {containerPort: 9001}]
         volumeMounts: [{name: data, mountPath: /data}]
+{{- if .Values.minio.persistence.enabled }}
+      volumes: [{name: data, persistentVolumeClaim: {claimName: minio-data}}]
+{{- else }}
       volumes: [{name: data, emptyDir: {}}]
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

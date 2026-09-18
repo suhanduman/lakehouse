@@ -1,3 +1,14 @@
+{{/* Yedek kablolaması (3 Cluster'da ortak): WAL arşivleyici eklenti + Velero hariç tutma */}}
+{{- define "glue.cnpgBackup" -}}
+{{- if .Values.backup.enabled }}
+  # Barman Cloud eklentisi (CNPG-I): WAL arşivi + base backup. isWALArchiver: en çok BİR eklenti olabilir.
+  plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters: {barmanObjectName: lakehouse-backups}}]
+  # Velero (Task 4): pgdata PVC'si dosya-sistemi yedeğinden HARİÇ — Postgres verisi CNPG/Barman PITR ile korunur
+  # (canlı doğrulandı: CNPG pod'unun veri volume adı `pgdata`). inheritedMetadata pod'lara/PVC'lere miras kalır.
+  inheritedMetadata:
+    annotations: {backup.velero.io/backup-volumes-excludes: pgdata}
+{{- end }}
+{{- end }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -13,6 +24,7 @@ spec:
 {{- end }}
   bootstrap:
     initdb: {database: polaris, owner: polaris}
+{{- include "glue.cnpgBackup" . }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -29,6 +41,7 @@ spec:
 {{- end }}
   bootstrap:
     initdb: {database: keycloak, owner: keycloak}
+{{- include "glue.cnpgBackup" . }}
 {{- if .Values.superset.enabled }}
 ---
 apiVersion: postgresql.cnpg.io/v1
@@ -46,4 +59,44 @@ spec:
 {{- end }}
   bootstrap:
     initdb: {database: superset, owner: superset}
+{{- include "glue.cnpgBackup" . }}
+{{- end }}
+{{- if .Values.backup.enabled }}
+---
+# Tek ObjectStore, üç Cluster: barman-cloud her küme için destinationPath altına serverName (= Cluster adı) klasörü açar.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: lakehouse-backups
+  namespace: {{ include "glue.ns" . }}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  configuration:
+    destinationPath: s3://{{ .Values.backup.s3.bucket }}/cnpg
+    endpointURL: {{ .Values.backup.s3.endpoint | quote }}
+    s3Credentials:
+      accessKeyId:     {name: {{ .Values.backup.s3.secret }}, key: AWS_ACCESS_KEY_ID}
+      secretAccessKey: {name: {{ .Values.backup.s3.secret }}, key: AWS_SECRET_ACCESS_KEY}
+    wal: {compression: gzip}
+    data: {compression: gzip}
+{{- range $db := (list "polaris" "keycloak" "superset") }}
+{{- if or (ne $db "superset") $.Values.superset.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $db }}-db-daily
+  namespace: {{ include "glue.ns" $ }}
+  annotations: {argocd.argoproj.io/sync-wave: "1"}
+spec:
+  # 6 alanlı cron (saniye önce) — Kubernetes CronJob biçimi DEĞİL
+  schedule: {{ $.Values.backup.schedule | quote }}
+  immediate: true
+  backupOwnerReference: self
+  method: plugin
+  pluginConfiguration: {name: barman-cloud.cloudnative-pg.io}
+  cluster: {name: {{ $db }}-db}
+{{- end }}
+{{- end }}
 {{- end }}

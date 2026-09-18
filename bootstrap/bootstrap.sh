@@ -26,6 +26,8 @@ if [[ "$MODE" == "helm" ]]; then
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.2.0 -n lakehouse --create-namespace --set watchNamespaces="{lakehouse}" --wait
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
   helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.0 -n cnpg-system --create-namespace --wait
+  # Barman Cloud eklentisi (CNPG-I): PITR yedekleri (in-tree barmanObjectStore 1.31'de kalkıyor). chart 0.8.0 = plugin v0.15.0; cert-manager gerekir.
+  helm upgrade --install plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 -n cnpg-system --create-namespace --set resources.requests.cpu=10m --set resources.requests.memory=64Mi --wait --timeout 5m
   kubectl apply -k "$ROOT/platform/keycloak-operator"
   helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
   # podMonitor: ArgoCD yolunda platform/apps/00-spark-operator.yaml values'ından gelir; helm modunda --set ile

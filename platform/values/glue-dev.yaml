@@ -20,6 +20,10 @@ cnpg:
   keycloakDb: {instances: 1, storageSize: 2Gi}
   supersetDb: {instances: 1, storageSize: 2Gi}
 components: {minio: true, devSecrets: true}
+# F5 DR: yedekler dev'de AYNI MinIO'nun ayrı `backups` bucket'ına gider (glue/values.yaml backup.* varsayılanları);
+# prod'da farklı endpoint/bucket (platform/values/glue.yaml). MinIO artık PVC'li (minio.persistence) — emptyDir'de
+# pod yeniden başlayınca hem Iceberg dosyaları hem WAL arşivi kaybolurdu.
+minio: {persistence: {size: 5Gi}}
 tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
 monitoring: {silverMergeStaleSeconds: 172800}   # dev: silver-merge cron gecelik (0 3 * * *) -> 48 saat

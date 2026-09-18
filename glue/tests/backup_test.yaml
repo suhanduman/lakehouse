@@ -1,0 +1,96 @@
+suite: CNPG yedekleri (Barman Cloud eklentisi, ObjectStore, ScheduledBackup)
+templates: [cnpg.yaml, minio.yaml]
+tests:
+  - it: ObjectStore points at the SEPARATE backup bucket via backup-s3-creds
+    template: cnpg.yaml
+    documentSelector: {path: kind, value: ObjectStore}
+    asserts:
+      - containsDocument: {kind: ObjectStore, apiVersion: barmancloud.cnpg.io/v1, name: lakehouse-backups}
+      - equal: {path: spec.configuration.destinationPath, value: "s3://backups/cnpg"}
+      - equal: {path: spec.configuration.endpointURL, value: "http://minio.lakehouse.svc:9000"}
+      - equal: {path: spec.configuration.s3Credentials.accessKeyId, value: {name: backup-s3-creds, key: AWS_ACCESS_KEY_ID}}
+      - equal: {path: spec.configuration.s3Credentials.secretAccessKey, value: {name: backup-s3-creds, key: AWS_SECRET_ACCESS_KEY}}
+      - equal: {path: spec.configuration.wal.compression, value: gzip}
+      # retentionPolicy CRD'de spec seviyesinde (configuration'ın ALTINDA DEĞİL) — kubectl explain ile doğrulandı
+      - equal: {path: spec.retentionPolicy, value: "30d"}
+  - it: ObjectStore honours prod backup.s3 overrides
+    template: cnpg.yaml
+    set: {backup.s3: {endpoint: "https://s3.example.com", bucket: lakehouse-backup, region: eu-central-1, secret: backup-s3-creds}, backup.retentionPolicy: "7d"}
+    documentSelector: {path: kind, value: ObjectStore}
+    asserts:
+      - equal: {path: spec.configuration.destinationPath, value: "s3://lakehouse-backup/cnpg"}
+      - equal: {path: spec.configuration.endpointURL, value: "https://s3.example.com"}
+      - equal: {path: spec.retentionPolicy, value: "7d"}
+  - it: three ScheduledBackups use the plugin method and a 6-field cron
+    template: cnpg.yaml
+    documentSelector: {path: kind, value: ScheduledBackup, matchMany: true}
+    asserts:
+      - equal: {path: spec.method, value: plugin}
+      - equal: {path: spec.pluginConfiguration.name, value: barman-cloud.cloudnative-pg.io}
+      - equal: {path: spec.immediate, value: true}
+      - equal: {path: spec.backupOwnerReference, value: self}
+      # 6 alan: saniye dakika saat gün ay haftagünü (Kubernetes CronJob'ın 5 alanı DEĞİL)
+      - matchRegex: {path: spec.schedule, pattern: '^\S+( \S+){5}$'}
+      - equal: {path: spec.schedule, value: "0 0 2 * * *"}
+  - it: each ScheduledBackup targets its own cluster
+    template: cnpg.yaml
+    documentSelector: {path: metadata.name, value: polaris-db-daily}
+    asserts:
+      - equal: {path: spec.cluster.name, value: polaris-db}
+  - it: keycloak/superset ScheduledBackups exist with matching cluster names
+    template: cnpg.yaml
+    asserts:
+      - documentIndex: 5
+        equal: {path: spec.cluster.name, value: keycloak-db}
+      - documentIndex: 6
+        equal: {path: spec.cluster.name, value: superset-db}
+  - it: all three Clusters load the barman WAL archiver plugin and the Velero exclusion
+    template: cnpg.yaml
+    documentSelector: {path: kind, value: Cluster, matchMany: true}
+    asserts:
+      - equal: {path: 'spec.plugins[0].name', value: barman-cloud.cloudnative-pg.io}
+      - equal: {path: 'spec.plugins[0].isWALArchiver', value: true}
+      - equal: {path: 'spec.plugins[0].parameters.barmanObjectName', value: lakehouse-backups}
+      # Task 4 (Velero): pgdata volume'u dosya-sistemi yedeğinden hariç (volume adı canlı doğrulandı)
+      - equal: {path: 'spec.inheritedMetadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: pgdata}
+  - it: backup.enabled=false renders NO ObjectStore, NO ScheduledBackup and NO plugins
+    template: cnpg.yaml
+    set: {backup.enabled: false}
+    asserts:
+      - hasDocuments: {count: 3}
+      - notExists: {path: spec.plugins}
+      - notExists: {path: spec.inheritedMetadata}
+  - it: dev MinIO gets the backups bucket, a PVC and the backup credential Secret
+    template: minio.yaml
+    set: {components.minio: true}
+    asserts:
+      - documentIndex: 1
+        containsDocument: {kind: Secret, apiVersion: v1, name: backup-s3-creds}
+      - documentIndex: 2
+        containsDocument: {kind: PersistentVolumeClaim, apiVersion: v1, name: minio-data}
+      - documentIndex: 2
+        equal: {path: spec.resources.requests.storage, value: 5Gi}
+      - documentIndex: 3
+        equal: {path: spec.strategy.type, value: Recreate}
+      - documentIndex: 3
+        equal: {path: 'spec.template.spec.volumes[0].persistentVolumeClaim.claimName', value: minio-data}
+      - documentIndex: 5
+        matchRegex: {path: 'spec.template.spec.containers[0].args[0]', pattern: 'mc mb -p m/backups'}
+  - it: minio.persistence.enabled=false falls back to emptyDir (PVC yok)
+    template: minio.yaml
+    set: {components.minio: true, minio.persistence.enabled: false}
+    asserts:
+      - hasDocuments: {count: 5}
+      - documentIndex: 2
+        containsDocument: {kind: Deployment, apiVersion: apps/v1, name: minio}
+      - documentIndex: 2
+        exists: {path: 'spec.template.spec.volumes[0].emptyDir'}
+      - documentIndex: 2
+        notExists: {path: 'spec.template.spec.volumes[0].persistentVolumeClaim'}
+  - it: backup.enabled=false drops the dev backup credential Secret
+    template: minio.yaml
+    set: {components.minio: true, backup.enabled: false}
+    asserts:
+      - hasDocuments: {count: 5}
+      - documentIndex: 1
+        containsDocument: {kind: PersistentVolumeClaim, apiVersion: v1, name: minio-data}
