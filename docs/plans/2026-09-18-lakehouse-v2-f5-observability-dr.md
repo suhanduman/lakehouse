@@ -43,6 +43,9 @@
 | R15 | `troubleshooting.md` yeni dosya: `install.md`'deki "Sorun giderme" ve F4 troubleshooting bölümleri buraya taşınır (install.md'de bağlantı kalır) | Spec §4 runbook listesi; tek yer |
 | R16 | Spec §8 metni bu kararlarla güncellenir (KSM, Barman plugin, Velero dışlamalar) | Spec otoriter |
 
+## Kapsam değişikliği (kullanıcı kararı, 2026-09-18 — Task 2 sonrası)
+İzleme yalnız **boru hattı sağlığı**: Kafka/Connect (Strimzi JMX + **kafkaExporter** consumer lag), Spark işleri (spark-operator süre/sayaç + KSM durum), Polaris mgmt. Gösterim bileşenlerinin uygulama metriği (Trino JMX exporter, JupyterHub hub, Zeppelin, Superset) **toplanmaz** — Task 1/2'de eklenenler Task 2b'de kaldırılır; `LakehouseSinkStalled` lag tabanlı olur; `LakehouseSparkRunTooLong` eklenir (5 kural). Tablo düzeyi veri metrikleri için upstream exporter yok → Trino Iceberg metadata tabloları + Superset dashboard (F6 kabul demosu); prod depolama (FlashBlade) metrikleri platform ekibinin exporter'ı. Ledger: `.superpowers/sdd/…/task-2b-brief.md`.
+
 ---
 
 ## Dosya yapısı
