@@ -15,13 +15,21 @@ if [[ "$MODE" == "helm" ]]; then
   # ArgoCD'nin varsayılanı: prod glue.yaml kullanır (10-glue.yaml), sadece dev overlay'i glue-dev.yaml'a değiştirir.
   # Job polaris-bootstrap düz Job: değerleri değişirse `kubectl delete job` gerekir (immutable template).
   GLUE_VALUES="$ROOT/platform/values/glue.yaml"; [[ "$ENV" == "dev" ]] && GLUE_VALUES="$ROOT/platform/values/glue-dev.yaml"
+  # İzleme yığını YALNIZ dev'de ve HER ŞEYDEN ÖNCE: PodMonitor/ServiceMonitor/PrometheusRule CRD'leri
+  # spark-operator (podMonitor.create) ve glue (monitoring.yaml) uygulanmadan var olmalı.
+  # Prod OpenShift'te CRD'ler platformdan gelir; bu chart KURULMAZ.
+  if [[ "$ENV" == "dev" ]]; then
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true; helm repo update prometheus-community >/dev/null
+    helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 91.4.1 -n monitoring --create-namespace -f "$ROOT/platform/values/monitoring-dev.yaml" --wait --timeout 10m
+  fi
   helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.21.2 -n cert-manager --create-namespace --set crds.enabled=true --wait --timeout 5m
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.2.0 -n lakehouse --create-namespace --set watchNamespaces="{lakehouse}" --wait
   helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true; helm repo update cnpg >/dev/null
   helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.0 -n cnpg-system --create-namespace --wait
   kubectl apply -k "$ROOT/platform/keycloak-operator"
   helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
-  helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --wait --timeout 5m
+  # podMonitor: ArgoCD yolunda platform/apps/00-spark-operator.yaml values'ından gelir; helm modunda --set ile
+  helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --set prometheus.metrics.enable=true --set prometheus.podMonitor.create=true --wait --timeout 5m
   helm upgrade --install superset-operator oci://ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator --version 0.2.0 -n lakehouse --wait --timeout 5m
   # 40m: taze düğümde imaj çekimi (Zeppelin 2,7 GB, pyspark-notebook ~2 GB) + Connect build + CNPG initdb (2026-09-17 canlı)
   helm upgrade --install glue "$ROOT/glue" -n lakehouse -f "$GLUE_VALUES" --wait --timeout 40m
@@ -86,6 +94,15 @@ stringData:
   type: helm
   enableOCI: "true"
 YAML
+# monitoring Application'ı YALNIZ dev overlay'inde var: prod'da eşleşmeyen bir kustomize patch'i hata verir.
+MONITORING_PATCH=""
+if [[ "$ENV" == "dev" ]]; then MONITORING_PATCH=$(cat <<EOS
+      - target: {kind: Application, name: monitoring}
+        patch: |-
+          - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+EOS
+); fi
 # Kök Application (platform/root-app.yaml'ın --env/--repo/--revision ile parametrelenmiş hâli). YALNIZ kök uygulanır:
 # alt Application'lar kökün kustomize patch'leriyle her reconcile'da aynı repo/revizyona sabitlenir -> PR'da bootstrap
 # edilen revizyon test edilir (tek seferlik `kubectl apply` yerine kalıcı, self-heal'e dayanıklı).
@@ -121,6 +138,7 @@ spec:
         patch: |-
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
+${MONITORING_PATCH}
   destination: {server: https://kubernetes.default.svc, namespace: argocd}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

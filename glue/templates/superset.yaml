@@ -71,6 +71,10 @@ spec:
       - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
     volumes:
     - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
+  # spec.monitoring.serviceMonitor BİLEREK YOK: operator ServiceMonitor'ü superset-web-server:8088/metrics'e
+  # kurar ama Superset 6.1.0'da böyle bir uç nokta YOKTUR (canlı: 404; imajda prometheus_flask_exporter yok).
+  # Etkinleştirilirse KALICI down hedef oluşur. Özel imaj yasak (global kısıt) -> Superset app metrikleri F5 kapsamı dışı;
+  # Superset sağlığı Deployment/pod metrikleriyle (kube-state-metrics) izlenir.
   webServer:
     podTemplate:
       container:

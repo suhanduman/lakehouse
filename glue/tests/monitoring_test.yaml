@@ -1,0 +1,82 @@
+suite: monitoring (metrik kaynakları + PodMonitor/ServiceMonitor)
+templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml, zeppelin.yaml]
+set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder
+tests:
+  - it: renders both metric ConfigMaps, the Strimzi PodMonitor and the hub/zeppelin ServiceMonitors
+    template: monitoring.yaml
+    asserts:
+      - hasDocuments: {count: 5}
+      - documentIndex: 0
+        containsDocument: {kind: ConfigMap, apiVersion: v1, name: kafka-metrics}
+      - documentIndex: 1
+        containsDocument: {kind: ConfigMap, apiVersion: v1, name: connect-metrics}
+      - documentIndex: 2
+        containsDocument: {kind: PodMonitor, apiVersion: monitoring.coreos.com/v1, name: kafka-resources-metrics}
+  - it: PodMonitor selects both Kafka and KafkaConnect pods on tcp-prometheus
+    template: monitoring.yaml
+    documentSelector: {path: kind, value: PodMonitor}
+    asserts:
+      - contains: {path: spec.selector.matchExpressions, content: {key: strimzi.io/kind, operator: In, values: [Kafka, KafkaConnect]}}
+      - equal: {path: spec.namespaceSelector.matchNames, value: [lakehouse]}
+      - equal: {path: 'spec.podMetricsEndpoints[0].port', value: tcp-prometheus}
+      - equal: {path: 'spec.podMetricsEndpoints[0].path', value: /metrics}
+  - it: hub ServiceMonitor scrapes /hub/metrics on the z2jh hub Service
+    template: monitoring.yaml
+    documentSelector: {path: metadata.name, value: hub}
+    asserts:
+      - equal: {path: kind, value: ServiceMonitor}
+      - equal: {path: 'spec.endpoints[0].path', value: /hub/metrics}
+      - equal: {path: 'spec.endpoints[0].port', value: hub}
+      - equal: {path: spec.selector.matchLabels, value: {app.kubernetes.io/name: jupyterhub, app.kubernetes.io/component: hub}}
+  - it: zeppelin ServiceMonitor scrapes /metrics with the classic-text fallback protocol
+    template: monitoring.yaml
+    documentSelector: {path: metadata.name, value: zeppelin}
+    asserts:
+      - equal: {path: 'spec.endpoints[0].path', value: /metrics}
+      - equal: {path: 'spec.endpoints[0].port', value: http}
+      - equal: {path: spec.fallbackScrapeProtocol, value: PrometheusText0.0.4}
+  - it: zeppelin ServiceMonitor is dropped when zeppelin is disabled
+    template: monitoring.yaml
+    set: {zeppelin.enabled: false}
+    asserts:
+      - hasDocuments: {count: 4}
+  - it: Kafka metricsConfig points at the kafka-metrics ConfigMap
+    template: kafka.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    documentSelector: {path: kind, value: Kafka}
+    asserts:
+      - equal: {path: spec.kafka.metricsConfig.type, value: jmxPrometheusExporter}
+      - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.name, value: kafka-metrics}
+      - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.key, value: kafka-metrics-config.yml}
+  - it: KafkaConnect metricsConfig points at the connect-metrics ConfigMap
+    template: kafka-connect.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    documentSelector: {path: kind, value: KafkaConnect}
+    asserts:
+      - equal: {path: spec.metricsConfig.valueFrom.configMapKeyRef.name, value: connect-metrics}
+      - equal: {path: spec.metricsConfig.valueFrom.configMapKeyRef.key, value: metrics-config.yml}
+  # Superset 6.1.0'da /metrics yok (canlı 404): spec.monitoring AÇILMAZ, aksi hâlde kalıcı down hedef olur
+  - it: Superset CR never asks the operator for a ServiceMonitor
+    template: superset.yaml
+    documentSelector: {path: kind, value: Superset}
+    asserts:
+      - isNull: {path: spec.monitoring}
+  - it: zeppelin gets the prometheus metric env
+    template: zeppelin.yaml
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}}
+  - it: monitoring.enabled=false drops every monitoring object and both metricsConfigs
+    set: {monitoring.enabled: false, connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    asserts:
+      - template: monitoring.yaml
+        hasDocuments: {count: 0}
+      - template: kafka.yaml
+        documentSelector: {path: kind, value: Kafka}
+        isNull: {path: spec.kafka.metricsConfig}
+      - template: kafka-connect.yaml
+        documentSelector: {path: kind, value: KafkaConnect}
+        isNull: {path: spec.metricsConfig}
+      - template: zeppelin.yaml
+        documentSelector: {path: kind, value: Deployment}
+        notContains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}}

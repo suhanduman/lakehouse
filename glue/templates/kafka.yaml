@@ -47,4 +47,10 @@ spec:
 {{- end }}
     config:
 {{ toYaml .Values.kafka.config | indent 6 }}
+{{- if .Values.monitoring.enabled }}
+    # jmx_exporter: her broker pod'unda tcp-prometheus (9404) /metrics — kurallar glue monitoring.yaml ConfigMap'inde
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom: {configMapKeyRef: {name: kafka-metrics, key: kafka-metrics-config.yml}}
+{{- end }}
   entityOperator: {topicOperator: {}, userOperator: {}}

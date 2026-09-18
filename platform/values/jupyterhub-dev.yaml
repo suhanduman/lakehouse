@@ -9,6 +9,14 @@ hub:
       authorize_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/auth
       token_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token
       userdata_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/userinfo
+  # z2jh hub netpol'ünün varsayılan kuralı podSelector'dır (AYNI ns) -> monitoring ns'indeki Prometheus'u
+  # kapsamaz (canlı: hedef "context deadline exceeded"). Liste birleştirilmez, ÜZERİNE YAZILIR:
+  # jupyterhub.yaml'daki prod (openshift-user-workload-monitoring) kuralının dev karşılığı budur.
+  networkPolicy:
+    ingress:
+    - from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+        podSelector: {matchLabels: {hub.jupyter.org/network-access-hub: "true"}}
   services:
     e2e: {apiToken: e2e-dev-token-0123456789abcdef0123456789abcdef}   # DEV-ONLY: e2e REST (kullanıcı yarat + sunucu başlat)
   loadRoles:

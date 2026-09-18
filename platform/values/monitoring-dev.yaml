@@ -1,0 +1,70 @@
+# DEV/vanilla izleme: yalnız operator + küçük Prometheus + kube-state-metrics (customResourceState) + küçük Grafana.
+# OpenShift'te KURULMAZ: user-workload monitoring lakehouse ns'indeki PodMonitor/ServiceMonitor/PrometheusRule'ları alır.
+alertmanager: {enabled: false}
+prometheus-node-exporter: {enabled: false}
+nodeExporter: {enabled: false}
+kubeApiServer: {enabled: false}
+kubelet: {enabled: false}
+kubeControllerManager: {enabled: false}
+coreDns: {enabled: false}
+kubeEtcd: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeProxy: {enabled: false}
+kubeStateMetrics: {enabled: true}
+kube-state-metrics:
+  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+  rbac:
+    extraRules:
+    - {apiGroups: [sparkoperator.k8s.io], resources: [sparkapplications, scheduledsparkapplications], verbs: [list, watch]}
+  # KOPYA: glue/files/ksm-custom-resource-state.yaml (tek kaynak; oradaki alan yolları canlı doğrulandı).
+  # KSM chart 8.5.0 yerel anahtarı -> ConfigMap + --custom-resource-state-config-file chart tarafından üretilir.
+  customResourceState:
+    enabled: true
+    config:
+      kind: CustomResourceStateMetrics
+      spec:
+        resources:
+        - groupVersionKind: {group: sparkoperator.k8s.io, version: v1beta2, kind: SparkApplication}
+          metricNamePrefix: kube_customresource_sparkapp
+          labelsFromPath: {name: [metadata, name], namespace: [metadata, namespace]}
+          metrics:
+          - name: state
+            help: SparkApplication applicationState.state
+            each:
+              type: StateSet
+              stateSet:
+                labelName: state
+                path: [status, applicationState, state]
+                list: [SUBMITTED, RUNNING, COMPLETED, FAILED, SUBMISSION_FAILED, PENDING_RERUN, INVALIDATING, SUCCEEDING, FAILING, UNKNOWN]
+          - name: termination_time
+            help: SparkApplication terminationTime (epoch s)
+            each:
+              type: Gauge
+              gauge: {path: [status, terminationTime]}
+        - groupVersionKind: {group: sparkoperator.k8s.io, version: v1beta2, kind: ScheduledSparkApplication}
+          metricNamePrefix: kube_customresource_ssa
+          labelsFromPath: {name: [metadata, name], namespace: [metadata, namespace]}
+          metrics:
+          - name: last_run
+            help: ScheduledSparkApplication lastRun (epoch s)
+            each:
+              type: Gauge
+              gauge: {path: [status, lastRun]}
+prometheusOperator:
+  resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+prometheus:
+  prometheusSpec:
+    retention: 24h
+    resources: {requests: {cpu: 50m, memory: 400Mi}, limits: {memory: 1Gi}}
+    serviceMonitorSelectorNilUsesHelmValues: false     # lakehouse ns'indeki ServiceMonitor'ler görülsün (tuzak!)
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
+    ruleNamespaceSelector: {}
+    podMetadata: {labels: {hub.jupyter.org/network-access-hub: "true"}}   # z2jh hub netpol: Prometheus hub'a erişebilsin
+grafana:
+  enabled: true
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 384Mi}}
+  sidecar: {dashboards: {enabled: true, searchNamespace: ALL, label: grafana_dashboard}}
+  defaultDashboardsEnabled: false

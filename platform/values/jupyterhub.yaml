@@ -2,7 +2,10 @@
 # Hostname KOPYALARI (runbooks/install.md): oauth_callback_url <- glue jupyterhub.hostname; authorize/token/userdata_url <- glue keycloak.hostname
 hub:
   config:
-    JupyterHub: {authenticator_class: generic-oauth}
+    # authenticate_prometheus: /hub/metrics token istemesin (ServiceMonitor glue monitoring.yaml'da).
+    # Uç nokta yalnız ağ politikasıyla korunur: dev'de Prometheus pod etiketi (hub.jupyter.org/network-access-hub),
+    # prod'da aşağıdaki networkPolicy.ingress kuralı (openshift-user-workload-monitoring).
+    JupyterHub: {authenticator_class: generic-oauth, authenticate_prometheus: false}
     Authenticator: {enable_auth_state: true}
     GenericOAuthenticator:
       oauth_callback_url: https://jupyterhub.lakehouse.example.com/hub/oauth_callback
@@ -20,6 +23,12 @@ hub:
     OAUTH_CLIENT_ID: {value: jupyterhub}
     OAUTH_CLIENT_SECRET: {valueFrom: {secretKeyRef: {name: keycloak-clients, key: jupyterhub}}}
   resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 1Gi}}
+  # PROD (OpenShift): user-workload Prometheus hub'ı kazıyabilsin. z2jh varsayılan hub netpol'üne EKLENİR
+  # (varsayılan: yalnız hub.jupyter.org/network-access-hub etiketli pod'lar) — dev'de o etiket Prometheus pod'una
+  # verilir (platform/values/monitoring-dev.yaml podMetadata), bu kural dev'de etkisizdir (ns yok).
+  networkPolicy:
+    ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}}]
 proxy:
   service: {type: ClusterIP}          # dış erişim glue Route/Ingress (proxy-public:80)
   chp: {resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}}

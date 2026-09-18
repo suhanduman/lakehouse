@@ -45,6 +45,33 @@ catalogs:
     s3.endpoint=https://s3.example.com
     s3.region=us-east-1
     s3.path-style-access=true
+# JMX -> Prometheus (chart varsayılan bitnamilegacy jmx-exporter sidecar'ı; plan kararı R13).
+# Kurallar BİLEREK dar: yalnız QueryManager + ClusterMemoryManager (tüm MBean ağacı binlerce seri üretirdi).
+jmx:
+  enabled: true
+  exporter:
+    enabled: true
+    configProperties: |-
+      hostPort: localhost:{{- .Values.jmx.registryPort }}
+      startDelaySeconds: 0
+      ssl: false
+      lowercaseOutputName: false
+      lowercaseOutputLabelNames: false
+      includeObjectNames: ["trino.execution:name=QueryManager", "trino.memory:name=ClusterMemoryManager"]
+      rules:
+      - pattern: 'trino\.execution<name=QueryManager><>(RunningQueries|QueuedQueries|StartedQueries\.OneMinute\.Count|FailedQueries\.OneMinute\.Count|CompletedQueries\.OneMinute\.Count): (.*)'
+        name: trino_execution_QueryManager_$1
+        value: '$2'
+        help: 'Trino QueryManager $1'
+        type: GAUGE
+      - pattern: 'trino\.memory<name=ClusterMemoryManager><>(ClusterMemoryBytes|ClusterUserMemoryReservation|ClusterTotalMemoryReservation): (.*)'
+        name: trino_memory_ClusterMemoryManager_$1
+        value: '$2'
+        help: 'Trino ClusterMemoryManager $1'
+        type: GAUGE
+    resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+serviceMonitor:
+  enabled: true
 accessControl:
   type: configmap
   refreshPeriod: 60s

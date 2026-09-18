@@ -55,6 +55,11 @@ spec:
         - {name: ZEPPELIN_NOTEBOOK_PUBLIC, value: "false"}
         - {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}
         - {name: ZEPPELIN_DEP_LOCALREPO, value: /data/local-repo}
+{{- if $.Values.monitoring.enabled }}
+        # zeppelin.metric.enable.prometheus (env eşlemesi canlı doğrulandı: zeppelin-zengine 0.12.1
+        # ZeppelinConfiguration) -> Micrometer /metrics; ServiceMonitor glue monitoring.yaml'da
+        - {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}
+{{- end }}
         - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
         - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
         resources: {{ toJson $z.resources }}
@@ -72,6 +77,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: zeppelin, namespace: {{ $ns }}}
+# label app: zeppelin ServiceMonitor selector'ı içindir (glue monitoring.yaml)
+metadata: {name: zeppelin, namespace: {{ $ns }}, labels: {app: zeppelin}}
 spec: {selector: {app: zeppelin}, ports: [{name: http, port: 8080, targetPort: http}]}
 {{- end }}

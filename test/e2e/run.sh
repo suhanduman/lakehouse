@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) -> trino + superset (F4) yolları. CI ve lokal aynı.
+# e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) -> trino + superset (F4) -> monitoring (F5) yolları. CI ve lokal aynı.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; MODE=argocd; REVISION="${REVISION:-v2}"; REPO="${REPO:-https://github.com/suhanduman/lakehouse.git}"
 while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --repo) REPO="$2"; shift 2;; *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
@@ -40,7 +40,8 @@ if [[ "$MODE" == "argocd" ]]; then
   else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
-  for app in cert-manager strimzi cnpg keycloak-operator spark-operator superset-operator glue polaris jupyterhub; do
+  # monitoring YALNIZ dev overlay'inde var (platform/apps/dev); e2e her zaman --env dev ile bootstrap eder
+  for app in cert-manager strimzi cnpg keycloak-operator spark-operator superset-operator monitoring glue polaris jupyterhub; do
     # git kaynaklı uygulamalar ($values/path): revizyon kontrolü; salt-chart olanlar için gereksiz
     # glue en ağır uygulama (Connect build + CNPG x3 + Keycloak + Zeppelin/Superset imajları): varsayılan 1800s yetmedi (CI 35267164775)
     case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
@@ -74,3 +75,4 @@ echo "E2E F1 OK"
 "$ROOT/test/e2e/superset-path.sh"
 "$ROOT/test/e2e/jupyterhub-path.sh"
 "$ROOT/test/e2e/zeppelin-path.sh"
+"$ROOT/test/e2e/monitoring-path.sh"

@@ -132,6 +132,11 @@ minio:
 networkPolicy:
   enabled: true
 
+monitoring:
+  enabled: true                 # PodMonitor/ServiceMonitor/PrometheusRule/Grafana ConfigMap'leri (CRD'ler: dev kube-prometheus-stack, OpenShift platform)
+  namespace: monitoring         # dev Prometheus/Grafana ns'i
+  silverMergeStaleSeconds: 2700 # LakehouseSilverMergeStale eşiği (prod 15 dk cron -> 45 dk); dev gecelik cron -> glue-dev 172800
+
 ingress:
   enabled: false
   className: nginx

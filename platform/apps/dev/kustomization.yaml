@@ -1,0 +1,8 @@
+# DEV-ONLY Application'lar. platform/apps/kustomization.yaml (base) bu dizini LİSTELEMEZ -> prod'a girmez;
+# yalnız platform/envs/dev/kustomization.yaml `../../apps/dev` olarak dahil eder.
+# Neden ayrı dizin: kustomize varsayılan load restrictor'ı (LoadRestrictionsRootOnly, ArgoCD'de de varsayılan)
+# overlay kökünün DIŞINDAKİ tek tek DOSYALARI reddeder; DİZİN referansı serbesttir.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- 40-monitoring.yaml

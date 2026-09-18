@@ -12,6 +12,11 @@ spec:
       valuesObject:
         spark:
           jobNamespaces: [lakehouse]
+        # Operator metrikleri (spark_application_*): PodMonitor CRD'si kurulumdan ÖNCE var olmalı —
+        # dev'de kube-prometheus-stack (40-monitoring, sync-wave 0), prod OpenShift'te platform sağlar.
+        prometheus:
+          metrics: {enable: true, port: 8080}
+          podMonitor: {create: true}
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

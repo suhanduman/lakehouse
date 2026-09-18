@@ -81,5 +81,11 @@ spec:
       - {type: maven, group: org.apache.iceberg, artifact: iceberg-aws-bundle, version: {{ .Values.versions.iceberg | quote }}}
       - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-api, version: {{ .Values.versions.hadoopClient | quote }}}
       - {type: maven, group: org.apache.hadoop, artifact: hadoop-client-runtime, version: {{ .Values.versions.hadoopClient | quote }}}
+{{- if .Values.monitoring.enabled }}
+  # jmx_exporter: her Connect worker pod'unda tcp-prometheus (9404) /metrics — connector/task durumu ve sink commit metrikleri
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom: {configMapKeyRef: {name: connect-metrics, key: metrics-config.yml}}
+{{- end }}
   resources:
 {{ toYaml .Values.connect.resources | indent 4 }}
