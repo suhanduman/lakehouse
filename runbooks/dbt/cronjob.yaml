@@ -45,5 +45,7 @@ spec:
               limits: {memory: 1Gi}
           volumes:
           - {name: project, configMap: {name: dbt-project}}     # dbt_project.yml, profiles.yml, orders_daily.sql
-          - {name: ca,      secret: {secretName: lakehouse-ca}} # tls.crt -> profiles.yml `cert`
+          # YALNIZ tls.crt: `lakehouse-ca` Secret'ı kümenin CA ANAHTARINI da (tls.key) taşır ve anahtarsız
+          # mount etmek şart (glue/templates/{superset,zeppelin}.yaml ile aynı kalıp) -> `items` ile daraltılır.
+          - {name: ca,      secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}  # -> profiles.yml `cert`
           - {name: tmp,     emptyDir: {}}

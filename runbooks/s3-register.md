@@ -15,6 +15,8 @@ referans örnek. e2e'nin parçası değildir; `glue-jobs` ConfigMap'inde zaten m
             })}' \
      | kubectl apply -f -
    ```
+   Uygulamadan önce manifest'i doğrulamak için aynı komutu `| kubectl apply --dry-run=server -f -` ile
+   koşturun (CRD şeması + admission webhook'u gerçekten devreye girer, nesne yaratılmaz).
 2. İzle: `kubectl -n lakehouse get sparkapplication s3-register-once -w`; tamam olunca driver log'unda
    `S3_REGISTER_OK s3://... -> lakehouse.<ns>.<tbl> (<n> satır)` görülür.
 3. Temizle: `kubectl -n lakehouse delete sparkapplication s3-register-once`.

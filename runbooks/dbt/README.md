@@ -8,6 +8,9 @@ bir referans proje + CronJob örneği bulunur. Kopyalayın, kendi modellerinizle
 - `models/gold/orders_daily.sql` — `shop.orders`'tan günlük özet
 - `cronjob.yaml` — `python:3.13-slim` + `pip install dbt-trino==1.10.4` + `dbt run`
 
+`lakehouse-ca` Secret'ından pod'a **yalnız `tls.crt`** mount edilir (`volumes[].secret.items`); CA'nın özel
+anahtarı (`tls.key`) hiçbir iş yüküne verilmez — chart'taki Superset/Zeppelin mount'ları da aynı kalıptadır.
+
 ## Neden özel imaj yok
 
 **Resmi bir `dbt-trino` imajı yoktur** ve bu kurulumun global kuralı "özel/baked imaj yok"tur. Bu yüzden örnek
@@ -79,9 +82,13 @@ sahiptir ve yazma yetkisi **yalnız `sandbox` namespace'inde** tanımlıdır. `g
 1. `platform/polaris/setup.yaml` → `namespaces:` listesine `- name: gold` ekleyin ve
    `runbooks/scripts/polaris-setup.sh --setup platform/polaris/setup.yaml` çalıştırın (idempotent; yalnız
    EKSİK nesneleri yaratır).
-2. Katalog rolüne `gold` ayrıcalıklarını verin. Yeni kurulumda `setup.yaml`'daki `lakehouse_sandbox` rolünün
-   `privileges.namespace` haritasına `gold` eklemek yeterlidir; **var olan** kurulumda rol zaten yaratılmış
-   olduğu için ayrıcalıklar CLI ile eklenir:
+2. Katalog rolüne `gold` ayrıcalıklarını verin: `setup.yaml` → `lakehouse_sandbox` rolünün
+   `privileges.namespace` haritasına `gold` ekleyip aynı script'i tekrar koşturmak **hem yeni hem de var olan**
+   kurulumda yeter. `polaris setup apply` var olan bir katalog rolünü yeniden YARATMAZ ("Skipping creation for
+   already existing catalog role") ama ayrıcalık grant'larını o rol için yine de uygular — CLI 1.7.0 kaynağında
+   doğrulandı (`apache_polaris/cli/command/setup.py`, `_create_catalog_roles`: "Grant privileges" bloğu
+   rolün var olup olmamasından bağımsız koşar; grant'lar idempotenttir).
+   Tek seferlik/ad-hoc bir yetkilendirme için aynı işi CLI de yapar:
    ```bash
    for p in NAMESPACE_READ_PROPERTIES TABLE_LIST TABLE_CREATE TABLE_DROP \
             TABLE_READ_PROPERTIES TABLE_WRITE_PROPERTIES TABLE_READ_DATA TABLE_WRITE_DATA; do
