@@ -12,5 +12,14 @@ extraEnv:
 - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
 storage:
   secret: {name: s3-creds, awsAccessKeyId: AWS_ACCESS_KEY_ID, awsSecretAccessKey: AWS_SECRET_ACCESS_KEY}
+# İzleme (spec §8): Quarkus yönetim arayüzü 8182'dedir (`managementService`, headless) ve metrikler
+# `/q/metrics` altındadır. Chart'ın kendi ServiceMonitor'ü bu portu seçer (templates/servicemonitor.yaml,
+# `port: polaris-mgmt` -> Prometheus'ta job="polaris-mgmt"); CRD yoksa (`.Capabilities` kapısı) hiç render
+# edilmez, yani OpenShift dışı/izlemesiz kurulumda zararsızdır. Chart varsayılanı da true ama İSTEM burada
+# AÇIKÇA yazılır: değer dosyası tek otorite olsun ve upstream varsayılanı değişirse sessizce kapanmasın.
+# Ek etiket gerekmiyor: dev'de kube-prometheus-stack serviceMonitorSelectorNilUsesHelmValues: false
+# (platform/values/monitoring-dev.yaml), OpenShift UWM ise kullanıcı ns'lerindeki ServiceMonitor'leri alır.
+metrics: {enabled: true}
+serviceMonitor: {enabled: true}
 # NOT: DROP_WITH_PURGE_ENABLED sunucu geneli olarak burada AÇILMAZ; `lakehouse` kataloğunun properties'inde
 # (`polaris.config.drop-with-purge.enabled`) katalog düzeyinde açılır — platform/polaris/setup.yaml.

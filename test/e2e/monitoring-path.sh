@@ -21,6 +21,9 @@ UP ".*kafka-resources-metrics.*"
 UP ".*spark-operator.*"
 # superset YOK: Superset 6.1.0'da /metrics uç noktası yoktur (glue/templates/superset.yaml notu) — hedef açılsaydı KALICI down olurdu
 UP ".*kube-state-metrics.*"
+# Polaris yönetim portu (8182 /q/metrics): chart'ın kendi ServiceMonitor'ü (platform/values/polaris.yaml
+# serviceMonitor.enabled) -> hedef job adı mgmt Service'inden gelir (polaris-mgmt).
+UP ".*polaris.*"
 
 # kube-state-metrics CustomResourceState metrikleri ancak İLGİLİ CR VARSA üretilir. lib.sh'in run_spark_once'ı
 # ScheduledSparkApplication'ı askıya alır (status.lastRun HİÇ yazılmaz) ve ürettiği SparkApplication'ı siler

@@ -292,7 +292,8 @@ gerekir.
   kubectl -n lakehouse get podmonitor,servicemonitor
   ```
   İzleme kapsamı **bilerek dardır**: Kafka/Connect JMX (+`kafkaExporter` consumer lag), spark-operator,
-  kube-state-metrics (`customResourceState`) ve Polaris mgmt. Trino/Superset/JupyterHub/Zeppelin **uygulama
+  kube-state-metrics (`customResourceState`) ve Polaris mgmt (`:8182/q/metrics`, chart'ın `serviceMonitor`'ü —
+  Prometheus'ta `job="polaris-mgmt"`). Trino/Superset/JupyterHub/Zeppelin **uygulama
   metriği toplanmaz** (Superset 6.1.0'da `/metrics` uç noktası zaten yoktur) — bu hedeflerin listede olmaması
   hata değildir.
 - **Alarm ateşleniyor ama bildirim gelmiyor:** dev yığınında `alertmanager: false`'tur (kurallar
