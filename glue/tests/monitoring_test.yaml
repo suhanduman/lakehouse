@@ -43,7 +43,7 @@ tests:
       - equal: {path: 'spec.groups[0].rules[1].expr', value: 'sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}) > 1000'}
       - equal: {path: 'spec.groups[0].rules[1].for', value: 15m}
       - equal: {path: 'spec.groups[0].rules[3].expr', value: 'kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1'}
-      - equal: {path: 'spec.groups[0].rules[4].expr', value: 'spark_application_success_execution_time_seconds_sum / spark_application_success_execution_time_seconds_count > 1800'}
+      - equal: {path: 'spec.groups[0].rules[4].expr', value: 'rate(spark_application_success_execution_time_seconds_sum[6h]) / rate(spark_application_success_execution_time_seconds_count[6h]) > 1800'}
       # Helm-escape doğrulaması: literal Prometheus şablon değişkeni render'a geçmeli ("{{" Helm tarafından tüketilmemeli)
       - matchRegex: {path: 'spec.groups[0].rules[0].annotations.summary', pattern: '\{\{ \$labels\.connector \}\}'}
       - matchRegex: {path: 'spec.groups[0].rules[1].annotations.summary', pattern: '\{\{ \$labels\.consumergroup \}\}'}

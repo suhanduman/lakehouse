@@ -84,14 +84,18 @@ spec:
       # spark_application_success_execution_time_seconds bir SUMMARY'dir (canlı /api/v1/metadata doğrulandı) VE
       # spark-operator 2.5.2'nin exporter'ı per-app etiket YAYMAZ (tüm seriler app_type="Unknown", canlı
       # doğrulandı — kube_customresource_sparkapp_* KSM metrikleri de tek başlarına per-run süre vermiyor: yalnız
-      # termination_time var, başlangıç zamanı yok). Bu yüzden kural KÜME GENELİ ortalama tamamlanan koşu
-      # süresidir (_sum/_count oranı), tek bir yavaş koşuyu DEĞİL, genel bir yavaşlama trendini yakalar — brief'in
-      # izin verdiği "_sum/_count" seçimi. count=0 (henüz başarılı koşu yok) -> 0/0 = NaN, NaN > eşik hiçbir zaman
-      # doğru DEĞİLDİR (Prometheus karşılaştırmaları NaN'ı hep eler) -> kural absence-safe, taze kümede INACTIVE.
-      expr: spark_application_success_execution_time_seconds_sum / spark_application_success_execution_time_seconds_count > {{ .Values.monitoring.sparkRunMaxSeconds }}
+      # termination_time var, başlangıç zamanı yok). Bu kural SON 6 SAATTEKİ başarılı koşuların ortalama
+      # süresidir (rate(_sum[6h]) / rate(_count[6h])) — operator per-app etiket vermediği için KÜME GENELİ.
+      # Düzeltme (review bulgusu, fix round 1/5): _sum/_count'un HAM (windowsuz) oranı operator pod'u
+      # başladığından beri TÜM ZAMANLARIN ortalamasıdır — yüzlerce koşudan sonra tek bir 5000 sn'lik koşu
+      # ortalamayı neredeyse hiç oynatmaz ve kural tam da geçmiş biriktiğinde gerçek yavaşlamaları kaçırır.
+      # rate(...) pencereyi son 6 saate sabitler, taze bir yavaşlama HER ZAMAN görünür kalır. Pencerede hiç
+      # koşu yoksa (taze küme/sessiz dönem) rate() sayaç için SONUÇSUZ döner (extrapolation verisi yok) ->
+      # oran NaN -> NaN > eşik hiçbir zaman doğru DEĞİLDİR -> kural absence-safe, taze kümede INACTIVE.
+      expr: rate(spark_application_success_execution_time_seconds_sum[6h]) / rate(spark_application_success_execution_time_seconds_count[6h]) > {{ .Values.monitoring.sparkRunMaxSeconds }}
       for: 10m
       labels: {severity: warning}
-      annotations: {summary: "Spark koşularının ortalama süresi eşiği aştı (>{{ .Values.monitoring.sparkRunMaxSeconds }}s)", runbook: runbooks/troubleshooting.md#spark-duration}
+      annotations: {summary: "Spark koşularının son 6 saatteki ortalama süresi eşiği aştı (>{{ .Values.monitoring.sparkRunMaxSeconds }}s)", runbook: runbooks/troubleshooting.md#spark-duration}
 ---
 # Grafana dashboard ConfigMap'leri: sidecar etiketi grafana_dashboard, searchNamespace ALL (monitoring-dev.yaml) ->
 # bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.
