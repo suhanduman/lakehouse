@@ -60,7 +60,7 @@ backup:
   retentionPolicy: "30d"
 velero: {enabled: true, namespace: openshift-adp}    # OADP kurulduktan SONRA açılır (§6)
 ```
-`velero.enabled: false` iken `Schedule` **ve** Kafka/MinIO dışlama annotation'ları hiç render edilmez; OADP
+`velero.enabled: false` iken `Schedule` **ve** Kafka/MinIO/CNPG `pgdata` dışlama annotation'ları hiç render edilmez; OADP
 kurulmadan açılırsa glue "no matches for kind Schedule" ile Degraded olur.
 
 ## 3. Sağlık kontrolü (haftalık + her yükseltmeden önce)
