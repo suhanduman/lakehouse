@@ -30,7 +30,8 @@ velero: {enabled: true}
 tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
 monitoring: {silverMergeStaleSeconds: 172800}   # dev: silver-merge cron gecelik (0 3 * * *) -> 48 saat
-networkPolicy: {enabled: false}      # dev'de kapalı (e2e port-forward/fixture trafiği); kindnetd enforce EDER (F4 canlı, z2jh singleuser netpol) — prod'da true
+networkPolicy: {enabled: true}       # kindnetd NetworkPolicy'yi ENFORCE EDER (F4 canlı bulgu) -> dev'de de açık; canlı doğrulama
+                                      # (izin verilen/verilmeyen ns, apiserver->webhook) F5 raporunda (task-5-report.md)
 keycloak:
   hostname: http://keycloak-service.lakehouse.svc:8080   # dev: iss küme içinden çözülür (Trino OIDC discovery); tarayıcı akışı küme dışından çalışmaz
   devUsers:

@@ -32,6 +32,10 @@ worker:
 auth:
   passwordAuthSecret: trino-service-accounts     # key password.db (htpasswd bcrypt): superset, zeppelin (+ dev: e2e)
 catalogs:
+  # chart varsayılanı tpch/tpcds sentetik benchmark katalogları içerir (F5 backlog) — açık null render'dan
+  # düşürür (helm map birleştirme: yalnız bu iki anahtar; lakehouse'a dokunmaz)
+  tpch: null
+  tpcds: null
   lakehouse: |
     connector.name=iceberg
     iceberg.catalog.type=rest

@@ -7,5 +7,5 @@ source "$ROOT/test/e2e/lib.sh"
 echo "== Trino hazır (polaris-trino Secret'ı polaris-setup ile geldi)"
 kubectl -n "$NS" rollout status deploy/trino-coordinator --timeout=900s
 echo "== servis hesabı + OIDC (analyst1/student1) + rules.json + sandbox"
-run_check_job "$ROOT/test/e2e/trino-check" trino-check 3 3 2
+run_check_job "$ROOT/test/e2e/trino-check" trino-check check.py 3 3 2
 echo "E2E F4 TRINO OK"

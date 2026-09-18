@@ -13,9 +13,12 @@ hub:
   # ServiceMonitor kaldırıldı, Prometheus'un hub'a erişmesi gerekmiyor. z2jh varsayılan hub netpol'ü
   # (yalnız AYNI ns podSelector) geçerli kalır.
   services:
-    e2e: {apiToken: e2e-dev-token-0123456789abcdef0123456789abcdef}   # DEV-ONLY: e2e REST (kullanıcı yarat + sunucu başlat)
+    # DEV-ONLY: e2e REST (kullanıcı yarat + sunucu başlat). Ad "e2e" test KULLANICISIYLA (jupyterhub-path.sh)
+    # ÇAKIŞIYORDU: token sahibi servis kendi kendini silmeyi reddediyordu (400 Cannot delete yourself) — servis
+    # adı "e2e-admin"e ayrıştırıldı, token değeri AYNI kaldı (F5 bulgu).
+    e2e-admin: {apiToken: e2e-dev-token-0123456789abcdef0123456789abcdef}
   loadRoles:
-    e2e: {description: e2e harness, scopes: [admin:users, admin:servers, read:servers], services: [e2e]}
+    e2e-admin: {description: e2e harness, scopes: [admin:users, admin:servers, read:servers], services: [e2e-admin]}
 singleuser:
   memory: {guarantee: 512M, limit: 2G}
   cpu: {guarantee: 0.2, limit: 1}

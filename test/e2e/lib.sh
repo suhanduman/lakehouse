@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
 # e2e ortak yardımcılar (pg/mongo/nginx yolları). Çağıran script ROOT ve NS tanımlar, sonra: source "$ROOT/test/e2e/lib.sh"
 
-verify() {  # verify <ns.table> <min_rows> [ek argümanlar…]  -> küme içi pyiceberg Job
-  local name; name="verify-$(date +%s)-$RANDOM"
-  kubectl -n "$NS" create configmap lakehouse-verify --from-file="$ROOT/test/e2e/verify/verify.py" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+run_check_job() {  # run_check_job <dizin> <ad> <pyfile> [argümanlar…] -> dizin/pyfile ConfigMap lakehouse-<ad>, dizin/job.yaml (JOBNAME, CHECK_ARGS) Job; "^OK" satırları
+  local dir="$1" base="$2" pyfile="$3"; shift 3; local q="" a name; name="$base-$(date +%s)-$RANDOM"
+  kubectl -n "$NS" create configmap "lakehouse-$base" --from-file="$dir/$pyfile" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # her argüman tek tırnakla: Job komutu /bin/sh -c ile çalışır, boşluklu koşul ('~ts=2026-09-11 13:52:24') bölünmesin (F3 canlı)
   # koşullar repo-içi sabitlerdir; ' ya da # içeren koşul desteklenmez
-  local q="" a; for a in "$@"; do q+="'$a' "; done
-  sed -e "s#JOBNAME#$name#" -e "s#VERIFY_ARGS#$q#" "$ROOT/test/e2e/verify/job.yaml" | kubectl apply -f - >/dev/null
-  kubectl -n "$NS" wait --for=condition=complete "job/$name" --timeout=900s >/dev/null || { kubectl -n "$NS" logs "job/$name" --tail=40; return 1; }
-  kubectl -n "$NS" logs "job/$name" | grep "^OK"
-}
-
-run_check_job() {  # run_check_job <dizin> <ad> [argümanlar…] -> dizin/check.py ConfigMap lakehouse-<ad>, dizin/job.yaml (JOBNAME, CHECK_ARGS) Job; "^OK" satırları
-  local dir="$1" base="$2"; shift 2; local q="" a name; name="$base-$(date +%s)-$RANDOM"
-  kubectl -n "$NS" create configmap "lakehouse-$base" --from-file="$dir/check.py" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  # her argüman tek tırnakla (verify ile aynı kalıp): Job komutu /bin/sh -c ile çalışır
   for a in "$@"; do q+="'$a' "; done
   sed -e "s#JOBNAME#$name#" -e "s#CHECK_ARGS#$q#" "$dir/job.yaml" | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait --for=condition=complete "job/$name" --timeout=900s >/dev/null || { kubectl -n "$NS" logs "job/$name" --tail=60; return 1; }
   kubectl -n "$NS" logs "job/$name" | grep "^OK"
+}
+
+verify() {  # verify <ns.table> <min_rows> [ek argümanlar…]  -> küme içi pyiceberg Job (run_check_job'ın ince sarmalayıcısı, DRY)
+  run_check_job "$ROOT/test/e2e/verify" verify verify.py "$@"
 }
 
 run_spark_once() {  # run_spark_once <ScheduledSparkApplication adı> -> template'ten tek seferlik SparkApplication (plan P9)
