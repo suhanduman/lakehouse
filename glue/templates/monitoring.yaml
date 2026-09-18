@@ -58,4 +58,62 @@ spec:
   endpoints:
   - {port: http, path: /metrics, interval: 30s}
 {{- end }}
+---
+# Lakehouse alarm kuralları. alertmanager kapalı (dev) -> hiçbir yere bildirim gitmez; doğrulama
+# /api/v1/rules (health) + /api/v1/alerts (ALERTS serisi) üzerinden yapılır.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: {name: lakehouse, namespace: {{ $ns }}}
+spec:
+  groups:
+  - name: lakehouse
+    rules:
+    - alert: LakehouseConnectTaskFailed
+      expr: kafka_connect_connector_task_status{status="failed"} == 1
+      for: 5m
+      labels: {severity: critical}
+      annotations: {summary: "Connect task FAILED: {{ "{{ $labels.connector }}" }}/{{ "{{ $labels.task }}" }}", runbook: runbooks/troubleshooting.md#connect}
+    - alert: LakehouseSinkStalled
+      # aktif kayıt var ama 15 dk'da offset commit yok (Iceberg sink upstream 300 s commit aralığı)
+      expr: sum by (connector) (kafka_connect_sink_task_sink_record_active_count) > 0 and sum by (connector) (increase(kafka_connect_sink_task_offset_commit_completion_total[15m])) == 0
+      for: 5m
+      labels: {severity: warning}
+      annotations: {summary: "Iceberg sink commit yok: {{ "{{ $labels.connector }}" }}", runbook: runbooks/troubleshooting.md#sink}
+    - alert: LakehouseSilverMergeStale
+      # en son COMPLETED silver-merge koşusundan bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
+      # BİLİNÇLİ absence-safe tasarım: kube_customresource_sparkapp_* yalnız CR VARKEN üretilir (Task 1 notu);
+      # taze kümede (e2e run_spark_once SparkApplication'ları siler) seri hiç yoktur. `max(...)` boş vektör
+      # üzerinde SONUÇSUZ döner (0 değil) -> `time() - max(...)` de sonuçsuz kalır -> kural INACTIVE olur,
+      # YANLIŞ ateşlemez. `or absent()` bilerek eklenmedi: absent() dev'de CR hiç yokken sürekli true döner ve
+      # sahte "stale" alarmı üretirdi (glue-dev eşiği 172800 s olsa bile).
+      expr: time() - max(kube_customresource_sparkapp_termination_time{name=~"silver-merge-.*"} and on (name) kube_customresource_sparkapp_state{state="COMPLETED"} == 1) > {{ .Values.monitoring.silverMergeStaleSeconds }}
+      for: 10m
+      labels: {severity: warning}
+      annotations: {summary: "silver-merge son başarı yaşı eşiği aştı", runbook: runbooks/troubleshooting.md#silver-merge}
+    - alert: LakehouseSparkScheduledRunFailed
+      expr: kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1
+      for: 1m
+      labels: {severity: warning}
+      annotations: {summary: "Zamanlanmış Spark koşusu FAILED: {{ "{{ $labels.name }}" }}", runbook: runbooks/troubleshooting.md#spark}
+---
+# Grafana dashboard ConfigMap'leri: sidecar etiketi grafana_dashboard, searchNamespace ALL (monitoring-dev.yaml) ->
+# bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.
+# Superset: /metrics yok (Task 1 sapma 2) -> Superset dashboard'u YOK.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-dashboard-strimzi-kafka, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
+data:
+  strimzi-kafka.json: {{ .Files.Get "files/dashboards/strimzi-kafka.json" | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-dashboard-strimzi-kafka-connect, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
+data:
+  strimzi-kafka-connect.json: {{ .Files.Get "files/dashboards/strimzi-kafka-connect.json" | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-dashboard-trino, namespace: {{ $ns }}, labels: {grafana_dashboard: "1"}}
+data:
+  trino.json: {{ .Files.Get "files/dashboards/trino-20208.json" | quote }}
 {{- end }}

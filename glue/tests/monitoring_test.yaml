@@ -2,16 +2,24 @@ suite: monitoring (metrik kaynakları + PodMonitor/ServiceMonitor)
 templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml, zeppelin.yaml]
 set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder
 tests:
-  - it: renders both metric ConfigMaps, the Strimzi PodMonitor and the hub/zeppelin ServiceMonitors
+  - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor, the rule and the hub/zeppelin ServiceMonitors
     template: monitoring.yaml
     asserts:
-      - hasDocuments: {count: 5}
+      - hasDocuments: {count: 9}
       - documentIndex: 0
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: kafka-metrics}
       - documentIndex: 1
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: connect-metrics}
       - documentIndex: 2
         containsDocument: {kind: PodMonitor, apiVersion: monitoring.coreos.com/v1, name: kafka-resources-metrics}
+      - documentIndex: 5
+        containsDocument: {kind: PrometheusRule, apiVersion: monitoring.coreos.com/v1, name: lakehouse}
+      - documentIndex: 6
+        containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka}
+      - documentIndex: 7
+        containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka-connect}
+      - documentIndex: 8
+        containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-trino}
   - it: PodMonitor selects both Kafka and KafkaConnect pods on tcp-prometheus
     template: monitoring.yaml
     documentSelector: {path: kind, value: PodMonitor}
@@ -39,7 +47,51 @@ tests:
     template: monitoring.yaml
     set: {zeppelin.enabled: false}
     asserts:
-      - hasDocuments: {count: 4}
+      - hasDocuments: {count: 8}
+  - it: PrometheusRule/lakehouse defines the 4 named lakehouse alerts
+    template: monitoring.yaml
+    documentSelector: {path: kind, value: PrometheusRule}
+    asserts:
+      - equal: {path: metadata.name, value: lakehouse}
+      - equal: {path: 'spec.groups[0].name', value: lakehouse}
+      - lengthEqual: {path: 'spec.groups[0].rules', count: 4}
+      - equal: {path: 'spec.groups[0].rules[0].alert', value: LakehouseConnectTaskFailed}
+      - equal: {path: 'spec.groups[0].rules[1].alert', value: LakehouseSinkStalled}
+      - equal: {path: 'spec.groups[0].rules[2].alert', value: LakehouseSilverMergeStale}
+      - equal: {path: 'spec.groups[0].rules[3].alert', value: LakehouseSparkScheduledRunFailed}
+      - equal: {path: 'spec.groups[0].rules[0].expr', value: 'kafka_connect_connector_task_status{status="failed"} == 1'}
+      - equal: {path: 'spec.groups[0].rules[3].expr', value: 'kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1'}
+      # Helm-escape doğrulaması: literal Prometheus şablon değişkeni render'a geçmeli ("{{" Helm tarafından tüketilmemeli)
+      - matchRegex: {path: 'spec.groups[0].rules[0].annotations.summary', pattern: '\{\{ \$labels\.connector \}\}'}
+  - it: LakehouseSilverMergeStale threshold renders the dev override (glue-dev.yaml -> 172800)
+    template: monitoring.yaml
+    set: {monitoring.silverMergeStaleSeconds: 172800}
+    documentSelector: {path: kind, value: PrometheusRule}
+    asserts:
+      - matchRegex: {path: 'spec.groups[0].rules[2].expr', pattern: '> 172800$'}
+  - it: LakehouseSilverMergeStale threshold uses the chart default when not overridden
+    template: monitoring.yaml
+    documentSelector: {path: kind, value: PrometheusRule}
+    asserts:
+      - matchRegex: {path: 'spec.groups[0].rules[2].expr', pattern: '> 2700$'}
+  - it: grafana-dashboard-strimzi-kafka ConfigMap carries the sidecar label and a .json data key
+    template: monitoring.yaml
+    documentSelector: {path: metadata.name, value: grafana-dashboard-strimzi-kafka}
+    asserts:
+      - equal: {path: metadata.labels.grafana_dashboard, value: "1"}
+      - isNotNull: {path: 'data["strimzi-kafka.json"]'}
+  - it: grafana-dashboard-strimzi-kafka-connect ConfigMap carries the sidecar label and a .json data key
+    template: monitoring.yaml
+    documentSelector: {path: metadata.name, value: grafana-dashboard-strimzi-kafka-connect}
+    asserts:
+      - equal: {path: metadata.labels.grafana_dashboard, value: "1"}
+      - isNotNull: {path: 'data["strimzi-kafka-connect.json"]'}
+  - it: grafana-dashboard-trino ConfigMap carries the sidecar label and a .json data key
+    template: monitoring.yaml
+    documentSelector: {path: metadata.name, value: grafana-dashboard-trino}
+    asserts:
+      - equal: {path: metadata.labels.grafana_dashboard, value: "1"}
+      - isNotNull: {path: 'data["trino.json"]'}
   - it: Kafka metricsConfig points at the kafka-metrics ConfigMap
     template: kafka.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}

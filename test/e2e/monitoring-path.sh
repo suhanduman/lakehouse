@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# e2e F5 izleme yolu (1/2): Prometheus hedefleri up, metrik adları mevcut. Kurallar/dashboard'lar Task 2'de eklenir.
+# e2e F5 izleme yolu: Prometheus hedefleri + metrik adları + PrometheusRule health/alarm + Grafana dashboard'ları.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; MON="${MON_NS:-monitoring}"
+# E2E_EXPECT_NO_FIRING=1 (varsayılan): "0 firing Lakehouse alarmı" iddiasını uygular. Bu makinede F4 gecesinden
+# kalan FAILED cron koşuları (maint-compact/maint-expire-orphan-ttl) LakehouseSparkScheduledRunFailed'i
+# GERÇEKTEN ateşleyebilir — bu, kural adının/metriklerin doğru çalıştığının POZİTİF kanıtıdır, bug değil.
+# Assert'i sessizce zayıflatmak yerine belgelenmiş bir değişkenle atlıyoruz; Task 7'nin taze kümesinde varsayılan
+# açık kalır ve gerçek anlamda "0 firing" doğrular.
+E2E_EXPECT_NO_FIRING="${E2E_EXPECT_NO_FIRING:-1}"
 kubectl -n "$MON" rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus --timeout=600s
 kubectl -n "$MON" port-forward svc/monitoring-kube-prometheus-prometheus 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
 Q() { curl -sS "localhost:19090/api/v1/query" --data-urlencode "query=$1" | jq -r '.data.result | length'; }
@@ -52,4 +58,28 @@ M "kube_customresource_sparkapp_termination_time{name=\"$RUN\"} > 0"
 M "time() - kube_customresource_ssa_last_run{name=\"$SSA\"} < 3600"
 M 'spark_application_success_count'
 M 'trino_execution_QueryManager_RunningQueries'
+
+echo "== kurallar"
+n=$(curl -sS localhost:19090/api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "4" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 4 kural yüklü"
+for a in LakehouseConnectTaskFailed LakehouseSinkStalled LakehouseSilverMergeStale LakehouseSparkScheduledRunFailed; do
+  st=$(curl -sS localhost:19090/api/v1/rules | jq -r ".data.groups[].rules[] | select(.name==\"$a\") | .health"); [[ "$st" == "ok" ]] || { echo "HATA $a health=$st"; exit 1; }; echo "OK $a health ok"
+done
+# Ateşlenen Lakehouse alarmları HER ZAMAN raporlanır (pozitif kanıt olabilir): önce listele, sonra
+# E2E_EXPECT_NO_FIRING=1 ise assert et. Bu kümede F4'ten kalan FAILED cron koşuları (maint-compact,
+# maint-expire-orphan-ttl) LakehouseSparkScheduledRunFailed'i meşru biçimde ateşleyebilir.
+firing_json=$(curl -sS localhost:19090/api/v1/alerts | jq '[.data.alerts[] | select(.labels.alertname | startswith("Lakehouse")) | select(.state=="firing")]')
+firing=$(jq 'length' <<<"$firing_json")
+echo "== ateşlenen Lakehouse alarmları ($firing)"; jq -c '.[] | {alertname: .labels.alertname, labels, activeAt}' <<<"$firing_json"
+if [[ "$E2E_EXPECT_NO_FIRING" == "1" ]]; then
+  [[ "$firing" == "0" ]] || { echo "HATA ateşlenen Lakehouse alarmı (E2E_EXPECT_NO_FIRING=1)"; exit 1; }
+  echo "OK ateşlenen alarm yok"
+else
+  echo "UYARI E2E_EXPECT_NO_FIRING=0 -> 'ateşlenen alarm yok' iddiası ATLANDI (belgelenmiş, varsayılan değil)"
+fi
+
+echo "== grafana dashboard'ları"
+kubectl -n "$MON" port-forward svc/monitoring-grafana 13000:80 >/dev/null 2>&1 & PF2=$!; sleep 3
+GP=$(kubectl -n "$MON" get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
+titles=$(curl -sS -u "admin:$GP" 'localhost:13000/api/search?type=dash-db' | jq -r '.[].title'); kill $PF2 2>/dev/null || true
+for t in "Strimzi Kafka" "Strimzi Kafka Connect" "Trino"; do grep -qi "$t" <<<"$titles" || { echo "HATA dashboard yok: $t ($titles)"; exit 1; }; echo "OK dashboard $t"; done
 echo "E2E F5 MONITORING OK"
