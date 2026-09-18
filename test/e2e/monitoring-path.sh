@@ -65,6 +65,10 @@ M "kube_customresource_sparkapp_termination_time{name=\"$RUN\"} > 0"
 # RFC3339 -> epoch saniye dönüşümü: değer şimdiki zamana yakın olmalı (1 saatten yeni)
 M "time() - kube_customresource_ssa_last_run{name=\"$SSA\"} < 3600"
 M 'spark_application_success_count'
+# LakehouseSparkRunTooLong'un TEK girdisi (glue/templates/monitoring.yaml): upstream bu aileyi yeniden
+# adlandırırsa kural sessizce ölür ve /api/v1/rules yine "health: ok" der (boş vektör hata değildir) ->
+# serinin VARLIĞINI ayrıca iddia ediyoruz. _count yeterli: _sum onunla aynı summary'den gelir.
+M 'spark_application_success_execution_time_seconds_count'
 
 echo "== kurallar"
 n=$(curl -sS localhost:19090/api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "5" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 5 kural yüklü"

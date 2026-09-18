@@ -54,10 +54,13 @@ prometheusOperator:
   resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
 prometheus:
   prometheusSpec:
-    # retention 24h + ~2000 seri: canlı RSS ~150-200 MiB. Limitler DÜŞÜRÜLDÜ (Task 7 canlı bulgusu):
-    # F5 yığını eklenince kind düğümünün bellek LİMİT taahhüdü %108'e çıktı (8664Mi istek / 16150Mi limit,
-    # düğüm 14,8 GiB) ve Spark driver+executor aynı anda ayaktayken host OOM killer polaris/connect/
-    # operatörleri öldürdü (exit 137). Limit toplamını düğümün altına çekmek dev'de tek gerçek kaldıraçtır.
+    # Limitler ÖLÇÜLEN gerçek kullanıma göre (Task 7 fix turu, canlı `crictl stats` + VM dmesg):
+    # prometheus RSS **153 MB** (retention 24h, 30s scrape, ~2000 seri) -> 640Mi ≈ 4x marj.
+    # NOT (kalıcı ders): limit toplamı bir tavandır, kullanımı ÖLÇMEZ ve Kubernetes onu zorlamaz;
+    # düğümün "limit taahhüdü %108" olması tek başına hiçbir şeyi öldürmez. VM'in kernel log'unda
+    # (açılıştan beri, tüm denemeler dâhil) **host düzeyinde "Out of memory:" kaydı YOKTUR**; tüm
+    # kayıtlar `Memory cgroup out of memory`, yani konteynerin KENDİ limiti. Bu yüzden limit düşürmek
+    # host baskısını azaltmaz, yalnız cgroup OOM eşiğini erkene çeker (bkz. grafana satırı).
     retention: 24h
     resources: {requests: {cpu: 50m, memory: 400Mi}, limits: {memory: 640Mi}}
     serviceMonitorSelectorNilUsesHelmValues: false     # lakehouse ns'indeki ServiceMonitor'ler görülsün (tuzak!)
@@ -70,6 +73,10 @@ prometheus:
     # (Task 2b, izleme kapsamı daraltıldı), Prometheus'un artık hub netpol'ünü geçmesi gerekmiyor.
 grafana:
   enabled: true
-  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 256Mi}}
+  # Grafana limiti 256Mi/384Mi DEĞİL **768Mi**: canlı ölçümde boştaki RSS **235 MB** (CPU %20) ve ana
+  # sürecin yanında ~14 `gpx_grafana-*` eklenti süreci var. VM kernel log'u bu pod'u 13 kez
+  # `Memory cgroup out of memory` ile öldürdü — hem 384Mi hem de (d56fa48 ile düşürülen) 256Mi limitinde.
+  # Yani F5'in TEK gerçek OOM'u buydu ve limiti düşürmek onu ağırlaştırdı; 768Mi ≈ 3x ölçülen marj.
+  resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 768Mi}}
   sidecar: {dashboards: {enabled: true, searchNamespace: ALL, label: grafana_dashboard}}
   defaultDashboardsEnabled: false

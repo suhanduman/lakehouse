@@ -26,10 +26,14 @@ jobs:
         run: |
           helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
           helm template jupyterhub jupyterhub/jupyterhub --version 4.4.2 -f platform/values/jupyterhub.yaml >/dev/null
-      # F5 upstream chart'ları: monitoring/velero DEV-ONLY overlay'de (platform/apps/dev) olduğu için e2e'nin
-      # ArgoCD yolu bunları dev'de render eder, ama bir şema/anahtar hatası ancak küme kurulurken (30+ dk sonra)
-      # görünürdü. Bu üç adım aynı hatayı 1 dk içinde yakalar. cnpg-barman değer dosyası yok (Application
-      # helm.valuesObject ile yalnız resources veriyor) -> varsayılan render'ı derlenir.
+      # F5 upstream chart'ları: monitoring/velero DEV-ONLY overlay'de (platform/apps/dev) olduğu için bir
+      # şablon/tip hatası ancak küme kurulurken (30+ dk sonra) görünürdü; bu üç adım onu 1 dk'da yakalar.
+      # KAPSAM SINIRI: velero 12.1.0 ve plugin-barman-cloud 0.8.0 `values.schema.json` TAŞIR (şema doğrulaması
+      # da devreye girer), ama kube-prometheus-stack 91.4.1 (ve kube-state-metrics subchart'ı) TAŞIMAZ ->
+      # monitoring-dev.yaml için bu kapı yalnız **şablon/tip** hatası yakalar; yanlış yazılmış bir ANAHTAR
+      # (ör. customResourceState bloğunda) sessizce geçer (o blok ConfigMap'e olduğu gibi kopyalanır).
+      # Hiçbir şema `additionalProperties: false` demiyor. cnpg-barman'ın değer dosyası yok; Application
+      # (platform/apps/00-cnpg-barman.yaml) yalnız `resources` veriyor -> render onunla AYNI değerle koşar.
       - name: F5 render (kube-prometheus-stack 91.4.1, velero 12.1.0, plugin-barman-cloud 0.8.0)
         run: |
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -37,7 +41,7 @@ jobs:
           helm repo add cnpg https://cloudnative-pg.github.io/charts
           helm template monitoring prometheus-community/kube-prometheus-stack --version 91.4.1 -f platform/values/monitoring-dev.yaml >/dev/null
           helm template velero vmware-tanzu/velero --version 12.1.0 -f platform/values/velero-dev.yaml >/dev/null
-          helm template plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 >/dev/null
+          helm template plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 --set-json 'resources={"requests":{"cpu":"10m","memory":"64Mi"}}' >/dev/null
   e2e-kind:
     runs-on: ubuntu-latest
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
@@ -78,6 +82,9 @@ jobs:
           # İzleme yığını (dev overlay, release "monitoring" ns "monitoring", sync-wave -1)
           kubectl -n monitoring get pods,prometheus,servicemonitor,podmonitor -o wide || true
           kubectl -n monitoring logs sts/prometheus-monitoring-kube-prometheus-prometheus -c prometheus --tail=60 || true
+          # Grafana dashboard sidecar'ı: monitoring-path.sh'in /api/search iddiası düşerse ConfigMap listesi
+          # sidecar'ın onu GERÇEKTEN aldığını göstermez; alma/yazma kaydı yalnız bu log'da.
+          kubectl -n monitoring logs deploy/monitoring-grafana -c grafana-sc-dashboard --tail=40 || true
           # lakehouse ns'indeki izleme/CNPG-yedek nesneleri (PodMonitor kafka-resources-metrics, 5 kurallı PrometheusRule,
           # ObjectStore lakehouse-backups, 3 ScheduledBackup). "backup" KISA ADI CNPG'ye çözülür -> tam ad yazılıyor.
           kubectl -n lakehouse get prometheusrule,podmonitor,servicemonitor,objectstore,scheduledbackup,backups.postgresql.cnpg.io || true
