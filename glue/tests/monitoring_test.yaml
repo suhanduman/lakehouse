@@ -1,24 +1,24 @@
-suite: monitoring (metrik kaynakları + PodMonitor/ServiceMonitor)
-templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml, zeppelin.yaml]
+suite: monitoring (metrik kaynakları + PodMonitor)
+templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml]
 set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder
 tests:
-  - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor, the rule and the hub/zeppelin ServiceMonitors
+  - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor and the rule (hub/zeppelin ServiceMonitor YOK - kapsam daraltıldı, Task 2b)
     template: monitoring.yaml
     asserts:
-      - hasDocuments: {count: 8}
+      - hasDocuments: {count: 6}
       - documentIndex: 0
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: kafka-metrics}
       - documentIndex: 1
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: connect-metrics}
       - documentIndex: 2
         containsDocument: {kind: PodMonitor, apiVersion: monitoring.coreos.com/v1, name: kafka-resources-metrics}
-      - documentIndex: 5
+      - documentIndex: 3
         containsDocument: {kind: PrometheusRule, apiVersion: monitoring.coreos.com/v1, name: lakehouse}
-      - documentIndex: 6
+      - documentIndex: 4
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka}
-      - documentIndex: 7
+      - documentIndex: 5
         containsDocument: {kind: ConfigMap, apiVersion: v1, name: grafana-dashboard-strimzi-kafka-connect}
-  - it: PodMonitor selects both Kafka and KafkaConnect pods on tcp-prometheus
+  - it: PodMonitor selects both Kafka and KafkaConnect pods on tcp-prometheus (kafka-exporter dahil, aynı selector/port - canlı doğrulandı)
     template: monitoring.yaml
     documentSelector: {path: kind, value: PodMonitor}
     asserts:
@@ -26,41 +26,39 @@ tests:
       - equal: {path: spec.namespaceSelector.matchNames, value: [lakehouse]}
       - equal: {path: 'spec.podMetricsEndpoints[0].port', value: tcp-prometheus}
       - equal: {path: 'spec.podMetricsEndpoints[0].path', value: /metrics}
-  - it: hub ServiceMonitor scrapes /hub/metrics on the z2jh hub Service
-    template: monitoring.yaml
-    documentSelector: {path: metadata.name, value: hub}
-    asserts:
-      - equal: {path: kind, value: ServiceMonitor}
-      - equal: {path: 'spec.endpoints[0].path', value: /hub/metrics}
-      - equal: {path: 'spec.endpoints[0].port', value: hub}
-      - equal: {path: spec.selector.matchLabels, value: {app.kubernetes.io/name: jupyterhub, app.kubernetes.io/component: hub}}
-  - it: zeppelin ServiceMonitor scrapes /metrics with the classic-text fallback protocol
-    template: monitoring.yaml
-    documentSelector: {path: metadata.name, value: zeppelin}
-    asserts:
-      - equal: {path: 'spec.endpoints[0].path', value: /metrics}
-      - equal: {path: 'spec.endpoints[0].port', value: http}
-      - equal: {path: spec.fallbackScrapeProtocol, value: PrometheusText0.0.4}
-  - it: zeppelin ServiceMonitor is dropped when zeppelin is disabled
-    template: monitoring.yaml
-    set: {zeppelin.enabled: false}
-    asserts:
-      - hasDocuments: {count: 7}
-  - it: PrometheusRule/lakehouse defines the 4 named lakehouse alerts
+  - it: PrometheusRule/lakehouse defines the 5 named lakehouse alerts
     template: monitoring.yaml
     documentSelector: {path: kind, value: PrometheusRule}
     asserts:
       - equal: {path: metadata.name, value: lakehouse}
       - equal: {path: 'spec.groups[0].name', value: lakehouse}
-      - lengthEqual: {path: 'spec.groups[0].rules', count: 4}
+      - lengthEqual: {path: 'spec.groups[0].rules', count: 5}
       - equal: {path: 'spec.groups[0].rules[0].alert', value: LakehouseConnectTaskFailed}
       - equal: {path: 'spec.groups[0].rules[1].alert', value: LakehouseSinkStalled}
       - equal: {path: 'spec.groups[0].rules[2].alert', value: LakehouseSilverMergeStale}
       - equal: {path: 'spec.groups[0].rules[3].alert', value: LakehouseSparkScheduledRunFailed}
+      - equal: {path: 'spec.groups[0].rules[4].alert', value: LakehouseSparkRunTooLong}
       - equal: {path: 'spec.groups[0].rules[0].expr', value: 'kafka_connect_connector_task_status{status="failed"} == 1'}
+      # LakehouseSinkStalled: lag tabanlı (Task 2b, kafka-exporter kafka_consumergroup_lag)
+      - equal: {path: 'spec.groups[0].rules[1].expr', value: 'sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}) > 1000'}
+      - equal: {path: 'spec.groups[0].rules[1].for', value: 15m}
       - equal: {path: 'spec.groups[0].rules[3].expr', value: 'kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1'}
+      - equal: {path: 'spec.groups[0].rules[4].expr', value: 'spark_application_success_execution_time_seconds_sum / spark_application_success_execution_time_seconds_count > 1800'}
       # Helm-escape doğrulaması: literal Prometheus şablon değişkeni render'a geçmeli ("{{" Helm tarafından tüketilmemeli)
       - matchRegex: {path: 'spec.groups[0].rules[0].annotations.summary', pattern: '\{\{ \$labels\.connector \}\}'}
+      - matchRegex: {path: 'spec.groups[0].rules[1].annotations.summary', pattern: '\{\{ \$labels\.consumergroup \}\}'}
+  - it: LakehouseSinkStalled threshold renders monitoring.sinkLagThreshold override
+    template: monitoring.yaml
+    set: {monitoring.sinkLagThreshold: 5000}
+    documentSelector: {path: kind, value: PrometheusRule}
+    asserts:
+      - matchRegex: {path: 'spec.groups[0].rules[1].expr', pattern: '> 5000$'}
+  - it: LakehouseSparkRunTooLong threshold renders monitoring.sparkRunMaxSeconds override
+    template: monitoring.yaml
+    set: {monitoring.sparkRunMaxSeconds: 3600}
+    documentSelector: {path: kind, value: PrometheusRule}
+    asserts:
+      - matchRegex: {path: 'spec.groups[0].rules[4].expr', pattern: '> 3600$'}
   - it: LakehouseSilverMergeStale threshold renders the dev override (glue-dev.yaml -> 172800)
     template: monitoring.yaml
     set: {monitoring.silverMergeStaleSeconds: 172800}
@@ -92,6 +90,14 @@ tests:
       - equal: {path: spec.kafka.metricsConfig.type, value: jmxPrometheusExporter}
       - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.name, value: kafka-metrics}
       - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.key, value: kafka-metrics-config.yml}
+  - it: Kafka kafkaExporter is enabled for consumer group lag (Task 2b)
+    template: kafka.yaml
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    documentSelector: {path: kind, value: Kafka}
+    asserts:
+      - equal: {path: spec.kafkaExporter.topicRegex, value: ".*"}
+      - equal: {path: spec.kafkaExporter.groupRegex, value: ".*"}
+      - equal: {path: spec.kafkaExporter.resources, value: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 128Mi}}}
   - it: KafkaConnect metricsConfig points at the connect-metrics ConfigMap
     template: kafka-connect.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
@@ -105,12 +111,9 @@ tests:
     documentSelector: {path: kind, value: Superset}
     asserts:
       - isNull: {path: spec.monitoring}
-  - it: zeppelin gets the prometheus metric env
-    template: zeppelin.yaml
-    documentSelector: {path: kind, value: Deployment}
-    asserts:
-      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}}
-  - it: monitoring.enabled=false drops every monitoring object and both metricsConfigs
+  # ZEPPELIN_METRIC_ENABLE_PROMETHEUS env'i BİLEREK YOK: Zeppelin ServiceMonitor kaldırıldı (Task 2b, izleme
+  # kapsamı daraltıldı) -> env de kaldırıldı (glue/templates/zeppelin.yaml).
+  - it: monitoring.enabled=false drops every monitoring object, both metricsConfigs and kafkaExporter
     set: {monitoring.enabled: false, connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
     asserts:
       - template: monitoring.yaml
@@ -118,9 +121,9 @@ tests:
       - template: kafka.yaml
         documentSelector: {path: kind, value: Kafka}
         isNull: {path: spec.kafka.metricsConfig}
+      - template: kafka.yaml
+        documentSelector: {path: kind, value: Kafka}
+        isNull: {path: spec.kafkaExporter}
       - template: kafka-connect.yaml
         documentSelector: {path: kind, value: KafkaConnect}
         isNull: {path: spec.metricsConfig}
-      - template: zeppelin.yaml
-        documentSelector: {path: kind, value: Deployment}
-        notContains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}}

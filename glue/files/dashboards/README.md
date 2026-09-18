@@ -20,15 +20,16 @@ Superset için dashboard YOK: Superset 6.1.0 imajında `/metrics` uç noktası y
 
 ## Datasource notu (`${DS_...}` girdileri)
 
-- `strimzi-kafka.json` / `strimzi-kafka-connect.json`: paneller `${DS_PROMETHEUS}` değişkenine referans verir
-  (`__inputs[0].name == "DS_PROMETHEUS"`, `type: datasource`, `pluginId: prometheus`). kube-prometheus-stack
-  Grafana sidecar'ı (`sidecar.dashboards`) bu tür `__inputs` içeren dashboard JSON'larını **otomatik import
-  ederken datasource girdisini çözmez** — sidecar ConfigMap'i doğrudan Grafana dashboard API'sine gönderir,
-  import sihirbazı devreye girmez. Sonuç: dashboard `/api/search` içinde GÖRÜNÜR (e2e bunu doğrular) ama panel
-  sorguları `${DS_PROMETHEUS}` değişkenini çözemeyen bir Grafana'da veri göstermeyebilir. Bu kurulumda tek bir
-  Prometheus datasource'u (kube-prometheus-stack'in kendi `Prometheus` datasource'u) var ve Grafana çoğu zaman
-  tek datasource'u örtük olarak eşler; doğrulanmadıysa (bu görevde `/api/search` ile sınırlı kalındı) panelin
-  boş geldiği görülürse: dashboard ayarlarından "Prometheus" datasource'unu manuel seçip kaydetmek yeterlidir.
+- `strimzi-kafka.json` / `strimzi-kafka-connect.json`: paneller `${DS_PROMETHEUS}` değişkenine referans verir.
+  **Düzeltme (Task 2b):** bu dosyalarda `__inputs` alanı YOK (canlı `python3 -c "import json; ... '__inputs' in
+  json.load(...)"` → `False`) — dolayısıyla import sihirbazı zaten hiç devreye girmiyor. Gerçek mekanizma
+  `templating.list[]` içindeki `{name: DS_PROMETHEUS, type: datasource, query: prometheus}` girdisidir (Grafana
+  şablon değişkeni, dashboard içi `${DS_PROMETHEUS}` referanslarını bu değişkenin seçtiği datasource'a çözer).
+  kube-prometheus-stack Grafana sidecar'ı (`sidecar.dashboards`) ConfigMap'i doğrudan Grafana dashboard API'sine
+  gönderir; dashboard içindeki `DS_PROMETHEUS` template değişkeni Grafana tarafında normal şekilde çalışır ve
+  (tek bir Prometheus datasource'u olan bu kurulumda) onu seçer. Dashboard `/api/search` içinde GÖRÜNÜR (e2e bunu
+  doğrular); panel-veri doğrulaması (canlı sorgu sonucu) bu görevin kapsamı dışında bırakıldı — boş panel
+  görülürse dashboard ayarlarından "Prometheus" datasource'unu manuel seçip kaydetmek yeterlidir.
 
 ## Güncelleme
 

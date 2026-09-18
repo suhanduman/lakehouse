@@ -54,3 +54,15 @@ spec:
       valueFrom: {configMapKeyRef: {name: kafka-metrics, key: kafka-metrics-config.yml}}
 {{- end }}
   entityOperator: {topicOperator: {}, userOperator: {}}
+{{- if .Values.monitoring.enabled }}
+  # kafka-exporter: consumer group lag (kafka_consumergroup_lag) — jmx_exporter broker metrikleri lag VERMEZ
+  # (yalnız throughput/partition sayaçları). LakehouseSinkStalled kuralı bu metriğe dayanır (glue monitoring.yaml).
+  # Canlı doğrulandı: exporter pod'u strimzi.io/kind: Kafka etiketini TAŞIR ve container portu 9404 adı
+  # tcp-prometheus'tur (broker jmx_exporter'ıyla AYNI ad/numara) -> mevcut kafka-resources-metrics PodMonitor'ü
+  # (selector strimzi.io/kind In [Kafka,KafkaConnect], podMetricsEndpoints port: tcp-prometheus) exporter'ı da
+  # YAKALAR; ayrı bir PodMonitor GEREKMEDİ (Prometheus hedefi "up", job lakehouse/kafka-resources-metrics).
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 128Mi}}
+{{- end }}

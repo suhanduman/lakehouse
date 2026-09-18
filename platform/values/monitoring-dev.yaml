@@ -62,7 +62,8 @@ prometheus:
     serviceMonitorNamespaceSelector: {}
     podMonitorNamespaceSelector: {}
     ruleNamespaceSelector: {}
-    podMetadata: {labels: {hub.jupyter.org/network-access-hub: "true"}}   # z2jh hub netpol: Prometheus hub'a erişebilsin
+    # podMetadata hub.jupyter.org/network-access-hub etiketi BİLEREK YOK: hub ServiceMonitor kaldırıldı
+    # (Task 2b, izleme kapsamı daraltıldı), Prometheus'un artık hub netpol'ünü geçmesi gerekmiyor.
 grafana:
   enabled: true
   resources: {requests: {cpu: 20m, memory: 128Mi}, limits: {memory: 384Mi}}

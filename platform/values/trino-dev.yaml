@@ -13,11 +13,7 @@ coordinator:
   jvm: {maxHeapSize: 1536M}
   config: {query: {maxMemoryPerNode: 512MB}, nodeScheduler: {includeCoordinator: true}}
   resources: {requests: {cpu: 250m, memory: 1536Mi}, limits: {memory: 2560Mi}}   # CI 4 vCPU: CPU isteği Spark driver'ına yer açar
-# CI 4 vCPU: jmx-exporter sidecar coordinator pod'una eklenir; imaj her restart'ta çekilmesin (kind)
-jmx:
-  exporter:
-    pullPolicy: IfNotPresent
-    resources: {requests: {cpu: 10m, memory: 48Mi}, limits: {memory: 128Mi}}
+# jmx-exporter sidecar override YOK: trino.yaml'da jmx.enabled kapalı (Task 2b, izleme kapsamı daraltıldı)
 auth:
   groups: |
     lakehouse-admins:admin1

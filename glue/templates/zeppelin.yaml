@@ -55,11 +55,8 @@ spec:
         - {name: ZEPPELIN_NOTEBOOK_PUBLIC, value: "false"}
         - {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}
         - {name: ZEPPELIN_DEP_LOCALREPO, value: /data/local-repo}
-{{- if $.Values.monitoring.enabled }}
-        # zeppelin.metric.enable.prometheus (env eşlemesi canlı doğrulandı: zeppelin-zengine 0.12.1
-        # ZeppelinConfiguration) -> Micrometer /metrics; ServiceMonitor glue monitoring.yaml'da
-        - {name: ZEPPELIN_METRIC_ENABLE_PROMETHEUS, value: "true"}
-{{- end }}
+        # ZEPPELIN_METRIC_ENABLE_PROMETHEUS BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı
+        # (kullanıcı kararı 2026-09-18, Task 2b) — Zeppelin ServiceMonitor kaldırıldı (glue monitoring.yaml).
         - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
         - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
         resources: {{ toJson $z.resources }}

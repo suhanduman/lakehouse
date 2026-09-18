@@ -9,15 +9,17 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; MON="${MON_NS:-monito
 # açık kalır ve gerçek anlamda "0 firing" doğrular.
 E2E_EXPECT_NO_FIRING="${E2E_EXPECT_NO_FIRING:-1}"
 kubectl -n "$MON" rollout status statefulset/prometheus-monitoring-kube-prometheus-prometheus --timeout=600s
-kubectl -n "$MON" port-forward svc/monitoring-kube-prometheus-prometheus 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
+PF2=""
+kubectl -n "$MON" port-forward svc/monitoring-kube-prometheus-prometheus 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF $PF2 2>/dev/null' EXIT; sleep 3
 Q() { curl -sS "localhost:19090/api/v1/query" --data-urlencode "query=$1" | jq -r '.data.result | length'; }
 UP() { local job="$1" n; for _ in $(seq 1 30); do n=$(Q "up{job=~\"$job\"} == 1"); [[ "$n" -ge 1 ]] && { echo "OK up $job ($n)"; return; }; sleep 10; done; echo "HATA up $job"; exit 1; }
+# Trino/hub/zeppelin BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (Task 2b, kullanıcı kararı
+# 2026-09-18) — gösterim bileşenlerinin uygulama metriği toplanmaz (ServiceMonitor'lar kaldırıldı).
 UP ".*kafka-resources-metrics.*"
+# kafka-exporter AYNI PodMonitor'e (kafka-resources-metrics) düşüyor (job adı aynı, canlı doğrulandı) — burada
+# consumer lag serisinin GERÇEKTEN üretildiğini (yalnız hedef "up" değil) aşağıdaki M() ile ayrıca kanıtlıyoruz.
 UP ".*spark-operator.*"
-UP ".*trino.*"
 # superset YOK: Superset 6.1.0'da /metrics uç noktası yoktur (glue/templates/superset.yaml notu) — hedef açılsaydı KALICI down olurdu
-UP ".*hub.*"
-UP ".*zeppelin.*"
 UP ".*kube-state-metrics.*"
 
 # kube-state-metrics CustomResourceState metrikleri ancak İLGİLİ CR VARSA üretilir. lib.sh'in run_spark_once'ı
@@ -28,7 +30,9 @@ UP ".*kube-state-metrics.*"
 # Mevcut CR'ın schedule'ını değiştirmek İŞE YARAMAZ: spark-operator 2.5.2 status.nextRun'ı yeniden hesaplamaz
 # (canlı: */1'e çekilen maint-position-deletes 6 dk boyunca koşmadı, nextRun ertesi güne sabit kaldı).
 SSA=e2e-monitoring
-cleanup() { kubectl -n "$NS" delete scheduledsparkapplication "$SSA" --ignore-not-found >/dev/null 2>&1 || true; kill $PF 2>/dev/null || true; }
+# PF2 (Grafana port-forward, aşağıda başlatılır) da bu trap'e dahil: değişken EXIT anında okunur (fonksiyon
+# çağrısı, string değil) -> henüz atanmamışsa "" (yukarıda tanımlı), atanmışsa gerçek PID kullanılır.
+cleanup() { kubectl -n "$NS" delete scheduledsparkapplication "$SSA" --ignore-not-found >/dev/null 2>&1 || true; kill $PF $PF2 2>/dev/null || true; }
 trap cleanup EXIT
 kubectl -n "$NS" delete scheduledsparkapplication "$SSA" --ignore-not-found --wait=true >/dev/null
 kubectl -n "$NS" get scheduledsparkapplication maint-position-deletes -o json \
@@ -51,17 +55,20 @@ echo "OK $RUN COMPLETED"
 M() { local q="$1" n; for _ in $(seq 1 12); do n=$(Q "$q"); [[ "$n" -ge 1 ]] && { echo "OK metrik $q ($n seri)"; return; }; sleep 10; done; echo "HATA metrik yok: $q"; exit 1; }
 M 'kafka_connect_connector_task_status{status="running"}'
 M 'kafka_connect_sink_task_offset_commit_completion_total'
+# kafka-exporter (glue kafka.yaml Kafka.spec.kafkaExporter): consumer lag, gerçek sink connector grupları
+# (connect-sink-shop/-shop-coord/-nginx/-nginx-coord — canlı doğrulandı, kafka-consumer-groups.sh --list).
+# LakehouseSinkStalled kuralının dayandığı seri budur (glue monitoring.yaml).
+M 'kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}'
 # StateSet HER durumu (0/1) yayar -> seri varlığı yetmez, değeri 1 olmalı (yüksek sesli)
 M "kube_customresource_sparkapp_state{name=\"$RUN\",state=\"COMPLETED\"} == 1"
 M "kube_customresource_sparkapp_termination_time{name=\"$RUN\"} > 0"
 # RFC3339 -> epoch saniye dönüşümü: değer şimdiki zamana yakın olmalı (1 saatten yeni)
 M "time() - kube_customresource_ssa_last_run{name=\"$SSA\"} < 3600"
 M 'spark_application_success_count'
-M 'trino_execution_QueryManager_RunningQueries'
 
 echo "== kurallar"
-n=$(curl -sS localhost:19090/api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "4" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 4 kural yüklü"
-for a in LakehouseConnectTaskFailed LakehouseSinkStalled LakehouseSilverMergeStale LakehouseSparkScheduledRunFailed; do
+n=$(curl -sS localhost:19090/api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "5" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 5 kural yüklü"
+for a in LakehouseConnectTaskFailed LakehouseSinkStalled LakehouseSilverMergeStale LakehouseSparkScheduledRunFailed LakehouseSparkRunTooLong; do
   st=$(curl -sS localhost:19090/api/v1/rules | jq -r ".data.groups[].rules[] | select(.name==\"$a\") | .health"); [[ "$st" == "ok" ]] || { echo "HATA $a health=$st"; exit 1; }; echo "OK $a health ok"
 done
 # Ateşlenen Lakehouse alarmları HER ZAMAN raporlanır (pozitif kanıt olabilir): önce listele, sonra

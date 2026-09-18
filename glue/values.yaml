@@ -136,6 +136,8 @@ monitoring:
   enabled: true                 # PodMonitor/ServiceMonitor/PrometheusRule/Grafana ConfigMap'leri (CRD'ler: dev kube-prometheus-stack, OpenShift platform)
   namespace: monitoring         # dev Prometheus/Grafana ns'i
   silverMergeStaleSeconds: 2700 # LakehouseSilverMergeStale eşiği (prod 15 dk cron -> 45 dk); dev gecelik cron -> glue-dev 172800
+  sinkLagThreshold: 1000        # LakehouseSinkStalled eşiği (kafka_consumergroup_lag toplamı, connect-sink-*)
+  sparkRunMaxSeconds: 1800      # LakehouseSparkRunTooLong eşiği (ortalama tamamlanan Spark koşu süresi, sn)
 
 ingress:
   enabled: false
