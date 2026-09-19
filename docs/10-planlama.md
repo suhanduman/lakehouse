@@ -40,23 +40,31 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 
 "İstek" (request), pod'un düğümde yer ayırtmak için beyan ettiği asgari kaynaktır; kapasite planı bunun üzerinden yapılır.
 
+> **Değişiklik nereye yazılır.** Aşağıdaki "Küçük" sütunu `glue/values.yaml` ve `platform/values/*.yaml`
+> dosyalarındaki ürün varsayılanlarını gösterir; bu dosyalar **yükseltmede üzerine yazılır**, bu yüzden
+> orada değiştirilmez. Boyutlandırma ezmeleri müşteriye özel site dosyalarına yazılır — ArgoCD bu
+> dosyaları en SON yükler ve ürün varsayılanlarını ezerler: glue chart'ı için
+> `platform/values/site/glue.yaml`, Trino için `platform/values/site/trino.yaml`, JupyterHub için
+> `platform/values/site/jupyterhub.yaml`. Anahtar site dosyasında yoksa, tablodaki yolu aynen yazarak
+> eklersiniz.
+
 | Bileşen | Küçük (bugünkü varsayılan) | Orta (başlangıç) | Büyük (başlangıç) | Nerede değiştirilir |
 |---|---|---|---|---|
-| **Kafka broker** (3 adet) | CPU/RAM isteği **tanımlı değil** (kümenin varsayılanı geçerlidir); disk **100Gi/broker** | disk 250Gi/broker | disk 500Gi/broker, 5 broker | `glue/values.yaml` → `kafka.storageSize`, `kafka.replicas` |
-| **Kafka Exporter** | 10m CPU / 64Mi (limit 128Mi) | aynı | aynı | `glue/templates/kafka.yaml` |
-| **Kafka Connect** (Debezium + Iceberg sink) | 1 kopya, 500m CPU / 1536Mi (limit 2Gi) | 2 kopya, 1 CPU / 3Gi (limit 4Gi) | 3 kopya, 2 CPU / 6Gi (limit 8Gi) | `glue/values.yaml` → `connect.replicas`, `connect.resources` |
-| **Spark sürücü** | 1 çekirdek / 2g + 512m ek | 2 çekirdek / 4g + 1g ek | 2 çekirdek / 4g + 1g ek | `glue/values.yaml` → `spark.driver` |
-| **Spark çalıştırıcı** | 1 adet × 1 çekirdek / 2g + 512m ek | 2 adet × 2 çekirdek / 4g + 1g ek | 4 adet × 2 çekirdek / 8g + 2g ek | `glue/values.yaml` → `spark.executor` |
-| **Spark shuffle bölümü** | 8 | 200 | 400 | `glue/values.yaml` → `spark.shufflePartitions` |
-| **PostgreSQL** (polaris-db, keycloak-db, superset-db) | üretimde **2 kopya**/küme, 10Gi disk/kopya | 20Gi disk/kopya | 50Gi disk/kopya | `platform/values/glue.yaml` → `cnpg.*.instances`; `glue/values.yaml` → `cnpg.*.storageSize` |
-| **Polaris** | chart varsayılanı (istek tanımlı değil) | aynı | 2 kopya | `platform/values/polaris.yaml` |
-| **Trino koordinatör** | JVM yığını 8G, sorgu başına düğüm belleği 1GB | aynı | JVM yığını 16G | `platform/values/trino.yaml` → `coordinator.jvm` |
-| **Trino işçi** | **2 işçi**, JVM yığını 8G | 4 işçi | 8 işçi, JVM yığını 16G | `platform/values/trino.yaml` → `server.workers`, `worker.jvm` |
-| **Superset** | 1 kopya, 250m CPU / 768Mi (limit 2Gi) | 2 kopya | 3 kopya, 500m CPU / 1536Mi | `glue/values.yaml` → `superset.replicas`, `superset.resources` |
-| **JupyterHub hub + proxy** | 100m/256Mi + 100m/128Mi | aynı | 200m/512Mi | `platform/values/jupyterhub.yaml` → `hub.resources`, `proxy.chp.resources` |
-| **JupyterHub kullanıcı pod'u** | garanti 0,5 CPU / 1G, limit 2 CPU / 4G, 10Gi disk | garanti 1 CPU / 2G, limit 4 CPU / 8G, 20Gi disk | garanti 2 CPU / 4G, limit 8 CPU / 16G, 50Gi disk | `platform/values/jupyterhub.yaml` → `singleuser` |
-| **Zeppelin** | 250m CPU / 1Gi (limit 2560Mi), 10Gi disk, JVM 1024m | 500m / 2Gi (limit 4Gi), JVM 2048m | 1 CPU / 4Gi (limit 8Gi), JVM 4096m | `glue/values.yaml` → `zeppelin.resources`, `zeppelin.mem`, `zeppelin.intpMem` |
-| **Keycloak** | operatör varsayılanı | aynı | 2 kopya | `glue/templates/keycloak.yaml` |
+| **Kafka broker** (3 adet) | CPU/RAM isteği **tanımlı değil** (kümenin varsayılanı geçerlidir); disk **100Gi/broker** | disk 250Gi/broker | disk 500Gi/broker, 5 broker | `platform/values/site/glue.yaml` → `kafka.storageSize`, `kafka.replicas` |
+| **Kafka Exporter** | 10m CPU / 64Mi (limit 128Mi) | aynı | aynı | şablonda sabit, değiştirilmez (`glue/templates/kafka.yaml`) |
+| **Kafka Connect** (Debezium + Iceberg sink) | 1 kopya, 500m CPU / 1536Mi (limit 2Gi) | 2 kopya, 1 CPU / 3Gi (limit 4Gi) | 3 kopya, 2 CPU / 6Gi (limit 8Gi) | `platform/values/site/glue.yaml` → `connect.replicas`, `connect.resources` |
+| **Spark sürücü** | 1 çekirdek / 2g + 512m ek | 2 çekirdek / 4g + 1g ek | 2 çekirdek / 4g + 1g ek | `platform/values/site/glue.yaml` → `spark.driver` |
+| **Spark çalıştırıcı** | 1 adet × 1 çekirdek / 2g + 512m ek | 2 adet × 2 çekirdek / 4g + 1g ek | 4 adet × 2 çekirdek / 8g + 2g ek | `platform/values/site/glue.yaml` → `spark.executor` |
+| **Spark shuffle bölümü** | 8 | 200 | 400 | `platform/values/site/glue.yaml` → `spark.shufflePartitions` |
+| **PostgreSQL** (polaris-db, keycloak-db, superset-db) | üretimde **2 kopya**/küme, 10Gi disk/kopya | 20Gi disk/kopya | 50Gi disk/kopya | `platform/values/site/glue.yaml` → `cnpg.*.instances`, `cnpg.*.storageSize` |
+| **Polaris** | chart varsayılanı (istek tanımlı değil) | aynı | 2 kopya | site dosyası **yok**: `platform/values/polaris.yaml` düzenlenir, yükseltmede elle birleştirilir |
+| **Trino koordinatör** | JVM yığını 8G, sorgu başına düğüm belleği 1GB | aynı | JVM yığını 16G | `platform/values/site/trino.yaml` → `coordinator.jvm` |
+| **Trino işçi** | **2 işçi**, JVM yığını 8G | 4 işçi | 8 işçi, JVM yığını 16G | `platform/values/site/trino.yaml` → `server.workers`, `worker.jvm` |
+| **Superset** | 1 kopya, 250m CPU / 768Mi (limit 2Gi) | 2 kopya | 3 kopya, 500m CPU / 1536Mi | `platform/values/site/glue.yaml` → `superset.replicas`, `superset.resources` |
+| **JupyterHub hub + proxy** | 100m/256Mi + 100m/128Mi | aynı | 200m/512Mi | `platform/values/site/jupyterhub.yaml` → `hub.resources`, `proxy.chp.resources` |
+| **JupyterHub kullanıcı pod'u** | garanti 0,5 CPU / 1G, limit 2 CPU / 4G, 10Gi disk | garanti 1 CPU / 2G, limit 4 CPU / 8G, 20Gi disk | garanti 2 CPU / 4G, limit 8 CPU / 16G, 50Gi disk | `platform/values/site/jupyterhub.yaml` → `singleuser` |
+| **Zeppelin** | 250m CPU / 1Gi (limit 2560Mi), 10Gi disk, JVM 1024m | 500m / 2Gi (limit 4Gi), JVM 2048m | 1 CPU / 4Gi (limit 8Gi), JVM 4096m | `platform/values/site/glue.yaml` → `zeppelin.resources`, `zeppelin.mem`, `zeppelin.intpMem` |
+| **Keycloak** | operatör varsayılanı | aynı | 2 kopya | şablonda sabit, değiştirilmez (`glue/templates/keycloak.yaml`) |
 
 **Dikkat edilecek üç nokta.**
 
@@ -154,27 +162,27 @@ cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lake
 
 **Ters giderse:** `Permission denied` alırsanız depoyu yazma izniniz olan bir dizine klonlayın. Dosya zaten varsa üzerine yazmaz — `cp -i` uyarısını dikkate alın.
 
-| Değişken | Kimden alınır | Nasıl / örnek |
-|---|---|---|
-| `GIT_REPO_URL` | Git yöneticisi | müşteri deposunun klonlama adresi; `git ls-remote` ile doğrulanır |
-| `ARGOCD_NS` | — (sabit) | `openshift-gitops` |
-| `LAKEHOUSE_NS` | lakehouse kurulumcusu | `lakehouse` (kurumsal ad standardı varsa değiştirilir) |
-| `APPS_DOMAIN` | küme (bkz. Adım 1) | `oc get ingresses.config cluster -o jsonpath='{.spec.domain}'` |
-| `STORAGE_CLASS` | küme (bkz. Adım 2) | `oc get storageclass`; varsayılan varsa boş bırakılabilir |
-| `INTERNAL_REGISTRY` | — (sabit) | `image-registry.openshift-image-registry.svc:5000` |
-| `S3_ENDPOINT` | depolama ekibi | `https://` ile başlamalı |
-| `S3_BUCKET_DATA` | depolama ekibi | Iceberg ambarı |
-| `S3_BUCKET_BACKUP` | depolama ekibi | veri bucket'ından **ayrı** olmalı |
-| `S3_REGION` | depolama ekibi | verilmezse `us-east-1` |
-| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | depolama ekibi | veri bucket'ı için anahtar çifti |
-| `S3_BACKUP_ACCESS_KEY` / `S3_BACKUP_SECRET_KEY` | depolama ekibi | yedek bucket'ı için **ayrı** anahtar çifti |
-| `LDAP_URL` | AD ekibi | `ldaps://` ve 636; şifresiz LDAP kabul edilmez |
-| `LDAP_BIND_DN` | AD ekibi | yalnız okuma yetkili servis hesabının tam DN'i |
-| `LDAP_BIND_PASSWORD` | AD ekibi | kasadan; values dosyalarına yazılmaz |
-| `LDAP_USERS_DN` | AD ekibi | kullanıcıların arandığı alt ağaç |
-| `LDAP_GROUPS_DN` | AD ekibi | üç lakehouse grubunun bulunduğu alt ağaç |
-| `LDAP_CA_FILE` | AD ekibi | AD sertifikasını imzalayan CA'nın PEM dosyası |
-| `KEYCLOAK_ADMIN_PASSWORD` | lakehouse kurulumcusu | isteğe bağlı; boş bırakılırsa kurulum `openssl rand -hex 24` ile üretir |
+| Değişken | Kimden alınır | Nasıl / örnek | Alındı |
+|---|---|---|---|
+| `GIT_REPO_URL` | Git yöneticisi | müşteri deposunun klonlama adresi; `git ls-remote` ile doğrulanır | ☐ |
+| `ARGOCD_NS` | — (sabit) | `openshift-gitops` | ☐ |
+| `LAKEHOUSE_NS` | lakehouse kurulumcusu | `lakehouse` (kurumsal ad standardı varsa değiştirilir) | ☐ |
+| `APPS_DOMAIN` | küme (bkz. Adım 1) | `oc get ingresses.config cluster -o jsonpath='{.spec.domain}'` | ☐ |
+| `STORAGE_CLASS` | küme (bkz. Adım 2) | `oc get storageclass`; varsayılan varsa boş bırakılabilir | ☐ |
+| `INTERNAL_REGISTRY` | — (sabit) | `image-registry.openshift-image-registry.svc:5000` | ☐ |
+| `S3_ENDPOINT` | depolama ekibi | `https://` ile başlamalı | ☐ |
+| `S3_BUCKET_DATA` | depolama ekibi | Iceberg ambarı | ☐ |
+| `S3_BUCKET_BACKUP` | depolama ekibi | veri bucket'ından **ayrı** olmalı | ☐ |
+| `S3_REGION` | depolama ekibi | verilmezse `us-east-1` | ☐ |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | depolama ekibi | veri bucket'ı için anahtar çifti | ☐ |
+| `S3_BACKUP_ACCESS_KEY` / `S3_BACKUP_SECRET_KEY` | depolama ekibi | yedek bucket'ı için **ayrı** anahtar çifti | ☐ |
+| `LDAP_URL` | AD ekibi | `ldaps://` ve 636; şifresiz LDAP kabul edilmez | ☐ |
+| `LDAP_BIND_DN` | AD ekibi | yalnız okuma yetkili servis hesabının tam DN'i | ☐ |
+| `LDAP_BIND_PASSWORD` | AD ekibi | kasadan; values dosyalarına yazılmaz | ☐ |
+| `LDAP_USERS_DN` | AD ekibi | kullanıcıların arandığı alt ağaç | ☐ |
+| `LDAP_GROUPS_DN` | AD ekibi | üç lakehouse grubunun bulunduğu alt ağaç | ☐ |
+| `LDAP_CA_FILE` | AD ekibi | AD sertifikasını imzalayan CA'nın PEM dosyası | ☐ |
+| `KEYCLOAK_ADMIN_PASSWORD` | lakehouse kurulumcusu | isteğe bağlı; boş bırakılırsa kurulum `openssl rand -hex 24` ile üretir | ☐ |
 
 Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakehouse-analysts`, `lakehouse-users` gruplarının açılması ve ilk yöneticinin `lakehouse-admins` grubuna eklenmesi.
 

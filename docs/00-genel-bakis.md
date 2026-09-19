@@ -1,33 +1,45 @@
 # 00 — Genel bakış
 
-**Bu bölümde:** ürünün ne yaptığı, hangi bileşenlerden oluştuğu, verinin kaynaktan rapora kadar izlediği yedi akış ve baştan sona kullanılan kavramların sözlüğü.
+**Bu bölümde:** ürünün ne yaptığı, hangi bileşenlerden oluştuğu, verinin kaynaktan rapora
+kadar izlediği yedi akış ve baştan sona kullanılan kavramların sözlüğü.
 **Süre:** 30–40 dakika (okuma).
 **Gereken yetki:** yok — bu bölümde komut çalıştırılmaz.
-**Nerede çalıştırılır:** komut yok; okuma bölümüdür. İlk komut kurulum öncesi denetimlerle birlikte 20-on-kosullar.md bölümünde gelir.
+**Nerede çalıştırılır:** komut yok; okuma bölümüdür. İlk komut kurulum öncesi
+denetimlerle birlikte 20-on-kosullar.md bölümünde gelir.
 
 ---
 
 ## 1. Tek cümlede
 
-Bu ürün, kurumun işletim veritabanlarındaki (PostgreSQL, SQL Server, MongoDB) ve web sunucularındaki değişiklikleri **sürekli** olarak açık formatlı bir veri gölüne (Apache Iceberg tabloları) taşır ve bu veriyi SQL, pano ve not defteri üzerinden, kurumun Active Directory kimlikleriyle sorgulanabilir kılar.
+Bu ürün, kurumun işletim veritabanlarındaki (PostgreSQL, SQL Server, MongoDB) ve web
+sunucularındaki değişiklikleri **sürekli** olarak açık formatlı bir veri gölüne (Apache
+Iceberg tabloları) taşır ve bu veriyi SQL, pano ve not defteri üzerinden, kurumun Active
+Directory kimlikleriyle sorgulanabilir kılar.
 
 Üç özellik ürünün tamamını belirler:
 
-1. **Kod yazılmaz, değer yazılır.** Yeni bir kaynak veya tablo eklemek, bir YAML dosyasına birkaç satır eklemektir; bağlayıcıları, Kafka konularını, tabloları ve zamanlanmış işleri Helm şablonları üretir.
-2. **Her şey Git'ten gelir.** Kümede elle değişiklik yapılmaz; Git'e yazılır, ArgoCD kümeyi Git'e eşitler. Böylece "kümede ne var" sorusunun cevabı her zaman depodadır.
-3. **Özel imaj yoktur.** Bütün konteyner imajları üreticinin resmi imajlarıdır; Kafka Connect imajı bile kümede, Strimzi'nin kendi yapı mekanizmasıyla üretilir. Dockerfile bakımı diye bir iş yoktur.
+1. **Kod yazılmaz, değer yazılır.** Yeni bir kaynak veya tablo eklemek, bir YAML dosyasına
+   birkaç satır eklemektir; bağlayıcıları, Kafka konularını, tabloları ve zamanlanmış
+   işleri Helm şablonları üretir.
+2. **Her şey Git'ten gelir.** Kümede elle değişiklik yapılmaz; Git'e yazılır, ArgoCD kümeyi
+   Git'e eşitler. Böylece "kümede ne var" sorusunun cevabı her zaman depodadır.
+3. **Özel imaj yoktur.** Bütün konteyner imajları üreticinin resmi imajlarıdır; Kafka Connect
+   imajı bile kümede, Strimzi'nin kendi yapı mekanizmasıyla üretilir. Dockerfile bakımı diye
+   bir iş yoktur.
 
 ---
 
 ## 2. Bileşenler
 
-Aşağıdaki tablo kurulumdan sonra kümede duran her şeyi listeler. "Yönetim" sütunu o bileşenin **hangi dosyadan** yönetildiğini söyler: yükseltme, boyut değişikliği veya ayar değişikliği o dosyada yapılır.
+Aşağıdaki tablo kurulumdan sonra kümede duran her şeyi listeler. "Yönetim" sütunu o
+bileşenin **hangi dosyadan** yönetildiğini söyler: yükseltme, boyut değişikliği veya ayar
+değişikliği o dosyada yapılır.
 
 | Bileşen | Rol | Nerede çalışır | Yönetim (Application / chart / değer dosyası) |
 |---|---|---|---|
 | **ArgoCD** (OpenShift GitOps) | Git'teki istenen durumu kümeye uygular, sapmayı gösterir | `openshift-gitops` ad alanı | `bootstrap/bootstrap.sh` + `platform/root-app.yaml` |
 | **cert-manager** | Küme içi sertifikalar (Trino TLS, iç kök CA) | `cert-manager` ad alanı | `platform/apps/00-cert-manager.yaml` |
-| **Strimzi Kafka Operator** | Kafka ve Kafka Connect kümelerini CR'lardan kurar | `lakehouse` | `platform/apps/00-strimzi.yaml` |
+| **Strimzi Kafka Operator** | Kafka ve Kafka Connect kümelerini CR'lardan (özel kaynak, bkz. [CR](#4-kavramlar-sözlüğü)) kurar | `lakehouse` | `platform/apps/00-strimzi.yaml` |
 | **Apache Kafka** (KRaft) | Değişiklik olaylarının dayanıklı tamponu | `lakehouse` | `glue/values.yaml` → `kafka` |
 | **Kafka Connect** (Debezium + Iceberg sink) | Kaynak DB'den okur, Iceberg tablosuna yazar | `lakehouse` | `glue/templates/kafka-connect.yaml`, `glue/templates/connectors.yaml` |
 | **CloudNativePG (CNPG)** | Polaris, Keycloak ve Superset'in PostgreSQL veritabanları | `lakehouse` (operatör `cnpg-system`) | `platform/apps/00-cnpg.yaml`, `glue/values.yaml` → `cnpg` |
@@ -45,13 +57,16 @@ Aşağıdaki tablo kurulumdan sonra kümede duran her şeyi listeler. "Yönetim"
 | **Kullanıcı iş yükü izleme (UWM)** | Metrik toplama ve alarm | `openshift-user-workload-monitoring` | `glue/templates/monitoring.yaml` |
 | **Müşteri kaynakları** | Kurumun kendi Spark uygulamaları, CronJob'ları | `lakehouse` | `custom/` klasörü, `custom/README.md` |
 
-Sözlükteki karşılıkları: [Route](#sozluk), [ArgoCD Application](#sozluk), [Helm values](#sozluk), [Secret](#sozluk).
+Sözlükteki karşılıkları: [Route](#4-kavramlar-sözlüğü),
+[ArgoCD Application](#4-kavramlar-sözlüğü), [Helm values](#4-kavramlar-sözlüğü),
+[Secret](#4-kavramlar-sözlüğü).
 
 ---
 
 ## 3. Veri akışları
 
-Yedi akış vardır. Her diyagramın altındaki paragraf, diyagramda görünmeyen ama işletme sırasında bilmeniz gereken şeyi anlatır.
+Yedi akış vardır. Her diyagramın altındaki paragraf, diyagramda görünmeyen ama işletme
+sırasında bilmeniz gereken şeyi anlatır.
 
 ### 3.1 CDC akışı — PostgreSQL ve SQL Server
 
@@ -63,38 +78,74 @@ Yedi akış vardır. Her diyagramın altındaki paragraf, diyagramda görünmeye
                              +-- ilk yükleme: snapshot ---------------------------->--+
 ```
 
-PostgreSQL'de [Debezium](#sozluk) veritabanının yazma-öncesi günlüğünü (WAL) mantıksal çoğaltma yuvasından okur; SQL Server'da Change Tracking/CDC tablolarını okur. Bağlayıcı ilk kez açıldığında tablonun tamamını okuyup Kafka'ya basar (bu ilk tam okumaya [snapshot](#sozluk) denir), sonra yalnız değişiklikleri akıtır. Iceberg [sink](#sozluk)'i aynı Kafka Connect kümesinde çalışır ve olayları toplu hâlde [Bronze](#sozluk) tablosuna yazar; Bronze tablosu kaynağın **tarihçesidir**, güncel hâli değildir (her `INSERT`/`UPDATE`/`DELETE` ayrı satırdır). Sink varsayılan olarak 300 saniyede bir yazar, yani yeni bir kaydın Bronze'da görünmesi en fazla ~5 dakika sürer. Mevcut bir kaynağa sonradan tablo eklendiğinde bütün bağlayıcıyı durdurmaya gerek yoktur: sinyal tablosuna bir satır yazılır ve [artımlı snapshot](#sozluk) yalnız o tabloyu geriye dönük doldurur.
+PostgreSQL'de [Debezium](#4-kavramlar-sözlüğü) veritabanının yazma-öncesi günlüğünü
+(WAL) mantıksal çoğaltma yuvasından okur; SQL Server'da Change Tracking/CDC tablolarını okur.
+Bağlayıcı ilk kez açıldığında tablonun tamamını okuyup Kafka'ya basar (bu ilk tam okumaya
+[snapshot](#4-kavramlar-sözlüğü) denir), sonra yalnız değişiklikleri akıtır. Iceberg
+[sink](#4-kavramlar-sözlüğü)'i aynı Kafka Connect kümesinde çalışır ve olayları toplu
+hâlde [Bronze](#4-kavramlar-sözlüğü) tablosuna yazar; Bronze tablosu kaynağın
+**tarihçesidir**, güncel hâli değildir (her `INSERT`/`UPDATE`/`DELETE` ayrı satırdır). Sink
+varsayılan olarak 300 saniyede bir yazar, yani yeni bir kaydın Bronze'da görünmesi en fazla ~5
+dakika sürer. Mevcut bir kaynağa sonradan tablo eklendiğinde bütün bağlayıcıyı durdurmaya
+gerek yoktur: sinyal tablosuna bir satır yazılır ve
+[artımlı snapshot](#4-kavramlar-sözlüğü) yalnız o tabloyu geriye dönük doldurur.
 
 ### 3.2 MongoDB akışı
 
 ```
- [kaynak DB]          [lakehouse ad alanı]                                    [S3]
- MongoDB  --oplog-->  Debezium ------> Kafka konusu ------> Spark mongo-bronze ----> Bronze tablosu
- (replicaSet)        (Kafka Connect)   crm.crm.customers   (5 dakikada bir)          crm_raw.customers
+ [kaynak DB]         [lakehouse ad alanı]                            [S3]
+ MongoDB --oplog-->  Debezium ----> Kafka konusu ----> Spark mongo-bronze ----> Bronze
+ (replicaSet)        (Kafka Connect) crm.crm.customers (5 dakikada bir)   crm_raw.customers
 ```
 
-MongoDB'de belgeler şemasızdır, bu yüzden Iceberg sink'i doğrudan kullanılamaz: arada `glue/jobs/mongo_bronze.py` adlı bir [Spark](#sozluk) işi vardır. Bu iş beş dakikada bir Kafka'dan okur, belgeleri düzleştirip Bronze tablosuna yazar ve nerede kaldığını Kafka tüketici grubunda saklar. Diğer iki fark: MongoDB kaynağı `replicaSet` modunda çalışmalıdır (tek düğümlü bir `replicaSet` yeterlidir) ve koleksiyon başına bir Bronze tablosu oluşur. Gecikme bu yüzden CDC akışından biraz yüksektir (en fazla ~5 dakika + Spark koşu süresi).
+MongoDB'de belgeler şemasızdır, bu yüzden Iceberg sink'i doğrudan kullanılamaz: arada
+`glue/jobs/mongo_bronze.py` adlı bir [Spark](#4-kavramlar-sözlüğü) işi vardır. Bu iş beş
+dakikada bir Kafka'dan okur, belgeleri düzleştirip Bronze tablosuna yazar ve nerede kaldığını
+Kafka tüketici grubunda saklar. Diğer iki fark: MongoDB kaynağı `replicaSet` modunda
+çalışmalıdır (tek düğümlü bir `replicaSet` yeterlidir) ve koleksiyon başına bir Bronze
+tablosu oluşur. Gecikme bu yüzden CDC akışından biraz yüksektir (en fazla ~5 dakika + Spark
+koşu süresi).
 
 ### 3.3 nginx erişim günlüğü akışı
 
 ```
- [müşteri web sunucusu]           [lakehouse ad alanı]                        [S3]
- nginx access.log --> Fluent Bit --TLS/Route--> Kafka (dış dinleyici) --> Iceberg sink --> nginx_raw.access_log
+ [müşteri web sunucusu]        [lakehouse ad alanı]                   [S3]
+ nginx access.log --> Fluent Bit --TLS/Route--> Kafka (dış dinleyici)
+                                        --> Iceberg sink --> nginx_raw.access_log
 ```
 
-Bu akış küme dışından başlar: web sunucusuna kurulan Fluent Bit ajanı erişim günlüğünü satır satır okuyup Kafka'nın **dış dinleyicisine** (OpenShift Route üzerinden, TLS ve SCRAM kimlik doğrulaması ile) gönderir. Kümede geri kalan yol CDC akışıyla aynıdır: Iceberg sink'i olayları `nginx_raw.access_log` tablosuna yazar. Akış varsayılan olarak **kapalıdır**; açmak için `glue/values.yaml` içindeki `nginx.enabled` ve `kafka.externalListener` anahtarlarının **ikisi birden** açılmalıdır (biri açık, öteki kapalı olursa ajan bağlanamaz). Bu tablo IP adresi içerdiği için Trino yetki kurallarında `remote` kolonu `lakehouse-users` grubuna maskelenmiş gösterilir.
+Bu akış küme dışından başlar: web sunucusuna kurulan Fluent Bit ajanı erişim günlüğünü
+satır satır okuyup Kafka'nın **dış dinleyicisine** (OpenShift Route üzerinden, TLS ve SCRAM
+kimlik doğrulaması ile) gönderir. Kümede geri kalan yol CDC akışıyla aynıdır: Iceberg
+sink'i olayları `nginx_raw.access_log` tablosuna yazar. Akış varsayılan olarak **kapalıdır**;
+açmak için `glue/values.yaml` içindeki `nginx.enabled` ve `kafka.externalListener`
+anahtarlarının **ikisi birden** açılmalıdır (biri açık, öteki kapalı olursa ajan
+bağlanamaz). Bu tablo IP adresi içerdiği için Trino yetki kurallarında `remote` kolonu
+`lakehouse-users` grubuna maskelenmiş gösterilir.
 
 ### 3.4 Silver birleştirme ve bakım işleri
 
 ```
-                          Bronze (tarihçe)                Silver (güncel hâl)          Gold (iş kuralı)
- shop_raw.orders  --> silver-merge (15 dk) -->  shop.orders  --> dbt / Spark --> gold.orders_daily
-                              |
-   bakım: maint-position-deletes (saatlik) · maint-compact (6 saat) · maint-expire-orphan-ttl (günlük 03:30)
-          mongo-bronze (5 dk, yalnız MongoDB kaynağı varsa)
+            Bronze (tarihçe)              Silver (güncel hâl)        Gold (iş kuralı)
+ shop_raw.orders --> silver-merge (15 dk) --> shop.orders --> dbt/Spark --> gold.orders_daily
+
+ bakım işleri: maint-position-deletes (saatlik) · maint-compact (6 saat)
+               maint-expire-orphan-ttl (günlük 03:30)
+               mongo-bronze (5 dk, yalnız MongoDB kaynağı varsa)
 ```
 
-`silver-merge` işi on beş dakikada bir Bronze'daki yeni olayları okur ve birincil anahtara göre [Silver](#sozluk) tablosuna `MERGE` eder; sonuç, kaynaktaki tablonun **güncel** kopyasıdır ve son kullanıcıların sorguladığı tablo budur. Bu birleştirme varsayılan olarak [merge-on-read](#sozluk) yazar: yazma hızlıdır ama okuma zamanla yavaşlar, çünkü silme dosyaları birikir. Üç bakım işi bu bedeli geri alır — `maint-position-deletes` silme dosyalarını katlar, `maint-compact` küçük dosyaları birleştirir ([compaction](#sozluk)), `maint-expire-orphan-ttl` eski [Iceberg snapshot](#sozluk)'larını (7 günden eski), sahipsiz dosyaları (3 günden eski) ve Bronze'daki 30 günden eski tarihçeyi siler. [Gold](#sozluk) katmanı ürünün parçası değildir: kurumun kendi iş kuralları `custom/` klasöründeki `dbt` CronJob'ı ya da Spark uygulamasıyla yazılır (`examples/dbt/`, `custom/examples/dbt-cronjob.yaml`).
+`silver-merge` işi on beş dakikada bir Bronze'daki yeni olayları okur ve birincil anahtara göre
+[Silver](#4-kavramlar-sözlüğü) tablosuna `MERGE` eder; sonuç, kaynaktaki tablonun **güncel**
+kopyasıdır ve son kullanıcıların sorguladığı tablo budur. Bu birleştirme varsayılan olarak
+[merge-on-read](#4-kavramlar-sözlüğü) yazar: yazma hızlıdır ama okuma zamanla yavaşlar,
+çünkü silme dosyaları birikir. Üç bakım işi bu bedeli geri alır —
+`maint-position-deletes` silme dosyalarını katlar, `maint-compact` küçük dosyaları
+birleştirir ([compaction](#4-kavramlar-sözlüğü)), `maint-expire-orphan-ttl` eski
+[Iceberg snapshot](#4-kavramlar-sözlüğü)'larını (7 günden eski), sahipsiz dosyaları (3
+günden eski) ve Bronze'daki 30 günden eski tarihçeyi siler. [Gold](#4-kavramlar-sözlüğü)
+katmanı ürünün parçası değildir: kurumun kendi iş kuralları `custom/` klasöründeki `dbt`
+CronJob'ı ya da Spark uygulamasıyla yazılır (`examples/dbt/`,
+`custom/examples/dbt-cronjob.yaml`).
 
 ### 3.5 Kimlik akışı
 
@@ -103,35 +154,65 @@ Bu akış küme dışından başlar: web sunucusuna kurulan Fluent Bit ajanı er
         |                          |                                       |
         +--- gruplar --------------+---- lakehouse-admins ---------------->+ tam yetki
                                    +---- lakehouse-analysts -------------->+ okuma + sandbox yazma
-                                   +---- lakehouse-users ----------------->+ okuma (filtre/maske ile)
+                                   +---- lakehouse-users ---------------->+ okuma (filtre/maske)
  Active Directory --LDAPS--> Trino group provider (gruplar ikinci kez, doğrudan AD'den)
 ```
 
-Kullanıcı hesabı ve parolası yalnız Active Directory'de tutulur; ürün parola saklamaz. [Keycloak](#sozluk), AD'yi LDAPS üzerinden okur ve `lakehouse` adlı [realm](#sozluk)'inde üç arayüze ([OIDC](#sozluk) ile) tek oturum açma sağlar. Yetkilendirme grup adına bakar: `lakehouse-admins` (tam yetki), `lakehouse-analysts` (her şeyi okur, `sandbox` şemasına yazar), `lakehouse-users` (okur; bazı kolonlar maskeli, bazı satırlar filtrelidir). Trino grupları Keycloak jetonundan **değil**, doğrudan AD'den kendi grup sağlayıcısıyla okur — bu yüzden AD bağlama bilgisi iki yerde yapılandırılır ve `scripts/check-site.sh` ikisinin aynı kaldığını denetler. Superset ve Zeppelin'in Trino'ya bağlanmakta kullandığı servis hesapları ise AD'de değil, Trino'nun kendi parola dosyasındadır.
+Kullanıcı hesabı ve parolası yalnız Active Directory'de tutulur; ürün parola saklamaz.
+[Keycloak](#4-kavramlar-sözlüğü), AD'yi LDAPS üzerinden okur ve `lakehouse` adlı
+[realm](#4-kavramlar-sözlüğü)'inde üç arayüze ([OIDC](#4-kavramlar-sözlüğü) ile) tek
+oturum açma sağlar. Yetkilendirme grup adına bakar: `lakehouse-admins` (tam yetki),
+`lakehouse-analysts` (her şeyi okur, `sandbox` şemasına yazar), `lakehouse-users` (okur; bazı
+kolonlar maskeli, bazı satırlar filtrelidir). Trino grupları Keycloak jetonundan **değil**,
+doğrudan AD'den kendi grup sağlayıcısıyla okur — bu yüzden AD bağlama bilgisi iki yerde
+yapılandırılır ve `scripts/check-site.sh` ikisinin aynı kaldığını denetler. Superset ve
+Zeppelin'in Trino'ya bağlanmakta kullandığı servis hesapları ise AD'de değil, Trino'nun kendi
+parola dosyasındadır.
 
 ### 3.6 Yedek akışı
 
 ```
- CNPG (polaris-db, keycloak-db, superset-db) --Barman Cloud--> S3 $S3_BUCKET_BACKUP  (sürekli WAL + gece 02:00, 30 gün)
- lakehouse ad alanı (CR'lar + kalıcı diskler) --OADP/Velero--> yedek deposu          (gece 03:00, 30 gün)
- Iceberg verisi (S3 $S3_BUCKET_DATA) --> yedeklenmez: S3 tarafında sürüm/çoğaltma ile korunur
+ CNPG (polaris-db, keycloak-db, superset-db) --Barman Cloud--> S3 $S3_BUCKET_BACKUP
+                                             (sürekli WAL + gece 02:00, 30 gün saklama)
+ lakehouse ad alanı (CR'lar + diskler) --OADP/Velero--> yedek deposu
+                                             (gece 03:00, 30 gün; öntanımlı KAPALI)
+ Iceberg verisi (S3 $S3_BUCKET_DATA) --> yedeklenmez: S3 sürümleme/çoğaltma ile korunur
 ```
 
-Üç ayrı koruma vardır ve üçü farklı şeyi kurtarır. [CNPG](#sozluk) veritabanları [Barman](#sozluk) Cloud eklentisiyle sürekli olarak yedek bucket'ına yazar; bu, zaman noktasına geri dönüşü (PITR) mümkün kılar — katalog ya da kimlik veritabanı bozulursa buradan dönülür. [Velero/OADP](#sozluk) ad alanının tamamının (CR'lar ve kalıcı diskler) günlük anlık görüntüsünü alır; yanlışlıkla silinen bir nesne buradan gelir. Iceberg verisinin kendisi **kopyalanmaz**: terabaytlarca veriyi ikinci kez yazmak yerine S3 tarafının kendi koruması (sürümleme, çoğaltma) kullanılır, buna karşılık Iceberg'in kendi [Iceberg snapshot](#sozluk)'ları son yedi günlük yanlışlıkla silmeyi tablo düzeyinde geri alabilir. Yedek bucket'ı veri bucket'ından ayrı olmalıdır; `scripts/check-site.sh` aynı olmadıklarını denetler.
+Üç ayrı koruma vardır ve üçü farklı şeyi kurtarır. [CNPG](#4-kavramlar-sözlüğü)
+veritabanları [Barman](#4-kavramlar-sözlüğü) Cloud eklentisiyle sürekli olarak yedek
+bucket'ına yazar; bu, zaman noktasına geri dönüşü (PITR) mümkün kılar — katalog ya da
+kimlik veritabanı bozulursa buradan dönülür. [Velero/OADP](#4-kavramlar-sözlüğü) ad
+alanının tamamının (CR'lar ve kalıcı diskler) günlük anlık görüntüsünü alır;
+yanlışlıkla silinen bir nesne buradan gelir; ancak bu yedek **öntanımlı olarak kapalıdır**
+(`glue/values.yaml` → `velero.enabled: false`) ve OADP operatörü kurulduktan sonra açılır —
+nginx akışında olduğu gibi, açılana kadar hiçbir zamanlama render edilmez. Iceberg verisinin
+kendisi **kopyalanmaz**: terabaytlarca veriyi ikinci kez yazmak yerine S3 tarafının kendi
+koruması (sürümleme, çoğaltma) kullanılır, buna karşılık Iceberg'in kendi
+[Iceberg snapshot](#4-kavramlar-sözlüğü)'ları son yedi günlük yanlışlıkla silmeyi tablo
+düzeyinde geri alabilir. Yedek bucket'ı veri bucket'ından ayrı olmalıdır;
+`scripts/check-site.sh` aynı olmadıklarını denetler.
 
 ### 3.7 İzleme akışı
 
 ```
- Kafka Connect / Kafka / Spark / Polaris --metrik--> UWM Prometheus --> PrometheusRule (5 alarm) --> Alertmanager
-                                                                   \
-                                                                    +--> OpenShift konsolu (Gözlem > Metrikler)
+ Kafka Connect / Kafka / Spark / Polaris --metrik--> UWM Prometheus
+                                     --> PrometheusRule (5 alarm) --> Alertmanager
+                                     --> OpenShift konsolu (Gözlem > Metrikler)
 ```
 
-İzleme kapsamı bilerek dardır: soru "boru hattı sağlam mı", "Trino ne kadar hızlı" değil. OpenShift'in kullanıcı iş yükü izleme yığını (UWM) `lakehouse` ad alanındaki metrik tanımlarını kendiliğinden toplar; ayrı bir Prometheus kurulmaz. Beş alarm vardır: bağlayıcı görevi düştü (`LakehouseConnectTaskFailed`), sink geride kaldı (`LakehouseSinkStalled`), Silver birleştirmesi bayatladı (`LakehouseSilverMergeStale`), zamanlanmış Spark koşusu başarısız (`LakehouseSparkScheduledRunFailed`), Spark koşusu çok uzun sürüyor (`LakehouseSparkRunTooLong`). Eşikler `glue/values.yaml` içindeki `monitoring` bloğundadır ve kurumun veri hacmine göre kurulumdan sonra ayarlanır.
+İzleme kapsamı bilerek dardır: soru "boru hattı sağlam mı", "Trino ne kadar hızlı" değil.
+OpenShift'in kullanıcı iş yükü izleme yığını (UWM) `lakehouse` ad alanındaki metrik
+tanımlarını kendiliğinden toplar; ayrı bir Prometheus kurulmaz. Beş alarm vardır:
+bağlayıcı görevi düştü (`LakehouseConnectTaskFailed`), sink geride kaldı
+(`LakehouseSinkStalled`), Silver birleştirmesi bayatladı (`LakehouseSilverMergeStale`),
+zamanlanmış Spark koşusu başarısız (`LakehouseSparkScheduledRunFailed`), Spark koşusu çok
+uzun sürüyor (`LakehouseSparkRunTooLong`). Eşikler `glue/values.yaml` içindeki `monitoring`
+bloğundadır ve kurumun veri hacmine göre kurulumdan sonra ayarlanır.
 
 ---
 
-## 4. Kavramlar sözlüğü {#sozluk}
+## 4. Kavramlar sözlüğü
 
 Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâlleriyle yazılır.
 
@@ -167,9 +248,12 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Active Directory (AD)** | Kurumun kullanıcı ve grup dizini. Gün-1'den zorunludur; kullanıcı ve parola tek kaynak olarak burada durur. |
 | **LDAPS** | Dizine TLS üzerinden erişim protokolü (636 portu). Şifresiz LDAP kullanılmaz. |
 | **Route** | OpenShift'te bir servisi küme dışına açan nesne. Adresler bileşen adı + `-` + ad alanı + `.` + uygulama alan adı biçiminde türetilir. |
+| **CR** (Custom Resource — özel kaynak) | Kubernetes'in kendi nesne çeşitlerine bir operatörün eklediği yeni nesne türü. `Kafka`, `SparkApplication`, `Certificate` ve ArgoCD `Application` birer CR'dır; hepsi sıradan YAML gibi Git'e yazılır. |
 | **ArgoCD Application** | "Şu Git yolundaki manifestler şu ad alanında dursun" diyen CR. Bu kurulumda her bileşenin bir Application'ı vardır. |
 | **sync (eşitleme)** | ArgoCD'nin Git'teki hâli kümeye uygulaması. `Synced` = küme Git ile aynı, `OutOfSync` = fark var, `Healthy` = nesneler sağlıklı. |
 | **Helm values** | Bir chart'ın davranışını belirleyen değer dosyası. Ürün varsayılanları `platform/values/` altında, müşteriye özel değerler yalnız `platform/values/site/` altındadır. |
+| **dbt** (data build tool) | SQL dosyalarını sıralı, sürümlenebilir dönüşüm hattına çeviren açık kaynak araç. Ürünle gelmez; Gold katmanını yazmak isteyen kurum için referans örnek `examples/dbt/` altındadır. |
+| **SCRAM** | Parolayı ağdan geçirmeden doğrulayan Kafka kimlik doğrulama yöntemi (SCRAM-SHA-512). Küme içi ve dış Kafka bağlantılarında TLS ile birlikte kullanılır. |
 | **Secret** | Kubernetes'te parola/anahtar saklayan nesne. Git'e **girmez**; kurulum sırasında komutla yaratılır. |
 | **StorageClass** | Kümenin hangi depolamadan disk vereceğini belirleyen sınıf. Boş bırakılırsa kümenin varsayılanı kullanılır. |
 | **PVC** (PersistentVolumeClaim) | Bir pod'un "şu boyutta kalıcı disk istiyorum" talebi. Kafka, veritabanları, Zeppelin ve not defterleri PVC kullanır. |
@@ -188,10 +272,12 @@ Bu bölümü bitirdiğinizde aşağıdakileri **yazılı kaynağa bakmadan** sö
 - [ ] Kaynak veritabanındaki bir `UPDATE`, hangi beş durakta hangi sırayla ilerler.
 - [ ] Bronze ile Silver arasındaki fark nedir; son kullanıcı hangisini sorgular.
 - [ ] Üç bakım işi hangi problemi çözer ve hangi sıklıkta koşar.
-- [ ] Bir kullanıcının Superset'e girebilmesi için hangi iki sistemde (AD ve Keycloak) ne olması gerekir.
+- [ ] Bir kullanıcının Superset'e girebilmesi için hangi iki sistemde (AD ve Keycloak) ne
+      olması gerekir.
 - [ ] Hangi üç veri yedeklenir, hangisi yedeklenmez ve neden.
 - [ ] Kümeye elle `oc apply` yapmak yerine neyin yapılması gerektiği.
 
 ## Sonraki bölüm
 
-10-planlama.md — boyutlandırma, ağ/port özeti, doldurmanız gereken değerlerin çalışma sayfası ve hangi ekipten neyi isteyeceğiniz.
+10-planlama.md — boyutlandırma, ağ/port özeti, doldurmanız gereken değerlerin çalışma
+sayfası ve hangi ekipten neyi isteyeceğiniz.
