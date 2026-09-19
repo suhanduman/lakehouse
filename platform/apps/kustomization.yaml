@@ -9,6 +9,7 @@ resources:
 - 00-spark-operator.yaml
 - 00-superset-operator.yaml
 - 10-glue.yaml
+- 15-custom.yaml
 - 20-polaris.yaml
 - 30-trino.yaml
 - 30-jupyterhub.yaml

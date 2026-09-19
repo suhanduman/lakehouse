@@ -1,0 +1,15 @@
+# ÖRNEK CR'lar. Dev overlay'i `custom` Application'ın path'ini buraya çevirir
+# (platform/envs/dev/kustomization.yaml) -> e2e bu klasörü doğrular (test/e2e/custom-path.sh).
+# Prod'da `custom` Application `custom/` kökünü izler; bu örnekleri açmak için custom/kustomization.yaml'a
+# `- examples` ekleyin (ya da bu dosyaları kendi CR'larınıza kopyalayın).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lakehouse
+resources:
+- spark-zamanli.yaml
+# - spark-tek-seferlik.yaml   # BİLEREK KAPALI: SparkApplication uygulandığı ANDA koşar; GitOps altında sync
+#                             # anında başlar ve TTL dolup CR silinince selfHeal onu yeniden yaratır (sonsuz
+#                             # tekrar). Elle çalıştırın: kubectl apply -f custom/examples/spark-tek-seferlik.yaml
+# - dbt-cronjob.yaml          # ConfigMap dbt-project + Secret dbt-trino ister (examples/dbt/README.md)
+configMapGenerator:
+- {name: ornek-rapor, files: [ornek_rapor.py], options: {disableNameSuffixHash: true}}

@@ -1,0 +1,12 @@
+# MÜŞTERİ CR'LARI BURAYA. Ürün chart'ına (glue/) dokunmadan kendi Kubernetes kaynaklarınızı (SparkApplication,
+# ScheduledSparkApplication, KafkaTopic, CronJob, ConfigMap…) GitOps ile dağıtırsınız: ArgoCD Application `custom`
+# bu klasörü izler (platform/apps/15-custom.yaml, sync-wave 4 -> ürün bileşenlerinden SONRA).
+# Adım adım: docs/50-isletme/yeni-spark-uygulamasi.md · örnekler: custom/examples/ (README.md)
+#
+# Kullanım: dosyanızı bu klasöre koyup aşağıdaki listeye ekleyin, commit + push edin — ArgoCD kendisi uygular.
+# Örnekleri olduğu gibi açmak için listeye `- examples` ekleyin (dev overlay'i zaten doğrudan examples'ı gösterir).
+# Secret'lar Git'e GİRMEZ: CR'larda yalnız ADLARIYLA referans verin (docs/30-kurulum.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Ürün kurulumunda BOŞTUR (bilerek): ArgoCD `custom` uygulaması kaynaksız da Synced/Healthy kalır.
+resources: []

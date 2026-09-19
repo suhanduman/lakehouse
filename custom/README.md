@@ -1,0 +1,62 @@
+# `custom/` — kendi Kubernetes kaynaklarınız (GitOps)
+
+Bu klasör **size** aittir. Ürün chart'ına (`glue/`) ve `platform/` altındaki dosyalara **dokunmadan** kendi
+Kubernetes kaynaklarınızı (Spark uygulaması, CronJob, ConfigMap, KafkaTopic…) kurulumun parçası yaparsınız.
+
+ArgoCD `custom` adlı bir Application ile bu klasörü sürekli izler
+(`platform/apps/15-custom.yaml`, sync-wave 4 → ürün bileşenleri kurulduktan sonra).
+Git'e ne koyarsanız kümede o vardır; elle `kubectl apply` gerekmez, elle yapılan değişiklik geri alınır
+(`selfHeal`), Git'ten sildiğiniz kaynak kümeden de silinir (`prune`).
+
+## Adım adım: yeni bir kaynak ekleme
+
+1. Dosyanızı bu klasöre koyun, örn. `custom/gunluk-rapor.yaml`.
+2. `custom/kustomization.yaml` içindeki `resources:` listesine ekleyin:
+   ```yaml
+   resources:
+   - gunluk-rapor.yaml
+   ```
+3. Commit + push edin (varsayılan dal: `main`).
+4. ArgoCD birkaç dakika içinde uygular. İzlemek için:
+   ```sh
+   kubectl -n argocd get application custom
+   kubectl -n lakehouse get sparkapplication,scheduledsparkapplication,cronjob
+   ```
+   `SYNC STATUS=Synced`, `HEALTH STATUS=Healthy` beklenen sonuçtur. Takılırsa:
+   `kubectl -n argocd describe application custom | tail -30`
+
+Hazır örnekleri olduğu gibi açmak isterseniz `custom/kustomization.yaml`'a `- examples` satırını ekleyin.
+
+## Örnekler (`custom/examples/`)
+
+| Dosya | Ne yapar |
+| --- | --- |
+| `ornek_rapor.py` | Silver `shop.orders` → durum bazında sipariş sayısı → `sandbox.ornek_rapor` (yalnız veri mantığı) |
+| `spark-tek-seferlik.yaml` | `SparkApplication ornek-rapor` — **tek seferlik** koşu (uygulandığı anda çalışır) |
+| `spark-zamanli.yaml` | `ScheduledSparkApplication ornek-rapor-zamanli` — aynı iş, gecelik cron (örnekte `suspend: true`) |
+| `dbt-cronjob.yaml` | Spark dışı örnek: `examples/dbt/cronjob.yaml`'ın kopyası (dbt → Gold) |
+| `kustomization.yaml` | Yukarıdakilerden hangilerinin uygulanacağı + Python dosyasından ConfigMap üretimi |
+
+Python kodu ayrı bir imaja gömülmez: `kustomization.yaml`'daki `configMapGenerator` `.py` dosyasından bir
+ConfigMap üretir, CR onu `/opt/job` altına mount eder ve `mainApplicationFile: local:///opt/job/<dosya>.py`
+onu çalıştırır. **Özel imaj gerekmez** — ürünün resmi Spark imajı kullanılır.
+
+## Bilmeniz gereken 4 şey
+
+1. **Tek seferlik iş GitOps'a uygun değildir.** `SparkApplication` uygulandığı anda koşar; ArgoCD altında
+   `timeToLiveSeconds` dolup CR silindiğinde `selfHeal` onu yeniden yaratır → iş tekrar tekrar koşar.
+   Bu yüzden `spark-tek-seferlik.yaml` örneği `kustomization.yaml`'da **yorumludur**; tekrar eden işler için
+   `ScheduledSparkApplication` (bkz. `spark-zamanli.yaml`) kullanın, tek seferlik koşuyu elle yapın:
+   ```sh
+   kubectl -n lakehouse delete sparkapplication ornek-rapor --ignore-not-found
+   kubectl apply -f custom/examples/spark-tek-seferlik.yaml
+   ```
+2. **Başarısız kaynak Application'ı Degraded yapar.** `custom` Application'ın sağlığı içindeki kaynakların
+   sağlığıdır; FAILED bir `SparkApplication` uygulamayı Degraded gösterir (kurulumun geri kalanını etkilemez).
+3. **Sırlar Git'e girmez.** CR'larda Secret'lara yalnız **adlarıyla** referans verin
+   (`secretKeyRef: {name: polaris-spark, key: credential}`). Secret'ları kurulumda siz yaratırsınız.
+4. **Siteye özel değerler.** Örneklerdeki `sparkConf` satırları dev/kind değerleridir. Prod'da S3 endpoint,
+   region, delegation header ve katalog `uri`/`warehouse` **`platform/values/site/glue.yaml` ile aynı** olmalıdır;
+   ilgili satırlar örneklerde `# SİTE` ile işaretlidir.
+
+Ayrıntılı, adım adım anlatım: `docs/50-isletme/yeni-spark-uygulamasi.md`.

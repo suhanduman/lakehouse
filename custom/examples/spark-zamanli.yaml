@@ -1,0 +1,80 @@
+# ÖRNEK — zamanlı (cron) Spark uygulaması: spark-tek-seferlik.yaml ile AYNI iş, ScheduledSparkApplication olarak.
+# Tekrar eden işlerin DOĞRU yolu budur: ArgoCD ile GitOps'ta yönetilebilir, koşuları operatör üretir
+# (ornek-rapor-zamanli-<epoch> adlı SparkApplication'lar), geçmiş *HistoryLimit ile sınırlanır.
+#
+# NASIL UYARLANIR
+#   1. `metadata.name` + `schedule` (cron, küme saat dilimi UTC) — gecelik bakım/merge'lerle çakışmasın.
+#   2. `suspend: true` -> iş ZAMANLANMAZ (bu örnek bilerek askıda; açmak için false yapın ya da satırı silin).
+#      Askıdayken bile elle koşturabilirsiniz:  test/e2e/lib.sh run_spark_once (SSA template'inden tek seferlik CR)
+#   3. `concurrencyPolicy: Forbid` -> önceki koşu bitmeden yenisi başlamaz (uzun işlerde şart).
+#   4. `template:` bloğu spark-tek-seferlik.yaml'ın `spec:`inin birebir aynısıdır (sparkConf, driver, executor,
+#      volumes) — site'e özel alanlar için o dosyadaki "SİTE" yorumlarına bakın.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: ornek-rapor-zamanli
+  namespace: lakehouse
+spec:
+  schedule: "0 4 * * *"             # her gece 04:00 UTC (silver-merge ve bakımdan sonra)
+  suspend: true                     # ÖRNEK askıda: kurulumda kendiliğinden koşmasın
+  concurrencyPolicy: Forbid
+  successfulRunHistoryLimit: 3
+  failedRunHistoryLimit: 3
+  template:
+    type: Python
+    pythonVersion: "3"
+    mode: cluster
+    image: apache/spark:4.1.0-java21-python3
+    imagePullPolicy: IfNotPresent
+    mainApplicationFile: local:///opt/job/ornek_rapor.py
+    sparkVersion: "4.1.0"
+    restartPolicy: {type: Never}
+    timeToLiveSeconds: 86400          # CR (ve driver pod'u) 24 saat sonra silinir
+    sparkConf:
+      spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0"
+      spark.jars.ivy: /tmp/.ivy2
+      spark.redaction.regex: "(?i)secret|password|token|credential"   # driver/executor log ve Spark UI'da sır sızdırma
+      spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+      spark.sql.catalog.lakehouse: org.apache.iceberg.spark.SparkCatalog
+      spark.sql.catalog.lakehouse.type: rest
+      spark.sql.catalog.lakehouse.uri: "http://polaris.lakehouse.svc:8181/api/catalog"
+      spark.sql.catalog.lakehouse.warehouse: "lakehouse"
+      spark.sql.catalog.lakehouse.scope: PRINCIPAL_ROLE:ALL
+      spark.sql.catalog.lakehouse.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+      spark.sql.catalog.lakehouse.s3.endpoint: "http://minio.lakehouse.svc:9000"     # SİTE
+      spark.sql.catalog.lakehouse.s3.path-style-access: "true"                       # SİTE
+      spark.sql.catalog.lakehouse.client.region: "us-east-1"                         # SİTE
+      spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation: vended-credentials   # SİTE (STS yoksa: none)
+      spark.sql.defaultCatalog: lakehouse
+      spark.sql.session.timeZone: UTC
+      spark.sql.shuffle.partitions: "8"
+      spark.default.parallelism: "8"
+      spark.driver.memoryOverhead: 512m
+      spark.executor.memoryOverhead: 512m
+    driver:
+      cores: 1
+      coreRequest: "500m"
+      memory: 1g
+      serviceAccount: spark-operator-spark          # spark-operator chart'ının lakehouse ns'inde yarattığı SA
+      env:
+      - {name: AWS_REGION, value: "us-east-1"}
+      - {name: POLARIS_CREDENTIAL, valueFrom: {secretKeyRef: {name: polaris-spark, key: credential}}}
+      # s3.vendedCredentials=false (STS yok) ise delegation header'ı `none` yapın ve şu çifti AÇIN:
+      # - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
+      # - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
+      volumeMounts:
+      - {name: job, mountPath: /opt/job}
+    executor:
+      instances: 1
+      cores: 1
+      coreRequest: "500m"
+      memory: 1g
+      env:
+      - {name: AWS_REGION, value: "us-east-1"}
+      # - {name: AWS_ACCESS_KEY_ID,     valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
+      # - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
+      volumeMounts:
+      - {name: job, mountPath: /opt/job}
+    volumes:
+    - name: job
+      configMap: {name: ornek-rapor}      # kustomization.yaml configMapGenerator (disableNameSuffixHash: true)

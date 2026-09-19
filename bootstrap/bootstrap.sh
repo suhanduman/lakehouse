@@ -142,6 +142,10 @@ spec:
         patch: |-
           - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/source/targetRevision, value: "${REVISION}"}
+      - target: {kind: Application, name: custom}
+        patch: |-
+          - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}
+          - {op: replace, path: /spec/source/targetRevision, value: "${REVISION}"}
       - target: {kind: Application, name: keycloak-operator}
         patch: |-
           - {op: replace, path: /spec/source/repoURL, value: "${REPO}"}

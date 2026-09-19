@@ -1,0 +1,15 @@
+# Müşteri CR'ları (custom/) — ürün chart'ına dokunmadan kendi kaynaklarınız. sync-wave 4: ürün bileşenlerinden
+# (glue 1, polaris 2, trino/jupyterhub 3) SONRA uygulanır. bootstrap.sh repo/revizyon/ns'i her `kind: Application`
+# için yeniden yazar -> bu dosyada özel bir şey gerekmez. Dev overlay'i path'i custom/examples'a çevirir.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: custom, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "4"}}
+spec:
+  project: default
+  source: {repoURL: https://github.com/suhanduman/lakehouse.git, targetRevision: main, path: custom}
+  destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    # CreateNamespace: custom, glue'dan bağımsız senkronize olur; ad alanı henüz yoksa ilk sync başarısız olmasın
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    retry: {limit: 5, backoff: {duration: 20s, factor: 2, maxDuration: 3m}}

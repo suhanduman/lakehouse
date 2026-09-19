@@ -12,6 +12,10 @@ kubectl -n lakehouse get cluster/demo-pg >/dev/null
 # Mongo fixture'ı da connector'lardan önce (dbz-crm Secret crm-db'yi bekler — aksi glue Degraded, F2 notu 8); idempotent
 # namespace/CRD beklemesini üstteki pg döngüsünden miras alır
 kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
+# custom/ (müşteri CR'ları): argocd modunda `custom` Application dağıtır; helm modunda ArgoCD yok -> doğrudan
+# uygula. Örnek CR'lar (ConfigMap + ASKIDA zamanlı SSA) kendiliğinden koşmaz; tek seferlik örneği custom-path.sh
+# pg yolundan SONRA (Silver shop.orders hazırken) uygular.
+[[ "$MODE" == "helm" ]] && kubectl apply -k "$ROOT/custom/examples" >/dev/null
 # ArgoCD Application'ı bekle: wait_app <ad> <revizyon_kontrolü 0|1> [zaman aşımı]. Revizyon kontrolü $EXPECT'i kullanır.
 wait_app() {
   local app="$1" chk="$2" to="${3:-1800s}" seen="" rev=""
@@ -41,14 +45,15 @@ if [[ "$MODE" == "argocd" ]]; then
   [[ -n "$EXPECT" ]] || { echo "revizyon çözülemedi: $REVISION ($REPO) — dal/etiket var mı?"; exit 1; }
   echo "beklenen revizyon: $EXPECT"
   # monitoring ve velero YALNIZ dev overlay'inde var (platform/apps/dev); e2e her zaman --env dev ile bootstrap eder
-  for app in cert-manager strimzi cnpg cnpg-barman keycloak-operator spark-operator superset-operator monitoring velero glue polaris jupyterhub; do
+  for app in cert-manager strimzi cnpg cnpg-barman keycloak-operator spark-operator superset-operator monitoring velero glue polaris jupyterhub custom; do
     # Revizyon kontrolü GIT KAYNAKLI her uygulama için: glue/polaris/jupyterhub/trino/keycloak-operator
     # $values ref'i ile değer dosyası çeker; monitoring ve velero de öyle ($values/platform/values/
     # {monitoring,velero}-dev.yaml — bootstrap.sh DEV_ONLY_PATCH'i o kaynağı repo/revizyona sabitler).
     # Kontrolsüz bırakılırlarsa var olan bir kümede yeniden koşu ESKİ revizyonun değerlerini test edip
     # yeşil raporlayabilirdi. Salt-chart olanlar (cert-manager, strimzi, cnpg, spark-operator, …) 0 alır.
     # glue en ağır uygulama (Connect build + CNPG x3 + Keycloak + Zeppelin/Superset imajları): varsayılan 1800s yetmedi (CI 35267164775)
-    case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; monitoring|velero) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
+    # custom: git kaynaklı (custom/examples) -> revizyon kontrolü 1
+    case "$app" in glue) wait_app "$app" 1 2700s;; keycloak-operator|polaris|jupyterhub) wait_app "$app" 1;; monitoring|velero|custom) wait_app "$app" 1;; *) wait_app "$app" 0;; esac
   done
 fi
 kubectl -n lakehouse wait kafka/lakehouse --for=condition=Ready --timeout=900s
@@ -73,6 +78,7 @@ kubectl -n lakehouse wait --for=condition=complete job/polaris-smoke --timeout=6
 kubectl -n lakehouse logs job/polaris-smoke | grep "^OK"
 echo "E2E F1 OK"
 "$ROOT/test/e2e/pg-path.sh"
+"$ROOT/test/e2e/custom-path.sh"      # Silver shop.orders gerekir -> pg yolundan hemen sonra
 "$ROOT/test/e2e/mongo-path.sh"
 "$ROOT/test/e2e/nginx-path.sh"
 "$ROOT/test/e2e/trino-path.sh"

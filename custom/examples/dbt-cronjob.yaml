@@ -1,0 +1,54 @@
+# ÖRNEK — Spark DIŞI bir CR da custom/ ile dağıtılabilir (burada bir CronJob).
+# Bu dosya examples/dbt/cronjob.yaml'ın KOPYASIDIR; OTORİTER sürüm oradadır (dbt projesi, profiles.yml ve
+# README ile birlikte). Kullanacaksanız orayı okuyun, buradaki kopyayı ihtiyacınıza göre değiştirin.
+# ÖN KOŞUL (bu yüzden kustomization.yaml'da YORUMLU): ConfigMap `dbt-project` (dbt_project.yml, profiles.yml,
+# orders_daily.sql) ve Secret `dbt-trino` (username/password) kümede OLMALI — ikisi de ürün chart'ında yoktur.
+# Secret'lar Git'e GİRMEZ: yalnız ada göre referans verilir (docs/30-kurulum.md).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dbt-gold
+  namespace: lakehouse
+spec:
+  schedule: "0 5 * * *"            # silver-merge ve gecelik bakımdan SONRA
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: dbt
+            image: python:3.13-slim
+            env:
+            - {name: TRINO_USER,     valueFrom: {secretKeyRef: {name: dbt-trino, key: username}}}
+            - {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: dbt-trino, key: password}}}
+            - {name: HOME, value: /tmp}
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              set -eu
+              pip install --no-cache-dir 'dbt-trino==1.10.4'
+              # ConfigMap anahtarları DÜZ'dür (alt dizin yok) -> proje düzenini yazılabilir bir yerde kur
+              mkdir -p /tmp/project/models/gold
+              cp /dbt-project/dbt_project.yml /dbt-project/profiles.yml /tmp/project/
+              cp /dbt-project/orders_daily.sql /tmp/project/models/gold/
+              cd /tmp/project
+              dbt debug --profiles-dir /tmp/project --project-dir /tmp/project
+              dbt run   --profiles-dir /tmp/project --project-dir /tmp/project
+            volumeMounts:
+            - {name: project, mountPath: /dbt-project, readOnly: true}
+            - {name: ca,      mountPath: /etc/lakehouse-ca, readOnly: true}
+            - {name: tmp,     mountPath: /tmp}
+            resources:
+              requests: {cpu: 100m, memory: 256Mi}
+              limits: {memory: 1Gi}
+          volumes:
+          - {name: project, configMap: {name: dbt-project}}     # dbt_project.yml, profiles.yml, orders_daily.sql
+          # YALNIZ tls.crt: `lakehouse-ca` Secret'ı kümenin CA ANAHTARINI da (tls.key) taşır ve anahtarsız
+          # mount etmek şart (glue/templates/{superset,zeppelin}.yaml ile aynı kalıp) -> `items` ile daraltılır.
+          - {name: ca,      secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}  # -> profiles.yml `cert`
+          - {name: tmp,     emptyDir: {}}

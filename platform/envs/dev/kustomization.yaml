@@ -20,3 +20,10 @@ patches:
     - op: add
       path: /spec/sources/0/helm/valueFiles/-
       value: $values/platform/values/jupyterhub-dev.yaml
+# custom/: prod'da müşterinin kendi CR'ları (kök boştur); dev/e2e'de ÖRNEKLERİ dağıtırız ki mekanizma
+# gerçekten doğrulansın (test/e2e/custom-path.sh -> "E2E CUSTOM OK").
+- target: {kind: Application, name: custom}
+  patch: |-
+    - op: replace
+      path: /spec/source/path
+      value: custom/examples
