@@ -4,6 +4,7 @@ suite: appsDomain türetimi
 templates:
   - templates/route.yaml
   - templates/keycloak-realm.yaml
+  - templates/keycloak.yaml
 tests:
   - it: hostname boşken appsDomain'den <bileşen>-<ns>.<appsDomain> türetilir
     set:
@@ -54,3 +55,17 @@ tests:
     template: templates/route.yaml
     asserts:
       - failedTemplate: {errorPattern: "appsDomain ya da .*hostname"}
+  - it: keycloak.hostname AÇIK verilmişse TAM URL olmalı — çıplak host render'ı durdurur
+    set:
+      appsDomain: apps.ocp.example.net
+      keycloak.hostname: keycloak.kurum.edu.tr
+    template: templates/keycloak.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "keycloak.hostname TAM URL olmalı"}
+  - it: keycloak.hostname TAM URL ise aynen kullanılır (appsDomain'i ezer)
+    set:
+      appsDomain: apps.ocp.example.net
+      keycloak.hostname: https://sso.kurum.edu.tr
+    template: templates/keycloak.yaml
+    asserts:
+      - equal: {path: spec.hostname.hostname, value: https://sso.kurum.edu.tr}

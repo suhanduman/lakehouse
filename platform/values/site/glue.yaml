@@ -4,6 +4,8 @@
 appsDomain: apps.ocp.example.net          # $APPS_DOMAIN — oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
 # hostname'ler boşken <bileşen>-lakehouse.<appsDomain> türetilir; kurumsal DNS adı için satırı açın:
 # trino: {hostname: trino.kurum.edu.tr}
+# İSTİSNA — keycloak.hostname AÇIK verilirse ÇIPLAK HOST DEĞİL, TAM URL olmalı (token iss bu değerdir):
+# keycloak: {hostname: https://sso.kurum.edu.tr}      # şemasız yazılırsa render hata verir (glue.keycloakUrl)
 s3:
   endpoint: https://s3.example.com        # $S3_ENDPOINT (FlashBlade; platform/polaris/setup.yaml ile aynı olmalı)
   region: us-east-1                       # $S3_REGION
@@ -23,7 +25,8 @@ cnpg:
   keycloakDb: {storageClass: ""}
   supersetDb: {storageClass: ""}
 backup:
-  s3: {endpoint: https://s3.example.com, bucket: backups, region: us-east-1}   # $S3_ENDPOINT / $S3_BUCKET_BACKUP
+  # VERİ bucket'ından AYRI olmalı (geri yükleme hedefi); dev'deki MinIO `backups` bucket'ıyla da çakışmasın
+  s3: {endpoint: https://s3.example.com, bucket: lakehouse-backups, region: us-east-1}   # $S3_ENDPOINT / $S3_BUCKET_BACKUP
 tls: {caBundle: ""}                       # docs/30-kurulum.md: lakehouse-ca tls.crt PEM içeriği (Route reencrypt)
 sources: []                               # docs/50-isletme/yeni-kaynak-ve-pipeline.md
 pipelines: []

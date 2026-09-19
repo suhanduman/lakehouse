@@ -34,6 +34,9 @@ for k in ["appsDomain", "s3.endpoint", "connect.buildImage", "keycloak.ldap.conn
         errs.append(f"site/glue.yaml: {k} boş/eksik")
 if not str(get(g, "s3.endpoint") or "").startswith("https://"):
     errs.append("site/glue.yaml: s3.endpoint https:// olmalı")
+kc_explicit = get(g, "keycloak.hostname")
+if kc_explicit and not str(kc_explicit).startswith("https://"):
+    errs.append(f"site/glue.yaml: keycloak.hostname AÇIK verildiyse TAM URL olmalı (https://...), verilen: {kc_explicit}")
 if get(g, "keycloak.ldap.enabled") is not True:
     errs.append("site/glue.yaml: keycloak.ldap.enabled true olmalı (AD gün-1 zorunlu)")
 if get(g, "connect.buildImage") and str(get(g, "connect.buildImage")).endswith(":latest"):
@@ -57,6 +60,15 @@ for key, path in [("ldap.url", "keycloak.ldap.connectionUrl"),
 s3 = get(g, "s3.endpoint") or ""
 if s3 and f"s3.endpoint={s3}" not in t:
     errs.append(f"site/trino.yaml: lakehouse kataloğunda s3.endpoint={s3} bulunamadı")
+region = get(g, "s3.region") or ""
+if region and f"s3.region={region}" not in t:
+    errs.append(f"site/trino.yaml: lakehouse kataloğunda s3.region={region} bulunamadı (site/glue.yaml s3.region ile aynı olmalı)")
+vended = get(g, "s3.vendedCredentials")
+if vended is not None and f"iceberg.rest-catalog.vended-credentials-enabled={str(vended).lower()}" not in t:
+    errs.append(f"site/trino.yaml: iceberg.rest-catalog.vended-credentials-enabled={str(vended).lower()} bulunamadı (site/glue.yaml s3.vendedCredentials ile aynı olmalı)")
+uri = f"iceberg.rest-catalog.uri=http://polaris.{ns}.svc:8181/api/catalog"
+if uri not in t:
+    errs.append(f"site/trino.yaml: lakehouse kataloğunda '{uri}' bulunamadı (namespace '{ns}')")
 if hub and f"https://{hub}/hub/oauth_callback" not in j:
     errs.append(f"site/jupyterhub.yaml: oauth_callback_url https://{hub}/hub/oauth_callback bulunamadı")
 if kc and kc not in j:
@@ -77,7 +89,11 @@ for line in ["http-server.authentication.oauth2.client-id=trino",
              "ldap.group-name-attribute=cn",
              "connector.name=iceberg",
              "iceberg.catalog.type=rest",
+             "iceberg.rest-catalog.uri=",
+             "iceberg.rest-catalog.warehouse=",
+             "iceberg.rest-catalog.security=OAUTH2",
              "iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CREDENTIAL}",
+             "iceberg.rest-catalog.oauth2.scope=",
              "fs.s3.enabled=true",
              "s3.path-style-access=true"]:
     if line not in t:

@@ -15,8 +15,15 @@
 {{- else if .ctx.Values.appsDomain }}{{ printf "%s-%s.%s" .name (include "glue.ns" .ctx) .ctx.Values.appsDomain }}
 {{- else }}{{ fail (printf "appsDomain ya da %s.hostname verilmeli (platform/values/site/glue.yaml)" .name) }}{{ end -}}
 {{- end -}}
-{{- /* glue.keycloakUrl: Keycloak TAM URL'i (token iss). keycloak.hostname verilmişse aynen (dev'de küme içi
-       http://keycloak-service...:8080); boşsa https://keycloak-<ns>.<appsDomain>. */ -}}
+{{- /* glue.keycloakUrl: Keycloak TAM URL'i (token iss = bu değer). keycloak.hostname verilmişse ŞEMA ZORUNLU
+       (dev'de küme içi http://keycloak-service...:8080); çıplak host sessizce geçerse Keycloak CR'ı ve Superset
+       KEYCLOAK_URL'i şemasız kalır ve OIDC akışı bozulur -> render HATA verir. Boşsa https://keycloak-<ns>.<appsDomain>. */ -}}
 {{- define "glue.keycloakUrl" -}}
-{{- if .Values.keycloak.hostname }}{{ .Values.keycloak.hostname }}{{ else }}{{ printf "https://%s" (include "glue.hostFor" (dict "name" "keycloak" "ctx" .)) }}{{ end -}}
+{{- $h := .Values.keycloak.hostname -}}
+{{- if $h -}}
+{{- if not (regexMatch "^https?://" $h) }}{{ fail (printf "keycloak.hostname TAM URL olmalı (şema dâhil, ör. https://keycloak-lakehouse.apps.ocp.example.net); verilen: %s" $h) }}{{ end -}}
+{{ $h }}
+{{- else -}}
+{{ printf "https://%s" (include "glue.hostFor" (dict "name" "keycloak" "ctx" .)) }}
+{{- end -}}
 {{- end -}}
