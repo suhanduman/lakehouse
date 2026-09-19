@@ -1,5 +1,5 @@
 # SİTE DEĞERLERİ — müşteriye özel tek glue dosyası; ürün varsayılanları ../glue.yaml'da (dokunmayın).
-# Doldurma rehberi: docs/30-kurulum.md §2 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
+# Doldurma rehberi: docs/30-kurulum.md §4 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
 # Tutarlılık kontrolü: scripts/check-site.sh (site/trino.yaml ve site/jupyterhub.yaml ile çapraz doğrular).
 appsDomain: apps.ocp.example.net          # $APPS_DOMAIN — oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
 # hostname'ler boşken <bileşen>-lakehouse.<appsDomain> türetilir; kurumsal DNS adı için satırı açın:

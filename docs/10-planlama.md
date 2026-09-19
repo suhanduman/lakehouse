@@ -165,6 +165,7 @@ cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lake
 | Değişken | Kimden alınır | Nasıl / örnek | Alındı |
 |---|---|---|---|
 | `GIT_REPO_URL` | Git yöneticisi | müşteri deposunun klonlama adresi; `git ls-remote` ile doğrulanır | ☐ |
+| `GIT_HTTPS_TOKEN` | Git yöneticisi | yalnız HTTPS depoda; salt okuma erişim jetonu (SSH kullanılıyorsa boş) | ☐ |
 | `ARGOCD_NS` | — (sabit) | `openshift-gitops` | ☐ |
 | `LAKEHOUSE_NS` | lakehouse kurulumcusu | `lakehouse` (kurumsal ad standardı varsa değiştirilir) | ☐ |
 | `APPS_DOMAIN` | küme (bkz. Adım 1) | `oc get ingresses.config cluster -o jsonpath='{.spec.domain}'` | ☐ |

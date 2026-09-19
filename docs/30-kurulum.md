@@ -167,8 +167,20 @@ oc -n "$ARGOCD_NS" create secret generic lakehouse-repo \
 oc -n "$ARGOCD_NS" label secret lakehouse-repo argocd.argoproj.io/secret-type=repository
 ```
 
-`$GIT_HTTPS_TOKEN` yalnız bu komut için elle verilir, `install/lakehouse.env` dosyasında
-tutulmaz.
+**Beklenen çıktı** (SSH varyantıyla aynı):
+
+```text
+secret/lakehouse-repo created
+secret/lakehouse-repo labeled
+```
+
+**Ters giderse:** `$GIT_HTTPS_TOKEN` boşsa Secret parolasız yaratılır ve ArgoCD
+`authentication required` der; jetonu doldurup Secret'ı silip yeniden yaratın. Git
+sunucusu kullanıcı adı yerine yalnız jeton kabul ediyorsa `username` değerini o
+sunucunun istediği sabit değere çevirin (çoğu sunucuda herhangi bir değer kabul edilir).
+
+`$GIT_HTTPS_TOKEN` yalnız HTTPS kullananlar içindir; `install/lakehouse.env` dosyasında
+vardır ve SSH kullanıyorsanız boş bırakılır.
 
 **Ters giderse:** `AlreadyExists` → Secret vardır; silip
 (`oc -n "$ARGOCD_NS" delete secret lakehouse-repo`) yeniden yaratın. Etiket eksik kalırsa
@@ -215,7 +227,8 @@ if [ -n "${STORAGE_CLASS:-}" ]; then
       platform/values/site/glue.yaml > platform/values/site/glue.new
   mv platform/values/site/glue.new platform/values/site/glue.yaml
 fi
-grep -n "example.com\|example.net" platform/values/site/*.yaml || echo "ornek deger kalmadi"
+grep -nE 'apps\.ocp\.example\.net|s3\.example\.com|ad\.example\.com|DC=example,DC=com' \
+  platform/values/site/*.yaml || echo "ornek deger kalmadi"
 ```
 
 **Beklenen çıktı:**
@@ -229,9 +242,12 @@ ornek deger kalmadi
 her yükseltmede artırılır; `:latest` **kullanılamaz**.
 
 **Ters giderse:** `ornek deger kalmadi` yerine satırlar basılıyorsa bir değişken boş
-kalmıştır (Adım 1'i tekrarlayın) ya da o satır bilerek örnek bir yorumdur — basılan
-satırın `#` ile başlayıp başlamadığına bakın. Dosyaları bozduysanız
-`git checkout -- platform/values/site/` ile şablonlara dönüp baştan başlayın.
+kalmıştır (Adım 1'i tekrarlayın); basılan satırın `#` ile başlayıp başlamadığına da
+bakın. Denetim bilerek **yalnız ürün şablonundaki dört literal yer tutucuyu** arar
+(`apps.ocp.example.net`, `s3.example.com`, `ad.example.com`, `DC=example,DC=com`);
+`example.net` geçen gerçek bir kurum alan adınız varsa yanlış alarm vermez.
+Dosyaları bozduysanız `git checkout -- platform/values/site/` ile şablonlara dönüp
+baştan başlayın.
 
 ### 4.2 Ad alanı adı `lakehouse` değilse
 
@@ -926,7 +942,7 @@ eklenir).
 Aşağıdaki zincir bileşenleri bağımlılık sırasıyla bekler. Her komut bir öncekinin
 tamamlanmasını şart koşar; ilki takılırsa sonrakileri denemeyin.
 
-### 7.1 Kafka, Connect, veritabanları, Keycloak, Polaris
+### 7.1 Kafka, Connect, veritabanları, Polaris, Keycloak
 
 `[bastion]`
 
@@ -934,10 +950,12 @@ tamamlanmasını şart koşar; ilki takılırsa sonrakileri denemeyin.
 oc -n "$LAKEHOUSE_NS" wait kafka/lakehouse --for=condition=Ready --timeout=900s
 oc -n "$LAKEHOUSE_NS" wait kafkaconnect/connect --for=condition=Ready --timeout=1800s
 oc -n "$LAKEHOUSE_NS" get cluster.postgresql.cnpg.io
+oc -n "$LAKEHOUSE_NS" rollout status deploy/polaris --timeout=600s
 oc -n "$LAKEHOUSE_NS" wait keycloak/keycloak --for=condition=Ready --timeout=900s
 oc -n "$LAKEHOUSE_NS" wait keycloakrealmimport/lakehouse-realm --for=condition=Done --timeout=600s
-oc -n "$LAKEHOUSE_NS" rollout status deploy/polaris --timeout=600s
 ```
+
+Sıra `test/e2e/run.sh` ile aynıdır: her sürümde uçtan uca sınanan zincir budur.
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; üretimde `INSTANCES` değeri
 **2** olur — birincil artı yedek):
@@ -949,9 +967,9 @@ NAME          AGE   INSTANCES   READY   STATUS                     PRIMARY
 keycloak-db   22h   1           1       Cluster in healthy state   keycloak-db-1
 polaris-db    22h   1           1       Cluster in healthy state   polaris-db-1
 superset-db   22h   1           1       Cluster in healthy state   superset-db-1
+deployment "polaris" successfully rolled out
 keycloak.k8s.keycloak.org/keycloak condition met
 keycloakrealmimport.k8s.keycloak.org/lakehouse-realm condition met
-deployment "polaris" successfully rolled out
 ```
 
 **Ters giderse:** `kafka` beklemede kalıyorsa broker pod'larının PVC'leri bağlanmamıştır.
@@ -988,12 +1006,16 @@ veriyorsa Adım 5.14'ü tekrarlayın.
 
 ```bash
 oc -n "$LAKEHOUSE_NS" get routes
-for h in keycloak superset jupyterhub zeppelin; do
-  printf '%-12s %s\n' "$h" \
-    "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-        "https://$h-$LAKEHOUSE_NS.$APPS_DOMAIN/")"
+for r in keycloak superset jupyterhub zeppelin; do
+  host=$(oc -n "$LAKEHOUSE_NS" get route "$r" -o jsonpath='{.spec.host}')
+  printf '%-12s %-44s %s\n' "$r" "$host" \
+    "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$host/")"
 done
 ```
+
+Adres **kümeden** okunur, `$APPS_DOMAIN` ile elle kurulmaz: site değerlerinde
+`trino.hostname` gibi bir kurumsal ad ezmesi kullandıysanız döngü yine doğru adresi
+dener.
 
 **Beklenen çıktı** (örnek — `200` ya da `302` "ayakta" demektir; oturum açma
 yönlendirmeleri `302` verir):
@@ -1005,21 +1027,22 @@ superset     superset-lakehouse.apps.ocp.example.net      http    edge
 jupyterhub   jupyterhub-lakehouse.apps.ocp.example.net    http    edge
 zeppelin     zeppelin-lakehouse.apps.ocp.example.net      http    edge
 trino        trino-lakehouse.apps.ocp.example.net         https   reencrypt
-keycloak     302
-superset     200
-jupyterhub   302
-zeppelin     200
+keycloak     keycloak-lakehouse.apps.ocp.example.net      302
+superset     superset-lakehouse.apps.ocp.example.net      200
+jupyterhub   jupyterhub-lakehouse.apps.ocp.example.net    302
+zeppelin     zeppelin-lakehouse.apps.ocp.example.net      200
 ```
 
 Trino Route'unun sonlandırması `tls.caBundle` doluysa `reencrypt`, boşsa `passthrough`
 olur. Trino'yu bu listede sınamayın: kimlik doğrulaması zorunlu olduğu için `401` döner,
 bu da beklenen davranıştır.
 
-**Ters giderse:** `000` → DNS çözülmüyor ya da güvenlik duvarı kapalıdır
-([20-on-kosullar](20-on-kosullar.md) madde 7). `503` → Route arkasındaki pod henüz hazır
-değildir, birkaç dakika bekleyin. `curl: (60) SSL certificate problem` → router
-sertifikası kurumsal bir CA ile imzalıdır; `--cacert` ile CA'yı verin ya da tarayıcıdan
-deneyin.
+**Ters giderse:** `NotFound` → glue henüz Route'ları yazmamıştır (Adım 6.1). `000` → DNS
+çözülmüyor ya da güvenlik duvarı kapalıdır ([20-on-kosullar](20-on-kosullar.md) madde 7);
+kurumsal ad ezmesi kullandıysanız o ad için CNAME kaydının açıldığını doğrulayın.
+`503` → Route arkasındaki pod henüz hazır değildir, birkaç dakika bekleyin.
+`curl: (60) SSL certificate problem` → router sertifikası kurumsal bir CA ile
+imzalıdır; `--cacert` ile CA'yı verin ya da tarayıcıdan deneyin.
 
 ---
 
@@ -1080,6 +1103,19 @@ export KIND_EXPERIMENTAL_PROVIDER=podman
 test/e2e/kind.sh
 bootstrap/bootstrap.sh --env dev --mode helm
 ```
+
+**Beklenen çıktı** (örnek — arada onlarca `helm upgrade` satırı akar; önemli olan bu iki
+satırdır. Taze bir dizüstü kümesinde imaj çekimleriyle birlikte 40 dakikayı bulur):
+
+```text
+OK: kind-lakehouse hazır
+OK: helm modunda kuruldu (env=dev)
+```
+
+**Ters giderse:** `command not found: kind` → kind ≥ 0.33 kurun (Podman 6 uyumu bu
+sürümle gelir). `helm upgrade` zaman aşımına uğrarsa imaj çekimi sürüyordur;
+`kubectl -n lakehouse get pods` ile bakıp komutu tekrarlayın — betik idempotenttir.
+Küme zaten ayaktaysa `test/e2e/kind.sh` onu **silmez**, var olan kümeyi kullanır.
 
 **Bu bölümün hangi adımları kind'da geçerlidir:**
 

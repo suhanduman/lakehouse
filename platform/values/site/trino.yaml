@@ -1,5 +1,5 @@
 # SİTE DEĞERLERİ — müşteriye özel tek Trino dosyası; ürün varsayılanları ../trino.yaml + ../trino-ldap.yaml'da.
-# Doldurma rehberi: docs/30-kurulum.md §2 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
+# Doldurma rehberi: docs/30-kurulum.md §4 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
 #
 # NEDEN TAM BLOKLAR: Helm değer birleştirmesinde ÇOK SATIRLI STRING bloklar birleşmez — SON dosyanınki
 # bütünüyle geçer. Bu yüzden aşağıdaki üç blok ürün satırlarını da TEKRAR eder. Ürün satırlarının

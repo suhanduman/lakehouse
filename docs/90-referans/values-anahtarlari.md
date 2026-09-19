@@ -61,6 +61,11 @@ müşteriye özel değerleri. **20 anahtar.**
 | `velero` | OADP operatörü kurulduktan **sonra** ad alanı yedeği açılacaksa | `velero: {enabled: true, namespace: openshift-adp}` |
 | `spark` | Veri hacmi büyüdüğünde büyük kademe kaynakları (ürün dosyasında yorumlu blok) | `spark: {shufflePartitions: 200}` |
 | `kafka.storageClass`, `kafka.storageSize` | Kafka diski varsayılandan (100 GiB) farklı olacaksa | `kafka: {storageSize: 500Gi}` |
+| `cnpg.polarisDb.instances`, `cnpg.keycloakDb.instances`, `cnpg.supersetDb.instances` | PostgreSQL kopya sayısı. Ürün varsayılanı üretimde **2** (birincil + yedek); tek düğümlü bir laboratuvarda 1'e çekilir | `cnpg: {polarisDb: {instances: 1}}` |
+| `cnpg.polarisDb.storageSize`, `cnpg.keycloakDb.storageSize`, `cnpg.supersetDb.storageSize` | PostgreSQL disk boyutu. Varsayılan **10Gi**; orta kademede 20Gi, büyükte 50Gi | `cnpg: {keycloakDb: {storageSize: 20Gi}}` |
+| `backup.schedule` | CNPG yedeğinin cron'u. Varsayılan `"0 0 2 * * *"` (her gün 02:00). **Altı alanlıdır** (saniye dâhil) — beş alan yazarsanız CNPG reddeder | `backup: {schedule: "0 30 1 * * *"}` |
+| `backup.retentionPolicy` | Yedeklerin saklanma süresi (barman-cloud). Varsayılan `30d` | `backup: {retentionPolicy: "90d"}` |
+| `spark.ivySettingsXml` | **Kapalı ağda zorunlu:** iç Maven aynasının `ivysettings.xml` içeriği. Doluysa glue bir ConfigMap üretir, bütün Spark işlerine `/opt/ivy/ivysettings.xml` olarak bağlar ve `spark.jars.ivySettings` onu gösterir. Boşken Spark her koşuda Maven Central'a çıkar | çok satırlı XML bloğu |
 
 ---
 
