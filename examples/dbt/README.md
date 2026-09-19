@@ -29,7 +29,7 @@ Bunu kalıcı bir üretim bileşeni yapacaksanız doğru yol, müşterinin kendi
 ### 1. Trino servis hesabı `dbt`
 
 `password.db` bcrypt htpasswd dosyasıdır ve `trino-service-accounts` Secret'ından gelir
-(`runbooks/install.md` → "F4 Secret'ları" 2. komut). Mevcut hesaplara `dbt`'yi ekleyin:
+(`docs/30-kurulum.md` §5.7). Mevcut hesaplara `dbt`'yi ekleyin:
 
 ```bash
 DBT_PW="$(openssl rand -hex 16)"

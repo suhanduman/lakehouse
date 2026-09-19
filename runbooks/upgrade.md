@@ -139,8 +139,8 @@ helm unittest glue          # şablon testleri kırıcı alan değişikliğini y
 ## 4. Keycloak: realm import mevcut realm'i GÜNCELLEMEZ
 
 Keycloak sürümünü yükseltmek realm'e dokunmaz; `glue/templates/keycloak-realm.yaml` değişse bile çalışan
-realm aynen kalır (CR `Done` görünür, değişiklik uygulanmaz). Realm içeriği değişecekse `runbooks/install.md`
-→ "Realm değişikliği" bölümündeki sil-yeniden-içe-aktar prosedürü uygulanır ve **kullanıcıların Keycloak
+realm aynen kalır (CR `Done` görünür, değişiklik uygulanmaz). Realm içeriği değişecekse `docs/30-kurulum.md`
+→ "Realm içeriğini sonradan değiştirmek" bölümündeki sil-yeniden-içe-aktar prosedürü uygulanır ve **kullanıcıların Keycloak
 UI'ında elle yaptığı her şey gider**. AD federasyonu varsa kullanıcılar tekrar akar; yoksa önce yedek alın:
 
 ```bash

@@ -5,7 +5,7 @@ kümesinde karşılığı olmayan ya da kind'ın sınırlarına takılan her şe
 **komut + beklenen çıktı + kaynak not** taşır.
 
 **Nasıl kullanılır**
-1. Pre-ship OpenShift ortamı hazır olunca kurulumu `runbooks/install.md` ile yapın (`platform: openshift`,
+1. Pre-ship OpenShift ortamı hazır olunca kurulumu `docs/30-kurulum.md` ile yapın (`platform: openshift`,
    `platform/values/glue.yaml`).
 2. Bu listeyi baştan sona koşun; her maddeyi kutusunu işaretleyerek ve **ölçülen çıktıyı** yanına yazarak kapatın
    (kanıt = çıktı, "bakıldı" değil).
@@ -43,7 +43,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   (gerçek HTTP yanıtı, TLS hatası değil). `tls.caBundle` boşsa Route `passthrough` olur ve **tarayıcı**
   `lakehouse-ca`'ya güvenmek zorunda kalır.
   *Kaynak: F4 notu açık kalanlar; `glue/templates/route.yaml`, `platform/values/glue.yaml` → `tls.caBundle`,
-  `runbooks/install.md` "lakehouse-ca".*
+  `docs/30-kurulum.md` §5.11.*
 
 - [ ] **1.3 JupyterHub hub → Keycloak: router sertifikasına güven**
   ```bash
@@ -72,8 +72,8 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   ```
   Beklenen: `True`; Secret anahtarı dolu ve realm JSON'unda düz parola YOK (değerler `spec.placeholders` ile
   Secret'tan enjekte edilir). AD federasyonu Keycloak Console → User Federation'da bağlanıyor.
-  *Kaynak: F1 notu 13. satır (realm import düz değer ister → yer tutucu mekanizması); `runbooks/install.md`
-  "F4 Secret'ları".*
+  *Kaynak: F1 notu 13. satır (realm import düz değer ister → yer tutucu mekanizması); `docs/30-kurulum.md`
+  §5.6.*
 
 - [ ] **1.6 Sertifika yenilemesi kesintisiz mi (cert-manager → Trino)**
   ```bash
@@ -138,7 +138,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   ```
   Beklenen: ConfigMap'in `data` altındaki config.yaml gövdesinde `enableUserWorkload: true`; `prometheus-user-workload-*`,
   `prometheus-operator-*`, `thanos-ruler-*` pod'ları `Running`.
-  *Kaynak: F5 notu "Açık kalanlar (F6/pre-ship)"; `runbooks/install.md` adım 3 "OpenShift'te izleme".*
+  *Kaynak: F5 notu "Açık kalanlar (F6/pre-ship)"; `docs/20-on-kosullar.md` madde 9.1.*
 
 - [ ] **2.2 glue'nun izleme nesneleri UWM tarafından toplanıyor (Polaris dâhil)**
   ```bash
@@ -218,7 +218,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   ```
   Beklenen: BSL `Available`; glue açıldıktan sonra `Schedule/lakehouse-daily` **`openshift-adp`** ns'inde doğar.
   Sıra ters olursa `Schedule` CRD'si yokken glue Degraded olur.
-  *Kaynak: `runbooks/dr.md` §6, `runbooks/install.md` adım 3 "OpenShift'te yedek"; `platform/values/glue.yaml`.*
+  *Kaynak: `runbooks/dr.md` §6, `docs/20-on-kosullar.md` madde 9.2; `platform/values/glue.yaml`.*
 
 - [ ] **3.3 PVC içeriği gerçekten yedekleniyor (CSI snapshot + Data Mover)**
   ```bash
@@ -287,8 +287,8 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   ```
   Beklenen: `image-registry.openshift-image-registry.svc:5000/<ns>/connect:<sürüm>` (`:latest` **yasak** —
   digest sabitlenemez), `connect-push` Secret'ı mevcut, build (~10 dk) sonunda `Ready=True`.
-  *Kaynak: `platform/values/glue.yaml` (`connect.buildImage`/`buildPushSecret`), `runbooks/install.md` ön
-  koşullar, `runbooks/upgrade.md` §2.3.*
+  *Kaynak: `platform/values/glue.yaml` (`connect.buildImage`/`buildPushSecret`), `docs/20-on-kosullar.md` madde
+  5, `runbooks/upgrade.md` §2.3.*
 
 - [ ] **4.3 Superset imajı müşteri aynasında ve etiketi sabit**
   ```bash
@@ -311,7 +311,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   Beklenen: ya `repo1.maven.org`'a sürekli erişim var (ConfigMap yok), ya da `spark.ivySettingsXml` dolu ve tüm
   Spark işleri `/opt/ivy/ivysettings.xml`'i gösteriyor. Aynı sınıftan diğer egress ihtiyaçları: Zeppelin'in
   Trino JDBC indirmesi (Maven), JupyterHub `postStart` ve dbt örneği (PyPI) → kapalı ağda iç PyPI aynası da şart.
-  *Kaynak: F2/F4 notları; `runbooks/troubleshooting.md` "İç Maven aynası", `runbooks/install.md` ön koşullar.*
+  *Kaynak: F2/F4 notları; `runbooks/troubleshooting.md` "İç Maven aynası", `docs/20-on-kosullar.md` madde 10.*
 
 - [ ] **4.5 Depolama sınıfları ve boyutlandırma**
   ```bash
@@ -321,7 +321,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   Beklenen: `kafka.storageClass` ve `cnpg.*.storageClass` ortamın **CSI** sınıfıyla doldurulmuş (3.3 maddesi
   buna bağlıdır), PVC boyutları veri hacmine uygun; tablo/veri büyüklüğü küçük tier'ı aşıyorsa
   `platform/values/glue.yaml`'daki yorumlu büyük tier `spark` bloğu açılır.
-  *Kaynak: `runbooks/install.md` adım 1 (boyutlandırma); F0 S4 tier kararı.*
+  *Kaynak: `docs/10-planlama.md` §2 (boyutlandırma); F0 S4 tier kararı.*
 
 - [ ] **4.6 Superset Alerts & Reports kararı**
   Şu an **kapalı**. Açılacaksa Valkey (broker) + `celeryWorker` + headless tarayıcı üçlüsü gerekir; karar

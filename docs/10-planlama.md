@@ -86,7 +86,7 @@ Bu satırlar Iceberg verisini **içermez**: veri S3'tedir ve tabloların boyutu 
 
 ## 3. Ön ölçüm: kümenin size söyleyeceği iki değer
 
-Bu iki değeri şimdi alın; 30-kurulum.md bölümünde `$APPS_DOMAIN` ve `$STORAGE_CLASS` olarak kullanılacaklar.
+Bu iki değeri şimdi alın; [30-kurulum.md](30-kurulum.md) bölümünde `$APPS_DOMAIN` ve `$STORAGE_CLASS` olarak kullanılacaklar.
 
 ### Adım 1 — Uygulama alan adını öğrenin
 
@@ -182,6 +182,7 @@ cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lake
 | `LDAP_USERS_DN` | AD ekibi | kullanıcıların arandığı alt ağaç | ☐ |
 | `LDAP_GROUPS_DN` | AD ekibi | üç lakehouse grubunun bulunduğu alt ağaç | ☐ |
 | `LDAP_CA_FILE` | AD ekibi | AD sertifikasını imzalayan CA'nın PEM dosyası | ☐ |
+| `AD_UPN_SUFFIX` | AD ekibi | kullanıcı adlarının UPN son eki (`@` dâhil); Zeppelin AD girişinde kullanılır | ☐ |
 | `KEYCLOAK_ADMIN_PASSWORD` | lakehouse kurulumcusu | isteğe bağlı; boş bırakılırsa kurulum `openssl rand -hex 24` ile üretir | ☐ |
 
 Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakehouse-analysts`, `lakehouse-users` gruplarının açılması ve ilk yöneticinin `lakehouse-admins` grubuna eklenmesi.

@@ -8,7 +8,7 @@ hub:
   # ve hub SÜRECİ iki değeri buradan okur: `hub.config.JupyterHub.cookie_secret` +
   # `hub.config.CryptKeeper.keys` (chart files/hub/z2jh.py get_secret_value: önce existing-secret/, sonra
   # secret/) -> oturum çerezleri ve auth_state şifresi pod döndüğünde AYAKTA KALIR. Dev'de glue üretir
-  # (components.devSecrets), prod'da kurulumcu yaratır (runbooks/install.md "F4 Secret'ları" 7) — Git'e girmez.
+  # (components.devSecrets), prod'da kurulumcu yaratır (docs/30-kurulum.md §5.12) — Git'e girmez.
   # DİKKAT: `hub.config.ConfigurableHTTPProxy.auth_token` bu mekanizmanın KAPSAMI DIŞINDADIR — hem hub hem
   # proxy Deployment'ı CONFIGPROXY_AUTH_TOKEN'ı chart'ın ÜRETTİĞİ `hub` Secret'ından okur ("References the
   # chart managed k8s Secret even if hub.existingSecret is specified", templates/{hub,proxy}/deployment.yaml)

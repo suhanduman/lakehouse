@@ -122,7 +122,7 @@ kubectl -n lakehouse logs <ad>-driver --tail=200 | grep -E 'incremental|FALLBACK
 - `FALLBACK full` görülüyorsa artımlı okuma penceresi kaçmıştır (uzun kesinti); bir sonraki koşuda normale
   döner, sürekli tekrar ediyorsa `pipelines[].casts` / `_cdc.ts` ve bakım snapshot'larını inceleyin.
 - Veri büyüdüyse boyutlandırmayı yükseltin: `glue/values.yaml` → `spark.driver`/`spark.executor` "büyük tier"
-  (driver 4g/2 core, 2×4g executor, `shufflePartitions: 200`) — `runbooks/install.md` adım 1.
+  (driver 4g/2 core, 2×4g executor, `shufflePartitions: 200`) — `docs/10-planlama.md` §2.
 - Bakım işleri veri hacmiyle büyür; eşiği (`monitoring.sparkRunMaxSeconds`) gerçekçi bir değere çekmek meşru
   bir çözümdür.
 
@@ -182,7 +182,7 @@ Belirti: Spark ya da Connect `ForbiddenException: The Access Key Id you provided
 - **Prod'da S3 STS yoksa bu sınıf hata hiç görülmez** (kimlik doğrudan `s3-creds`'ten gelir).
 - Karıştırmayın: `DROP TABLE` sırasındaki `Unable to purge entity … set DROP_WITH_PURGE_ENABLED` 403'ü
   katalog property'si eksikliğidir (`polaris.config.drop-with-purge.enabled`) — var olan katalogda
-  `polaris catalogs update --set-property …` ile eklenir (`runbooks/install.md` adım 4).
+  `polaris catalogs update --set-property …` ile eklenir (`docs/30-kurulum.md` "Realm içeriğini sonradan değiştirmek").
 
 ---
 
@@ -251,8 +251,8 @@ gerekir.
   `scripts/polaris-setup.sh` koşmamış.
 - **Trino `401` / `Authentication failed`:** HTTP 8080'de kimlik doğrulama YOKTUR (yalnız probe/iç trafik);
   istemciler **8443 HTTPS** kullanmalı ve `lakehouse-ca`'ya güvenmelidir. Bearer reddediliyorsa token'ın `aud`
-  talebinde `trino` yoktur → realm'in `trino` client'ındaki audience mapper (`runbooks/install.md` → "Realm
-  değişikliği").
+  talebinde `trino` yoktur → realm'in `trino` client'ındaki audience mapper (`docs/30-kurulum.md` → "Realm içeriğini
+  sonradan değiştirmek").
 - **Trino `Access Denied`:** `rules.json` **ilk eşleşen kurala** bakar — `runbooks/access-control.md`.
   Kullanıcının grubu görünmüyorsa group provider (dev: `auth.groups`; prod: `platform/values/trino-ldap.yaml`).
 - **Superset `phase: Initializing` + `LifecycleComplete=False (TaskFailed: Migrate)`:** `superset-migrate`

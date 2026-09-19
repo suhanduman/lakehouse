@@ -29,7 +29,7 @@ spec:
     termination: reencrypt
     destinationCACertificate: {{ .Values.tls.caBundle | quote }}
   {{- else }}
-    termination: passthrough        # tarayıcı lakehouse-ca'ya güvenmeli (runbooks/install.md)
+    termination: passthrough        # tarayıcı lakehouse-ca'ya güvenmeli (docs/30-kurulum.md §5.11)
   {{- end }}
 {{- if .Values.superset.enabled }}
 ---

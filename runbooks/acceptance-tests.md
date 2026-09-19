@@ -10,7 +10,7 @@ scripts/acceptance.sh --mon-ns monitoring --velero-ns openshift-adp   # OpenShif
 Taze kümede (kind + bootstrap dâhil) aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
 (`.github/workflows/e2e.yaml`).
 
-**Ön koşullar:** kurulum tamam (`runbooks/install.md`), `polaris-setup.sh` koşmuş, glue values'ında demo
+**Ön koşullar:** kurulum tamam (`docs/30-kurulum.md`), `polaris-setup.sh` koşmuş, glue values'ında demo
 kaynaklar açık (`sources`, `pipelines`, `nginx.enabled` — `platform/values/glue-dev.yaml` kalıbı) ve yerelde
 `kubectl`, `jq`, `python3`, `polaris` CLI. Script kind/bootstrap **yapmaz**.
 

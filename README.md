@@ -24,7 +24,8 @@ Ayrıntılı diyagramlar ve sözlük: [docs/00-genel-bakis.md](docs/00-genel-bak
 - **Kurulumcu** — sıfırdan kurmak:
   [docs/00-genel-bakis.md](docs/00-genel-bakis.md) →
   [docs/10-planlama.md](docs/10-planlama.md) →
-  [docs/20-on-kosullar.md](docs/20-on-kosullar.md)
+  [docs/20-on-kosullar.md](docs/20-on-kosullar.md) →
+  [docs/30-kurulum.md](docs/30-kurulum.md)
 - **İşletmen** — kaynak/tablo eklemek, yetki vermek, yedek almak:
   docs/50-isletme/ altındaki kılavuzlar
 - **Analist** — ilk giriş, sorgu ve pano: docs/40-kurulum-sonrasi.md
@@ -58,15 +59,16 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
 - [docs/20-on-kosullar.md](docs/20-on-kosullar.md) — OpenShift, GitOps,
   StorageClass, S3, registry,
   Active Directory, DNS, sertifika
-- docs/30-kurulum.md — depoyu kopyalama, site değerleri, Secret'lar,
-  bootstrap, doğrulama
+- [docs/30-kurulum.md](docs/30-kurulum.md) — depoyu kopyalama, site
+  değerleri, Secret'lar, bootstrap, doğrulama
 - docs/40-kurulum-sonrasi.md — Polaris kataloğu, Superset içe aktarma,
   ilk giriş, izleme hedefleri, kabul testi
 - docs/50-isletme/ — gün-2: değişiklik uygulama, kaynak/tablo ekleme ve
   silme, kullanıcı ve yetki, yedek ve geri dönüş, yükseltme, izleme ve
   alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme
-- docs/90-referans/ — değer anahtarları, Secret listesi, port ve
-  servisler, sürümler ve lisanslar, kabul testleri, oc hızlı başvuru
+- docs/90-referans/ — [değer anahtarları](docs/90-referans/values-anahtarlari.md),
+  [Secret listesi](docs/90-referans/secret-listesi.md), port ve servisler,
+  sürümler ve lisanslar, kabul testleri, oc hızlı başvuru
 
-30 ile başlayan bölümler ve 50/90 klasörleri sonraki görevlerde eklenir.
+40 ile başlayan bölüm ve 50 klasörü sonraki görevlerde eklenir.
 Kurulum değişkenleri şablonu: `install/lakehouse.env.example`.

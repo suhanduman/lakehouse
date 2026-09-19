@@ -307,7 +307,7 @@ dağıtabilir; bunun için depolamanın STS desteklemesi gerekir. FlashBlade'in 
 sürümünde STS'in açık olup olmadığı **depolama ekibinden sorulur**: cevaba göre kurulumda
 `platform/values/site/glue.yaml` dosyasındaki `s3.vendedCredentials` anahtarı `true`
 (STS var) ya da `false` (STS yok) yapılır. Değeri şimdi yazmayın; satırın doldurulması
-30-kurulum bölümündedir (bu bölüm bir sonraki görevde eklenir).
+[30-kurulum](30-kurulum.md) §4.3'tedir.
 
 **Ters giderse:** `Could not connect to the endpoint URL` → `$S3_ENDPOINT` yanlış ya da
 güvenlik duvarı 443'ü kapatıyor. `SSL validation failed` → depolamanın sertifikası
@@ -419,7 +419,7 @@ yüzden üç grup birebir bu adlarla açılmalıdır:
 
 **Kimin işi:** AD ekibi (grupları açar, üyeleri ekler, yalnız okuma yetkili servis hesabı
 ile kök CA PEM dosyasını verir); kurulumcu doğrular. Secret'ların kümede yaratılması bu
-bölümde **değildir**, 30-kurulum bölümündedir (bu bölüm bir sonraki görevde eklenir).
+bölümde **değildir**, [30-kurulum](30-kurulum.md) §5'tedir.
 
 `[bastion]`
 
@@ -790,7 +790,6 @@ eksiklik kurulumda değil, ilk Spark koşusunda ortaya çıkar.
 
 ## Sonraki bölüm
 
-30-kurulum.md — deponun müşterinin Git sunucusuna kopyalanması,
+[30-kurulum.md](30-kurulum.md) — deponun müşterinin Git sunucusuna kopyalanması,
 `platform/values/site/` dosyalarının doldurulması, Secret'ların yaratılması,
-`bootstrap/bootstrap.sh` ile bootstrap ve kurulumun doğrulanması (bu bölüm bir sonraki
-görevde eklenir).
+`bootstrap/bootstrap.sh` ile bootstrap ve kurulumun doğrulanması.

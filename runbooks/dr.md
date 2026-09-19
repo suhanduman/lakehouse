@@ -138,7 +138,7 @@ values kopyaları ve ObjectStore `serverName` klasörü orijinal ada bağlıdır
 
 `keycloak-db` restore'u realm'i, kullanıcıları, client'ları **veritabanı seviyesinde** geri getirir;
 `KeycloakRealmImport` CR'ının yeniden koşmasına gerek yoktur (zaten mevcut realm'i güncellemez —
-`runbooks/install.md` → "Realm değişikliği"). AD federasyonu varsa kullanıcılar zaten AD'den akar; yerel
+`docs/30-kurulum.md` → "Realm içeriğini sonradan değiştirmek"). AD federasyonu varsa kullanıcılar zaten AD'den akar; yerel
 rol/eşlemeler DB'den gelir. Realm'i sıfırdan kurmak **kullanıcıların UI'da elle yaptığı her şeyi siler**.
 
 ## 5. Velero — geri yükleme prosedürleri

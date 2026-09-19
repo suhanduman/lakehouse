@@ -27,7 +27,7 @@ Dosya `platform/values/trino.yaml` → `accessControl.rules["rules.json"]` için
 Canlı davranış (e2e `test/e2e/trino-check/check.py` her koşuda doğrular): `analyst1` → `shop.orders` 3 satır, `remote` maskesiz, `sandbox`'a CTAS **başarılı**; `user1` → aynı tabloda **2 satır** (filtre), `remote='x.x.x.x'` (maske), `sandbox` CTAS **Access Denied**; servis hesabı `e2e` → okur, sandbox'a yazamaz.
 
 ### Yeni grup / yeni kural ekleme
-1. AD'de grup + Keycloak'ta aynı adlı grup (federasyon getirir; realm dosyasına elle grup eklendiyse `runbooks/install.md` "Realm değişikliği" — import mevcut realm'i güncellemez).
+1. AD'de grup + Keycloak'ta aynı adlı grup (federasyon getirir; realm dosyasına elle grup eklendiyse `docs/30-kurulum.md` "Realm içeriğini sonradan değiştirmek" — import mevcut realm'i güncellemez).
 2. `platform/values/trino.yaml` → `accessControl.rules` içine kuralları **doğru sıraya** ekle (özel → genel).
 3. Grup adı üç yerde birden geçer: Superset `superset.roleMapping`, JupyterHub `allowed_groups`, Zeppelin `groupRolesMap` — gerekiyorsa onları da güncelle.
 4. Commit + push → ArgoCD `trino`/`glue` sync. Coordinator'ı yeniden başlatmaya **gerek yok**: ConfigMap değişikliği pod'a yayıldıktan (~1 dk, kubelet) sonra `refreshPeriod: 60s` ile dosya yeniden okunur → toplam ≤ 2 dk.
@@ -46,7 +46,7 @@ Yazma iki katmandan birden geçer:
 
 Analist/kullanıcı ayrımı Trino'da, motor sınırı Polaris'te. Bronze/Silver namespace'lerine Trino üzerinden **hiç kimse** yazamaz (oraya yalnız `connect`/`spark` principal'ları yazar).
 
-**Purge kapsamı:** `DROP TABLE` sırasında verinin de silinmesi (`purgeRequested=true`) artık **katalog düzeyinde** açılır — `platform/polaris/setup.yaml` → `lakehouse` kataloğunun `properties`'inde `polaris.config.drop-with-purge.enabled: "true"` (sunucu geneli `features.DROP_WITH_PURGE_ENABLED` KALDIRILDI). Yani bayrak yalnız bu kataloğu kapsar; ileride eklenecek başka kataloglar (federated/external dâhil) etkilenmez. Kalan risk: bu katalog içinde silme yetkisi olan her principal (`connect`, `spark` dâhil) silerken veriyi de purge edebilir — Trino tarafında yalnız `sandbox` şeması yazılabilir olduğundan analist/kullanıcı için kapsam sandbox'tır. **Kurulum uyarısı:** `polaris setup apply` katalog `properties`'ini yalnız katalog YARATILIRKEN yazar; var olan bir kurulumda `polaris catalogs update --set-property polaris.config.drop-with-purge.enabled=true lakehouse` gerekir (`runbooks/install.md` "F3 → F4 yükseltme sırası").
+**Purge kapsamı:** `DROP TABLE` sırasında verinin de silinmesi (`purgeRequested=true`) artık **katalog düzeyinde** açılır — `platform/polaris/setup.yaml` → `lakehouse` kataloğunun `properties`'inde `polaris.config.drop-with-purge.enabled: "true"` (sunucu geneli `features.DROP_WITH_PURGE_ENABLED` KALDIRILDI). Yani bayrak yalnız bu kataloğu kapsar; ileride eklenecek başka kataloglar (federated/external dâhil) etkilenmez. Kalan risk: bu katalog içinde silme yetkisi olan her principal (`connect`, `spark` dâhil) silerken veriyi de purge edebilir — Trino tarafında yalnız `sandbox` şeması yazılabilir olduğundan analist/kullanıcı için kapsam sandbox'tır. **Kurulum uyarısı:** `polaris setup apply` katalog `properties`'ini yalnız katalog YARATILIRKEN yazar; var olan bir kurulumda `polaris catalogs update --set-property polaris.config.drop-with-purge.enabled=true lakehouse` gerekir (`docs/30-kurulum.md` "Realm içeriğini sonradan değiştirmek").
 
 ## Servis hesapları (paylaşımlı — spec §14)
 

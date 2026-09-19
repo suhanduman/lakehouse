@@ -9,7 +9,7 @@ stringData:
 {{- if .Values.backup.enabled }}
 ---
 # DEV-ONLY: CNPG yedek bucket'ının kimliği = MinIO root kimliği. Prod'da bu Secret kurulumdan ÖNCE elle yaratılır
-# (ayrı S3 hesabı/anahtarı; runbooks/install.md) ve components.minio=false olduğu için burası render EDİLMEZ.
+# (ayrı S3 hesabı/anahtarı; docs/30-kurulum.md §5.3) ve components.minio=false olduğu için burası render EDİLMEZ.
 apiVersion: v1
 kind: Secret
 metadata: {name: {{ .Values.backup.s3.secret }}, namespace: {{ include "glue.ns" . }}}
