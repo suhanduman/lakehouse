@@ -38,6 +38,8 @@ tests:
     documentIndex: 6
     asserts:
       - containsDocument: {kind: Secret, apiVersion: v1, name: jupyterhub-secrets}
-      - matchRegex: {path: 'stringData["hub.config.ConfigurableHTTPProxy.auth_token"]', pattern: "^[0-9a-f]{64}$"}
       - matchRegex: {path: 'stringData["hub.config.JupyterHub.cookie_secret"]', pattern: "^[0-9a-f]{64}$"}
       - matchRegex: {path: 'stringData["hub.config.CryptKeeper.keys"]', pattern: "^[0-9a-f]{64}$"}
+      # hub<->proxy token'ı BİLEREK yok: chart'ın `hub` Secret'ından env ile gelir, buradan okunmaz.
+      # Konulsaydı operatör onu döndürdüğünde hiçbir şeyin değişmediğini fark etmezdi.
+      - isNull: {path: 'stringData["hub.config.ConfigurableHTTPProxy.auth_token"]'}

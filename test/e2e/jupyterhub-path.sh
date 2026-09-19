@@ -3,6 +3,46 @@
 # -> pod içinde pyiceberg (Polaris notebooks principal) + trino (TLS) -> sunucuyu durdur, kullanıcıyı sil.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; TOK=e2e-dev-token-0123456789abcdef0123456789abcdef
+
+# --- YALNIZ ArgoCD modunda: proxy token'ının re-sync'te SABİT kaldığını doğrula ---
+# Kusur (CI 35451232616): z2jh 4.4.2 `hub.config.ConfigurableHTTPProxy.auth_token`'ı values'ta pinlenmemişse
+# HER `helm template` çağrısında yeniden üretir (chart'ın `lookup` kaçışı ArgoCD yolunda çalışmaz). Re-render
+# `hub` Secret'ını yeni token'la yazınca pod'lardan yalnız biri dönüyor, hub ile proxy farklı token'da kalıyor
+# ve hub "api_request to proxy failed: HTTP 403: Forbidden" veriyordu (singleuser pod'u hiç yaratılmıyordu).
+# Düzeltme platform/apps/30-jupyterhub.yaml: ignoreDifferences + RespectIgnoreDifferences=true.
+# Buradaki HARD REFRESH manifest önbelleğini atlar, yani chart'ı GERÇEKTEN yeniden render ettirir — düzeltme
+# olmasaydı token değişirdi. İki tur koşulur ki tek turluk bir rastlantı "düzeldi" sanılmasın.
+# Helm modunda (bootstrap --mode helm) ArgoCD yoktur: orada chart'ın `lookup`u değeri zaten korur -> atlanır.
+JH_TOKEN_PATH='{.data.hub\.config\.ConfigurableHTTPProxy\.auth_token}'
+if kubectl -n argocd get application jupyterhub >/dev/null 2>&1; then
+  TOK_BEFORE=$(kubectl -n "$NS" get secret hub -o jsonpath="$JH_TOKEN_PATH")
+  [[ -n "$TOK_BEFORE" ]] || { echo "HATA: hub Secret'ında auth_token yok"; exit 1; }
+  PODS_BEFORE=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=jupyterhub -o name | sort | tr '\n' ' ')
+  for round in 1 2; do
+    kubectl -n argocd annotate application jupyterhub argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+    settled=0; sync=""; health=""
+    for _ in $(seq 1 60); do      # 60 x 5s = 300s üst sınır
+      # ArgoCD refresh'i bitirince annotation'ı KENDİSİ siler; sync/health ancak ondan sonra anlamlıdır.
+      ann=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/refresh}' 2>/dev/null || true)
+      sync=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+      health=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+      [[ -z "$ann" && "$sync" == "Synced" && "$health" == "Healthy" ]] && { settled=1; break; }
+      sleep 5
+    done
+    [[ "$settled" == 1 ]] || { echo "HATA: jupyterhub Application $round. hard refresh sonrası 300s'de Synced/Healthy olmadı (sync=$sync health=$health)"; exit 1; }
+  done
+  TOK_AFTER=$(kubectl -n "$NS" get secret hub -o jsonpath="$JH_TOKEN_PATH")
+  PODS_AFTER=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=jupyterhub -o name | sort | tr '\n' ' ')
+  [[ "$TOK_BEFORE" == "$TOK_AFTER" ]] || {
+    echo "HATA: hub Secret'ındaki proxy token'ı iki hard refresh sonrasında DEĞİŞTİ -> hub/proxy 403 kusuru geri geldi"
+    echo "      (platform/apps/30-jupyterhub.yaml: ignoreDifferences ya da RespectIgnoreDifferences=true kaybolmuş olabilir)"; exit 1; }
+  echo "OK jupyterhub hub Secret auth_token re-sync sonrası değişmedi"
+  if [[ "$PODS_BEFORE" == "$PODS_AFTER" ]]; then echo "   pod'lar dönmedi: $PODS_BEFORE"
+  else echo "   pod'lar döndü ama token aynı kaldı -> ÖNCE: $PODS_BEFORE SONRA: $PODS_AFTER"; fi
+else
+  echo "ArgoCD yok, atlandı: hub Secret auth_token re-sync denetimi (helm modu; chart'ın lookup'ı değeri korur)"
+fi
+
 kubectl -n "$NS" rollout status deploy/hub --timeout=600s; kubectl -n "$NS" rollout status deploy/proxy --timeout=600s
 kubectl -n "$NS" port-forward svc/proxy-public 18080:80 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
 H() { curl -sS -H "Authorization: token $TOK" "$@"; }

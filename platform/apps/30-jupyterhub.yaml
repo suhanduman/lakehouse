@@ -24,8 +24,11 @@ spec:
   # (RespectIgnoreDifferences olmadan ignoreDifferences yalnız diff'i susturur, sync yine üzerine yazardı).
   # Secret'ın geri kalanı (`values.yaml` = chart değerleri) sync'lenmeye DEVAM eder; bu yüzden bir values
   # değişikliği hub Deployment'ının `checksum/secret` annotation'ını yine değiştirir ve hub yeniden başlar.
-  # Deployment annotation'ları BİLEREK yok sayılmadı: token artık sabit olduğundan dönen pod doğru değeri
-  # okur (kendi kendini onarır); yok saysaydık elle yapılan bir token rotasyonu proxy'ye hiç ulaşmazdı.
+  # Deployment annotation'ları (hub `checksum/secret`, proxy `checksum/auth-token`) BİLEREK yok sayılmadı:
+  # token'ı dondurmak için Secret'ın verisini yok saymak YETER. Bu annotation'lar her yeni render'da yine
+  # değişir ve hub + proxy'yi gereksizce döndürür — ama artık İKİSİ DE AYNI, değişmeyen token'ı okuduğu için
+  # bu zararsızdır. Bilinçli sadeleştirme: fazladan iki `ignoreDifferences` girdisi eklemek yerine anlamsız
+  # ama etkisiz bir restart'a katlanıyoruz (yok sayılsalardı hub, values değişikliğinde yeniden başlamazdı).
   ignoreDifferences:
   - group: ""
     kind: Secret

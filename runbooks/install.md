@@ -51,7 +51,7 @@ Dev/kind'da `components.devSecrets=true` ile glue chart bunların **sahtelerini*
 | `zeppelin-shiro` | `shiro.ini` | Zeppelin `/opt/zeppelin/conf/shiro.ini` |
 | `zeppelin-interpreter` | `interpreter.json` | Zeppelin initContainer tohumu (PVC `/data/conf`) |
 | `lakehouse-ca` | `tls.crt`, `tls.key` | cert-manager `Issuer/lakehouse-ca` (trino-tls'i imzalar) + istemcilerin güven kökü |
-| `jupyterhub-secrets` | `hub.config.ConfigurableHTTPProxy.auth_token`, `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret`: oturum çerezi imzası + auth_state şifresi (hub pod'u yeniden başlayınca kullanıcılar düşmez) |
+| `jupyterhub-secrets` | `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret`: oturum çerezi imzası + auth_state şifresi (hub pod'u yeniden başlayınca kullanıcılar düşmez) |
 
 ```bash
 # 1) Keycloak client sırları (her biri rastgele, Keycloak realm'e placeholder olarak enjekte edilir)
@@ -103,10 +103,17 @@ rm -f tls.key     # tls.crt'yi sakla: caBundle ve istemci güven deposu için ge
 #    Neden: chart bu değerleri values'ta yoksa her render'da rastgele üretir; JupyterHub kurulumdan SONRA
 #    yeniden üretilirse tüm kullanıcı çerezleri geçersizleşir ve auth_state çözülemez.
 kubectl -n lakehouse create secret generic jupyterhub-secrets \
-  --from-literal=hub.config.ConfigurableHTTPProxy.auth_token="$(openssl rand -hex 32)" \
   --from-literal=hub.config.JupyterHub.cookie_secret="$(openssl rand -hex 32)" \
   --from-literal=hub.config.CryptKeeper.keys="$(openssl rand -hex 32)"
 ```
+
+**Hub ile proxy arasındaki token bu Secret'ta DEĞİLDİR** ve elle yaratılmaz: z2jh onu kendi ürettiği `hub`
+Secret'ına (`hub.config.ConfigurableHTTPProxy.auth_token`) yazar, hem hub hem proxy pod'u oradan
+`CONFIGPROXY_AUTH_TOKEN` env'i olarak okur. Değeri ilk sync'te bir kez üretilir ve
+`platform/apps/30-jupyterhub.yaml`'daki `ignoreDifferences` sayesinde ArgoCD re-sync'inde DEĞİŞMEZ (değişseydi
+hub ile proxy farklı token'da kalıp `HTTP 403: Forbidden` verirdi). Döndürmek isterseniz:
+`kubectl -n lakehouse delete secret hub` → ArgoCD sync (ya da `argocd app sync jupyterhub`) → yeni token
+üretilir ve hub + proxy birlikte yeniden başlar.
 
 Kurumsal PKI'nız varsa `lakehouse-ca` yerine kurumsal ara CA'nın cert+key'ini aynı Secret'a koyun — cert-manager `Issuer/lakehouse-ca` onunla imzalar; `tls.caBundle` yine **doğrulayıcı zincir** olur.
 
