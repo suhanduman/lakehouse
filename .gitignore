@@ -7,3 +7,6 @@ test/spike/.state/
 
 # Dahili belgeler (spec/plan/review/bulgu notları) — ürün reposuna girmez, yalnız lokalde
 docs/internal/
+
+# Kurulum sırlarını taşıyan doldurulmuş .env (yalnız şablon lakehouse.env.example Git'tedir)
+lakehouse.env
