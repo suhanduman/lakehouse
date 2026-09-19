@@ -21,3 +21,12 @@ spec:
   proxy: {headers: xforwarded}
   bootstrapAdmin:
     user: {secret: {{ .Values.keycloak.adminSecret }}}   # keys: username, password
+{{- with .Values.keycloak.ldap.caSecret }}
+  # AD LDAPS güven kökü: operatör bu Secret'taki PEM'leri /opt/keycloak/conf/truststores altına bağlar ve
+  # Keycloak'ın truststore SPI'sine ekler; LDAP federasyonu (keycloak-realm.yaml, useTruststoreSpi: ldapsOnly)
+  # TLS doğrulamasını oradan yapar. Alan operator 26.7.3 CRD'sinden canlı doğrulandı
+  # (kubectl explain keycloak.spec.truststores.secret.name). Boşsa blok hiç render edilmez.
+  truststores:
+    ad-ca:
+      secret: {name: {{ . | quote }}}
+{{- end }}

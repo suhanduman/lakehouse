@@ -509,6 +509,13 @@ ile çevirin. `CA:TRUE` yerine `CA:FALSE` görüyorsanız elinizdeki dosya sunuc
 sertifikasıdır, kök CA değildir — AD ekibinden doğrusunu isteyin.
 Şifresiz LDAP (`ldap://`, 389) **kabul edilmez**: ürün bind parolasını ağdan açık
 geçirmez.
+Bu kök CA dosyası kurulumda `ad-ca` Secret'ı olur ve chart onu Keycloak, Trino
+coordinator ve Zeppelin'e **kendisi** bağlar; tüketicilerin tam listesi ve doğrulama
+komutları [30-kurulum](30-kurulum.md) §5.13'tedir. Kurulumdan sonra bu üç bileşenden
+birinin günlüğünde `PKIX path building failed` (ya da `unable to find valid
+certification path to requested target`) görürseniz elinizdeki dosya yanlış köktür ya da
+Secret eksiktir — o tabloya dönün. Uçtan uca LDAPS el sıkışması yalnız gerçek AD ile
+kanıtlanabilir **(OpenShift'te doğrulanır)**.
 
 ---
 

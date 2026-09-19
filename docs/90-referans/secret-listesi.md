@@ -40,7 +40,7 @@ alanındadır.
 | 11 | `zeppelin-interpreter` | `interpreter.json` | Zeppelin initContainer'ı (PVC `/data/conf` tohumu) — Trino JDBC bağlantısı | `glue/files/zeppelin/interpreter.json` şablonu; parola §5.7'deki `zeppelin` parolası | [30-kurulum](../30-kurulum.md) §5.10 |
 | 12 | `lakehouse-ca` | `tls.crt`, `tls.key` | cert-manager `Issuer/lakehouse-ca` (Trino sunucu sertifikasını imzalar); Superset ve Zeppelin pod'larında güven kökü | kurulumda üretilir (`openssl req -x509`) ya da kurumsal ara CA | [30-kurulum](../30-kurulum.md) §5.11 |
 | 13 | `jupyterhub-secrets` | `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret` — oturum çerezi imzası ve `auth_state` şifrelemesi | üretilir (her biri `openssl rand -hex 32`) | [30-kurulum](../30-kurulum.md) §5.12 |
-| 14 | `ad-ca` | `ca.crt` | AD sunucu sertifikasını imzalayan kök CA; yalnız o kök konteynerin güven deposunda **yoksa** gerekir | `$LDAP_CA_FILE` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.13 (koşullu) |
+| 14 | `ad-ca` | `ca.crt` | **Keycloak** (CR `spec.truststores` → `/opt/keycloak/conf/truststores`), **Trino coordinator** (`ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt`), **Zeppelin** (`ad-truststore` initContainer'ı cacerts kopyasına ekler) — üçü de AD'ye LDAPS ile bağlanır | `$LDAP_CA_FILE` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.13 (koşullu: AD sertifikası özel bir kökten geliyorsa **zorunlu**) |
 
 **`jupyterhub-secrets` tam olarak iki anahtar içerir.** Hub ile proxy arasındaki
 `ConfigurableHTTPProxy.auth_token` **bu Secret'ta değildir** ve elle yaratılmaz: z2jh

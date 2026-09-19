@@ -783,9 +783,10 @@ rastgele üretir; adları Adım 5.14'teki listeyle karşılaştırın.
 ### 5.13 `ad-ca` — AD kök CA'sı (koşullu)
 
 **Ne zaman gerekir:** AD sunucusunun sertifikasını imzalayan kök CA, konteyner imajlarının
-varsayılan güven deposunda yoksa Keycloak ve Zeppelin AD'ye bağlanamaz
-(`PKIX path building failed`). Sertifika genel bir CA'dan alınmışsa ya da kök zaten
-kümenin güven paketindeyse bu adım gerekmez.
+varsayılan güven deposunda yoksa Keycloak, Trino ve Zeppelin AD'ye LDAPS ile bağlanamaz
+(`PKIX path building failed`). Kurumsal (özel) bir CA kullanan her AD'de bu adım
+**zorunludur**; sertifika herkesçe bilinen bir CA'dan alınmışsa gerekmez.
+Kökü [20-on-kosullar](20-on-kosullar.md) madde 6'da `$LDAP_CA_FILE` olarak almıştınız.
 
 `[bastion]`
 
@@ -799,17 +800,80 @@ oc -n "$LAKEHOUSE_NS" create secret generic ad-ca --from-file=ca.crt="$LDAP_CA_F
 secret/ad-ca created
 ```
 
-> **Açık kalem (OpenShift ön-teslim ortamında doğrulanacak).** Ürün bu Secret'ı bu sürümde
-> Keycloak ve Zeppelin pod'larına **otomatik bağlamaz**. Kurulumdan sonra LDAPS bağlantısı
-> `PKIX path building failed` verirse iki yol vardır: (a) kök CA'yı kümenin varsayılan
-> güven paketine aldırıp (OpenShift'in `config.openshift.io/inject-trusted-cabundle`
-> etiketli ConfigMap'i) ilgili Deployment'a bağlamak, (b) AD sertifikasını kümenin zaten
-> güvendiği bir CA'dan aldırmak. Özel konteyner imajı üretmek ürünün kuralları
-> dışındadır.
+#### Bu Secret'ı kim okur
+
+Chart bu Secret'ı **kendiliğinden** üç bileşene birden bağlar. Elle mount eklemeniz, özel
+konteyner imajı üretmeniz ya da çalışan bir konteynerin `cacerts` dosyasını düzenlemeniz
+**gerekmez ve yasaktır** (pod her döndüğünde kaybolur).
+
+| Bileşen | Nasıl bağlanır | Konteynerdeki yol | Hangi dosya yapar |
+|---|---|---|---|
+| **Keycloak** — AD kullanıcı federasyonu (`useTruststoreSpi: ldapsOnly`) | Keycloak CR `spec.truststores`; operatör Secret'taki PEM'leri bağlar ve Keycloak'ın güven deposu SPI'sine ekler | `/opt/keycloak/conf/truststores/` | `glue/templates/keycloak.yaml` |
+| **Trino coordinator** — LDAP grup sağlayıcısı (AD grupları) | Secret volume + `ldap.ssl.truststore.path` (Trino PEM güven deposu kabul eder) | `/etc/trino/ad-ca/ca.crt` | `platform/values/trino-ldap.yaml` (mount) + `platform/values/site/trino.yaml` (satır) |
+| **Zeppelin** — Shiro `ActiveDirectoryGroupRealm` | `ad-truststore` initContainer'ı imajın **kendi** `cacerts` dosyasını kopyalar, kökü `keytool` ile ekler; sunucu ve yorumlayıcı JVM'leri `-Djavax.net.ssl.trustStore` ile bu kopyayı kullanır | `/truststore/ad-truststore.p12` | `glue/templates/zeppelin.yaml` |
+
+Üçünü birden açıp kapatan **tek** ayar `platform/values/site/glue.yaml` içindeki
+`keycloak.ldap.caSecret`'tir (şablonda `ad-ca` yazılıdır). Bu Secret'a ihtiyacınız yoksa
+onu `""` yapın **ve** `platform/values/site/trino.yaml` içindeki
+`ldap.ssl.truststore.path` satırını silin; `scripts/check-site.sh` ikisinin birlikte
+açılıp kapandığını denetler.
+
+Zeppelin'de kopya alınmasının nedeni: yalnız AD kökünü içeren bir güven deposu JVM'in
+varsayılanını **ezer** ve Maven Central'dan inen Trino JDBC sürücüsü ile Keycloak/Trino
+TLS bağlantıları kırılır. Depo parolası (`changeit`) sır değildir: depo yalnız açık
+sertifika taşır.
+
+#### Doğrulama (Adım 6 bootstrap'tan **sonra** çalıştırın)
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- ls /opt/keycloak/conf/truststores
+oc -n "$LAKEHOUSE_NS" get deploy/trino-coordinator \
+  -o jsonpath='{.spec.template.spec.containers[0].volumeMounts[?(@.name=="ad-ca")].mountPath}{"\n"}'
+oc -n "$LAKEHOUSE_NS" logs deploy/zeppelin -c ad-truststore --tail=1
+```
+
+**Beklenen çıktı** (birinci ve üçüncü satır kind kümesinden alınmış gerçek çıktıdır;
+ikinci satır üretim değer dosyalarıyla üretilmiştir — geliştirme kümesi LDAP grup
+sağlayıcısını kullanmadığı için orada **boş** döner):
+
+```text
+secret-ad-ca
+/etc/trino/ad-ca
+147
+```
+
+Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: imajın
+varsayılan kökleri **artı** sizin AD kökünüz. 1 ya da 0 görürseniz kopyalama adımı
+atlanmıştır. AD kökünün gerçekten içeride olduğunu görmek için:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -c zeppelin -- \
+  keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 \
+  -storepass changeit | grep ad-ca
+```
+
+**Beklenen çıktı** (tarih kurulum gününüzü gösterir):
+
+```text
+ad-ca, Sep 19, 2026, trustedCertEntry,
+```
 
 **Ters giderse:** `error reading ...: no such file` → `$LDAP_CA_FILE` yolu yanlıştır.
 Dosyanın gerçekten bir kök CA olduğunu [20-on-kosullar](20-on-kosullar.md) madde 6'daki
 `openssl x509 -noout -subject -issuer` komutuyla doğrulayın.
+Kurulumdan sonra herhangi bir bileşenin günlüğünde `PKIX path building failed` ya da
+`unable to find valid certification path to requested target` görürseniz: bu Secret ya
+eksiktir, ya **yanlış kökü** taşımaktadır, ya da ilgili bileşen onu okumamıştır —
+yukarıdaki tablodaki üç doğrulama komutunu sırayla çalıştırın. Zeppelin'in
+`ad-truststore` initContainer'ı `Error` durumundaysa pod hiç açılmaz: `ca.crt` PEM
+değildir (`openssl x509 -inform der` ile çevirin).
+Uçtan uca LDAPS el sıkışması yalnız gerçek bir AD ile kanıtlanabilir
+**(OpenShift'te doğrulanır)** — geliştirme kümesinde AD yoktur, orada yalnız bağlama ve
+güven deposu üretimi doğrulanır.
 
 ### 5.14 Hepsini birden doğrulayın
 
@@ -818,7 +882,7 @@ Dosyanın gerçekten bir kök CA olduğunu [20-on-kosullar](20-on-kosullar.md) m
 ```bash
 for s in connect-push s3-creds backup-s3-creds polaris-root keycloak-admin \
          keycloak-clients trino-service-accounts trino-shared-secret superset-secret \
-         zeppelin-shiro zeppelin-interpreter lakehouse-ca jupyterhub-secrets; do
+         zeppelin-shiro zeppelin-interpreter lakehouse-ca jupyterhub-secrets ad-ca; do
   printf '%-24s %s\n' "$s" \
     "$(oc -n "$LAKEHOUSE_NS" get secret "$s" \
         -o go-template='{{range $k,$v := .data}}{{$k}} {{end}}' 2>/dev/null || echo EKSIK)"
@@ -842,7 +906,12 @@ zeppelin-shiro           shiro.ini
 zeppelin-interpreter     interpreter.json
 lakehouse-ca             tls.crt tls.key
 jupyterhub-secrets       hub.config.CryptKeeper.keys hub.config.JupyterHub.cookie_secret
+ad-ca                    ca.crt
 ```
+
+Son satır (`ad-ca`) **koşulludur**: AD sertifikanız konteynerlerin zaten güvendiği bir
+kökten geliyorsa §5.13'ü atlamış olursunuz ve burada `EKSIK` yazması normaldir. Özel bir
+kurumsal CA kullanan AD'de ise **dolu olmalıdır**.
 
 **Ters giderse:** `EKSIK` yazan her satır için ilgili alt adımı tekrarlayın. Bu tabloyu
 bootstrap'tan **önce** eksiksiz görmelisiniz: eksik bir Secret'la başlatılan kurulumda

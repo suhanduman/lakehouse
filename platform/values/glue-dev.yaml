@@ -36,6 +36,10 @@ networkPolicy: {enabled: true}       # kindnetd NetworkPolicy'yi ENFORCE EDER (F
                                       # (izin verilen/verilmeyen ns, apiserver->webhook) F5 raporunda (task-5-report.md)
 keycloak:
   hostname: http://keycloak-service.lakehouse.svc:8080   # dev: iss küme içinden çözülür (Trino OIDC discovery); tarayıcı akışı küme dışından çalışmaz
+  # ldap.enabled dev'de KAPALI (AD yok) ama caSecret AÇIK: sentetik ad-ca Secret'ı (dev-secrets.yaml) ile
+  # Keycloak truststore mount'u ve Zeppelin ad-truststore initContainer'ı kind'da GERÇEKTEN koşar.
+  # Kanıtlanan: mount + keytool import + JVM opts; kanıtlanmayan: LDAPS el sıkışması (OpenShift'te doğrulanır).
+  ldap: {caSecret: ad-ca}
   devUsers:
   - {username: admin1,   password: admin1-dev,   group: lakehouse-admins}
   - {username: analyst1, password: analyst1-dev, group: lakehouse-analysts}

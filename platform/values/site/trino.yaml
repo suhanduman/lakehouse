@@ -12,6 +12,9 @@
 #   group-provider.properties · ldap.url         = $LDAP_URL       (site/glue.yaml keycloak.ldap.connectionUrl ile AYNI)
 #   group-provider.properties · ldap.admin-user  = $LDAP_BIND_DN   (site/glue.yaml keycloak.ldap.bindDn ile AYNI)
 #   group-provider.properties · ldap.user-base-dn= $LDAP_USERS_DN  (site/glue.yaml keycloak.ldap.usersDn ile AYNI)
+#   group-provider.properties · ldap.ssl.truststore.path — AD kök CA'sı (Secret ad-ca) coordinator'a
+#     /etc/trino/ad-ca altında bağlanır (../trino-ldap.yaml). site/glue.yaml keycloak.ldap.caSecret BOŞSA
+#     bu satırı SİLİN; doluysa DURMALIDIR (scripts/check-site.sh ikisini birlikte denetler).
 #   catalogs.lakehouse · s3.endpoint / s3.region = $S3_ENDPOINT / $S3_REGION (site/glue.yaml s3.* ile AYNI)
 # LDAP bağlama PAROLASI values'ta DEĞİL: Secret keycloak-clients anahtarı ldap-bind (${ENV:LDAP_BIND_PASSWORD}).
 server:
@@ -33,6 +36,7 @@ coordinator:
       ldap.user-search-filter=(sAMAccountName={0})
       ldap.user-member-of-attribute=memberOf
       ldap.group-name-attribute=cn
+      ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt
 catalogs:
   lakehouse: |
     connector.name=iceberg

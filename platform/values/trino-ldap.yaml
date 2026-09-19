@@ -9,3 +9,22 @@
 # dosyası listesini [trino.yaml, trino-dev.yaml] ile DEĞİŞTİRİR -> dev ne bu dosyayı ne site/trino.yaml'ı
 # yükler, yerine auth.groups (dosya provider'ı, platform/values/trino-dev.yaml) devreye girer.
 # Bağlama parolası: Secret keycloak-clients anahtarı ldap-bind -> LDAP_BIND_PASSWORD (platform/values/trino.yaml env).
+#
+# AD KÖK CA'SI (LDAPS güveni) — BURADA. Secret `ad-ca` (anahtar ca.crt, PEM; docs/30-kurulum.md §5.13)
+# coordinator'a bağlanır; Trino'nun LDAP group provider'ı PEM truststore KABUL EDER
+# (Trino 483 belgesi, security/group-mapping.html: "ldap.ssl.truststore.path — Path to the PEM or JKS
+# trust store") -> JKS'e çevirmek ya da imaja sertifika gömmek GEREKMEZ.
+# Yolu kullanan satır (ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt) BURADA DEĞİL: çok satırlı
+# group-provider.properties bloğu bütünüyle site/trino.yaml'dan gelir (yukarıdaki gerekçe).
+# additionalVolumes/additionalVolumeMounts SEÇİLDİ, coordinator.secretMounts DEĞİL: secretMounts
+# platform/values/trino.yaml'da trino-tls için kullanılıyor ve Helm LİSTELERİ birleştirmez — buradan
+# yeniden verilseydi trino-tls mount'u sessizce düşer, HTTPS 8443 açılmazdı.
+# Dev bu dosyayı YÜKLEMEZ (envs/dev değer listesini değiştirir) -> kind'da Trino'ya ad-ca bağlanmaz.
+# ad-ca'ya ihtiyaç yoksa (AD sertifikası zaten güvenilen bir kökten): aşağıdaki bloğu ve
+# site/trino.yaml'daki ldap.ssl.truststore.path satırını birlikte silin; site/glue.yaml'da
+# keycloak.ldap.caSecret'i "" yapın. scripts/check-site.sh üçünün tutarlılığını denetler.
+coordinator:
+  additionalVolumes:
+  - {name: ad-ca, secret: {secretName: ad-ca}}
+  additionalVolumeMounts:
+  - {name: ad-ca, mountPath: /etc/trino/ad-ca, readOnly: true}

@@ -45,3 +45,16 @@ tests:
     documentIndex: 0
     asserts:
       - equal: {path: 'spec.rules[0].host', value: keycloak-lakehouse.apps.ocp.example.net}
+  # AD LDAPS güven kökü (ad-ca). Keycloak operator 26.7.3 CRD alanı CANLI doğrulandı:
+  # `kubectl explain keycloak.spec.truststores.secret.name` (v2alpha1 ve v2beta1'de var). Operatör
+  # Secret'taki PEM'leri /opt/keycloak/conf/truststores altına bağlar ve truststore SPI'sine ekler —
+  # LDAP federasyonunun useTruststoreSpi: ldapsOnly ayarı bu depoyu kullanır.
+  - it: ad-ca truststore absent while caSecret empty
+    template: keycloak.yaml
+    asserts:
+      - isNull: {path: spec.truststores}
+  - it: ad-ca truststore wired when caSecret set
+    template: keycloak.yaml
+    set: {keycloak.ldap.caSecret: ad-ca}
+    asserts:
+      - equal: {path: 'spec.truststores["ad-ca"].secret.name', value: ad-ca}

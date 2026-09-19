@@ -99,6 +99,16 @@ for line in ["http-server.authentication.oauth2.client-id=trino",
     if line not in t:
         errs.append(f"site/trino.yaml: ürün satırı eksik -> {line}")
 
+# 3b) AD kök CA'sı (ad-ca) üç tüketiciye TEK anahtardan açılır: glue'da keycloak.ldap.caSecret,
+# Trino'da mount (../trino-ldap.yaml) + ldap.ssl.truststore.path (site/trino.yaml group-provider bloğu).
+# Biri açık, öteki kapalı bırakılırsa Trino ya PKIX hatası verir ya da olmayan bir dosyayı gösterir.
+ca = get(g, "keycloak.ldap.caSecret")
+ts = "ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt"
+if ca and ts not in t:
+    errs.append(f"site/trino.yaml: keycloak.ldap.caSecret='{ca}' iken group-provider bloğunda '{ts}' bulunmalı")
+if not ca and ts in t:
+    errs.append(f"site/trino.yaml: keycloak.ldap.caSecret boşken '{ts}' satırı kalmamalı (ad-ca bağlanmıyor)")
+
 # 4) Polaris sunucusunun kendi endpoint'i ayrı bir dosyada ve dev'de MinIO'yu gösterir (test/e2e) -> UYARI
 if s3 and s3 not in p:
     warns.append(f"platform/polaris/setup.yaml: endpoint '{s3}' değil — Polaris sunucusu için ayrıca düzenlenir (docs/30-kurulum.md)")

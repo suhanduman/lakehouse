@@ -37,6 +37,19 @@ spec:
         image: {{ $z.image }}
         command: ["sh", "-c", "mkdir -p /data/conf /data/notebook /data/local-repo && ([ -f /data/conf/interpreter.json ] || cp /seed/interpreter.json /data/conf/interpreter.json)"]
         volumeMounts: [{name: data, mountPath: /data}, {name: seed, mountPath: /seed, readOnly: true}]
+      {{- with $.Values.keycloak.ldap.caSecret }}
+      # AD LDAPS güven deposu. Shiro'nun ActiveDirectoryGroupRealm'i (examples/zeppelin/shiro-ad.ini) JVM'in
+      # güven deposunu kullanır; AD sertifikası özel bir kökten geliyorsa imajın cacerts'inde YOKTUR.
+      # ÖZEL İMAJ YOK / ELLE cacerts DÜZENLEME YOK: aynı resmi imaj, imajın kendi keytool'u.
+      # cacerts ÖNCE KOPYALANIR, AD kökü ÜSTÜNE eklenir: yalnız AD CA'sı içeren bir truststore JVM
+      # varsayılanını EZER ve Maven Central'dan trino-jdbc indirmesini, Keycloak/Trino TLS'ini kırardı.
+      # Depo parolası SIR DEĞİLDİR (yalnız public sertifika taşır) — sabit `changeit`.
+      # Son `grep -c` bilerek kalıcıdır: depo boş çıkarsa initContainer düşer ve pod hiç açılmaz.
+      - name: ad-truststore
+        image: {{ $z.image }}
+        command: ["sh", "-c", "set -e; keytool -importkeystore -noprompt -srckeystore \"$JAVA_HOME/lib/security/cacerts\" -srcstoretype JKS -srcstorepass changeit -destkeystore /truststore/ad-truststore.p12 -deststoretype PKCS12 -deststorepass changeit; keytool -importcert -noprompt -trustcacerts -alias ad-ca -file /ad-ca/ca.crt -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit; keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit | grep -c trustedCertEntry"]
+        volumeMounts: [{name: ad-truststore, mountPath: /truststore}, {name: ad-ca, mountPath: /ad-ca, readOnly: true}]
+      {{- end }}
       containers:
       - name: zeppelin
         image: {{ $z.image }}
@@ -59,6 +72,11 @@ spec:
         # (kullanıcı kararı 2026-09-18, Task 2b) — Zeppelin ServiceMonitor kaldırıldı (glue monitoring.yaml).
         - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
         - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
+        {{- if .Values.keycloak.ldap.caSecret }}
+        # Hem sunucu JVM'i (Shiro/AD girişi) hem yorumlayıcı JVM'leri AD kökünü içeren KOPYA depoyu kullanır.
+        - {name: ZEPPELIN_JAVA_OPTS, value: "-Djavax.net.ssl.trustStore=/truststore/ad-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"}
+        - {name: ZEPPELIN_INTP_JAVA_OPTS, value: "-Djavax.net.ssl.trustStore=/truststore/ad-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"}
+        {{- end }}
         resources: {{ toJson $z.resources }}
         readinessProbe: {httpGet: {path: /api/version, port: http}, initialDelaySeconds: 20, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /api/version, port: http}, initialDelaySeconds: 90, periodSeconds: 20}
@@ -66,11 +84,18 @@ spec:
         - {name: data, mountPath: /data}
         - {name: shiro, mountPath: /opt/zeppelin/conf/shiro.ini, subPath: shiro.ini, readOnly: true}
         - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
+        {{- if .Values.keycloak.ldap.caSecret }}
+        - {name: ad-truststore, mountPath: /truststore, readOnly: true}
+        {{- end }}
       volumes:
       - {name: data, persistentVolumeClaim: {claimName: zeppelin-data}}
       - {name: seed, secret: {secretName: {{ $z.interpreterSecret }}}}
       - {name: shiro, secret: {secretName: {{ $z.shiroSecret }}}}
       - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
+      {{- with .Values.keycloak.ldap.caSecret }}
+      - {name: ad-truststore, emptyDir: {}}
+      - {name: ad-ca, secret: {secretName: {{ . | quote }}, items: [{key: ca.crt, path: ca.crt}]}}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

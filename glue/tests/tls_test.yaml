@@ -43,3 +43,14 @@ tests:
       # hub<->proxy token'ı BİLEREK yok: chart'ın `hub` Secret'ından env ile gelir, buradan okunmaz.
       # Konulsaydı operatör onu döndürdüğünde hiçbir şeyin değişmediğini fark etmezdi.
       - isNull: {path: 'stringData["hub.config.ConfigurableHTTPProxy.auth_token"]'}
+  # DEV-ONLY sentetik AD kök CA'sı: kind'da AD/LDAP YOKTUR — bu Secret yalnız mount yolunu ve Zeppelin
+  # truststore initContainer'ını canlı koşturmak içindir. Değer SABİTTİR (üretilmez): ArgoCD her sync'te
+  # yeniden yazmasın. Prod'da kurulumcu yaratır (docs/30-kurulum.md §5.13).
+  - it: dev secrets render a synthetic ad-ca root
+    template: dev-secrets.yaml
+    set: {components.devSecrets: true}
+    documentIndex: 7
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: ad-ca}
+      - matchRegex: {path: 'stringData["ca.crt"]', pattern: '^-----BEGIN CERTIFICATE-----'}
+      - matchRegex: {path: 'stringData["ca.crt"]', pattern: '-----END CERTIFICATE-----'}

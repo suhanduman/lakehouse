@@ -74,3 +74,27 @@ tests:
       - matchRegex: {path: 'stringData["interpreter.json"]', pattern: '"default\.user":\s*\{[^}]*"value": "zeppelin"'}
       # Zeppelin'in kendi {{applicationId}} yer tutucusu tpl'de kaçırılmış olmalı (aksi halde render boşaltır)
       - matchRegex: {path: 'stringData["interpreter.json"]', pattern: '\{\{applicationId\}\}'}
+  # AD LDAPS güven kökü (ad-ca): Shiro'nun ActiveDirectoryGroupRealm'i JVM güven deposunu kullanır.
+  # caSecret BOŞKEN hiçbir şey değişmez (mevcut kurulumlar etkilenmez).
+  - it: ad truststore pieces absent while caSecret empty
+    template: zeppelin.yaml
+    documentIndex: 1
+    asserts:
+      - isNull: {path: 'spec.template.spec.initContainers[1]'}
+      - notContains: {path: 'spec.template.spec.volumes', content: {name: ad-truststore, emptyDir: {}}}
+  # initContainer imajdaki VARSAYILAN cacerts'i kopyalar, üstüne AD kökünü ekler: yalnız AD CA'lı bir
+  # truststore JVM varsayılanını EZER ve Maven Central (trino-jdbc indirmesi) / Keycloak TLS'i kırardı.
+  - it: ad truststore initContainer copies cacerts and JVM opts point at it
+    template: zeppelin.yaml
+    set: {keycloak.ldap.caSecret: ad-ca}
+    documentIndex: 1
+    asserts:
+      - equal: {path: 'spec.template.spec.initContainers[1].name', value: ad-truststore}
+      - equal: {path: 'spec.template.spec.initContainers[1].image', value: apache/zeppelin:0.12.1}
+      - matchRegex: {path: 'spec.template.spec.initContainers[1].command[2]', pattern: 'importkeystore .*JAVA_HOME/lib/security/cacerts'}
+      - matchRegex: {path: 'spec.template.spec.initContainers[1].command[2]', pattern: '-alias ad-ca -file /ad-ca/ca\.crt'}
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_JAVA_OPTS, value: "-Djavax.net.ssl.trustStore=/truststore/ad-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"}}
+      - contains: {path: 'spec.template.spec.containers[0].env', content: {name: ZEPPELIN_INTP_JAVA_OPTS, value: "-Djavax.net.ssl.trustStore=/truststore/ad-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"}}
+      - contains: {path: 'spec.template.spec.containers[0].volumeMounts', content: {name: ad-truststore, mountPath: /truststore, readOnly: true}}
+      - contains: {path: 'spec.template.spec.volumes', content: {name: ad-truststore, emptyDir: {}}}
+      - contains: {path: 'spec.template.spec.volumes', content: {name: ad-ca, secret: {secretName: ad-ca, items: [{key: ca.crt, path: ca.crt}]}}}

@@ -127,6 +127,22 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   *Kaynak: F3 notu 7. satır (küme içi ajan kanıtlandı) + F3 "Açık kalanlar" (gerçek sunucuda kurulum);
   `runbooks/nginx-agent.md`.*
 
+- [ ] **1.10 AD kök CA'sı (`ad-ca`) → gerçek LDAPS el sıkışması**
+  ```bash
+  oc -n lakehouse exec keycloak-0 -- ls /opt/keycloak/conf/truststores          # secret-ad-ca
+  oc -n lakehouse logs keycloak-0 | grep TruststoreBuilder | tail -1
+  oc -n lakehouse exec deploy/trino-coordinator --     grep ldap.ssl.truststore.path /etc/trino/group-provider.properties
+  oc -n lakehouse exec deploy/zeppelin -c zeppelin --     keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit | grep ad-ca
+  ```
+  Beklenen: dört komut da dolu yanıt verir; **ardından** gerçek bir AD hesabıyla Keycloak User Federation
+  senkronu, Trino'da grup çözümü ve Zeppelin girişi `PKIX path building failed` OLMADAN tamamlanır.
+  *Yalnız burada kanıtlanabilir:* kind kümesinde AD/LDAP **yoktur** — orada bağlama, `keytool` importu
+  (147 girişli kopya cacerts) ve JVM `-Djavax.net.ssl.trustStore` argümanı doğrulandı, **el sıkışması
+  doğrulanmadı**. Şüphede kalırsan önce `openssl s_client -connect` ile sunucu zincirinin bu kökle bittiğini
+  gör (`docs/20-on-kosullar.md` madde 6).
+  *Kaynak: Task 5c (chart bağlaması); tüketici tablosu ve doğrulama komutları `docs/30-kurulum.md` §5.13,
+  Secret satırı `docs/90-referans/secret-listesi.md` #14.*
+
 ---
 
 ## 2. İzleme ve loglar
