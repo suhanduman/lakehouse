@@ -1,5 +1,7 @@
 suite: tls + dev secrets
 templates: [tls.yaml, dev-secrets.yaml]
+# appsDomain: hostname'ler boş varsayılandan türetilir (glue.hostFor) — <bileşen>-<ns>.<appsDomain>
+set: {appsDomain: apps.ocp.example.net}
 tests:
   - it: prod renders only Issuer and trino Certificate
     template: tls.yaml

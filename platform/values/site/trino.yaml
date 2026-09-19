@@ -1,0 +1,49 @@
+# SİTE DEĞERLERİ — müşteriye özel tek Trino dosyası; ürün varsayılanları ../trino.yaml + ../trino-ldap.yaml'da.
+# Doldurma rehberi: docs/30-kurulum.md §2 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
+#
+# NEDEN TAM BLOKLAR: Helm değer birleştirmesinde ÇOK SATIRLI STRING bloklar birleşmez — SON dosyanınki
+# bütünüyle geçer. Bu yüzden aşağıdaki üç blok ürün satırlarını da TEKRAR eder. Ürün satırlarının
+# eksilmediğini scripts/check-site.sh denetler.
+# BLOKLARIN İÇİNE SATIR SONU YORUMU YAZMAYIN: bu bloklar Java .properties dosyası olarak render edilir,
+# `anahtar=değer   # not` yazarsanız not değerin PARÇASI olur. Açıklamalar yalnız burada, blok dışında.
+#
+# Doldurulacak satırlar:
+#   coordinatorExtraConfig · oauth2.issuer   = https://keycloak-<LAKEHOUSE_NS>.<APPS_DOMAIN>/realms/lakehouse
+#   group-provider.properties · ldap.url         = $LDAP_URL       (site/glue.yaml keycloak.ldap.connectionUrl ile AYNI)
+#   group-provider.properties · ldap.admin-user  = $LDAP_BIND_DN   (site/glue.yaml keycloak.ldap.bindDn ile AYNI)
+#   group-provider.properties · ldap.user-base-dn= $LDAP_USERS_DN  (site/glue.yaml keycloak.ldap.usersDn ile AYNI)
+#   catalogs.lakehouse · s3.endpoint / s3.region = $S3_ENDPOINT / $S3_REGION (site/glue.yaml s3.* ile AYNI)
+# LDAP bağlama PAROLASI values'ta DEĞİL: Secret keycloak-clients anahtarı ldap-bind (${ENV:LDAP_BIND_PASSWORD}).
+server:
+  coordinatorExtraConfig: |
+    http-server.authentication.oauth2.issuer=https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse
+    http-server.authentication.oauth2.client-id=trino
+    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
+    http-server.authentication.oauth2.principal-field=preferred_username
+    http-server.authentication.oauth2.scopes=openid
+    web-ui.authentication.type=oauth2
+coordinator:
+  additionalConfigFiles:
+    group-provider.properties: |
+      group-provider.name=ldap
+      ldap.url=ldaps://ad.example.com:636
+      ldap.admin-user=CN=svc-lakehouse,OU=Service,DC=example,DC=com
+      ldap.admin-password=${ENV:LDAP_BIND_PASSWORD}
+      ldap.user-base-dn=OU=Users,DC=example,DC=com
+      ldap.user-search-filter=(sAMAccountName={0})
+      ldap.user-member-of-attribute=memberOf
+      ldap.group-name-attribute=cn
+catalogs:
+  lakehouse: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://polaris.lakehouse.svc:8181/api/catalog
+    iceberg.rest-catalog.warehouse=lakehouse
+    iceberg.rest-catalog.security=OAUTH2
+    iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CREDENTIAL}
+    iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL
+    iceberg.rest-catalog.vended-credentials-enabled=true
+    fs.s3.enabled=true
+    s3.endpoint=https://s3.example.com
+    s3.region=us-east-1
+    s3.path-style-access=true

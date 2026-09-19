@@ -28,6 +28,8 @@ minio: {persistence: {size: 5Gi}}
 # Aynı `backups` bucket'ı, AYRI prefix (velero/ vs cnpg/).
 velero: {enabled: true}
 tls: {selfSignedCA: true}
+# DEV hostname'leri AÇIK verilir: dev overlay'i yalnız bu dosyayı yükler (site/glue.yaml'ı DEĞİL) ->
+# appsDomain boş kalır ve glue.hostFor açık değerleri kullanır (prod'da <bileşen>-<ns>.<appsDomain> türetilir).
 trino: {hostname: trino.127.0.0.1.nip.io}
 monitoring: {silverMergeStaleSeconds: 172800}   # dev: silver-merge cron gecelik (0 3 * * *) -> 48 saat
 networkPolicy: {enabled: true}       # kindnetd NetworkPolicy'yi ENFORCE EDER (F4 canlı bulgu) -> dev'de de açık; canlı doğrulama

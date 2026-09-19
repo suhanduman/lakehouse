@@ -1,0 +1,16 @@
+# SİTE DEĞERLERİ — müşteriye özel tek JupyterHub dosyası; ürün varsayılanları ../jupyterhub.yaml'da.
+# Doldurma rehberi: docs/30-kurulum.md §2 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
+# Tümü site/glue.yaml'ın KOPYASIDIR (z2jh chart'ı glue değerlerini göremez); scripts/check-site.sh eşitliği denetler:
+#   oauth_callback_url            = https://jupyterhub-<LAKEHOUSE_NS>.<APPS_DOMAIN>/hub/oauth_callback
+#   authorize_url/token_url/userdata_url = https://keycloak-<LAKEHOUSE_NS>.<APPS_DOMAIN>/realms/<realm>/protocol/openid-connect/...
+#   S3_ENDPOINT                   = $S3_ENDPOINT (site/glue.yaml s3.endpoint ile AYNI)
+hub:
+  config:
+    GenericOAuthenticator:
+      oauth_callback_url: https://jupyterhub-lakehouse.apps.ocp.example.net/hub/oauth_callback
+      authorize_url: https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/auth
+      token_url: https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/token
+      userdata_url: https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/userinfo
+singleuser:
+  extraEnv:
+    S3_ENDPOINT: https://s3.example.com

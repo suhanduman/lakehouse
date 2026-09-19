@@ -1,5 +1,6 @@
-# Keycloak OAuth (client secret env'den), pyspark-notebook + PyIceberg/Trino, kişisel PVC (F.1.2).
-# Hostname KOPYALARI (runbooks/install.md): oauth_callback_url <- glue jupyterhub.hostname; authorize/token/userdata_url <- glue keycloak.hostname
+# ÜRÜN varsayılanları: Keycloak OAuth (client secret env'den), pyspark-notebook + PyIceberg/Trino, kişisel PVC (F.1.2).
+# MÜŞTERİYE ÖZEL HİÇBİR DEĞER BURADA DEĞİL: Keycloak/JupyterHub URL'leri ve S3_ENDPOINT tek yerde ->
+# platform/values/site/jupyterhub.yaml (dev'de platform/values/jupyterhub-dev.yaml ezer).
 hub:
   config:
     # authenticate_prometheus / networkPolicy.ingress (monitoring/UWM) BİLEREK YOK: izleme kapsamı "boru hattı
@@ -9,10 +10,7 @@ hub:
     JupyterHub: {authenticator_class: generic-oauth}
     Authenticator: {enable_auth_state: true}
     GenericOAuthenticator:
-      oauth_callback_url: https://jupyterhub.lakehouse.example.com/hub/oauth_callback
-      authorize_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/auth
-      token_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/token
-      userdata_url: https://keycloak.lakehouse.example.com/realms/lakehouse/protocol/openid-connect/userinfo
+      # oauth_callback_url / authorize_url / token_url / userdata_url: site/jupyterhub.yaml
       login_service: Keycloak
       username_claim: preferred_username
       scope: [openid, profile, email]
@@ -45,8 +43,7 @@ singleuser:
   extraEnv:
     POLARIS_URI: http://polaris.lakehouse.svc:8181/api/catalog
     POLARIS_CREDENTIAL: {valueFrom: {secretKeyRef: {name: polaris-notebooks, key: credential}}}   # paylaşımlı notebooks principal (spec §14)
-    S3_ENDPOINT: https://s3.example.com
-    TRINO_HOST: trino.lakehouse.svc
+    TRINO_HOST: trino.lakehouse.svc   # S3_ENDPOINT: site/jupyterhub.yaml
     # REQUESTS_CA_BUNDLE YOK (Superset'teki kararla aynı gerekçe, glue/templates/superset.yaml): bu env TEK kök
     # dayatır ve not defterindeki HER `requests`/`urllib3` çağrısını (PyPI, müşteri API'leri, S3 HTTPS) yalnız
     # lakehouse-ca ile doğrulatır -> hepsi SSLCertVerificationError. CA yine /etc/lakehouse-ca/tls.crt'te mount'lu;

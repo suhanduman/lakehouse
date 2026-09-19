@@ -1,6 +1,6 @@
 suite: monitoring (metrik kaynakları + PodMonitor)
 templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml]
-set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder
+set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h", appsDomain: apps.ocp.example.net}   # süit tüm şablonları render eder (appsDomain: superset.yaml keycloakUrl için)
 tests:
   - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor and the rule (hub/zeppelin ServiceMonitor YOK - kapsam daraltıldı, Task 2b)
     template: monitoring.yaml

@@ -14,7 +14,7 @@ spec:
     usernameSecret: {name: keycloak-db-app, key: username}
     passwordSecret: {name: keycloak-db-app, key: password}
   hostname:
-    hostname: {{ .Values.keycloak.hostname }}
+    hostname: {{ include "glue.keycloakUrl" . }}
     strict: {{ eq (include "glue.isOpenShift" .) "true" }}
   http:
     httpEnabled: true            # TLS kenarda (Route edge / Ingress); kind'da düz HTTP

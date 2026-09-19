@@ -1,0 +1,56 @@
+# appsDomain türetimi (Task 3): hostname'ler tek kaynaktan (platform/values/site/glue.yaml) gelir.
+# Boş hostname -> <bileşen>-<ns>.<appsDomain>; açık hostname her zaman ezer; ikisi de yoksa render hata verir.
+suite: appsDomain türetimi
+templates:
+  - templates/route.yaml
+  - templates/keycloak-realm.yaml
+tests:
+  - it: hostname boşken appsDomain'den <bileşen>-<ns>.<appsDomain> türetilir
+    set:
+      platform: openshift
+      route.enabled: true
+      appsDomain: apps.ocp.example.net
+      namespace: lakehouse
+      trino.hostname: ""
+      superset.hostname: ""
+      jupyterhub.hostname: ""
+      zeppelin.hostname: ""
+      keycloak.hostname: ""
+    template: templates/route.yaml
+    asserts:
+      - documentSelector: {path: metadata.name, value: trino}
+        equal: {path: spec.host, value: trino-lakehouse.apps.ocp.example.net}
+      - documentSelector: {path: metadata.name, value: keycloak}
+        equal: {path: spec.host, value: keycloak-lakehouse.apps.ocp.example.net}
+      - documentSelector: {path: metadata.name, value: jupyterhub}
+        equal: {path: spec.host, value: jupyterhub-lakehouse.apps.ocp.example.net}
+  - it: açık hostname appsDomain'i ezer
+    set:
+      platform: openshift
+      route.enabled: true
+      appsDomain: apps.ocp.example.net
+      trino.hostname: trino.kurum.edu.tr
+    template: templates/route.yaml
+    asserts:
+      - documentSelector: {path: metadata.name, value: trino}
+        equal: {path: spec.host, value: trino.kurum.edu.tr}
+  - it: realm redirectUri türetilen https hostname'i kullanır
+    set:
+      appsDomain: apps.ocp.example.net
+      namespace: lakehouse
+      keycloak.hostname: ""
+      trino.hostname: ""
+    template: templates/keycloak-realm.yaml
+    asserts:
+      - matchRegex:
+          path: spec.realm.clients[0].redirectUris[0]
+          pattern: "^https://trino-lakehouse\\.apps\\.ocp\\.example\\.net/oauth2/callback$"
+  - it: ne appsDomain ne hostname verilmişse render hata verir
+    set:
+      platform: openshift
+      route.enabled: true
+      appsDomain: ""
+      trino.hostname: ""
+    template: templates/route.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "appsDomain ya da .*hostname"}

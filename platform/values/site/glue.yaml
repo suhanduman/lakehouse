@@ -1,0 +1,29 @@
+# SİTE DEĞERLERİ — müşteriye özel tek glue dosyası; ürün varsayılanları ../glue.yaml'da (dokunmayın).
+# Doldurma rehberi: docs/30-kurulum.md §2 · anahtar tablosu: docs/90-referans/values-anahtarlari.md
+# Tutarlılık kontrolü: scripts/check-site.sh (site/trino.yaml ve site/jupyterhub.yaml ile çapraz doğrular).
+appsDomain: apps.ocp.example.net          # $APPS_DOMAIN — oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
+# hostname'ler boşken <bileşen>-lakehouse.<appsDomain> türetilir; kurumsal DNS adı için satırı açın:
+# trino: {hostname: trino.kurum.edu.tr}
+s3:
+  endpoint: https://s3.example.com        # $S3_ENDPOINT (FlashBlade; platform/polaris/setup.yaml ile aynı olmalı)
+  region: us-east-1                       # $S3_REGION
+  vendedCredentials: true                 # STS yoksa false
+connect:
+  buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0   # $INTERNAL_REGISTRY/$LAKEHOUSE_NS/connect:<sürüm>
+  buildPushSecret: connect-push
+keycloak:
+  ldap:
+    enabled: true                                     # AD gün-1 zorunlu
+    connectionUrl: ldaps://ad.example.com:636         # $LDAP_URL
+    usersDn: "OU=Users,DC=example,DC=com"             # $LDAP_USERS_DN
+    groupsDn: "OU=Groups,DC=example,DC=com"           # $LDAP_GROUPS_DN
+    bindDn: "CN=svc-lakehouse,OU=Service,DC=example,DC=com"   # $LDAP_BIND_DN (parola: Secret keycloak-clients/ldap-bind)
+cnpg:
+  polarisDb:  {storageClass: ""}          # $STORAGE_CLASS ("" = kümenin varsayılanı)
+  keycloakDb: {storageClass: ""}
+  supersetDb: {storageClass: ""}
+backup:
+  s3: {endpoint: https://s3.example.com, bucket: backups, region: us-east-1}   # $S3_ENDPOINT / $S3_BUCKET_BACKUP
+tls: {caBundle: ""}                       # docs/30-kurulum.md: lakehouse-ca tls.crt PEM içeriği (Route reencrypt)
+sources: []                               # docs/50-isletme/yeni-kaynak-ve-pipeline.md
+pipelines: []

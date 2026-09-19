@@ -3,7 +3,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata: {name: keycloak, namespace: {{ include "glue.ns" . }}}
 spec:
-  host: {{ include "glue.host" .Values.keycloak.hostname }}
+  host: {{ include "glue.hostFor" (dict "name" "keycloak" "ctx" $) }}
   to: {kind: Service, name: keycloak-service}
   port: {targetPort: http}
   tls: {termination: edge}
@@ -21,7 +21,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata: {name: trino, namespace: {{ include "glue.ns" . }}}
 spec:
-  host: {{ .Values.trino.hostname }}
+  host: {{ include "glue.hostFor" (dict "name" "trino" "ctx" $) }}
   to: {kind: Service, name: trino}
   port: {targetPort: https}
   tls:
@@ -38,7 +38,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata: {name: superset, namespace: {{ include "glue.ns" . }}}
 spec:
-  host: {{ .Values.superset.hostname }}
+  host: {{ include "glue.hostFor" (dict "name" "superset" "ctx" $) }}
   to: {kind: Service, name: superset-web-server}   # operator adlandırması: <CR adı>-web-server
   port: {targetPort: http}
   tls: {termination: edge}
@@ -49,7 +49,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata: {name: jupyterhub, namespace: {{ include "glue.ns" . }}}
 spec:
-  host: {{ .Values.jupyterhub.hostname }}
+  host: {{ include "glue.hostFor" (dict "name" "jupyterhub" "ctx" $) }}
   to: {kind: Service, name: proxy-public}
   port: {targetPort: http}
   tls: {termination: edge}
@@ -60,7 +60,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata: {name: zeppelin, namespace: {{ include "glue.ns" . }}}
 spec:
-  host: {{ .Values.zeppelin.hostname }}
+  host: {{ include "glue.hostFor" (dict "name" "zeppelin" "ctx" $) }}
   to: {kind: Service, name: zeppelin}
   port: {targetPort: http}
   tls: {termination: edge}

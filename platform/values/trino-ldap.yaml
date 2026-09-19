@@ -1,14 +1,11 @@
-# Prod-only: gruplar AD'den (Trino >= 473 LDAP group provider). Bağlama parolası keycloak-clients/ldap-bind (LDAP_BIND_PASSWORD, trino.yaml env).
-# AYRI DOSYA: Helm map birleştirmesinde `additionalConfigFiles: {}` prod anahtarını SİLMEZ -> dev bu dosyayı hiç yüklemez,
-# yerine auth.groups (dosya provider'ı) devreye girer (platform/values/trino-dev.yaml).
-coordinator:
-  additionalConfigFiles:
-    group-provider.properties: |
-      group-provider.name=ldap
-      ldap.url=ldaps://ad.example.com:636
-      ldap.admin-user=CN=svc-lakehouse,OU=Service,DC=example,DC=com
-      ldap.admin-password=${ENV:LDAP_BIND_PASSWORD}
-      ldap.user-base-dn=OU=Users,DC=example,DC=com
-      ldap.user-search-filter=(sAMAccountName={0})
-      ldap.user-member-of-attribute=memberOf
-      ldap.group-name-attribute=cn
+# Prod-only işaret dosyası: gruplar AD'den gelir (Trino >= 473 LDAP group provider).
+#
+# İÇERİK BİLEREK BOŞ. group-provider.properties ÇOK SATIRLI bir string'tir; Helm çok satırlı string'leri
+# birleştirmez, SON değer dosyasınınki bütünüyle geçer. Bu yüzden bloğun TAMAMI müşteriye özel tek dosyada
+# durur: platform/values/site/trino.yaml (coordinator.additionalConfigFiles."group-provider.properties").
+# Burada bir kopya tutulsaydı iki yer sürüklenir, biri sessizce yok sayılırdı.
+#
+# AYRI DOSYA olarak listede kalır çünkü dev overlay'i (platform/envs/dev/kustomization.yaml) prod değer
+# dosyası listesini [trino.yaml, trino-dev.yaml] ile DEĞİŞTİRİR -> dev ne bu dosyayı ne site/trino.yaml'ı
+# yükler, yerine auth.groups (dosya provider'ı, platform/values/trino-dev.yaml) devreye girer.
+# Bağlama parolası: Secret keycloak-clients anahtarı ldap-bind -> LDAP_BIND_PASSWORD (platform/values/trino.yaml env).

@@ -31,6 +31,6 @@ spec:
   secretName: trino-tls
   duration: 2160h
   renewBefore: 360h
-  dnsNames: [trino, trino.{{ $ns }}.svc, trino.{{ $ns }}.svc.cluster.local, {{ .Values.trino.hostname }}]
+  dnsNames: [trino, trino.{{ $ns }}.svc, trino.{{ $ns }}.svc.cluster.local, {{ include "glue.hostFor" (dict "name" "trino" "ctx" $) }}]
   additionalOutputFormats: [{type: CombinedPEM}]
   issuerRef: {name: lakehouse-ca, kind: Issuer}

@@ -6,14 +6,9 @@ server:
     authenticationType: OAUTH2,PASSWORD
     https: {enabled: true, port: 8443, keystore: {path: /etc/trino/tls/tls-combined.pem}}   # cert-manager trino-tls (glue tls.yaml)
     query: {maxMemory: 4GB}
-  # yalnız coordinator: OAuth2 (Keycloak). issuer = glue keycloak.hostname + /realms/<realm> (KOPYA — runbooks/install.md)
-  coordinatorExtraConfig: |
-    http-server.authentication.oauth2.issuer=https://keycloak.lakehouse.example.com/realms/lakehouse
-    http-server.authentication.oauth2.client-id=trino
-    http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
-    http-server.authentication.oauth2.principal-field=preferred_username
-    http-server.authentication.oauth2.scopes=openid
-    web-ui.authentication.type=oauth2
+  # yalnız coordinator: OAuth2 (Keycloak). BLOK BURADA YOK: çok satırlı string'ler Helm'de birleşmez, son
+  # dosyanınki bütünüyle geçer -> issuer'ın MÜŞTERİ değeri tek yerde dursun diye tüm blok oradadır:
+  # prod platform/values/site/trino.yaml, dev platform/values/trino-dev.yaml. scripts/check-site.sh doğrular.
 additionalConfigProperties:
 - internal-communication.shared-secret=${ENV:TRINO_SHARED_SECRET}
 env:
@@ -36,19 +31,8 @@ catalogs:
   # düşürür (helm map birleştirme: yalnız bu iki anahtar; lakehouse'a dokunmaz)
   tpch: null
   tpcds: null
-  lakehouse: |
-    connector.name=iceberg
-    iceberg.catalog.type=rest
-    iceberg.rest-catalog.uri=http://polaris.lakehouse.svc:8181/api/catalog
-    iceberg.rest-catalog.warehouse=lakehouse
-    iceberg.rest-catalog.security=OAUTH2
-    iceberg.rest-catalog.oauth2.credential=${ENV:POLARIS_CREDENTIAL}
-    iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL
-    iceberg.rest-catalog.vended-credentials-enabled=true
-    fs.s3.enabled=true
-    s3.endpoint=https://s3.example.com
-    s3.region=us-east-1
-    s3.path-style-access=true
+  # lakehouse kataloğu BURADA YOK (aynı gerekçe: s3.endpoint/s3.region müşteri değeri, blok bütünüyle ezilir):
+  # prod platform/values/site/trino.yaml, dev platform/values/trino-dev.yaml.
 # JMX/serviceMonitor BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (kullanıcı kararı
 # 2026-09-18, Task 2b) — gösterim bileşenlerinin (Trino) uygulama metriği toplanmaz. Chart varsayılanına
 # dönüldü (jmx.enabled/serviceMonitor.enabled kapalı). Geçmiş: Task 1/2'de vardı (plan kararı R13).

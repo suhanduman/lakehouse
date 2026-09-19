@@ -8,7 +8,8 @@ spec:
     targetRevision: main
     path: glue
     helm:
-      valueFiles: [../platform/values/glue.yaml]
+      # site/glue.yaml SONRA yüklenir: müşteriye özel değerler ürün varsayılanlarını ezer (dev overlay bu listeyi değiştirir)
+      valueFiles: [../platform/values/glue.yaml, ../platform/values/site/glue.yaml]
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

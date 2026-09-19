@@ -8,8 +8,9 @@ spec:
     chart: trino
     targetRevision: 1.42.2
     helm:
-      # trino-ldap.yaml YALNIZ prod: dev overlay'i bu listeyi trino.yaml + trino-dev.yaml ile DEĞİŞTİRİR (envs/dev)
-      valueFiles: [$values/platform/values/trino.yaml, $values/platform/values/trino-ldap.yaml]
+      # trino-ldap.yaml ve site/trino.yaml YALNIZ prod: dev overlay'i bu listeyi trino.yaml + trino-dev.yaml ile DEĞİŞTİRİR (envs/dev).
+      # site/trino.yaml SON sırada: müşteriye özel tam bloklar (oauth2 issuer, group-provider, lakehouse kataloğu) burada ezer.
+      valueFiles: [$values/platform/values/trino.yaml, $values/platform/values/trino-ldap.yaml, $values/platform/values/site/trino.yaml]
   - repoURL: https://github.com/suhanduman/lakehouse.git
     targetRevision: main
     ref: values

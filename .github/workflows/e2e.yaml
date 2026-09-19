@@ -22,17 +22,21 @@ jobs:
           python3 -m pytest glue/jobs/tests -q
       # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
       - name: prod + dev değer dosyalarıyla render
-        run: helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
+        run: helm template glue -f platform/values/glue.yaml -f platform/values/site/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
       # Upstream chart'ların PROD değer dosyaları e2e'de hiç render edilmiyor (dev overlay'i farklı dosya kullanır):
       # bu iki adım prod-only anahtarlarda (trino-ldap, jupyterhub Keycloak URL'leri) şema/şablon hatasını yakalar.
       - name: prod Trino render (chart 1.42.2, AD/LDAP dâhil)
         run: |
           helm repo add trino https://trinodb.github.io/charts
-          helm template trino trino/trino --version 1.42.2 -f platform/values/trino.yaml -f platform/values/trino-ldap.yaml >/dev/null
+          helm template trino trino/trino --version 1.42.2 -f platform/values/trino.yaml -f platform/values/trino-ldap.yaml -f platform/values/site/trino.yaml >/dev/null
       - name: prod JupyterHub render (z2jh 4.4.2)
         run: |
           helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
-          helm template jupyterhub jupyterhub/jupyterhub --version 4.4.2 -f platform/values/jupyterhub.yaml >/dev/null
+          helm template jupyterhub jupyterhub/jupyterhub --version 4.4.2 -f platform/values/jupyterhub.yaml -f platform/values/site/jupyterhub.yaml >/dev/null
+      # Site değerleri (platform/values/site/*.yaml) birbirinin kopyası olan alanları taşır (Keycloak URL'i,
+      # JupyterHub callback'i, LDAP, S3 endpoint) — biri elle değiştirilip diğeri unutulursa kurulum sessizce bozulur.
+      - name: site değerleri tutarlı mı (scripts/check-site.sh)
+        run: scripts/check-site.sh
       # F5 upstream chart'ları: monitoring/velero DEV-ONLY overlay'de (platform/apps/dev) olduğu için bir
       # şablon/tip hatası ancak küme kurulurken (30+ dk sonra) görünürdü; bu üç adım onu 1 dk'da yakalar.
       # KAPSAM SINIRI: velero 12.1.0 ve plugin-barman-cloud 0.8.0 `values.schema.json` TAŞIR (şema doğrulaması

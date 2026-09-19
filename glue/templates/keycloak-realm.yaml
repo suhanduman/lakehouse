@@ -104,7 +104,7 @@ spec:
       secret: "${TRINO_CLIENT_SECRET}"
       standardFlowEnabled: true
       directAccessGrantsEnabled: {{ if .Values.keycloak.devUsers }}true{{ else }}false{{ end }}   # yalnız dev: e2e password grant
-      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth2/callback" .Values.trino.hostname)) .Values.keycloak.extraRedirectUris.trino) }}
+      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth2/callback" (include "glue.hostFor" (dict "name" "trino" "ctx" $)))) .Values.keycloak.extraRedirectUris.trino) }}
       webOrigins: ["+"]
       attributes: {access.token.lifespan: "3600"}
       protocolMappers:
@@ -118,7 +118,7 @@ spec:
       publicClient: false
       secret: "${SUPERSET_CLIENT_SECRET}"
       standardFlowEnabled: true
-      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth-authorized/keycloak" .Values.superset.hostname)) .Values.keycloak.extraRedirectUris.superset) }}
+      redirectUris: {{ toJson (concat (list (printf "https://%s/oauth-authorized/keycloak" (include "glue.hostFor" (dict "name" "superset" "ctx" $)))) .Values.keycloak.extraRedirectUris.superset) }}
       webOrigins: ["+"]
       protocolMappers:
       - name: groups                  # FAB keycloak provider: role_keys = userinfo.groups
@@ -131,7 +131,7 @@ spec:
       publicClient: false
       secret: "${JUPYTERHUB_CLIENT_SECRET}"
       standardFlowEnabled: true
-      redirectUris: {{ toJson (concat (list (printf "https://%s/hub/oauth_callback" .Values.jupyterhub.hostname)) .Values.keycloak.extraRedirectUris.jupyterhub) }}
+      redirectUris: {{ toJson (concat (list (printf "https://%s/hub/oauth_callback" (include "glue.hostFor" (dict "name" "jupyterhub" "ctx" $)))) .Values.keycloak.extraRedirectUris.jupyterhub) }}
       webOrigins: ["+"]
       # `groups` claim mapper — without it Keycloak's userinfo response has no
       # `groups` key at all; jupyterhub_config.py's GenericOAuthenticator

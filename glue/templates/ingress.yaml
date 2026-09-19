@@ -5,7 +5,7 @@ metadata: {name: keycloak, namespace: {{ include "glue.ns" . }}}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-  - host: {{ include "glue.host" .Values.keycloak.hostname }}
+  - host: {{ include "glue.hostFor" (dict "name" "keycloak" "ctx" $) }}
     http:
       paths:
       - path: /
@@ -22,7 +22,7 @@ metadata:
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-  - host: {{ .Values.trino.hostname }}
+  - host: {{ include "glue.hostFor" (dict "name" "trino" "ctx" $) }}
     http:
       paths:
       - path: /
@@ -36,7 +36,7 @@ metadata: {name: superset, namespace: {{ include "glue.ns" . }}}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-  - host: {{ .Values.superset.hostname }}
+  - host: {{ include "glue.hostFor" (dict "name" "superset" "ctx" $) }}
     http:
       paths:
       - path: /
@@ -50,7 +50,7 @@ metadata: {name: jupyterhub, namespace: {{ include "glue.ns" . }}}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-  - host: {{ .Values.jupyterhub.hostname }}
+  - host: {{ include "glue.hostFor" (dict "name" "jupyterhub" "ctx" $) }}
     http:
       paths:
       - path: /
@@ -64,7 +64,7 @@ metadata: {name: zeppelin, namespace: {{ include "glue.ns" . }}}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
-  - host: {{ .Values.zeppelin.hostname }}
+  - host: {{ include "glue.hostFor" (dict "name" "zeppelin" "ctx" $) }}
     http:
       paths:
       - path: /

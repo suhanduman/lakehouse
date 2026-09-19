@@ -8,7 +8,8 @@ spec:
     chart: jupyterhub
     targetRevision: 4.4.2
     helm:
-      valueFiles: [$values/platform/values/jupyterhub.yaml]
+      # site/jupyterhub.yaml SONRA: Keycloak/callback URL'leri + S3_ENDPOINT (dev overlay listeye jupyterhub-dev.yaml EKLER)
+      valueFiles: [$values/platform/values/jupyterhub.yaml, $values/platform/values/site/jupyterhub.yaml]
   - repoURL: https://github.com/suhanduman/lakehouse.git
     targetRevision: main
     ref: values

@@ -1,46 +1,29 @@
-# prod varsayılanları (glue/values.yaml üstüne): müşteri S3'ü, 3 broker, Route (openshift) — hostname/S3 kurulumda doldurulur
+# ÜRÜN (prod) varsayılanları — glue/values.yaml üstüne. MÜŞTERİYE ÖZEL HİÇBİR DEĞER BURADA DEĞİL:
+# hostname/appsDomain, S3 endpoint, LDAP DN'leri, Connect imajı, yedek bucket'ı, CA paketi ve
+# sources/pipelines TEK YERDE -> platform/values/site/glue.yaml (ArgoCD bu dosyayı SONRA yükler).
+# Bu dosya sürümle birlikte güncellenir; site dosyası müşteride kalır.
 platform: openshift
 route: {enabled: true}
-keycloak:
-  hostname: https://keycloak.lakehouse.example.com   # TAM URL (şema dâhil); Trino oauth2.issuer + JupyterHub URL'leri bunun kopyasıdır
-# Route/Ingress host'ları — hepsi kurulumda müşteri alan adıyla değiştirilir. Keycloak realm'indeki redirect
-# URI'leri bu değerlerden TÜRETİLİR (glue/templates/keycloak-realm.yaml), ayrıca elle girilmez.
-# Kopyaları: jupyterhub.hostname -> platform/values/jupyterhub.yaml oauth_callback_url (runbooks/install.md).
-trino:      {hostname: trino.lakehouse.example.com}
-superset:   {hostname: superset.lakehouse.example.com}
-jupyterhub: {hostname: jupyterhub.lakehouse.example.com}
-zeppelin:   {hostname: zeppelin.lakehouse.example.com}
-tls:
-  # Route reencrypt için destinationCACertificate: `lakehouse-ca` Secret'ındaki tls.crt DOSYA İÇERİĞİ (PEM).
-  # BOŞ bırakılırsa Trino Route'u passthrough olur (tarayıcı doğrudan trino-tls'i görür ve CA'ya güvenmelidir).
-  caBundle: ""
-connect:
-  # spec.build çıktısı Git'te otoriter: kurulumda gerçek registry/repo:tag ile değiştir; :latest KULLANMA (digest sabitlenemez)
-  buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0
-  buildPushSecret: connect-push        # kubernetes.io/dockerconfigjson; Git'e girmez, kurulumdan önce yaratılır
+# Route/Ingress host'ları ve Keycloak URL'i glue/values.yaml'da BOŞ: site/glue.yaml'daki appsDomain'den
+# <bileşen>-<ns>.<appsDomain> olarak türetilir (glue.hostFor). Keycloak realm'indeki redirect URI'leri de
+# aynı kaynaktan TÜRETİLİR (glue/templates/keycloak-realm.yaml) — elle girilmez.
 cnpg:
-  # HA: primary + 1 replika (CNPG senkron/asenkron replikasyon); storageClass kurulumda ortamın sınıfıyla doldurulur
+  # HA: primary + 1 replika (CNPG senkron/asenkron replikasyon); storageClass site/glue.yaml'da
   polarisDb: {instances: 2}
   keycloakDb: {instances: 2}
   supersetDb: {instances: 2}
-# Ingestion (F2): kaynaklar ve pipeline'lar kurulumda doldurulur — runbooks/add-source.md
 # nginx erişim logu (F3): Fluent Bit ajanları müşteri sunucusunda -> Kafka dış listener (Route). Açmadan önce ikisini de doldur:
 #kafka: {externalListener: true}
 #nginx: {enabled: true}
-# CNPG PITR yedekleri (F5): veri bucket'ından AYRI hedef. Endpoint/bucket kurulumda müşterinin değerleriyle
-# doldurulur; `backup-s3-creds` Secret'ı (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) kurulumdan ÖNCE yaratılır.
+# CNPG PITR yedekleri (F5): veri bucket'ından AYRI hedef. Endpoint/bucket site/glue.yaml'da (backup.s3);
+# `backup-s3-creds` Secret'ı (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) kurulumdan ÖNCE yaratılır.
 # Velero/OADP: prod'da OADP operatörü kurulduktan SONRA açılır (Schedule CR ns openshift-adp'ye yazılır).
 # Kapalıyken Kafka/MinIO fs-backup dışlama annotation'ları da render edilmez — runbooks/dr.md.
 velero: {enabled: false, namespace: openshift-adp}
 backup:
   enabled: true
-  s3: {endpoint: https://s3.example.com, bucket: lakehouse-backups, region: us-east-1, secret: backup-s3-creds}
+  s3: {secret: backup-s3-creds}
   retentionPolicy: "30d"
-s3:
-  endpoint: https://s3.example.com     # müşteri S3 endpoint'i (platform/polaris/setup.yaml ile aynı)
-  vendedCredentials: true              # STS yoksa false (F0 S1c)
-sources: []
-pipelines: []
 # Büyük tier (F0 S4): tablo/veri hacmi büyüdüğünde yorumu kaldır — küçük tier varsayılanları glue/values.yaml'da
 #spark:
 #  driver:   {cores: 2, memory: 4g, memoryOverhead: 1g}

@@ -1,6 +1,10 @@
 # platform: vanilla | openshift  (Route <-> Ingress)
 platform: vanilla
 namespace: lakehouse
+# OpenShift apps alanı — `oc get ingresses.config cluster -o jsonpath='{.spec.domain}'`.
+# Bileşen hostname'leri BOŞKEN buradan türetilir: <bileşen>-<namespace>.<appsDomain>
+# (glue.hostFor). Müşteri değeri TEK YERDE: platform/values/site/glue.yaml.
+appsDomain: ""
 
 versions:
   kafka: "4.3.1"
@@ -76,7 +80,9 @@ polaris:
   rootCredentialSecret: polaris-root   # keys: clientId, clientSecret (Git'e girmez; kurulumdan önce yaratılır)
 
 keycloak:
-  hostname: https://keycloak.lakehouse.example.com   # TAM URL (hostname v2): token iss = bu değer; Trino oauth2.issuer (platform/values/trino.yaml) ile aynı olmalı
+  # TAM URL (hostname v2): token iss = bu değer. BOŞ -> https://keycloak-<ns>.<appsDomain> türetilir
+  # (glue.keycloakUrl). Dev'de küme içi URL açıkça verilir (platform/values/glue-dev.yaml).
+  hostname: ""    # ör. https://keycloak-lakehouse.apps.ocp.example.net
   realm: {name: lakehouse, displayName: Lakehouse}
   adminSecret: keycloak-admin          # keys: username, password
   clientsSecret: keycloak-clients      # keys: trino, superset, jupyterhub, ldap-bind -> realm import placeholders (spec.placeholders)
@@ -94,10 +100,10 @@ tls:
   selfSignedCA: false          # dev/kind: true -> ClusterIssuer selfsigned + CA Certificate -> Secret lakehouse-ca. Prod: false, lakehouse-ca (tls.crt, tls.key) kurulumdan önce
   caBundle: ""                 # prod: Route reencrypt destinationCACertificate (PEM, lakehouse-ca tls.crt). Boş -> passthrough
 trino:
-  hostname: trino.lakehouse.example.com
+  hostname: ""                     # boş -> trino-<ns>.<appsDomain>; kurumsal DNS adı için site/glue.yaml'da doldurun
 superset:
   enabled: true
-  hostname: superset.lakehouse.example.com
+  hostname: ""                     # boş -> superset-<ns>.<appsDomain>
   # resmi -dev etiketi sürücüleri (psycopg2, trino, authlib) İÇERİR; düz 6.1.0 içermez ve
   # site-packages salt-okunur -> açılışta pip yok, PyPI erişimi gerekmez
   imageTag: "6.1.0-dev"
@@ -107,10 +113,10 @@ superset:
   # Keycloak grup adı -> Superset rolleri (AUTH_ROLES_MAPPING); grup talebi realm'in superset client'ındaki groups mapper'ından gelir
   roleMapping: {lakehouse-admins: [Admin], lakehouse-analysts: [Alpha], lakehouse-students: [Gamma]}
 jupyterhub:
-  hostname: jupyterhub.lakehouse.example.com
+  hostname: ""                     # boş -> jupyterhub-<ns>.<appsDomain>
 zeppelin:
   enabled: true
-  hostname: zeppelin.lakehouse.example.com
+  hostname: ""                     # boş -> zeppelin-<ns>.<appsDomain>
   image: apache/zeppelin:0.12.1
   storageSize: 10Gi
   storageClass: ""                 # boş = kümenin varsayılan StorageClass'ı

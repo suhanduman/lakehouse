@@ -1,5 +1,7 @@
 suite: platform pieces
 templates: [cnpg.yaml, polaris-bootstrap.yaml, minio.yaml, networkpolicy.yaml, route.yaml, ingress.yaml]
+# appsDomain: hostname'ler boş varsayılandan türetilir (glue.hostFor) — <bileşen>-<ns>.<appsDomain>
+set: {appsDomain: apps.ocp.example.net}
 tests:
   - it: renders three CNPG clusters (+ ObjectStore + 3 ScheduledBackup, backup.enabled varsayılan)
     template: cnpg.yaml
@@ -53,7 +55,7 @@ tests:
     set: {platform: openshift, route.enabled: true}
     documentSelector: {path: metadata.name, value: jupyterhub}
     asserts:
-      - equal: {path: spec.host, value: jupyterhub.lakehouse.example.com}
+      - equal: {path: spec.host, value: jupyterhub-lakehouse.apps.ocp.example.net}
       - equal: {path: spec.to, value: {kind: Service, name: proxy-public}}
       - equal: {path: spec.port.targetPort, value: http}
       - equal: {path: spec.tls.termination, value: edge}
@@ -62,7 +64,7 @@ tests:
     set: {platform: openshift, route.enabled: true}
     documentSelector: {path: metadata.name, value: zeppelin}
     asserts:
-      - equal: {path: spec.host, value: zeppelin.lakehouse.example.com}
+      - equal: {path: spec.host, value: zeppelin-lakehouse.apps.ocp.example.net}
       - equal: {path: spec.to, value: {kind: Service, name: zeppelin}}
       - equal: {path: spec.port.targetPort, value: http}
       - equal: {path: spec.tls.termination, value: edge}
@@ -71,7 +73,7 @@ tests:
     set: {platform: openshift, route.enabled: true}
     documentSelector: {path: metadata.name, value: superset}
     asserts:
-      - equal: {path: spec.host, value: superset.lakehouse.example.com}
+      - equal: {path: spec.host, value: superset-lakehouse.apps.ocp.example.net}
       - equal: {path: spec.to, value: {kind: Service, name: superset-web-server}}
       - equal: {path: spec.port.targetPort, value: http}
       - equal: {path: spec.tls.termination, value: edge}
@@ -82,7 +84,7 @@ tests:
     asserts:
       - equal: {path: spec.tls.termination, value: passthrough}
       - isNull: {path: spec.tls.destinationCACertificate}
-      - equal: {path: spec.host, value: trino.lakehouse.example.com}
+      - equal: {path: spec.host, value: trino-lakehouse.apps.ocp.example.net}
       - equal: {path: spec.port.targetPort, value: https}
   - it: trino route reencrypts when tls.caBundle is set
     template: route.yaml
@@ -127,19 +129,19 @@ tests:
       - documentIndex: 2
         equal: {path: metadata.name, value: superset}
       - documentIndex: 2
-        equal: {path: 'spec.rules[0].host', value: superset.lakehouse.example.com}
+        equal: {path: 'spec.rules[0].host', value: superset-lakehouse.apps.ocp.example.net}
       - documentIndex: 2
         equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: superset-web-server, port: {number: 8088}}}
       - documentIndex: 3
         equal: {path: metadata.name, value: jupyterhub}
       - documentIndex: 3
-        equal: {path: 'spec.rules[0].host', value: jupyterhub.lakehouse.example.com}
+        equal: {path: 'spec.rules[0].host', value: jupyterhub-lakehouse.apps.ocp.example.net}
       - documentIndex: 3
         equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: proxy-public, port: {number: 80}}}
       - documentIndex: 4
         equal: {path: metadata.name, value: zeppelin}
       - documentIndex: 4
-        equal: {path: 'spec.rules[0].host', value: zeppelin.lakehouse.example.com}
+        equal: {path: 'spec.rules[0].host', value: zeppelin-lakehouse.apps.ocp.example.net}
       - documentIndex: 4
         equal: {path: 'spec.rules[0].http.paths[0].backend.service', value: {name: zeppelin, port: {number: 8080}}}
   - it: vanilla networkpolicy takes the Prometheus ns from monitoring.namespace

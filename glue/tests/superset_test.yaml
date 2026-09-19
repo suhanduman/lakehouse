@@ -1,5 +1,7 @@
 suite: superset
 templates: [superset.yaml]
+# appsDomain: hostname'ler boş varsayılandan türetilir (glue.hostFor) — <bileşen>-<ns>.<appsDomain>
+set: {appsDomain: apps.ocp.example.net}
 tests:
   - it: tam olarak datasource + assets ConfigMap'larını ve Superset CR'ını render eder
     asserts:
@@ -26,7 +28,7 @@ tests:
     asserts:
       - contains: {path: spec.podTemplate.container.env, content: {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: superset}}}}
       - contains: {path: spec.podTemplate.container.env, content: {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}}
-      - contains: {path: spec.podTemplate.container.env, content: {name: KEYCLOAK_URL, value: https://keycloak.lakehouse.example.com}}
+      - contains: {path: spec.podTemplate.container.env, content: {name: KEYCLOAK_URL, value: https://keycloak-lakehouse.apps.ocp.example.net}}
       # Keycloak sistem kökleriyle doğrulanır (prod'da edge Route sertifikası lakehouse-ca imzalı DEĞİL);
       # Trino'nun CA'sı datasource extra.connect_args.verify ile pinlenir
       - notContains: {path: spec.podTemplate.container.env, content: {name: REQUESTS_CA_BUNDLE}, any: true}
