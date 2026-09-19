@@ -5,7 +5,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/suhanduman/lakehouse.git
-    targetRevision: v2
+    targetRevision: main
     path: platform/keycloak-operator
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:

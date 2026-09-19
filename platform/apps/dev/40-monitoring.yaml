@@ -16,7 +16,7 @@ spec:
     helm:
       valueFiles: [$values/platform/values/monitoring-dev.yaml]
   - repoURL: https://github.com/suhanduman/lakehouse.git
-    targetRevision: v2
+    targetRevision: main
     ref: values
   destination: {server: https://kubernetes.default.svc, namespace: monitoring}
   syncPolicy:

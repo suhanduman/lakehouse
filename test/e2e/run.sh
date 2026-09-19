@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # e2e: kind -> bootstrap -> Application'lar Healthy -> polaris-setup -> smoke -> pg (F2) -> mongo + nginx (F3) -> trino + superset (F4) -> monitoring + DR (F5) yolları. CI ve lokal aynı.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; MODE=argocd; REVISION="${REVISION:-v2}"; REPO="${REPO:-https://github.com/suhanduman/lakehouse.git}"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; MODE=argocd; REVISION="${REVISION:-main}"; REPO="${REPO:-https://github.com/suhanduman/lakehouse.git}"
 while [[ $# -gt 0 ]]; do case "$1" in --mode) MODE="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --repo) REPO="$2"; shift 2;; *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
 "$ROOT/test/e2e/kind.sh"
 "$ROOT/bootstrap/bootstrap.sh" --env dev --mode "$MODE" --repo "$REPO" --revision "$REVISION"
@@ -34,7 +34,7 @@ wait_app() {
 if [[ "$MODE" == "argocd" ]]; then
   # Alt Application'ları kök üretir (ilk sync repo klonu + kustomize): önce kök Synced, sonra çocuk var olsun
   kubectl -n argocd wait application/lakehouse-root --for=jsonpath='{.status.sync.status}'=Synced --timeout=600s
-  # ArgoCD status.sync.revision her zaman commit SHA'sıdır: dal/etiket adıyla karşılaştırmak (eski "v2" Synced'ı)
+  # ArgoCD status.sync.revision her zaman commit SHA'sıdır: dal/etiket adıyla karşılaştırmak (eski "main" Synced'ı)
   # yanıltır -> beklenen SHA'yı uzaktan çöz. (head SIGPIPE'ı pipefail'i tetiklemesin diye || true; boşsa fail-loud.)
   if [[ "$REVISION" =~ ^[0-9a-f]{7,40}$ ]]; then EXPECT="$REVISION"
   else EXPECT=$(git ls-remote "$REPO" "refs/heads/$REVISION" "refs/tags/$REVISION" | head -1 | cut -f1 || true); fi

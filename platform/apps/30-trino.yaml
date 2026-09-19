@@ -11,7 +11,7 @@ spec:
       # trino-ldap.yaml YALNIZ prod: dev overlay'i bu listeyi trino.yaml + trino-dev.yaml ile DEĞİŞTİRİR (envs/dev)
       valueFiles: [$values/platform/values/trino.yaml, $values/platform/values/trino-ldap.yaml]
   - repoURL: https://github.com/suhanduman/lakehouse.git
-    targetRevision: v2
+    targetRevision: main
     ref: values
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:

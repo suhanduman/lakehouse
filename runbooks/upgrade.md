@@ -150,11 +150,11 @@ kubectl -n lakehouse exec keycloak-0 -- /opt/keycloak/bin/kcadm.sh get users -r 
 ## 5. ArgoCD `targetRevision` (uygulama kaynağı) bump'ı
 
 Git kaynaklı Application'lar (`glue`, `polaris`, `trino`, `jupyterhub`, `keycloak-operator`; dev'de
-`monitoring`/`velero`) `targetRevision: v2` ile dalı izler. Bir etikete sabitlemek için:
+`monitoring`/`velero`) `targetRevision: main` ile dalı izler. Bir etikete sabitlemek için:
 
 ```bash
 git tag -a v2.1.0 -m "F5" && git push origin v2.1.0
-# platform/apps/*.yaml + platform/root-app.yaml: targetRevision: v2 -> v2.1.0
+# platform/apps/*.yaml + platform/root-app.yaml: targetRevision: main -> v2.1.0
 kubectl -n argocd get applications -o wide                                   # Synced/Healthy
 kubectl -n argocd get app glue -o jsonpath='{.status.sync.revision}{"\n"}'   # beklenen commit SHA'sı
 ```

@@ -34,8 +34,8 @@
 7. Kabul kanıtı: `runbooks/scripts/acceptance.sh` + `runbooks/acceptance-tests.md`. Ayrıca: sürüm/lisans listesi `runbooks/versions.md` · yükseltme `runbooks/upgrade.md` · yedek/DR `runbooks/dr.md` · sorun giderme `runbooks/troubleshooting.md` · dbt örneği `runbooks/dbt/`
 
 ## Lokal geliştirme (kind + Podman/Docker)
-`test/e2e/kind.sh && bootstrap/bootstrap.sh --env dev --mode helm` (yerel chart, ArgoCD'siz) veya `--mode argocd --revision <dal>` (ArgoCD GitHub'dan çeker → değişiklikler push'lu olmalı).
-Not: `--repo/--revision` kök Application'a uygulanır ve kök, `spec.source.kustomize.patches` ile alt Application'ların (`glue`, `keycloak-operator`, `polaris`) `repoURL`/`targetRevision`'ını **her reconcile'da** aynı repo/revizyona sabitler — yani bootstrap edilen revizyon (PR'da commit SHA'sı) uçtan uca test edilir. `platform/root-app.yaml` belgelenen statik varsayılandır (dev@main; cutover öncesi `v2`); bootstrap.sh onu değil, parametreli eşdeğerini uygular.
+`test/e2e/kind.sh && bootstrap/bootstrap.sh --env dev --mode helm` (yerel chart, ArgoCD'siz) veya `--mode argocd --revision main` (ArgoCD GitHub'dan çeker → değişiklikler push'lu olmalı; `--revision` varsayılanı `main`, dal/etiket/commit SHA'sı verilebilir).
+Not: `--repo/--revision` kök Application'a uygulanır ve kök, `spec.source.kustomize.patches` ile alt Application'ların (`glue`, `keycloak-operator`, `polaris`) `repoURL`/`targetRevision`'ını **her reconcile'da** aynı repo/revizyona sabitler — yani bootstrap edilen revizyon (PR'da commit SHA'sı) uçtan uca test edilir. `platform/root-app.yaml` belgelenen statik varsayılandır (dev@main); bootstrap.sh onu değil, parametreli eşdeğerini uygular.
 Podman: kind ≥ 0.33 (Podman 6 uyumu); `kind.sh` düğüm pids limitini yükseltir (Spark için).
 
 ## F4 Secret'ları (kullanıcı yüzü; kurulumdan ÖNCE, `lakehouse` ns'inde)

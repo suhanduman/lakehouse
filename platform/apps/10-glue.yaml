@@ -5,7 +5,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/suhanduman/lakehouse.git
-    targetRevision: v2
+    targetRevision: main
     path: glue
     helm:
       valueFiles: [../platform/values/glue.yaml]

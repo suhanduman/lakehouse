@@ -1,7 +1,7 @@
 name: e2e
 on:
-  push: {branches: [main, v2]}          # F6 cutover: rename sonrası yalnız main kalır (T4)
-  pull_request: {branches: [main, v2]}
+  push: {branches: [main]}
+  pull_request: {branches: [main]}
 jobs:
   helm-unittest:
     runs-on: ubuntu-latest
