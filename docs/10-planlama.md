@@ -193,7 +193,7 @@ Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakeho
 | Aşama | Süre | Not |
 |---|---|---|
 | Değerlerin toplanması (AD, depolama, DNS/sertifika) | **2–5 iş günü** | Kurulumun önündeki en uzun bekleme; ilk gün başlatın. |
-| Ön koşulların doğrulanması ve operatörlerin kurulması | 1–2 saat | 20-on-kosullar.md (bu bölüm bir sonraki görevde eklenir). |
+| Ön koşulların doğrulanması ve operatörlerin kurulması | 1–2 saat | [20-on-kosullar.md](20-on-kosullar.md). |
 | Deponun kopyalanması, site değerlerinin doldurulması, Secret'ların yaratılması | 1 saat | `scripts/check-site.sh` yeşile dönene kadar. |
 | ArgoCD bootstrap ve bileşenlerin ayağa kalkması | **40–60 dakika** | Ağın hızına bağlı: Kafka Connect imajı kümede üretilir (~10 dk), not defteri imajı ~4,5 dakikada çekilir. |
 | Polaris kataloğu, ilk giriş, kabul testi | 1 saat | `scripts/polaris-setup.sh` ve `scripts/acceptance.sh`. |
@@ -240,4 +240,4 @@ Toplam: değerler hazırsa **bir iş günü**; değerler beklenerek **bir hafta*
 
 ## Sonraki bölüm
 
-20-on-kosullar.md — kümede neyin kurulu olması gerektiği, operatörlerin kurulumu ve kuruluma başlamadan önceki doğrulamalar (bu bölüm bir sonraki görevde eklenir).
+[20-on-kosullar.md](20-on-kosullar.md) — kümede neyin kurulu olması gerektiği, operatörlerin kurulumu ve kuruluma başlamadan önceki doğrulamalar.
