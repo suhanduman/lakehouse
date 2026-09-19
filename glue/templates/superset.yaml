@@ -37,6 +37,7 @@ metadata: {name: superset-assets, namespace: {{ $ns }}}
 data:
 {{- range $path, $_ := .Files.Glob "files/superset/iceberg-metadata/**.yaml" }}
   {{ $path | trimPrefix "files/superset/" | replace "/" "__" }}: |
+{{- /* Bundle dosyaları Helm şablonudur; canlı bir Superset'ten yeniden üretilirse SQL içinde kalan bir "{{" render'ı kırar (bkz. runbooks/data-metrics.md §5). */}}
 {{ tpl ($.Files.Get $path) $ | indent 4 }}
 {{- end }}
 ---

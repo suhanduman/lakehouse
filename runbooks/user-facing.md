@@ -19,6 +19,8 @@ kubectl -n lakehouse exec "$POD" -- superset legacy-import-datasources -p /app/c
 ```
 Sonuç: SQL Lab'da `lakehouse` veritabanı (`allow_dml: false`; CTAS/CVAS açık — hedef şema **`sandbox`** olmalı). `legacy-import-datasources` v0 importer'dır (deprecated ama 6.1'de çalışır); 6.x'in `import-datasources` komutu yalnız v1 ZIP kabul eder. Komut idempotenttir (aynı `database_name` güncellenir); bağlantı ayarı değişince tekrar çalıştırın.
 
+Bu adımdan **sonra**, tablo düzeyi veri metrikleri dashboard'unu import etmek için: `runbooks/data-metrics.md` §3 (prod'da önce §başındaki PROD UYARISI'na bakın).
+
 ### Alerts & Reports (varsayılan KAPALI)
 Kurulum Redis/Valkey'siz çalışır (`SimpleCache`; worker/beat yok). Alerts & Reports için CR'a **`valkey`** bloğu + **`celeryWorker`** (zamanlama için beat) eklenmeli, `CELERY_CONFIG`/`SCREENSHOT_*` yapılandırılmalı ve ekran görüntüsü için headless tarayıcı sağlanmalıdır — ekran görüntüsü için headless tarayıcı özel imaj gerektirebileceğinden **F5'te uygulanmadı**, açık kalemdir (pre-ship). Dış bildirim (Slack/SMTP) genel internete HTTPS ister; sistem kökleri kullanıldığı için bu yönüyle sorun yoktur.
 

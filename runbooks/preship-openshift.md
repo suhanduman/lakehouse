@@ -328,6 +328,13 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   pre-ship'te müşteriyle verilir, açılırsa canlı kanıt bu maddenin altına yazılır.
   *Kaynak: F4 notu açık kalanlar; `runbooks/user-facing.md` "Alerts & Reports (varsayılan KAPALI)".*
 
+- [ ] **4.7 Veri metrikleri dashboard'u: SQL müşteri tablolarına uyarlandı → import → render**
+  ```bash
+  curl -s 'https://<superset-host>/api/v1/dashboard/?q=(filters:!((col:slug,opr:eq,value:iceberg-metadata)))' | jq '.count'
+  ```
+  Beklenen: `count` **1**.
+  *Kaynak: `runbooks/data-metrics.md` (PROD UYARISI, §3, §4).*
+
 ---
 
 ## 5. Kararlar (F6'da alındı)

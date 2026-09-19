@@ -25,6 +25,10 @@ Kullanım: runbooks/scripts/acceptance.sh [seçenekler]
   --velero-ns <ad>   Velero/OADP namespace'i (varsayılan: velero; OpenShift: openshift-adp; dr-path.sh VELERO_NS ile okur)
   -h, --help         bu yardım
 
+Ortam değişkeni dikişleri (test/e2e/monitoring-path.sh çocuk sürece kalıtımla geçer, forward gerekmez):
+  PROM_STS, PROM_SVC, GRAFANA_SVC, GRAFANA_SECRET, GRAFANA_SKIP=1 (OpenShift UWM: GRAFANA_SKIP=1 + UWM
+  StatefulSet/Service adları).
+
 Sıra: pg-fixture + mongo-fixture -> polaris-setup.sh -> pg, mongo, nginx, trino, superset, jupyterhub,
       zeppelin, monitoring, dr yolları -> KABUL özeti.
 EOF

@@ -72,6 +72,16 @@ sonrası düşer). `summary` MAP(varchar,varchar) olduğu için her sayaç `CAST
 
 ## 3. Dashboard'u import etme
 
+> **PROD UYARISI:** Dashboard'un sanal veri seti SQL'i (§2) dev demo tablolarına (`shop.orders`,
+> `crm.customers`, `nginx_raw.access_log`) sabittir. Prod kurulumunda (`platform/values/glue.yaml`:
+> `sources: []`, `pipelines: []`) bu tablolar yoktur — SQL'i **olduğu gibi** import edip çalıştırmak
+> `UNION ALL`'ın tamamını `TABLE_NOT_FOUND` ile düşürür. **Import'tan ÖNCE** SQL'i müşterinin gerçek
+> Silver/ham tablolarına uyarlayın:
+> `glue/files/superset/iceberg-metadata/datasets/lakehouse/iceberg_table_health.yaml`
+> içindeki `sql:` alanını §4'teki yönteme göre elle düzenleyin (ya da bundle'ı
+> §5'e göre canlı bir Superset'ten yeniden üretin), commit edin, sonra bu bölümdeki import'u çalıştırın.
+> values'a ayrı bir tablo-listesi anahtarı **eklenmez** (YAGNI) — düzenleme SQL dosyası üzerindendir.
+
 Bundle chart ile gelir; Superset'e **bir kez** import edilir (import, Superset metastore'una yazar — GitOps
 sync'i tekrarlamaz). ConfigMap anahtarları alt dizin taşıyamadığı için dosya adları `dizin__dosya` biçimindedir;
 ilk adım bunları dizin ağacına geri açıp zip'ler:

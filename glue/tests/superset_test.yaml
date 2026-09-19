@@ -1,7 +1,7 @@
 suite: superset
 templates: [superset.yaml]
 tests:
-  - it: renders exactly the datasources + assets ConfigMap'ları ve Superset CR
+  - it: tam olarak datasource + assets ConfigMap'larını ve Superset CR'ını render eder
     asserts:
       - hasDocuments: {count: 3}
   - it: renders Superset CR in Production mode with secret refs
@@ -66,6 +66,18 @@ tests:
         contains: {path: spec.webServer.podTemplate.volumes, content: {name: assets, configMap: {name: superset-assets}}}
       - documentSelector: {path: metadata.name, value: superset}
         contains: {path: spec.webServer.podTemplate.container.volumeMounts, content: {name: assets, mountPath: /app/assets, readOnly: true}}
+  - it: superset-assets ConfigMap chart dosyasını da taşır
+    asserts:
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        exists: {path: 'data["iceberg-metadata__charts__iceberg_table_health_table.yaml"]'}
+  # chart↔dataset bağı uuid iledir (chart dataset_uuid == dataset uuid); eşleşmezse Superset import'u chart'ı
+  # sessizce atlar (F6 notu 12(a)). İki dosyadaki sabit literal aynı: ed543c35-...796027.
+  - it: chart'ın dataset_uuid'si veri setinin uuid'si ile aynıdır
+    asserts:
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__datasets__lakehouse__iceberg_table_health.yaml"]', pattern: 'uuid: ed543c35-d90b-4398-b1d0-32d901796027'}
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__charts__iceberg_table_health_table.yaml"]', pattern: 'dataset_uuid: ed543c35-d90b-4398-b1d0-32d901796027'}
   # Bundle'ın veritabanı tanımı ürün datasource'uyla İNŞA GEREĞİ aynı: ad alanı `tpl` ile aynı ifadeden,
   # uuid ise iki dosyada da aynı sabit. (Import uuid ile eşleşir ve overwrite=True ile üzerine yazar.)
   - it: bundle'daki lakehouse veritabanı ürün datasource'uyla aynı ad alanı ve aynı sabit uuid'yi taşır

@@ -1,4 +1,4 @@
-# lakehouse (v2)
+# lakehouse
 
 Deklaratif, minimal-kod açık kaynak data lakehouse: Debezium (Strimzi Kafka Connect) → Apache Iceberg (Polaris REST katalog) → Spark MERGE → Trino/Superset/notebook.
 
