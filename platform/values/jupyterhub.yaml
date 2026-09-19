@@ -2,6 +2,20 @@
 # MÜŞTERİYE ÖZEL HİÇBİR DEĞER BURADA DEĞİL: Keycloak/JupyterHub URL'leri ve S3_ENDPOINT tek yerde ->
 # platform/values/site/jupyterhub.yaml (dev'de platform/values/jupyterhub-dev.yaml ezer).
 hub:
+  # z2jh 4.4.2 üç sırrı values'ta pinlenmemişse HER render'da yeniden üretir (chart
+  # templates/hub/_helpers-passwords.tpl: randAlphaNum/randHex; aradaki `lookup` yalnız canlı `helm upgrade`ta
+  # çalışır, ArgoCD'nin `helm template` yolunda BOŞ döner). Bu Secret chart'ın ürettiğinin YANINA mount edilir
+  # ve hub SÜRECİ iki değeri buradan okur: `hub.config.JupyterHub.cookie_secret` +
+  # `hub.config.CryptKeeper.keys` (chart files/hub/z2jh.py get_secret_value: önce existing-secret/, sonra
+  # secret/) -> oturum çerezleri ve auth_state şifresi pod döndüğünde AYAKTA KALIR. Dev'de glue üretir
+  # (components.devSecrets), prod'da kurulumcu yaratır (runbooks/install.md "F4 Secret'ları" 7) — Git'e girmez.
+  # DİKKAT: `hub.config.ConfigurableHTTPProxy.auth_token` bu mekanizmanın KAPSAMI DIŞINDADIR — hem hub hem
+  # proxy Deployment'ı CONFIGPROXY_AUTH_TOKEN'ı chart'ın ÜRETTİĞİ `hub` Secret'ından okur ("References the
+  # chart managed k8s Secret even if hub.existingSecret is specified", templates/{hub,proxy}/deployment.yaml)
+  # ve jupyterhub_config.py values'taki auth_token'ı zaten pop eder. O token'ın ArgoCD re-sync'inde dönmesi
+  # platform/apps/30-jupyterhub.yaml'daki ignoreDifferences ile engellenir (CI 35451232616: proxy yeni
+  # token'la döndü, hub eskisinde kaldı -> "api_request to proxy failed: HTTP 403: Forbidden").
+  existingSecret: jupyterhub-secrets
   config:
     # authenticate_prometheus / networkPolicy.ingress (monitoring/UWM) BİLEREK YOK: izleme kapsamı "boru hattı
     # sağlığı"na daraltıldı (kullanıcı kararı 2026-09-18, Task 2b) — hub uygulama metriği (/hub/metrics) artık

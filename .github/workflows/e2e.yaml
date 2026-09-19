@@ -86,6 +86,10 @@ jobs:
           kubectl -n lakehouse describe superset superset | tail -30 || true
           kubectl -n lakehouse logs deploy/trino-coordinator --tail=60 || true
           kubectl -n lakehouse logs deploy/hub --tail=40 || true
+          # proxy log'u + iki pod'un yaşı: hub/proxy token uyuşmazlığı (403 Forbidden) ancak ikisi AYRI
+          # zamanlarda döndüğünde olur; yaş farkı bunun tek kanıtıdır (CI 35451232616).
+          kubectl -n lakehouse logs deploy/proxy --tail=40 || true
+          kubectl -n lakehouse get pod -l 'app.kubernetes.io/name=jupyterhub' -o custom-columns='NAME:.metadata.name,START:.status.startTime' || true
           kubectl -n lakehouse logs deploy/zeppelin --tail=40 || true
           kubectl -n argocd get app glue -o jsonpath='{.status.operationState.phase} {.status.operationState.message}{"\n"}' || true
           kubectl -n argocd get app glue -o json | jq -r '.status.conditions[]? | "\(.type): \(.message)"' || true

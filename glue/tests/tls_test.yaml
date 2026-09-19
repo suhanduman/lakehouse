@@ -28,3 +28,16 @@ tests:
       - containsDocument: {kind: Secret, apiVersion: v1, name: trino-service-accounts, any: true}
       - documentIndex: 1
         matchRegex: {path: 'stringData["password.db"]', pattern: "e2e:\\$2y\\$10\\$"}
+  # z2jh hub.existingSecret sözleşmesi: hub SÜRECİ cookie_secret/CryptKeeper.keys'i bu Secret'tan okur
+  # (chart files/hub/z2jh.py get_secret_value: önce existing-secret/, sonra secret/). Prod'da kurulumcu
+  # yaratır (runbooks/install.md "F4 Secret'ları" 7); dev'de sentetik ve SABİT olmalı — şablonda rastgele
+  # üretmek render'ı belirsizleştirir ve ArgoCD'yi her sync'te yeniden yazmaya iter.
+  - it: dev secrets pin jupyterhub z2jh keys deterministically
+    template: dev-secrets.yaml
+    set: {components.devSecrets: true}
+    documentIndex: 6
+    asserts:
+      - containsDocument: {kind: Secret, apiVersion: v1, name: jupyterhub-secrets}
+      - matchRegex: {path: 'stringData["hub.config.ConfigurableHTTPProxy.auth_token"]', pattern: "^[0-9a-f]{64}$"}
+      - matchRegex: {path: 'stringData["hub.config.JupyterHub.cookie_secret"]', pattern: "^[0-9a-f]{64}$"}
+      - matchRegex: {path: 'stringData["hub.config.CryptKeeper.keys"]', pattern: "^[0-9a-f]{64}$"}

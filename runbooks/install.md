@@ -51,6 +51,7 @@ Dev/kind'da `components.devSecrets=true` ile glue chart bunların **sahtelerini*
 | `zeppelin-shiro` | `shiro.ini` | Zeppelin `/opt/zeppelin/conf/shiro.ini` |
 | `zeppelin-interpreter` | `interpreter.json` | Zeppelin initContainer tohumu (PVC `/data/conf`) |
 | `lakehouse-ca` | `tls.crt`, `tls.key` | cert-manager `Issuer/lakehouse-ca` (trino-tls'i imzalar) + istemcilerin güven kökü |
+| `jupyterhub-secrets` | `hub.config.ConfigurableHTTPProxy.auth_token`, `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret`: oturum çerezi imzası + auth_state şifresi (hub pod'u yeniden başlayınca kullanıcılar düşmez) |
 
 ```bash
 # 1) Keycloak client sırları (her biri rastgele, Keycloak realm'e placeholder olarak enjekte edilir)
@@ -97,6 +98,14 @@ kubectl -n lakehouse create secret tls lakehouse-ca --cert=tls.crt --key=tls.key
 #   tls: {selfSignedCA: false, caBundle: "-----BEGIN CERTIFICATE-----\n…"}
 # Bu değer OpenShift'te Trino Route'unu `passthrough` yerine `reencrypt` (destinationCACertificate) yapar.
 rm -f tls.key     # tls.crt'yi sakla: caBundle ve istemci güven deposu için gerekir
+
+# 7) JupyterHub z2jh sırları (hub.existingSecret). Anahtar ADLARI z2jh'nin sözleşmesidir, harfi harfine yazılmalı.
+#    Neden: chart bu değerleri values'ta yoksa her render'da rastgele üretir; JupyterHub kurulumdan SONRA
+#    yeniden üretilirse tüm kullanıcı çerezleri geçersizleşir ve auth_state çözülemez.
+kubectl -n lakehouse create secret generic jupyterhub-secrets \
+  --from-literal=hub.config.ConfigurableHTTPProxy.auth_token="$(openssl rand -hex 32)" \
+  --from-literal=hub.config.JupyterHub.cookie_secret="$(openssl rand -hex 32)" \
+  --from-literal=hub.config.CryptKeeper.keys="$(openssl rand -hex 32)"
 ```
 
 Kurumsal PKI'nız varsa `lakehouse-ca` yerine kurumsal ara CA'nın cert+key'ini aynı Secret'a koyun — cert-manager `Issuer/lakehouse-ca` onunla imzalar; `tls.caBundle` yine **doğrulayıcı zincir** olur.

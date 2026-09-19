@@ -129,7 +129,7 @@ zeppelin:
 
 components:
   minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü
-  devSecrets: false             # DEV-ONLY: keycloak-clients, trino-service-accounts, trino-shared-secret, superset-secret, zeppelin-shiro, zeppelin-interpreter (sentetik)
+  devSecrets: false             # DEV-ONLY: keycloak-clients, trino-service-accounts, trino-shared-secret, superset-secret, zeppelin-shiro, zeppelin-interpreter, jupyterhub-secrets (sentetik; prod'da kurulumcu yaratır)
 minio:
   rootUser: minioadmin
   rootPassword: minioadmin
