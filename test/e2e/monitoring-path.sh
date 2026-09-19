@@ -11,7 +11,7 @@ E2E_EXPECT_NO_FIRING="${E2E_EXPECT_NO_FIRING:-1}"
 # İzleme yığınının NESNE ADLARI değişkenlerle ezilebilir: varsayılanlar kube-prometheus-stack (dev/CI) adlarıdır,
 # yani CI davranışı DEĞİŞMEZ. OpenShift user-workload monitoring'de adlar başkadır ve Grafana platform tarafındadır:
 #   PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
-#     runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring
+#     scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring
 # GRAFANA_SKIP=1 yalnız Grafana dashboard iddialarını atlar; diğer tüm iddialar yüksek sesle koşmaya devam eder.
 PROM_STS="${PROM_STS:-prometheus-monitoring-kube-prometheus-prometheus}"
 PROM_SVC="${PROM_SVC:-monitoring-kube-prometheus-prometheus}"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Polaris katalog/rol/principal kurulumu (kurulumdan sonra bir kez; idempotent).
-#   runbooks/scripts/polaris-setup.sh [--setup platform/polaris/setup.yaml] [--ns lakehouse]
+#   scripts/polaris-setup.sh [--setup platform/polaris/setup.yaml] [--ns lakehouse]
 # Gereksinim: pip install apache-polaris ; root credential Secret'ı (polaris-root: clientId/clientSecret) kümede.
 set -euo pipefail
 SETUP=platform/polaris/setup.yaml; NS=lakehouse

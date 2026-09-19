@@ -97,7 +97,7 @@ kubectl -n lakehouse logs <ad>-driver --tail=200
 | `SchemaConflict` (silver-merge) | Silver kolon tipi güvenli genişletilemiyor | Elle `ALTER TABLE` ya da yeni kolon (`runbooks/add-table.md`) |
 | `KAFKA_JAAS` yok (mongo-bronze) | `KafkaUser spark` yalnız mongodb kaynağı varken oluşur | Kaynağı ekleyin ya da işi kapatın |
 | OOM / uzun GC (mongo-bronze, uzun kesinti sonrası) | Backlog `collect()` ile driver'a sığmıyor | Tek koşu için `spark.driver.memory` artırın ya da `lakehouse.kafka.offsets` tablo özelliğini elle ilerletin (offset yalnız başarıda ilerler) |
-| Driver `CreateContainerConfigError` | `polaris-spark` Secret'ı yok | `runbooks/scripts/polaris-setup.sh` koşmamış |
+| Driver `CreateContainerConfigError` | `polaris-spark` Secret'ı yok | `scripts/polaris-setup.sh` koşmamış |
 | Driver 20+ dk `Pending` | Düğümde CPU/bellek isteği karşılanmıyor | `spark.driver.coreRequest` / `spark.executor.coreRequest` (dev'de 500m); düğüm kapasitesi |
 | 403 `The Access Key Id you provided does not exist` | Vended credential süresi/önbelleği | [Polaris/S3 403](#polaris-403) |
 
@@ -248,7 +248,7 @@ gerekir.
 ## Kullanıcı yüzü (Trino, Superset, JupyterHub, Zeppelin)
 
 - **Trino pod'u `CreateContainerConfigError`:** `polaris-trino` Secret'ı yok →
-  `runbooks/scripts/polaris-setup.sh` koşmamış.
+  `scripts/polaris-setup.sh` koşmamış.
 - **Trino `401` / `Authentication failed`:** HTTP 8080'de kimlik doğrulama YOKTUR (yalnız probe/iç trafik);
   istemciler **8443 HTTPS** kullanmalı ve `lakehouse-ca`'ya güvenmelidir. Bearer reddediliyorsa token'ın `aud`
   talebinde `trino` yoktur → realm'in `trino` client'ındaki audience mapper (`runbooks/install.md` → "Realm

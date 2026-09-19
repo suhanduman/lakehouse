@@ -8,7 +8,7 @@
    - mongodb: replica set **şart** (change streams tek düğümde çalışmaz — en azından tek üyeli rs0). Kullanıcı en az yetki (Debezium mongodb belgesi):
      `db.getSiblingDB("admin").createUser({user: "<u>", pwd: "<p>", roles: [{role: "read", db: "<db>"}, {role: "read", db: "config"}, {role: "clusterMonitor", db: "admin"}]})`
 2. **Secret** (Git'e girmez): `kubectl -n lakehouse create secret generic <name>-db --from-literal=username=<u> --from-literal=password=<p>`
-3. **Polaris namespace'leri**: `platform/polaris/setup.yaml` → `namespaces:` listesine `<name>_raw` ve `<name>` ekle → `runbooks/scripts/polaris-setup.sh` (idempotent).
+3. **Polaris namespace'leri**: `platform/polaris/setup.yaml` → `namespaces:` listesine `<name>_raw` ve `<name>` ekle → `scripts/polaris-setup.sh` (idempotent).
 4. **values**: `platform/values/glue.yaml`
    ```yaml
    sources:

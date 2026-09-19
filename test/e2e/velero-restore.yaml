@@ -2,7 +2,7 @@
 # labelSelector (e2e: dr-marker) + includedResources ile daraltılır; canlı iş yüklerine dokunulmaz.
 # `metadata.namespace` YAZILMAZ (velero-backup.yaml ile aynı gerekçe): `kubectl -n "$VELERO_NS" apply -f`.
 # `includedNamespaces` ise YEDEĞİN İÇİNDEKİ ns'tir, Velero sunucusununki değil: e2e yol script'leri ve
-# fixture'lar `lakehouse` ns'ine SABİTTİR (runbooks/scripts/acceptance.sh --ns uyarısı) -> sabit yazılır.
+# fixture'lar `lakehouse` ns'ine SABİTTİR (scripts/acceptance.sh --ns uyarısı) -> sabit yazılır.
 apiVersion: velero.io/v1
 kind: Restore
 metadata: {name: e2e-marker}

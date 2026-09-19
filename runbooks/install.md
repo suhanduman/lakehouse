@@ -18,7 +18,7 @@
    - `platform/values/trino.yaml` — `http-server.authentication.oauth2.issuer` (= `<keycloak.hostname>/realms/lakehouse`) ve `fs.s3.*` endpoint'i; ayrıca `accessControl.rules` (grup kuralları, `runbooks/access-control.md`).
    - `platform/values/trino-ldap.yaml` — **yalnız prod**: AD group provider (`ldap.url`, bind DN, `user-base-dn`, `user-search-filter`, `memberOf`/`cn`).
    - `platform/values/jupyterhub.yaml` — Keycloak URL'leri (`authorize_url`/`token_url`/`userdata_url`), `oauth_callback_url`, `S3_ENDPOINT`.
-   - `runbooks/zeppelin/shiro-ad.ini` — AD realm'i (bu dosya Secret olarak yaratılır, aşağıdaki "F4 Secret'ları" 4. adımı).
+   - `examples/zeppelin/shiro-ad.ini` — AD realm'i (bu dosya Secret olarak yaratılır, aşağıdaki "F4 Secret'ları" 4. adımı).
    Boyutlandırma: varsayılan `spark.*` değerleri küçük tier içindir (driver 2g/1 core, 1 executor, `shufflePartitions: 8`); tablolar/veri büyüdüğünde `platform/values/glue.yaml`'daki yorumlu büyük tier bloğunu aç (driver 4g/2 core, 2×4g executor, `shufflePartitions: 200`).
 2. **F4 Secret'ları** (aşağıdaki bölüm) kurulumdan ÖNCE yaratılmalı — `components.devSecrets` yalnız dev'de `true`; prod'da chart bunları üretmez ve eksik Secret pod'u `CreateContainerConfigError`'da bırakır.
 3. `bootstrap/bootstrap.sh --env prod` (ArgoCD `v3.5.2` kurar; `quay.io/strimzi-helm`, `quay.io/jetstack/charts` ve `ghcr.io/apache/superset-kubernetes-operator/charts` OCI Helm repository'lerini ArgoCD'ye kaydeder; kök + alt Application'ları — **cert-manager**, Strimzi, CNPG, **cnpg-barman** (Barman Cloud yedek eklentisi), keycloak-operator, spark-operator, **superset-operator**, glue, Polaris, **Trino**, **JupyterHub** — uygular). İzle: `kubectl -n argocd get applications` → hepsi `Synced/Healthy`. Connect imaj build'i ~10 dk.
@@ -27,11 +27,11 @@
    - **OpenShift'te izleme:** kube-prometheus-stack KURULMAZ; platformun **user-workload monitoring**'i açılır (`openshift-monitoring` ns'indeki `cluster-monitoring-config` ConfigMap'inde `enableUserWorkload: true`). glue'nun `lakehouse` ns'ine yazdığı PodMonitor/ServiceMonitor/PrometheusRule nesneleri otomatik alınır; Alertmanager/bildirim platformundur. `monitoring.enabled` (glue) açık kalır — yalnız CRD'lerin kaynağı değişir.
    - **OpenShift'te yedek:** Velero chart'ı yerine **OADP** operatörü kurulur (ns `openshift-adp`), `DataProtectionApplication` uygulanır ve ancak ondan sonra glue'da `velero: {enabled: true, namespace: openshift-adp}` açılır (aksi hâlde `Schedule` CRD'si yokken glue Degraded olur). Ayrıntı ve alan eşlemesi: `runbooks/dr.md` §6.
    - **CNPG yedekleri** her iki ortamda da `cnpg-barman` Application'ı (Barman Cloud eklentisi) + `backup.*` değerleriyle çalışır.
-4. Polaris kataloğu: `pip install 'apache-polaris==1.7.0'` → `runbooks/scripts/polaris-setup.sh` (katalog `lakehouse`, namespace'ler — `sandbox` dâhil —, roller — `writers`/`readers`/**`sandbox_writers`** + katalog rolü **`lakehouse_sandbox`** —, principal'lar; `polaris-connect/-spark/-trino/-notebooks` Secret'ları yazılır). İdempotent; var olan katalogda yalnız EKSİK nesneler yaratılır (katalog `properties` GÜNCELLENMEZ).
+4. Polaris kataloğu: `pip install 'apache-polaris==1.7.0'` → `scripts/polaris-setup.sh` (katalog `lakehouse`, namespace'ler — `sandbox` dâhil —, roller — `writers`/`readers`/**`sandbox_writers`** + katalog rolü **`lakehouse_sandbox`** —, principal'lar; `polaris-connect/-spark/-trino/-notebooks` Secret'ları yazılır). İdempotent; var olan katalogda yalnız EKSİK nesneler yaratılır (katalog `properties` GÜNCELLENMEZ).
    - S3'te STS yoksa `setup.yaml`'da `sts_unavailable: true`; istemcilerde vending kapalı (Connect `iceberg.catalog.header.X-Iceberg-Access-Delegation=none` + `s3.*` anahtarları; Trino `iceberg.rest-catalog.vended-credentials-enabled=false`; Spark `header.X-Iceberg-Access-Delegation=none`).
 5. Doğrulama: `test/e2e/polaris-smoke/job.yaml` (küme içi pyiceberg yaz/oku) — `test/e2e/run.sh` aynı adımları otomatik yapar.
 6. Kaynak ekleme: `runbooks/add-source.md`; kullanıcı yüzü (Superset/notebook/Zeppelin) `runbooks/user-facing.md`; yetkilendirme `runbooks/access-control.md`
-7. Kabul kanıtı: `runbooks/scripts/acceptance.sh` + `runbooks/acceptance-tests.md`. Ayrıca: sürüm/lisans listesi `runbooks/versions.md` · yükseltme `runbooks/upgrade.md` · yedek/DR `runbooks/dr.md` · sorun giderme `runbooks/troubleshooting.md` · dbt örneği `runbooks/dbt/`
+7. Kabul kanıtı: `scripts/acceptance.sh` + `runbooks/acceptance-tests.md`. Ayrıca: sürüm/lisans listesi `runbooks/versions.md` · yükseltme `runbooks/upgrade.md` · yedek/DR `runbooks/dr.md` · sorun giderme `runbooks/troubleshooting.md` · dbt örneği `examples/dbt/`
 
 ## Lokal geliştirme (kind + Podman/Docker)
 `test/e2e/kind.sh && bootstrap/bootstrap.sh --env dev --mode helm` (yerel chart, ArgoCD'siz) veya `--mode argocd --revision main` (ArgoCD GitHub'dan çeker → değişiklikler push'lu olmalı; `--revision` varsayılanı `main`, dal/etiket/commit SHA'sı verilebilir).
@@ -74,7 +74,7 @@ kubectl -n lakehouse create secret generic trino-shared-secret --from-literal=se
 kubectl -n lakehouse create secret generic superset-secret --from-literal=secret-key="$(openssl rand -hex 32)"
 
 # 4) Zeppelin Shiro (AD/LDAPS): şablonu doldur, sonra Secret yap
-cp runbooks/zeppelin/shiro-ad.ini shiro.ini    # DC=/OU=, systemUsername/Password, ldaps ana bilgisayarı DEĞİŞTİR
+cp examples/zeppelin/shiro-ad.ini shiro.ini    # DC=/OU=, systemUsername/Password, ldaps ana bilgisayarı DEĞİŞTİR
 kubectl -n lakehouse create secret generic zeppelin-shiro --from-file=shiro.ini=shiro.ini
 
 # 5) Zeppelin interpreter tohumu: glue/files/zeppelin/interpreter.json bir Helm şablonudur;
@@ -138,7 +138,7 @@ ingress controller'da varsayılan sertifika, ya da her host için bir `Secret` +
 | Trino Web UI | `https://<trino.hostname>/ui` | `web-ui.authentication.type=oauth2` → Keycloak'a yönlendirir; kullanıcı adı `preferred_username` |
 | Superset | `https://<superset.hostname>/login/` | "Keycloak" (anahtar ikonu) butonu; rol `AUTH_ROLES_MAPPING` ile grup→(Admin/Alpha/Gamma), her girişte senkronlanır |
 | JupyterHub | `https://<jupyterhub.hostname>/` | "Sign in with Keycloak"; yalnız `allowed_groups` üyeleri; `lakehouse-admins` hub yöneticisi. İlk spawn soğuk imajda ~5 dk (`startTimeout: 1200`) |
-| Zeppelin | `https://<zeppelin.hostname>/` | **Keycloak DEĞİL**: Shiro + AD (LDAPS) — kullanıcı adı/parola formu (`runbooks/zeppelin/shiro-ad.ini`) |
+| Zeppelin | `https://<zeppelin.hostname>/` | **Keycloak DEĞİL**: Shiro + AD (LDAPS) — kullanıcı adı/parola formu (`examples/zeppelin/shiro-ad.ini`) |
 
 Superset'te Trino bağlantısı tek seferlik bir komutla içe aktarılır — `runbooks/user-facing.md`.
 
@@ -169,7 +169,7 @@ pod'ları eksik Secret'la `CreateContainerConfigError`'a sokar ve realm/issuer d
    nesneleri yaratır. **Uyarı:** katalog `properties` (ör. `polaris.config.drop-with-purge.enabled`) yalnız katalog
    YARATILIRKEN yazılır → var olan kurulumda ayrıca uygulanmalıdır:
    ```bash
-   runbooks/scripts/polaris-setup.sh --setup platform/polaris/setup.yaml
+   scripts/polaris-setup.sh --setup platform/polaris/setup.yaml
    polaris catalogs update --set-property polaris.config.drop-with-purge.enabled=true lakehouse
    ```
 5. **Doğrulama:**

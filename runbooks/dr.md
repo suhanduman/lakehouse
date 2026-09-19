@@ -282,7 +282,7 @@ glue'da `velero.enabled: true` açılır ve `Schedule/lakehouse-daily` `openshif
 
 | Sıklık | Prova | Kanıt |
 |---|---|---|
-| Her CI koşusu / her kurulum | CNPG yedek + restore, Velero backup + restore | `test/e2e/dr-path.sh` → `E2E F5 DR OK` (`runbooks/scripts/acceptance.sh` ile de koşar) |
+| Her CI koşusu / her kurulum | CNPG yedek + restore, Velero backup + restore | `test/e2e/dr-path.sh` → `E2E F5 DR OK` (`scripts/acceptance.sh` ile de koşar) |
 | Haftalık | Arşiv + son yedek sağlığı | §3 komutları (yedekler için PrometheusRule YOKTUR → kontrol listesi elle) |
 | **Çeyreklik** | **Polaris DB PITR provası**: dünkü bir zaman damgasına restore, tablo sayımı, restore kümesini silme | §4.2 |
 | **Çeyreklik** | **Velero PVC restore provası** (Zeppelin ya da bir kullanıcı not defteri PVC'si) | §5.3 — kind'da anlamsız (§5.4), pre-ship/prod kümesinde |

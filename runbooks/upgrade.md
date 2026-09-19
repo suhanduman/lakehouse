@@ -102,7 +102,7 @@ migrasyonunu yapar). Önce `polaris-db` yedeğini doğrulayın (`runbooks/dr.md`
 ```bash
 kubectl -n lakehouse rollout status deploy/polaris --timeout=600s
 kubectl -n lakehouse exec deploy/polaris -- curl -sf localhost:8182/q/health | head -c 200
-runbooks/scripts/polaris-setup.sh --setup platform/polaris/setup.yaml   # idempotent; yalnız EKSİK nesneleri yaratır
+scripts/polaris-setup.sh --setup platform/polaris/setup.yaml   # idempotent; yalnız EKSİK nesneleri yaratır
 ```
 
 ### 2.5 Trino / Superset / JupyterHub / Zeppelin
@@ -175,7 +175,7 @@ Yerel ön kontrol:
 helm unittest glue
 helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
 ```
-Var olan bir kümede yükseltme sonrası kabul kanıtı: `runbooks/scripts/acceptance.sh`
+Var olan bir kümede yükseltme sonrası kabul kanıtı: `scripts/acceptance.sh`
 (`runbooks/acceptance-tests.md`).
 
 ## 7. Geri alma

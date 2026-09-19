@@ -80,7 +80,7 @@ Trino, Polaris'e **`trino` principal'ı** ile bağlanır; bu principal `readers`
 sahiptir ve yazma yetkisi **yalnız `sandbox` namespace'inde** tanımlıdır. `gold` için ikisi de gerekir:
 
 1. `platform/polaris/setup.yaml` → `namespaces:` listesine `- name: gold` ekleyin ve
-   `runbooks/scripts/polaris-setup.sh --setup platform/polaris/setup.yaml` çalıştırın (idempotent; yalnız
+   `scripts/polaris-setup.sh --setup platform/polaris/setup.yaml` çalıştırın (idempotent; yalnız
    EKSİK nesneleri yaratır).
 2. Katalog rolüne `gold` ayrıcalıklarını verin: `setup.yaml` → `lakehouse_sandbox` rolünün
    `privileges.namespace` haritasına `gold` ekleyip aynı script'i tekrar koşturmak **hem yeni hem de var olan**
@@ -107,11 +107,11 @@ sahiptir ve yazma yetkisi **yalnız `sandbox` namespace'inde** tanımlıdır. `g
 
 ```bash
 kubectl -n lakehouse create configmap dbt-project \
-  --from-file=dbt_project.yml=runbooks/dbt/dbt_project.yml \
-  --from-file=profiles.yml=runbooks/dbt/profiles.yml \
-  --from-file=orders_daily.sql=runbooks/dbt/models/gold/orders_daily.sql \
+  --from-file=dbt_project.yml=examples/dbt/dbt_project.yml \
+  --from-file=profiles.yml=examples/dbt/profiles.yml \
+  --from-file=orders_daily.sql=examples/dbt/models/gold/orders_daily.sql \
   --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f runbooks/dbt/cronjob.yaml
+kubectl apply -f examples/dbt/cronjob.yaml
 ```
 ConfigMap anahtarları **düzdür** (alt dizin taşımaz); CronJob başlangıçta `models/gold/` düzenini
 `/tmp/project` altında kurar (`cronjob.yaml` `args`).
@@ -132,7 +132,7 @@ Beklenen (e2e fixture verisiyle): `shop.orders`'ın günlük/durum bazlı özeti
 
 ## Sınırlar ve notlar
 
-- **e2e'ye dâhil değildir**: `test/e2e/run.sh` ve `runbooks/scripts/acceptance.sh` bu CronJob'u koşturmaz.
+- **e2e'ye dâhil değildir**: `test/e2e/run.sh` ve `scripts/acceptance.sh` bu CronJob'u koşturmaz.
 - **Satır filtresi / kolon maskesi UYGULANMAZ**: dbt bir servis hesabıdır (HTTP Basic). Kullanıcı bazlı
   güvenlik interaktif OIDC oturumları içindir (`runbooks/access-control.md`).
 - **`materialized: table`** her koşuda tabloyu yeniden yazar (`CREATE OR REPLACE`). Artımlı ihtiyaçlar için

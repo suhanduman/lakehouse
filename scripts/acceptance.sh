@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Kabul testi orkestratörü (şartname kabul maddeleri — runbooks/acceptance-tests.md).
-#   runbooks/scripts/acceptance.sh [--ns lakehouse] [--mon-ns monitoring] [--velero-ns velero]
+#   scripts/acceptance.sh [--ns lakehouse] [--mon-ns monitoring] [--velero-ns velero]
 #
 # ZATEN KURULU bir kümede koşar: kind/bootstrap adımı YOKTUR (onlar test/e2e/run.sh'ta).
 # Yaptığı tek şey: kaynak DB fixture'larını uygula -> polaris-setup.sh (idempotent) -> dokuz e2e yolunu
@@ -18,7 +18,7 @@ VELERO_NS="${VELERO_NS:-velero}"
 
 usage() {
   cat <<'EOF'
-Kullanım: runbooks/scripts/acceptance.sh [seçenekler]
+Kullanım: scripts/acceptance.sh [seçenekler]
 
   --ns <ad>          lakehouse namespace'i (varsayılan: lakehouse)
   --mon-ns <ad>      Prometheus/Grafana namespace'i (varsayılan: monitoring; monitoring-path.sh MON_NS ile okur)
@@ -83,7 +83,7 @@ kubectl apply -f "$ROOT/test/e2e/pg-fixture.yaml"
 kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml"
 
 echo "== polaris-setup (idempotent)"
-"$ROOT/runbooks/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml" --ns "$NS"
+"$ROOT/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml" --ns "$NS"
 
 for p in pg-path.sh mongo-path.sh nginx-path.sh trino-path.sh superset-path.sh \
          jupyterhub-path.sh zeppelin-path.sh monitoring-path.sh dr-path.sh; do

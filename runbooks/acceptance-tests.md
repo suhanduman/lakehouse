@@ -4,8 +4,8 @@ Kabul, **kümede koşan kanıtla** yapılır: her madde için bir e2e yolu vard�
 sesle basar (`OK …` satırları, sonunda `E2E … OK`). Orkestratör:
 
 ```bash
-runbooks/scripts/acceptance.sh                                                 # kurulu kümede: 9 yol + KABUL özeti
-runbooks/scripts/acceptance.sh --mon-ns monitoring --velero-ns openshift-adp   # OpenShift/OADP
+scripts/acceptance.sh                                                 # kurulu kümede: 9 yol + KABUL özeti
+scripts/acceptance.sh --mon-ns monitoring --velero-ns openshift-adp   # OpenShift/OADP
 ```
 Taze kümede (kind + bootstrap dâhil) aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
 (`.github/workflows/e2e.yaml`).
@@ -36,7 +36,7 @@ kaynaklar açık (`sources`, `pipelines`, `nginx.enabled` — `platform/values/g
 ## Koşu ve çıktı
 
 ```text
-$ runbooks/scripts/acceptance.sh
+$ scripts/acceptance.sh
 == ön kontrol
 == kaynak DB fixture'ları (pg + mongo)
 == polaris-setup (idempotent)
@@ -94,7 +94,7 @@ OpenShift user-workload monitoring'de Grafana yoktur → `GRAFANA_SKIP=1` yalnı
 hedef/metrik/kural/alarm iddiaları yüksek sesle koşmaya devam eder:
 ```bash
 PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
-  runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
+  scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
 ```
 UWM'nin Prometheus servisi yetkilendirme ister; erişilemiyorsa izleme kanıtı thanos-querier üzerinden elle
 alınır (`runbooks/preship-openshift.md` §2.2/2.3) — kural/hedef adları aynıdır.

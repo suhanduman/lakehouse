@@ -55,7 +55,7 @@ Tarayıcısız/otomatik işlerde `trino.auth.BasicAuthentication("<servis hesab�
 
 ## Zeppelin
 
-- Giriş **Shiro + AD (LDAPS)**, Keycloak DEĞİL (0.12'de OIDC/pac4j realm'i yok). Yapılandırma `Secret zeppelin-shiro` (`shiro.ini`; prod şablonu `runbooks/zeppelin/shiro-ad.ini`); değişiklikten sonra `kubectl -n lakehouse rollout restart deploy/zeppelin`.
+- Giriş **Shiro + AD (LDAPS)**, Keycloak DEĞİL (0.12'de OIDC/pac4j realm'i yok). Yapılandırma `Secret zeppelin-shiro` (`shiro.ini`; prod şablonu `examples/zeppelin/shiro-ad.ini`); değişiklikten sonra `kubectl -n lakehouse rollout restart deploy/zeppelin`.
 - **Rol kapısı:** `[urls]`'in son kuralı `/** = authc, anyofroles[admin, analyst, student]`'tır — yalnız kimlik doğrulamak YETMEZ, `groupRolesMap`'ten gelen üç rolden en az biri şarttır. `lakehouse-*` gruplarının hiçbirinde olmayan bir AD hesabı 401 alır (aksi hâlde paylaşımlı `zeppelin` Trino servis hesabıyla tüm kataloğu okuyabilirdi). Yeni bir grup eklenirse rol adı hem `groupRolesMap`'e hem bu listeye yazılır.
 - **Not defterleri varsayılan PRIVATE:** `ZEPPELIN_NOTEBOOK_PUBLIC=false` (Deployment env'i). Zeppelin'in varsayılanı `true`'dur ve her yeni not defterini tüm oturum açmış kullanıcılara açar; servis hesabı modelinde bu, bir analistin notundaki sonuçların öğrencilerce okunması demektir. Paylaşım not bazında UI'dan verilir (Note → permissions: `owners`/`readers`/`writers`). Değer değişirse pod yeniden başlar; var olan notların izinleri geriye dönük DEĞİŞMEZ.
 - Kullanım `%jdbc` ile: `%jdbc` ⏎ `select count(*) from shop.orders`. Bağlantı `jdbc:trino://trino.lakehouse.svc:8443/lakehouse?SSL=true&SSLTrustStorePath=/etc/lakehouse-ca/tls.crt`, kullanıcı `zeppelin` servis hesabı (SELECT-only).
@@ -82,8 +82,8 @@ Dev'de `keycloak.hostname` **küme içi** bir URL'dir (`http://keycloak-service.
 
 ## dbt ile Gold katmanı (referans)
 
-Gold modelleri isteyen ekipler için çalışan bir referans proje + CronJob örneği: `runbooks/dbt/`.
+Gold modelleri isteyen ekipler için çalışan bir referans proje + CronJob örneği: `examples/dbt/`.
 Resmi `dbt-trino` imajı olmadığından örnek, resmi `python:3.13-slim` imajını kullanır ve `dbt-trino==1.10.4`'ü
 çalışma anında kurar (PyPI erişimi gerekir). Trino'ya **servis hesabı** (`dbt`) ile bağlanır → satır
 filtresi/kolon maskesi uygulanmaz; kurulum adımları (password.db, `rules.json`, Polaris `gold` namespace'i)
-`runbooks/dbt/README.md`'de.
+`examples/dbt/README.md`'de.

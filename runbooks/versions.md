@@ -30,7 +30,7 @@ ile kümede üretilir (Dockerfile yok). Hızlı denetim:
 | Apache Iceberg Kafka Connect sink | 1.11.0 | Apache-2.0 | `spec.build` maven artefaktları (`iceberg-kafka-connect`, `-transforms`, `iceberg-parquet`, `-orc`, `-aws`, `-aws-bundle`) | `glue/values.yaml` → `versions.iceberg` | Aynı değer Spark `spark.jars.packages`'ini de üretir (tek kaynak) |
 | Hadoop client (Connect build) | 3.4.3 | Apache-2.0 | `org.apache.hadoop:hadoop-client-api` / `-runtime` | `glue/values.yaml` → `versions.hadoopClient` | Iceberg sink'in gereksinimi (F0 S2) |
 | Apache Polaris (REST katalog) | 1.7.0 | Apache-2.0 | chart `https://downloads.apache.org/polaris/helm-chart` + imaj `apache/polaris:1.7.0` | `platform/apps/20-polaris.yaml`, `platform/values/polaris.yaml` | `persistence.type=relational-jdbc` → CNPG `polaris-db`; admin-tool bootstrap Job glue'da (`versions.polarisAdminTool`) |
-| `apache-polaris` CLI | 1.7.0 | Apache-2.0 | PyPI (`pip install 'apache-polaris==1.7.0'`) | `runbooks/scripts/polaris-setup.sh`, `test/e2e/run.sh` | Katalog/namespace/rol/principal kurulumu |
+| `apache-polaris` CLI | 1.7.0 | Apache-2.0 | PyPI (`pip install 'apache-polaris==1.7.0'`) | `scripts/polaris-setup.sh`, `test/e2e/run.sh` | Katalog/namespace/rol/principal kurulumu |
 | Apache Spark | 4.1.0 | Apache-2.0 | `apache/spark:4.1.0-java21-python3` | `glue/values.yaml` → `spark.image`, `spark.version` | Iceberg runtime **her koşuda** Maven'den çözülür; iç ayna: `spark.ivySettingsXml` (`runbooks/troubleshooting.md#maven`) |
 | Trino | **483** (chart 1.42.2; chart appVersion `480`) | Apache-2.0 | `https://trinodb.github.io/charts` | `platform/apps/30-trino.yaml` + `platform/values/trino.yaml` (`image.tag: "483"`) | Chart varsayılan etiketi 480; values 483'e sabitler. **jmx-exporter sidecar'ı kullanılmıyor** (izleme yalnız boru hattı sağlığı) → `bitnamilegacy/jmx-exporter` imajına bağımlılık YOK |
 | Apache Superset | 6.1.0 — imaj etiketi `apache/superset:6.1.0-dev` | Apache-2.0 | resmi imaj + `Superset` CR | `glue/values.yaml` → `superset.imageTag` | `-dev` etiketi `psycopg2`/`trino`/`authlib` sürücülerini İÇERİR (düz `6.1.0` içermez). Operator `spec.image` **digest kabul etmez** (`repository:tag`) → müşteri aynasında *tag immutability* ile sabitlenir; yükseltmede sürücülerin hâlâ imajda olduğu doğrulanır |
@@ -57,7 +57,7 @@ ile kümede üretilir (Dockerfile yok). Hızlı denetim:
 |---|---|---|---|---|---|
 | PyIceberg | `>=0.10,<0.11` | Apache-2.0 | PyPI `pyiceberg[s3fs,pyarrow]` | `platform/values/jupyterhub.yaml` (`postStart`), `test/e2e/*/job.yaml` | Not defterleri + e2e doğrulama Job'ları |
 | trino (Python client) | `>=0.339,<0.340` | Apache-2.0 | PyPI `trino` | `platform/values/jupyterhub.yaml` (`postStart`) | |
-| dbt-trino | 1.10.4 | Apache-2.0 | PyPI | `runbooks/dbt/cronjob.yaml` (referans örnek) | **Resmi dbt-trino imajı YOK** → örnek CronJob `python:3.13-slim` + `pip install dbt-trino==1.10.4` kullanır (özel imaj yasağı); çalışma zamanında PyPI erişimi gerekir |
+| dbt-trino | 1.10.4 | Apache-2.0 | PyPI | `examples/dbt/cronjob.yaml` (referans örnek) | **Resmi dbt-trino imajı YOK** → örnek CronJob `python:3.13-slim` + `pip install dbt-trino==1.10.4` kullanır (özel imaj yasağı); çalışma zamanında PyPI erişimi gerekir |
 
 ## DEV-ONLY bileşenler (prod'da KURULMAZ)
 

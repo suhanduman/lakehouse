@@ -59,7 +59,7 @@ kubectl -n lakehouse wait keycloakrealmimport/lakehouse-realm --for=condition=Do
 python3 -m venv "$ROOT/.venv" >/dev/null 2>&1 || true
 [[ -x "$ROOT/.venv/bin/pip" ]] || { echo "venv yok: python3 -m venv $ROOT/.venv başarısız"; exit 1; }
 "$ROOT/.venv/bin/pip" install -q 'apache-polaris==1.7.0'
-PATH="$ROOT/.venv/bin:$PATH" "$ROOT/runbooks/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml"
+PATH="$ROOT/.venv/bin:$PATH" "$ROOT/scripts/polaris-setup.sh" --setup "$ROOT/platform/polaris/setup.yaml"
 # Trino app döngüde DEĞİL: pod polaris-trino Secret'ını bekler -> ancak polaris-setup'tan sonra Healthy olabilir.
 # Değerleri aynı git kaynağından geldiği için revizyon kontrolü diğer git kaynaklı uygulamalarla aynı (eski rules.json'a karşı test etmemek için).
 [[ "$MODE" == "argocd" ]] && wait_app trino 1 900s

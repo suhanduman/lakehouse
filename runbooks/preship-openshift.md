@@ -9,11 +9,11 @@ kümesinde karşılığı olmayan ya da kind'ın sınırlarına takılan her şe
    `platform/values/glue.yaml`).
 2. Bu listeyi baştan sona koşun; her maddeyi kutusunu işaretleyerek ve **ölçülen çıktıyı** yanına yazarak kapatın
    (kanıt = çıktı, "bakıldı" değil).
-3. Kapanış kanıtı: `runbooks/scripts/acceptance.sh` 9/9 + bu listede açık kutu kalmaması
+3. Kapanış kanıtı: `scripts/acceptance.sh` 9/9 + bu listede açık kutu kalmaması
    (`runbooks/acceptance-tests.md`).
 
 **Kapsam dışı:** kind/CI'da zaten yeşil olan her şey (10 e2e işareti) — onların kanıtı
-`docs/plans/2026-09-10-f0-findings.md` F1–F5 notlarındadır. Bu liste yalnız **eksik kalan canlı kanıtı** izler.
+dahili planlama notlarında (F1–F5) kayıtlıdır. Bu liste yalnız **eksik kalan canlı kanıtı** izler.
 
 Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özgü nesnelerde (`Route`, `DPA`)
 `oc` yazılmıştır.
@@ -190,7 +190,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   (UWM'de Grafana platform tarafındadır):
   ```bash
   PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
-    runbooks/scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
+    scripts/acceptance.sh --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
   ```
   UWM Prometheus'u yetkilendirme ister (port-forward'lu düz `curl` 401 alabilir): script bu hâlde düşerse
   izleme kanıtı 2.2/2.3 maddeleriyle (thanos-querier + token) elle alınır — kural/hedef adları aynıdır.
@@ -256,7 +256,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
 
 - [ ] **3.6 Uçtan uca kabul koşusu OpenShift ns adlarıyla (HİÇ KOŞMADI)**
   ```bash
-  runbooks/scripts/acceptance.sh --ns lakehouse --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
+  scripts/acceptance.sh --ns lakehouse --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
   ```
   Beklenen: `KABUL: 9/9 yol geçti`. **Uyarı:** izleme yolu için 2.6 maddesi geçerlidir; DR yolu
   (`test/e2e/dr-path.sh`) ns'i `VELERO_NS` ile doğru alır ve Velero nesnelerini **tam adla**
@@ -393,7 +393,7 @@ deneme taze kümede CNPG'nin hazır olma süresini (~4 dk) rahatça kapsar ve ca
 ## 6. Kabul
 
 - [ ] **6.1 Kabul koşusu ve kanıt paketi**
-  `runbooks/acceptance-tests.md` (madde ↔ kanıt tablosu) + `runbooks/scripts/acceptance.sh` çıktısı; 3.6
+  `runbooks/acceptance-tests.md` (madde ↔ kanıt tablosu) + `scripts/acceptance.sh` çıktısı; 3.6
   maddesindeki ns bayraklarıyla koşulur ve çıktı müşteriye teslim edilen kanıt paketine konur.
 
 - [ ] **6.2 Bu listede açık kutu kalmadı**
