@@ -97,12 +97,20 @@ kubectl -n $NS exec deploy/superset-web-server -- superset import-dashboards -p 
   **mevcut** Superset kullanıcısı. Kullanıcılar OIDC ile yaratılır (`AUTH_ROLES_MAPPING`), yani ilgili yönetici
   Keycloak ile **en az bir kez giriş yapmış** olmalıdır; aksi hâlde komut kullanıcıyı bulamaz. Dev kümede bu
   `admin1`'dir.
-- Bundle içindeki `databases/lakehouse.yaml` mevcut `lakehouse` veritabanına **adla** bağlanır
-  (`superset legacy-import-datasources -p /app/configs/trino.yaml` ile kurulan datasource —
-  `runbooks/user-facing.md`). Parola bundle'da **yoktur**: Trino parolası `SQLALCHEMY_CUSTOM_PASSWORD_STORE`
-  ile env'den gelir, bu yüzden import parola sormaz.
-- Import, mevcut `lakehouse` veritabanını bundle'daki `uuid` ile eşleştirir; datasource zaten kuruluysa yeni
-  bağlantı yaratılmaz.
+- **Eşleşme `uuid` iledir.** Superset import'u veritabanını uuid'siyle bulur (`superset/models/helpers.py`
+  `import_from_dict`: uuid hem içe aktarılan bir alan hem de tekil kısıt). Bu yüzden ürün datasource'u
+  (`glue/templates/superset.yaml` içindeki `trino.yaml`) ve bundle'daki `databases/lakehouse.yaml` **aynı
+  sabit uuid'yi** taşır (tek kaynak: `glue/templates/_helpers.tpl` → `glue.supersetDbUuid`; veri seti de
+  veritabanını `database_uuid` ile aynı değere bağlar — eşleşmezse import veri setini ve chart'ı **sessizce
+  atlar**, dashboard boş kalır); URI ve `extra` de aynı Helm ifadesinden
+  üretilir — ConfigMap şablonu bundle dosyalarını `tpl` ile işler. İki tanım **inşa gereği birebir aynı**
+  olduğundan, import'un her zaman açık olan `overwrite=True` davranışı ürün datasource'unu bozmaz: mevcut
+  satır aynı değerlerle güncellenir, ikinci bir `lakehouse` satırı açılmaz.
+- **Taze kurulum sırası:** önce datasource import'u
+  (`superset legacy-import-datasources -p /app/configs/trino.yaml` — `runbooks/user-facing.md`), sonra bu
+  bölümdeki bundle import'u. Sabit uuid'li `lakehouse` veritabanını ilk adım yaratır, bundle onu bulur.
+- Parola bundle'da **yoktur**: Trino parolası `SQLALCHEMY_CUSTOM_PASSWORD_STORE` ile env'den gelir, bu yüzden
+  import parola sormaz.
 - Doğrulama (dashboard listesi):
   ```bash
   kubectl -n $NS exec deploy/superset-web-server -- python3 -c "
@@ -136,6 +144,9 @@ otomatik keşfedilemez — her tablo ayrı bir `"tbl$snapshots"` ilişkisidir).
 
 ## 5. Sınırlar
 
+- Bundle dosyaları repoda **Helm şablonudur** (`{{ include "glue.supersetDbUuid" . }}`, ad alanı ifadesi);
+  ConfigMap şablonu onları `tpl` ile işler. Bundle canlı Superset'ten yeniden üretilirse bu ifadeler elle
+  geri konmalıdır, aksi hâlde dev kümenin uuid/ad alanı repoya sabitlenir.
 - Silver/ham tablo adları values'a bağlıdır (`glue/values.yaml` `sources`/`pipelines`): farklı bir kurulumda
   SQL'deki üç demo tablosu yerine kendi tablolarınızı yazın (§4).
 - Metrikler **sorgu anında** hesaplanır; Prometheus serisi üretilmez, alarm kurulamaz. Tablo tazeliği alarmı

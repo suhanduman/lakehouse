@@ -130,4 +130,6 @@ columns:
   datetime_format: null
   extra: null
 version: 1.0.0
-database_uuid: afaeffd8-4b5b-4987-a12a-3389dbad7e0d
+# Veri seti, veritabanını uuid ile bulur: databases/lakehouse.yaml ve ürün datasource'u ile aynı sabit
+# (tek kaynak _helpers.tpl "glue.supersetDbUuid"). Eşleşmezse import veri setini ve chart'ı sessizce atlar.
+database_uuid: {{ include "glue.supersetDbUuid" . }}

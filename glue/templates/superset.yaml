@@ -8,6 +8,13 @@ data:
   trino.yaml: |
     databases:
     - database_name: lakehouse
+      # SABİT uuid (tek kaynak: _helpers.tpl "glue.supersetDbUuid") — asset bundle'ındaki
+      # databases/lakehouse.yaml ve datasets/.../database_uuid ile AYNI olmak ZORUNDA. Superset import'u
+      # nesneleri uuid ile eşleştirir (superset/models/helpers.py import_from_dict: uuid hem içe aktarılan
+      # alan hem tekil kısıt). Taze kurulumda önce bu legacy-import koşar; uuid sabitlenmezse rastgele
+      # üretilir ve sonraki bundle import'u ikinci bir "lakehouse" satırı yazmaya kalkar → dbs.database_name
+      # tekil kısıtı düşer.
+      uuid: {{ include "glue.supersetDbUuid" . }}
       sqlalchemy_uri: trino://superset@trino.{{ $ns }}.svc:8443/lakehouse
       expose_in_sqllab: true
       allow_ctas: true
@@ -20,13 +27,17 @@ data:
 # veri metrikleri dashboard'u. ConfigMap anahtarı alt dizin taşıyamaz -> "dizin__dosya" adlandırması;
 # runbooks/data-metrics.md import adımı adları dizin ağacına geri açar.
 # SIR YOK: databases/lakehouse.yaml parolasızdır (Trino parolası SQLALCHEMY_CUSTOM_PASSWORD_STORE ile env'den).
+# Dosyalar `tpl` ile işlenir: bundle'daki databases/lakehouse.yaml YAPISAL OLARAK yukarıdaki ürün
+# datasource'u (trino.yaml) ile aynı olsun diye ad alanını aynı ifadeden alır. Import overwrite=True ile
+# çalıştığı için farklı bir URI/extra ürün datasource'unu bozardı. Diğer bundle dosyaları şablon ifadesi
+# içermez, `tpl` onları değiştirmeden geçirir.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: superset-assets, namespace: {{ $ns }}}
 data:
 {{- range $path, $_ := .Files.Glob "files/superset/iceberg-metadata/**.yaml" }}
   {{ $path | trimPrefix "files/superset/" | replace "/" "__" }}: |
-{{ $.Files.Get $path | indent 4 }}
+{{ tpl ($.Files.Get $path) $ | indent 4 }}
 {{- end }}
 ---
 apiVersion: superset.apache.org/v1alpha1

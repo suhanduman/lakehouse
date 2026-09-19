@@ -66,6 +66,25 @@ tests:
         contains: {path: spec.webServer.podTemplate.volumes, content: {name: assets, configMap: {name: superset-assets}}}
       - documentSelector: {path: metadata.name, value: superset}
         contains: {path: spec.webServer.podTemplate.container.volumeMounts, content: {name: assets, mountPath: /app/assets, readOnly: true}}
+  # Bundle'ın veritabanı tanımı ürün datasource'uyla İNŞA GEREĞİ aynı: ad alanı `tpl` ile aynı ifadeden,
+  # uuid ise iki dosyada da aynı sabit. (Import uuid ile eşleşir ve overwrite=True ile üzerine yazar.)
+  - it: bundle'daki lakehouse veritabanı ürün datasource'uyla aynı ad alanı ve aynı sabit uuid'yi taşır
+    set: {namespace: veri-golu}
+    asserts:
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__databases__lakehouse.yaml"]', pattern: 'trino://superset@trino\.veri-golu\.svc:8443/lakehouse'}
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__databases__lakehouse.yaml"]', pattern: 'uuid: 7b68c652-4b36-41e8-a5f8-1324d7d577cf'}
+      - documentSelector: {path: metadata.name, value: superset-datasources}
+        matchRegex: {path: 'data["trino.yaml"]', pattern: 'trino://superset@trino\.veri-golu\.svc:8443/lakehouse'}
+      - documentSelector: {path: metadata.name, value: superset-datasources}
+        matchRegex: {path: 'data["trino.yaml"]', pattern: 'uuid: 7b68c652-4b36-41e8-a5f8-1324d7d577cf'}
+      # veri seti veritabanını uuid ile bulur: aynı sabit olmalı (eşleşmezse import veri seti + chart'ı atlar)
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__datasets__lakehouse__iceberg_table_health.yaml"]', pattern: 'database_uuid: 7b68c652-4b36-41e8-a5f8-1324d7d577cf'}
+      # diğer bundle dosyaları `tpl`'den değişmeden geçer (şablon ifadesi içermezler)
+      - documentSelector: {path: metadata.name, value: superset-assets}
+        matchRegex: {path: 'data["iceberg-metadata__dashboards__iceberg_metadata.yaml"]', pattern: 'slug: iceberg-metadata'}
   - it: disabled renders nothing
     set: {superset.enabled: false}
     asserts:
