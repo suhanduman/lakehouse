@@ -1,6 +1,6 @@
 # Prod-only işaret dosyası: gruplar AD'den gelir (Trino >= 473 LDAP group provider).
 #
-# İÇERİK BİLEREK BOŞ. group-provider.properties ÇOK SATIRLI bir string'tir; Helm çok satırlı string'leri
+# group-provider.properties BURADA DEĞİL. Çok satırlı bir string'tir; Helm çok satırlı string'leri
 # birleştirmez, SON değer dosyasınınki bütünüyle geçer. Bu yüzden bloğun TAMAMI müşteriye özel tek dosyada
 # durur: platform/values/site/trino.yaml (coordinator.additionalConfigFiles."group-provider.properties").
 # Burada bir kopya tutulsaydı iki yer sürüklenir, biri sessizce yok sayılırdı.

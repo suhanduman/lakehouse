@@ -845,8 +845,8 @@ secret-ad-ca
 ```
 
 Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: imajın
-varsayılan kökleri **artı** sizin AD kökünüz. 1 ya da 0 görürseniz kopyalama adımı
-atlanmıştır. AD kökünün gerçekten içeride olduğunu görmek için:
+varsayılan kökleri **artı** sizin AD kökünüz; onlarca olması beklenir. `1` görürseniz
+depoda yalnız AD kökü vardır (kopyalama yapılmamış) ve bu, dış TLS bağlantılarını kırar. AD kökünün gerçekten içeride olduğunu görmek için:
 
 `[bastion]`
 
@@ -868,7 +868,7 @@ Dosyanın gerçekten bir kök CA olduğunu [20-on-kosullar](20-on-kosullar.md) m
 Kurulumdan sonra herhangi bir bileşenin günlüğünde `PKIX path building failed` ya da
 `unable to find valid certification path to requested target` görürseniz: bu Secret ya
 eksiktir, ya **yanlış kökü** taşımaktadır, ya da ilgili bileşen onu okumamıştır —
-yukarıdaki tablodaki üç doğrulama komutunu sırayla çalıştırın. Zeppelin'in
+yukarıdaki "Doğrulama" başlığındaki komutları sırayla çalıştırın. Zeppelin'in
 `ad-truststore` initContainer'ı `Error` durumundaysa pod hiç açılmaz: `ca.crt` PEM
 değildir (`openssl x509 -inform der` ile çevirin).
 Uçtan uca LDAPS el sıkışması yalnız gerçek bir AD ile kanıtlanabilir
