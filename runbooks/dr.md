@@ -164,7 +164,8 @@ kubectl -n velero get restores.velero.io lakehouse-full -o jsonpath='{.status.ph
 kümeleri **Barman PITR** ile (§4). ArgoCD `selfHeal` glue'nun ürettiği nesneleri zaten Git'ten geri koyar;
 Velero restore'u asıl olarak **Git'te olmayanlar** için değerlidir: kullanıcı PVC'leri, Zeppelin not
 defterleri, elle yaratılan Secret'lar (`keycloak-clients`, `trino-service-accounts`, `lakehouse-ca`,
-`polaris-*` credential'ları).
+`jupyterhub-secrets`, `polaris-*` credential'ları). `jupyterhub-secrets` geri yüklenmezse veri kaybı olmaz
+ama tüm JupyterHub oturumları düşer ve saklanan auth_state çözülemez (kullanıcılar yeniden giriş yapar).
 
 ### 5.2 Seçili kaynak geri yükleme
 

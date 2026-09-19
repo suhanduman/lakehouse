@@ -156,9 +156,9 @@ Superset'te Trino bağlantısı tek seferlik bir komutla içe aktarılır — `r
 Temiz kurulum değil, **çalışan bir F3 kümesini** F4'e taşıyorsanız sıra önemlidir; ArgoCD sync'i doğrudan tetiklemek
 pod'ları eksik Secret'la `CreateContainerConfigError`'a sokar ve realm/issuer değişiklikleri sessizce uygulanmaz.
 
-1. **Yedi yeni Secret, glue sync'inden ÖNCE.** Yukarıdaki "F4 Secret'ları" bölümünün 1–6 numaralı komutlarını çalıştırın
+1. **Sekiz yeni Secret, glue sync'inden ÖNCE.** Yukarıdaki "F4 Secret'ları" bölümünün 1–7 numaralı komutlarını çalıştırın
    (`keycloak-clients`, `trino-service-accounts`, `trino-shared-secret`, `superset-secret`, `zeppelin-shiro`,
-   `zeppelin-interpreter`, `lakehouse-ca`). Eksik bir Secret'la sync edilirse Trino/Superset/Zeppelin pod'ları
+   `zeppelin-interpreter`, `lakehouse-ca`, `jupyterhub-secrets`). Eksik bir Secret'la sync edilirse Trino/Superset/Zeppelin/JupyterHub pod'ları
    `CreateContainerConfigError`'da bekler; Secret sonradan yaratılınca kubelet kendiliğinden toparlar
    (`kubectl -n lakehouse get pods` ile doğrulayın).
 2. **Realm'i yeniden içe aktarın.** `KeycloakRealmImport` mevcut realm'i GÜNCELLEMEZ — F4'ün yeni client'ları
