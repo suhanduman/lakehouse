@@ -39,13 +39,13 @@ catalogs:
 accessControl:
   type: configmap
   refreshPeriod: 60s
-  # İlk eşleşen kural kazanır: özel (öğrenci filtre/maske) kurallar genel SELECT kuralından ÖNCE.
+  # İlk eşleşen kural kazanır: özel (kullanıcı filtre/maske) kurallar genel SELECT kuralından ÖNCE.
   rules:
     rules.json: |-
       {
         "catalogs": [
           {"group": "lakehouse-admins|lakehouse-analysts", "catalog": "lakehouse|system", "allow": "all"},
-          {"group": "lakehouse-students", "catalog": "lakehouse|system", "allow": "read-only"},
+          {"group": "lakehouse-users", "catalog": "lakehouse|system", "allow": "read-only"},
           {"user": "superset|zeppelin|e2e", "catalog": "lakehouse|system", "allow": "read-only"}
         ],
         "schemas": [
@@ -57,10 +57,10 @@ accessControl:
           {"group": "lakehouse-admins", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"]},
           {"group": "lakehouse-analysts", "schema": "sandbox", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"]},
           {"group": "lakehouse-analysts", "privileges": ["SELECT"]},
-          {"group": "lakehouse-students", "schema": "shop", "table": "orders", "privileges": ["SELECT"], "filter": "status <> 'shipped'"},
-          {"group": "lakehouse-students", "schema": "nginx_raw", "table": "access_log", "privileges": ["SELECT"],
+          {"group": "lakehouse-users", "schema": "shop", "table": "orders", "privileges": ["SELECT"], "filter": "status <> 'shipped'"},
+          {"group": "lakehouse-users", "schema": "nginx_raw", "table": "access_log", "privileges": ["SELECT"],
            "columns": [{"name": "remote", "mask": "'x.x.x.x'"}]},
-          {"group": "lakehouse-students", "privileges": ["SELECT"]},
+          {"group": "lakehouse-users", "privileges": ["SELECT"]},
           {"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]},
           {"catalog": "system", "privileges": ["SELECT"]}
         ]

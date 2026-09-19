@@ -111,7 +111,7 @@ superset:
   secretName: superset-secret          # key: secret-key (Superset SECRET_KEY; Git'e girmez)
   resources: {requests: {cpu: 250m, memory: 768Mi}, limits: {memory: 2Gi}}
   # Keycloak grup adı -> Superset rolleri (AUTH_ROLES_MAPPING); grup talebi realm'in superset client'ındaki groups mapper'ından gelir
-  roleMapping: {lakehouse-admins: [Admin], lakehouse-analysts: [Alpha], lakehouse-students: [Gamma]}
+  roleMapping: {lakehouse-admins: [Admin], lakehouse-analysts: [Alpha], lakehouse-users: [Gamma]}
 jupyterhub:
   hostname: ""                     # boş -> jupyterhub-<ns>.<appsDomain>
 zeppelin:

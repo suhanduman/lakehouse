@@ -279,7 +279,7 @@ gerekir.
   `kubectl -n lakehouse exec deploy/zeppelin -- rm /data/conf/interpreter.json && kubectl -n lakehouse rollout restart deploy/zeppelin`
   (UI'daki tüm interpreter değişiklikleri sıfırlanır).
 - **Zeppelin: giriş başarılı ama `/api/notebook` 401:** rol kapısı
-  (`[urls]` son kuralı `anyofroles[admin, analyst, student]`) — kullanıcı `lakehouse-*` gruplarının hiçbirinde
+  (`[urls]` son kuralı `anyofroles[admin, analyst, user]`) — kullanıcı `lakehouse-*` gruplarının hiçbirinde
   değildir (`runbooks/access-control.md`).
 
 ---

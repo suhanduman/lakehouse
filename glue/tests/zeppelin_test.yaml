@@ -53,13 +53,13 @@ tests:
     asserts:
       - containsDocument: {kind: Secret, apiVersion: v1, name: zeppelin-shiro}
       - matchRegex: {path: 'stringData["shiro.ini"]', pattern: 'anyofroles = org\.apache\.zeppelin\.utils\.AnyOfRolesUserAuthorizationFilter'}
-      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: '/\*\* = authc, anyofroles\[admin, analyst, student\]'}
+      - matchRegex: {path: 'stringData["shiro.ini"]', pattern: '/\*\* = authc, anyofroles\[admin, analyst, user\]'}
       # giriş uç noktası rol kapısından MUAF olmalı (aksi halde Zeppelin'in filtresi NPE -> /api/login 500)
       - matchRegex: {path: 'stringData["shiro.ini"]', pattern: '(?m)^\s*/api/login = authc\s*$'}
       # rol kapısının negatif kanıtı için rolsüz dev kullanıcısı
       - matchRegex: {path: 'stringData["shiro.ini"]', pattern: 'nogroup1 = nogroup1-dev, nogroup'}
-      # wildcard izin tanımı kalmamalı (footgun): `analyst = *` / `student = *`
-      - notMatchRegex: {path: 'stringData["shiro.ini"]', pattern: '(?m)^\s*(admin|analyst|student) = \*\s*$'}
+      # wildcard izin tanımı kalmamalı (footgun): `analyst = *` / `user = *`
+      - notMatchRegex: {path: 'stringData["shiro.ini"]', pattern: '(?m)^\s*(admin|analyst|user) = \*\s*$'}
   - it: dev interpreter seed targets trino jdbc over TLS
     template: dev-secrets.yaml
     set: {components.devSecrets: true}

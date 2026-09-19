@@ -35,10 +35,10 @@ tests:
       - contains: {path: 'spec.realm.clients[0].redirectUris', content: https://trino-lakehouse.apps.ocp.example.net/oauth2/callback}
   - it: dev users enable password grant
     template: keycloak-realm.yaml
-    set: {keycloak.devUsers: [{username: u1, password: p1, group: lakehouse-students}]}
+    set: {keycloak.devUsers: [{username: u1, password: p1, group: lakehouse-users}]}
     asserts:
       - equal: {path: 'spec.realm.clients[0].directAccessGrantsEnabled', value: true}
-      - equal: {path: 'spec.realm.users[0].groups[0]', value: /lakehouse-students}
+      - equal: {path: 'spec.realm.users[0].groups[0]', value: /lakehouse-users}
   - it: ingress host strips scheme
     template: ingress.yaml
     set: {ingress.enabled: true}

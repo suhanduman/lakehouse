@@ -39,7 +39,7 @@ keycloak:
   devUsers:
   - {username: admin1,   password: admin1-dev,   group: lakehouse-admins}
   - {username: analyst1, password: analyst1-dev, group: lakehouse-analysts}
-  - {username: student1, password: student1-dev, group: lakehouse-students}
+  - {username: user1, password: user1-dev, group: lakehouse-users}
 superset:
   hostname: superset.127.0.0.1.nip.io
   resources: {requests: {cpu: 100m, memory: 512Mi}, limits: {memory: 1536Mi}}     # CI 4 vCPU: istek düşük, limit aynı

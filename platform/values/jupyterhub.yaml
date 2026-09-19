@@ -16,7 +16,7 @@ hub:
       scope: [openid, profile, email]
       manage_groups: true
       auth_state_groups_key: oauth_user.groups
-      allowed_groups: [lakehouse-admins, lakehouse-analysts, lakehouse-students]
+      allowed_groups: [lakehouse-admins, lakehouse-analysts, lakehouse-users]
       admin_groups: [lakehouse-admins]
   extraEnv:
     OAUTH_CLIENT_ID: {value: jupyterhub}
@@ -50,7 +50,7 @@ singleuser:
     # Trino'ya bağlanan örnekler açık `verify='/etc/lakehouse-ca/tls.crt'` verir (runbooks/user-facing.md).
   # singleuser netpol z2jh tarafından; egress yalnız Trino/Polaris (+dev MinIO), dış ağ (PyPI/S3) nonPrivateIPs
   # varsayılanı. glue'nun NetworkPolicy'leri yalnız Ingress'tir (glue/templates/networkpolicy.yaml: "egress
-  # kısıtlanmaz") -> tek egress kontrolü budur; öğrenciler dahil TÜM özel IP'lere izin vermek yerine podSelector ile
+  # kısıtlanmaz") -> tek egress kontrolü budur; kullanıcılar dahil TÜM özel IP'lere izin vermek yerine podSelector ile
   # yalnız Trino (8443) ve Polaris (8181) pod'larına daraltıldı (etiketler canlı doğrulandı: kubectl -n lakehouse
   # get svc trino/polaris -o jsonpath='{.spec.selector}').
   networkPolicy:

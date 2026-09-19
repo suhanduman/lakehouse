@@ -131,7 +131,7 @@ ingress controller'da varsayılan sertifika, ya da her host için bir `Secret` +
 
 ## İlk giriş
 
-Ön koşul: tarayıcı `lakehouse-ca`'ya güveniyor olmalı (Trino Route `passthrough`; `tls.caBundle` doluysa `reencrypt` ve router sertifikası geçerlidir). Kullanıcı Keycloak'ta `lakehouse-admins` / `lakehouse-analysts` / `lakehouse-students` gruplarından birinde olmalı (AD federasyonu ile gelir).
+Ön koşul: tarayıcı `lakehouse-ca`'ya güveniyor olmalı (Trino Route `passthrough`; `tls.caBundle` doluysa `reencrypt` ve router sertifikası geçerlidir). Kullanıcı Keycloak'ta `lakehouse-admins` / `lakehouse-analysts` / `lakehouse-users` gruplarından birinde olmalı (AD federasyonu ile gelir).
 
 | Bileşen | URL | Akış |
 |---|---|---|

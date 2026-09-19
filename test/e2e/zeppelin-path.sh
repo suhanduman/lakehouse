@@ -8,9 +8,9 @@ kubectl -n "$NS" port-forward svc/zeppelin 18081:8080 >/dev/null 2>&1 & PF=$!; t
 CJ=$(mktemp)
 curl -sS -c "$CJ" -d 'userName=analyst1' -d 'password=analyst1-dev' localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin shiro login analyst1"; exit 1; }
 echo "OK zeppelin shiro login analyst1"
-[[ "$(curl -sS -o /dev/null -w '%{http_code}' -d 'userName=student1' -d 'password=wrong' localhost:18081/api/login)" == "403" ]] || { echo "HATA zeppelin wrong password 403 beklendi"; exit 1; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -d 'userName=user1' -d 'password=wrong' localhost:18081/api/login)" == "403" ]] || { echo "HATA zeppelin wrong password 403 beklendi"; exit 1; }
 echo "OK zeppelin wrong password 403"
-# Rol kapısı ([urls] son kuralı anyofroles[admin, analyst, student]): kimlik doğrulamak YETMEZ. Rolsüz dev
+# Rol kapısı ([urls] son kuralı anyofroles[admin, analyst, user]): kimlik doğrulamak YETMEZ. Rolsüz dev
 # kullanıcısı nogroup1 giriş yapabilir ama hiçbir veri uç noktasına erişemez (aksi halde paylaşımlı `zeppelin`
 # Trino servis hesabıyla tüm kataloğu okurdu — final review C1).
 NJ=$(mktemp)

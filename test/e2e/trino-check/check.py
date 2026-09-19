@@ -1,6 +1,6 @@
-"""check.py <shop_rows> <crm_rows> <shop_rows_student>
+"""check.py <shop_rows> <crm_rows> <shop_rows_user>
 Trino'ya küme içinden: (1) servis hesabı e2e (Basic) sayımlar + sandbox yazma reddi; (2) analyst1 (Keycloak password grant -> Bearer)
-tam okuma, nginx remote maskesiz, sandbox'a CTAS + DROP; (3) student1: shop.orders satır filtresi, remote maskesi 'x.x.x.x', sandbox yazma reddi."""
+tam okuma, nginx remote maskesiz, sandbox'a CTAS + DROP; (3) user1: shop.orders satır filtresi, remote maskesi 'x.x.x.x', sandbox yazma reddi."""
 import os
 import re
 import sys
@@ -10,7 +10,7 @@ import trino
 from trino.auth import BasicAuthentication, JWTAuthentication
 
 HOST, CA = os.environ["TRINO_HOST"], os.environ["CA_FILE"]
-shop_rows, crm_rows, shop_rows_student = (int(a) for a in sys.argv[1:4])
+shop_rows, crm_rows, shop_rows_user = (int(a) for a in sys.argv[1:4])
 
 
 def conn(auth):
@@ -69,8 +69,8 @@ expect(q(an, "select count(*) from sandbox.e2e_orders")[0][0] == shop_rows, "ana
 q(an, "drop table sandbox.e2e_orders")
 print("OK analyst1 sandbox DROP")
 
-st = conn(JWTAuthentication(token("student1", "student1-dev")))
-expect(q(st, "select count(*) from shop.orders")[0][0] == shop_rows_student, f"student1 satır filtresi status <> 'shipped' -> {shop_rows_student}")
-expect(q(st, "select remote from nginx_raw.access_log limit 1")[0][0] == "x.x.x.x", "student1 remote maskesi")
-expect_denied(st, "create table sandbox.e2e_student as select 1 x", "student1 sandbox yazma reddi")
+usr = conn(JWTAuthentication(token("user1", "user1-dev")))
+expect(q(usr, "select count(*) from shop.orders")[0][0] == shop_rows_user, f"user1 satır filtresi status <> 'shipped' -> {shop_rows_user}")
+expect(q(usr, "select remote from nginx_raw.access_log limit 1")[0][0] == "x.x.x.x", "user1 remote maskesi")
+expect_denied(usr, "create table sandbox.e2e_user as select 1 x", "user1 sandbox yazma reddi")
 print("OK TRINO_OK")

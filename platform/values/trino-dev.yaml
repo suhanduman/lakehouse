@@ -18,7 +18,7 @@ auth:
   groups: |
     lakehouse-admins:admin1
     lakehouse-analysts:analyst1
-    lakehouse-students:student1
+    lakehouse-users:user1
 catalogs:
   lakehouse: |
     connector.name=iceberg

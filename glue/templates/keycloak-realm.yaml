@@ -162,16 +162,16 @@ spec:
         description: "Lakehouse yöneticisi"
       - name: analyst
         description: "Veri analisti / Araştırmacı"
-      - name: student
-        description: "Öğrenci (salt-okunur)"
+      - name: user
+        description: "Kullanıcı (salt-okunur)"
 
     groups:
     - name: lakehouse-admins
       realmRoles: [admin]
     - name: lakehouse-analysts
       realmRoles: [analyst]
-    - name: lakehouse-students
-      realmRoles: [student]
+    - name: lakehouse-users
+      realmRoles: [user]
 
     {{- with .Values.keycloak.devUsers }}
     # DEV-ONLY statik kullanıcılar (e2e password grant); prod'da kullanıcılar AD federasyonundan gelir

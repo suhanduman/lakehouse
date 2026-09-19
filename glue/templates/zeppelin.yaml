@@ -50,7 +50,7 @@ spec:
         - {name: ZEPPELIN_NOTEBOOK_DIR, value: /data/notebook}
         # zeppelin.notebook.public varsayılanı TRUE: yeni her not defteri BÜTÜN oturum açmış kullanıcılara
         # açık olur (Shiro rol kapısı yalnız girişi sınırlar, not sahipliğini değil). Servis hesabı modelinde
-        # (paylaşımlı `zeppelin` Trino hesabı) bu, bir analistin notunun öğrencilerce okunması demektir ->
+        # (paylaşımlı `zeppelin` Trino hesabı) bu, bir analistin notunun kullanıcılarca okunması demektir ->
         # varsayılan private; paylaşım not bazında UI'dan (Note permissions) verilir.
         - {name: ZEPPELIN_NOTEBOOK_PUBLIC, value: "false"}
         - {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}
