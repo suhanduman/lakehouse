@@ -101,6 +101,8 @@ for line in ["http-server.authentication.oauth2.client-id=trino",
 
 # 3b) AD kök CA'sı (ad-ca) üç tüketiciye TEK anahtardan açılır: glue'da keycloak.ldap.caSecret,
 # Trino'da mount (../trino-ldap.yaml) + ldap.ssl.truststore.path (site/trino.yaml group-provider bloğu).
+# KURAL: denetlenen çift `caSecret` <-> `ldap.ssl.truststore.path` SATIRIDIR; trino-ldap.yaml'daki mount
+# DENETLENMEZ çünkü optional: true'dur (Secret yoksa Trino yine açılır, mount sessizce boş kalır).
 # Biri açık, öteki kapalı bırakılırsa Trino ya PKIX hatası verir ya da olmayan bir dosyayı gösterir.
 ca = get(g, "keycloak.ldap.caSecret")
 ts = "ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt"

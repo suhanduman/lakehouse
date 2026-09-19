@@ -49,7 +49,10 @@ spec:
           rdnLDAPAttribute: ["cn"]
           uuidLDAPAttribute: ["objectGUID"]
           searchScope: ["2"]
-          useTruststoreSpi: ["ldapsOnly"]
+          # Keycloak 26: "ldapsOnly" KULLANIMDAN KALKTI. KC 24'ten beri conf/truststores altındaki
+          # sertifikalar SİSTEM güven deposuyla BİRLEŞİR (glue/templates/keycloak.yaml spec.truststores),
+          # bu yüzden güveni sağlayan şey bu ayar değil, o depodur; "always" tek geçerli değerdir.
+          useTruststoreSpi: ["always"]
           connectionPooling: ["true"]
           pagination: ["true"]
           batchSizeForSync: ["1000"]

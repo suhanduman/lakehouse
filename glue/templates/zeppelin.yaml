@@ -45,9 +45,12 @@ spec:
       # varsayılanını EZER ve Maven Central'dan trino-jdbc indirmesini, Keycloak/Trino TLS'ini kırardı.
       # Depo parolası SIR DEĞİLDİR (yalnız public sertifika taşır) — sabit `changeit`.
       # Son `grep -c` bilerek kalıcıdır: depo boş çıkarsa initContainer düşer ve pod hiç açılmaz.
+      # Baştaki `rm -f` İDEMPOTENSİ SAĞLAR: emptyDir pod sandbox'ı yeniden başlatıldığında YAŞAR ama init
+      # konteynerleri YENİDEN KOŞAR -> var olan depoya ikinci `importcert` "alias <ad-ca> already exists"
+      # ile 1 döner ve `set -e` yüzünden pod bir daha açılmazdı. Depo her koşuda sıfırdan üretilir.
       - name: ad-truststore
         image: {{ $z.image }}
-        command: ["sh", "-c", "set -e; keytool -importkeystore -noprompt -srckeystore \"$JAVA_HOME/lib/security/cacerts\" -srcstoretype JKS -srcstorepass changeit -destkeystore /truststore/ad-truststore.p12 -deststoretype PKCS12 -deststorepass changeit; keytool -importcert -noprompt -trustcacerts -alias ad-ca -file /ad-ca/ca.crt -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit; keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit | grep -c trustedCertEntry"]
+        command: ["sh", "-c", "set -e; rm -f /truststore/ad-truststore.p12; keytool -importkeystore -noprompt -srckeystore \"$JAVA_HOME/lib/security/cacerts\" -srcstoretype JKS -srcstorepass changeit -destkeystore /truststore/ad-truststore.p12 -deststoretype PKCS12 -deststorepass changeit; keytool -importcert -noprompt -trustcacerts -alias ad-ca -file /ad-ca/ca.crt -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit; keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 -storepass changeit | grep -c trustedCertEntry"]
         volumeMounts: [{name: ad-truststore, mountPath: /truststore}, {name: ad-ca, mountPath: /ad-ca, readOnly: true}]
       {{- end }}
       containers:

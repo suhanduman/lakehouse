@@ -48,7 +48,7 @@ tests:
   # AD LDAPS güven kökü (ad-ca). Keycloak operator 26.7.3 CRD alanı CANLI doğrulandı:
   # `kubectl explain keycloak.spec.truststores.secret.name` (v2alpha1 ve v2beta1'de var). Operatör
   # Secret'taki PEM'leri /opt/keycloak/conf/truststores altına bağlar ve truststore SPI'sine ekler —
-  # LDAP federasyonunun useTruststoreSpi: ldapsOnly ayarı bu depoyu kullanır.
+  # KC 24'ten beri bu dizin SİSTEM güven deposuyla birleşir; realm useTruststoreSpi: always ile onu seçer.
   - it: ad-ca truststore absent while caSecret empty
     template: keycloak.yaml
     asserts:
@@ -58,3 +58,10 @@ tests:
     set: {keycloak.ldap.caSecret: ad-ca}
     asserts:
       - equal: {path: 'spec.truststores["ad-ca"].secret.name', value: ad-ca}
+  # Keycloak 26'da "ldapsOnly" kullanımdan kalktı; güven zaten conf/truststores + sistem deposu
+  # birleşiminden gelir (glue/templates/keycloak.yaml). Bu test eski değerin geri sızmasını engeller.
+  - it: ldap federation uses the non-deprecated truststore spi value
+    template: keycloak-realm.yaml
+    set: {keycloak.ldap.enabled: true}
+    asserts:
+      - equal: {path: 'spec.realm.components["org.keycloak.storage.UserStorageProvider"][0].config.useTruststoreSpi[0]', value: always}

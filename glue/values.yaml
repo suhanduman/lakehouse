@@ -96,7 +96,7 @@ keycloak:
     # AD kök CA'sını taşıyan Secret'ın ADI (anahtar ca.crt, PEM) — docs/30-kurulum.md §5.13.
     # BOŞ = hiçbir yere bağlanmaz (AD sertifikası zaten imajların güven deposundaki bir kökten geliyorsa).
     # Doluyken TEK anahtar İKİ tüketiciyi birden açar: Keycloak CR spec.truststores (operatör PEM'i
-    # /opt/keycloak/conf/truststores'a bağlar, useTruststoreSpi: ldapsOnly onu kullanır) ve Zeppelin'in
+    # /opt/keycloak/conf/truststores'a bağlar, oradan sistem güven deposuyla birleşir) ve Zeppelin'in
     # ad-truststore initContainer'ı (cacerts kopyası + keytool import). Trino AYRI chart'tadır: aynı
     # Secret platform/values/trino-ldap.yaml ile bağlanır, yol site/trino.yaml'daki group-provider
     # bloğunda (ldap.ssl.truststore.path). Üçünün tutarlılığını scripts/check-site.sh denetler.

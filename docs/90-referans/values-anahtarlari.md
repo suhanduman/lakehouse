@@ -130,9 +130,17 @@ Diğer satırlar (`connector.name=iceberg`, `iceberg.catalog.type=rest`,
 `iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL`, `fs.s3.enabled=true`,
 `s3.path-style-access=true`) ürün satırlarıdır.
 
-> **`platform/values/trino-ldap.yaml` bilerek boştur.** Yalnız yorum içerir ve ArgoCD'nin
-> değer dosyası listesinde durur (geliştirme kümesi bu listeyi başka bir dosyayla
-> değiştirir). **Dokunmayın, silmeyin.**
+> **`platform/values/trino-ldap.yaml` yalnız AD kök CA'sının bağlanmasını taşır.**
+> `group-provider.properties` bloğu **burada değildir** (çok satırlı string'ler birleşmez,
+> blok bütünüyle `platform/values/site/trino.yaml`'dan gelir); bu dosyada
+> `coordinator.additionalVolumes`
+> ve `additionalVolumeMounts` ile `ad-ca` Secret'ı `/etc/trino/ad-ca` altına bağlanır —
+> `optional: true` olduğu için Secret yoksa Trino yine açılır. Dosya ayrıca ArgoCD'nin
+> değer dosyası listesinde **prod işaretidir** (geliştirme kümesi bu listeyi başka bir
+> dosyayla değiştirir). **Silmeyin**; AD sertifikanız herkesçe bilinen bir CA'dan
+> geliyorsa dokunmanız gereken yer burası değil, `platform/values/site/glue.yaml` →
+> `keycloak.ldap.caSecret` ve `platform/values/site/trino.yaml` → `ldap.ssl.truststore.path`
+> satırıdır.
 
 ---
 

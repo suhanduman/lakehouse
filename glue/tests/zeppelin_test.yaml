@@ -98,3 +98,11 @@ tests:
       - contains: {path: 'spec.template.spec.containers[0].volumeMounts', content: {name: ad-truststore, mountPath: /truststore, readOnly: true}}
       - contains: {path: 'spec.template.spec.volumes', content: {name: ad-truststore, emptyDir: {}}}
       - contains: {path: 'spec.template.spec.volumes', content: {name: ad-ca, secret: {secretName: ad-ca, items: [{key: ca.crt, path: ca.crt}]}}}
+  # init konteynerleri sandbox yeniden başlatıldığında YENİDEN KOŞAR, emptyDir ise YAŞAR -> depo
+  # silinmeden ikinci `importcert` "alias already exists" ile 1 döner ve pod bir daha açılmaz.
+  - it: ad truststore initContainer is idempotent (rebuilds the store)
+    template: zeppelin.yaml
+    set: {keycloak.ldap.caSecret: ad-ca}
+    documentIndex: 1
+    asserts:
+      - matchRegex: {path: 'spec.template.spec.initContainers[1].command[2]', pattern: '^set -e; rm -f /truststore/ad-truststore\.p12; keytool -importkeystore'}

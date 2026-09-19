@@ -808,15 +808,24 @@ konteyner imajı üretmeniz ya da çalışan bir konteynerin `cacerts` dosyasın
 
 | Bileşen | Nasıl bağlanır | Konteynerdeki yol | Hangi dosya yapar |
 |---|---|---|---|
-| **Keycloak** — AD kullanıcı federasyonu (`useTruststoreSpi: ldapsOnly`) | Keycloak CR `spec.truststores`; operatör Secret'taki PEM'leri bağlar ve Keycloak'ın güven deposu SPI'sine ekler | `/opt/keycloak/conf/truststores/` | `glue/templates/keycloak.yaml` |
+| **Keycloak** — AD kullanıcı federasyonu (LDAPS) | Keycloak CR `spec.truststores`; operatör Secret'taki PEM'leri bu dizine bağlar, Keycloak onları **sistem güven deposuyla birleştirir** | `/opt/keycloak/conf/truststores/` | `glue/templates/keycloak.yaml` |
 | **Trino coordinator** — LDAP grup sağlayıcısı (AD grupları) | Secret volume + `ldap.ssl.truststore.path` (Trino PEM güven deposu kabul eder) | `/etc/trino/ad-ca/ca.crt` | `platform/values/trino-ldap.yaml` (mount) + `platform/values/site/trino.yaml` (satır) |
 | **Zeppelin** — Shiro `ActiveDirectoryGroupRealm` | `ad-truststore` initContainer'ı imajın **kendi** `cacerts` dosyasını kopyalar, kökü `keytool` ile ekler; sunucu ve yorumlayıcı JVM'leri `-Djavax.net.ssl.trustStore` ile bu kopyayı kullanır | `/truststore/ad-truststore.p12` | `glue/templates/zeppelin.yaml` |
 
 Üçünü birden açıp kapatan **tek** ayar `platform/values/site/glue.yaml` içindeki
-`keycloak.ldap.caSecret`'tir (şablonda `ad-ca` yazılıdır). Bu Secret'a ihtiyacınız yoksa
-onu `""` yapın **ve** `platform/values/site/trino.yaml` içindeki
-`ldap.ssl.truststore.path` satırını silin; `scripts/check-site.sh` ikisinin birlikte
-açılıp kapandığını denetler.
+`keycloak.ldap.caSecret`'tir (şablonda `ad-ca` yazılıdır).
+
+**Bu Secret'a ihtiyacınız yoksa** (AD sertifikanız herkesçe bilinen bir CA'dan geliyorsa)
+tam olarak iki satır değiştirin:
+
+1. `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret: ""`
+2. `platform/values/site/trino.yaml` → `group-provider.properties` bloğundan
+   `ldap.ssl.truststore.path` satırını **silin**
+
+`platform/values/trino-ldap.yaml` dosyasına **dokunmayın**: oradaki Secret bağlaması
+`optional: true`'dur, yani `ad-ca` yoksa Trino yine sorunsuz açılır (bağlama sessizce boş
+kalır). `scripts/check-site.sh` yukarıdaki iki adımın **birlikte** yapıldığını denetler:
+`caSecret` doluyken `ldap.ssl.truststore.path` satırı bulunmalı, boşken bulunmamalıdır.
 
 Zeppelin'de kopya alınmasının nedeni: yalnız AD kökünü içeren bir güven deposu JVM'in
 varsayılanını **ezer** ve Maven Central'dan inen Trino JDBC sürücüsü ile Keycloak/Trino

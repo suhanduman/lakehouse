@@ -22,8 +22,11 @@ keycloak:
     bindDn: "CN=svc-lakehouse,OU=Service,DC=example,DC=com"   # $LDAP_BIND_DN (parola: Secret keycloak-clients/ldap-bind)
     # AD kök CA'sı özel bir CA'dan geliyorsa (hedef ortam) bu Secret'ı kurulumda yaratın (docs/30-kurulum.md
     # §5.13) ve adını burada bırakın: Keycloak, Zeppelin ve Trino onu tek elden alır. AD sertifikası
-    # konteynerlerin zaten güvendiği bir kökten geliyorsa "" yapın — O ZAMAN site/trino.yaml'daki
-    # ldap.ssl.truststore.path satırını da SİLİN (scripts/check-site.sh ikisini birlikte denetler).
+    # konteynerlerin zaten güvendiği bir kökten geliyorsa TAM OLARAK iki şey yapın:
+    #   1) burada caSecret: ""
+    #   2) site/trino.yaml -> group-provider bloğundan ldap.ssl.truststore.path satırını SİLİN
+    # ../trino-ldap.yaml'a DOKUNMAYIN: oradaki mount optional'dır, Secret yoksa Trino yine açılır.
+    # scripts/check-site.sh bu iki adımın birlikte yapıldığını denetler.
     caSecret: ad-ca                                   # Secret adı; anahtar ca.crt (PEM)
 cnpg:
   polarisDb:  {storageClass: ""}          # $STORAGE_CLASS ("" = kümenin varsayılanı)

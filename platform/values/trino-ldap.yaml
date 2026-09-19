@@ -20,11 +20,16 @@
 # platform/values/trino.yaml'da trino-tls için kullanılıyor ve Helm LİSTELERİ birleştirmez — buradan
 # yeniden verilseydi trino-tls mount'u sessizce düşer, HTTPS 8443 açılmazdı.
 # Dev bu dosyayı YÜKLEMEZ (envs/dev değer listesini değiştirir) -> kind'da Trino'ya ad-ca bağlanmaz.
-# ad-ca'ya ihtiyaç yoksa (AD sertifikası zaten güvenilen bir kökten): aşağıdaki bloğu ve
-# site/trino.yaml'daki ldap.ssl.truststore.path satırını birlikte silin; site/glue.yaml'da
-# keycloak.ldap.caSecret'i "" yapın. scripts/check-site.sh üçünün tutarlılığını denetler.
+# optional: true ZORUNLU: ad-ca koşullu bir Secret'tır (docs/30-kurulum.md §5.13). Optional olmasaydı,
+# herkesçe bilinen bir CA'dan sertifika alan müşteride Secret hiç yaratılmaz ve trino-coordinator
+# `secret "ad-ca" not found` ile ContainerCreating'de sonsuza kadar beklerdi. Optional ile mount sessizce
+# boş kalır; Trino açılır. Kapatmanın TEK adımı bu blok DEĞİL, aşağıdaki iki satırdır:
+#   1) site/glue.yaml   -> keycloak.ldap.caSecret: ""
+#   2) site/trino.yaml  -> group-provider bloğundan ldap.ssl.truststore.path satırını SİL
+# (aksi halde Trino olmayan bir dosyayı okumaya çalışır). scripts/check-site.sh kuralı: caSecret ile
+# ldap.ssl.truststore.path satırı BİRLİKTE açılır/kapanır; bu mount optional olduğu için denetime girmez.
 coordinator:
   additionalVolumes:
-  - {name: ad-ca, secret: {secretName: ad-ca}}
+  - {name: ad-ca, secret: {secretName: ad-ca, optional: true}}
   additionalVolumeMounts:
   - {name: ad-ca, mountPath: /etc/trino/ad-ca, readOnly: true}
