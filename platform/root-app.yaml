@@ -7,8 +7,10 @@ spec:
     repoURL: https://github.com/suhanduman/lakehouse.git
     targetRevision: main
     path: platform/envs/dev
-# Belgelenen statik varsayılan (dev, bu repo@main). bootstrap.sh bunu doğrudan UYGULAMAZ: --env/--repo/--revision ile
-# eşdeğerini kendi heredoc'undan üretir ve alt Application'ları kustomize patch'leriyle aynı repo/revizyona sabitler.
+# Belgelenen statik varsayılan (dev, bu repo@main, ns argocd). bootstrap.sh bunu doğrudan UYGULAMAZ: --env/--repo/--revision
+# ile eşdeğerini kendi heredoc'undan üretir ve alt Application'ları kustomize patch'leriyle aynı repo/revizyona sabitler.
+# Ad alanı `bootstrap.sh --argocd-ns NS` ile değişir (varsayılan argocd; OpenShift GitOps'ta openshift-gitops) — kök ve
+# alt Application'lar kustomize patch ile verilen ns'e taşınır, bu dosyadaki `argocd` yalnız belge amaçlıdır.
   destination: {server: https://kubernetes.default.svc, namespace: argocd}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

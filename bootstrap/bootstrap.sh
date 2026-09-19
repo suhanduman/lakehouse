@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Lakehouse v2 bootstrap: ArgoCD'yi kur ve app-of-apps kök Application'ını uygula. Idempotent.
-#   bootstrap/bootstrap.sh --env dev|prod [--repo URL] [--revision REF] [--mode argocd|helm]
+#   bootstrap/bootstrap.sh --env dev|prod [--repo URL] [--revision REF] [--mode argocd|helm] [--argocd-ns NS]
 # --mode helm : ArgoCD'siz lokal döngü (aynı chart'lar helm ile; ArgoCD yolu CI'da doğrulanır)
+# --argocd-ns : ArgoCD'nin bulunduğu/kurulacağı ad alanı (varsayılan argocd). OpenShift GitOps'ta bu openshift-gitops'tur;
+#               ns'de argocd-server ya da openshift-gitops-server deployment'ı zaten varsa upstream ArgoCD kurulumu atlanır.
 set -euo pipefail
 ARGOCD_VERSION=v3.5.2
-ENV=dev; REPO=https://github.com/suhanduman/lakehouse.git; REVISION=main; MODE=argocd
+ENV=dev; REPO=https://github.com/suhanduman/lakehouse.git; REVISION=main; MODE=argocd; ARGOCD_NS=argocd
 while [[ $# -gt 0 ]]; do case "$1" in
-  --env) ENV="$2"; shift 2;; --repo) REPO="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --mode) MODE="$2"; shift 2;;
+  --env) ENV="$2"; shift 2;; --repo) REPO="$2"; shift 2;; --revision) REVISION="$2"; shift 2;; --mode) MODE="$2"; shift 2;; --argocd-ns) ARGOCD_NS="$2"; shift 2;;
   *) echo "bilinmeyen argüman: $1"; exit 2;; esac; done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 case "$ENV" in dev|prod) ;; *) echo "bilinmeyen --env: $ENV (dev|prod olmalı)"; exit 2;; esac
@@ -58,18 +60,23 @@ if [[ "$MODE" == "helm" ]]; then
   echo "OK: helm modunda kuruldu (env=$ENV)"; exit 0
 fi
 
-kubectl create ns argocd --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl apply -n argocd --server-side -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
-kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
-kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=300s
-kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+kubectl create ns "$ARGOCD_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+if kubectl -n "$ARGOCD_NS" get deploy argocd-server >/dev/null 2>&1 || kubectl -n "$ARGOCD_NS" get deploy openshift-gitops-server >/dev/null 2>&1; then
+  # OpenShift GitOps operatörü ArgoCD'yi kendisi kurar/yönetir; upstream manifesti bunun üstüne UYGULANMAZ.
+  echo "ArgoCD zaten kurulu ($ARGOCD_NS) — upstream manifest uygulanmıyor (OpenShift GitOps operatörü yönetir)"
+else
+  kubectl apply -n "$ARGOCD_NS" --server-side -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+  kubectl -n "$ARGOCD_NS" rollout status deploy/argocd-server --timeout=300s
+  kubectl -n "$ARGOCD_NS" rollout status deploy/argocd-repo-server --timeout=300s
+  kubectl -n "$ARGOCD_NS" rollout status statefulset/argocd-application-controller --timeout=300s
+fi
 # ArgoCD, OCI Helm chart'ları (strimzi) sadece kayıtlı bir repository Secret'ından çeker. Anonim, kimlik bilgisi yok.
-kubectl apply -f - <<'YAML'
+kubectl apply -f - <<YAML
 apiVersion: v1
 kind: Secret
 metadata:
   name: strimzi-helm
-  namespace: argocd
+  namespace: $ARGOCD_NS
   labels: {argocd.argoproj.io/secret-type: repository}
 stringData:
   name: strimzi-helm
@@ -77,12 +84,12 @@ stringData:
   type: helm
   enableOCI: "true"
 YAML
-kubectl apply -f - <<'YAML'
+kubectl apply -f - <<YAML
 apiVersion: v1
 kind: Secret
 metadata:
   name: jetstack-helm
-  namespace: argocd
+  namespace: $ARGOCD_NS
   labels: {argocd.argoproj.io/secret-type: repository}
 stringData:
   name: jetstack-helm
@@ -90,12 +97,12 @@ stringData:
   type: helm
   enableOCI: "true"
 YAML
-kubectl apply -f - <<'YAML'
+kubectl apply -f - <<YAML
 apiVersion: v1
 kind: Secret
 metadata:
   name: superset-operator-helm
-  namespace: argocd
+  namespace: $ARGOCD_NS
   labels: {argocd.argoproj.io/secret-type: repository}
 stringData:
   name: superset-operator-helm
@@ -122,7 +129,7 @@ EOS
 kubectl apply -f - <<YAML
 apiVersion: argoproj.io/v1alpha1
 kind: Application
-metadata: {name: lakehouse-root, namespace: argocd, finalizers: [resources-finalizer.argocd.argoproj.io]}
+metadata: {name: lakehouse-root, namespace: "${ARGOCD_NS}", finalizers: [resources-finalizer.argocd.argoproj.io]}
 spec:
   project: default
   source:
@@ -152,9 +159,12 @@ spec:
           - {op: replace, path: /spec/sources/1/repoURL, value: "${REPO}"}
           - {op: replace, path: /spec/sources/1/targetRevision, value: "${REVISION}"}
 ${DEV_ONLY_PATCH}
-  destination: {server: https://kubernetes.default.svc, namespace: argocd}
+      - target: {kind: Application}
+        patch: |-
+          - {op: replace, path: /metadata/namespace, value: "${ARGOCD_NS}"}
+  destination: {server: https://kubernetes.default.svc, namespace: "${ARGOCD_NS}"}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
 YAML
 echo "OK: ArgoCD ${ARGOCD_VERSION} + lakehouse-root (env=${ENV}, repo=${REPO}@${REVISION}) uygulandı"
-echo "İzle: kubectl -n argocd get applications"
+echo "İzle: kubectl -n $ARGOCD_NS get applications"
