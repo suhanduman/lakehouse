@@ -86,7 +86,7 @@ sahiptir ve yazma yetkisi **yalnız `sandbox` namespace'inde** tanımlıdır. `g
    `privileges.namespace` haritasına `gold` ekleyip aynı script'i tekrar koşturmak **hem yeni hem de var olan**
    kurulumda yeter. `polaris setup apply` var olan bir katalog rolünü yeniden YARATMAZ ("Skipping creation for
    already existing catalog role") ama ayrıcalık grant'larını o rol için yine de uygular — CLI 1.7.0 kaynağında
-   doğrulandı (`apache_polaris/cli/command/setup.py`, `_create_catalog_roles`: "Grant privileges" bloğu
+   doğrulandı (apache_polaris paketi, cli/command/setup.py, `_create_catalog_roles`: "Grant privileges" bloğu
    rolün var olup olmamasından bağımsız koşar; grant'lar idempotenttir).
    Tek seferlik/ad-hoc bir yetkilendirme için aynı işi CLI de yapar:
    ```bash

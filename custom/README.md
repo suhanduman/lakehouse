@@ -10,7 +10,7 @@ Git'e ne koyarsanız kümede o vardır; elle `kubectl apply` gerekmez, elle yap�
 
 ## Adım adım: yeni bir kaynak ekleme
 
-1. Dosyanızı bu klasöre koyun, örn. `custom/gunluk-rapor.yaml`.
+1. Dosyanızı bu klasöre koyun, örn. `gunluk-rapor.yaml`.
 2. `custom/kustomization.yaml` içindeki `resources:` listesine ekleyin:
    ```yaml
    resources:
@@ -38,8 +38,8 @@ Hazır örnekleri olduğu gibi açmak isterseniz `custom/kustomization.yaml`'a `
 | `kustomization.yaml` | Yukarıdakilerden hangilerinin uygulanacağı + Python dosyasından ConfigMap üretimi |
 
 Python kodu ayrı bir imaja gömülmez: `kustomization.yaml`'daki `configMapGenerator` `.py` dosyasından bir
-ConfigMap üretir, CR onu `/opt/job` altına mount eder ve `mainApplicationFile: local:///opt/job/<dosya>.py`
-onu çalıştırır. **Özel imaj gerekmez** — ürünün resmi Spark imajı kullanılır.
+ConfigMap üretir, CR onu `/opt/job` altına mount eder ve `mainApplicationFile: local:///opt/job/ornek_rapor.py`
+(kendi dosyanızda dosya adını değiştirirsiniz) onu çalıştırır. **Özel imaj gerekmez** — ürünün resmi Spark imajı kullanılır.
 
 ## Bilmeniz gereken 4 şey
 
@@ -62,4 +62,4 @@ onu çalıştırır. **Özel imaj gerekmez** — ürünün resmi Spark imajı ku
    region, delegation header ve katalog `uri`/`warehouse` **`platform/values/site/glue.yaml` ile aynı** olmalıdır;
    ilgili satırlar örneklerde `# SİTE` ile işaretlidir.
 
-Ayrıntılı, adım adım anlatım: `docs/50-isletme/yeni-spark-uygulamasi.md`.
+Ayrıntılı, adım adım anlatım: işletme kılavuzunda "yeni Spark uygulaması ekleme" bölümü (kılavuz Task 7/12'de eklenecek).

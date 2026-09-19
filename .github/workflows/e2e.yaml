@@ -20,6 +20,10 @@ jobs:
         run: |
           pip install -r glue/jobs/requirements-dev.txt
           python3 -m pytest glue/jobs/tests -q
+      # Belge kapısı: bağlantı/yol, bash sözdizimi, yer tutucu, site anahtarları, yasak sözcükler
+      # (scripts/check-docs.sh). PyYAML kural 4 (site anahtarları) için gerekir; iş dosyasına
+      # (glue/jobs/requirements-dev.txt) eklenmez çünkü o dosya yalnız glue/jobs testleri içindir.
+      - run: pip install pyyaml && scripts/check-docs.sh
       # Prod render yolu (platform: openshift) da derlensin: unittest varsayılan değerlerle koşar
       - name: prod + dev değer dosyalarıyla render
         run: helm template glue -f platform/values/glue.yaml -f platform/values/site/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
@@ -36,7 +40,7 @@ jobs:
       # Site değerleri (platform/values/site/*.yaml) birbirinin kopyası olan alanları taşır (Keycloak URL'i,
       # JupyterHub callback'i, LDAP, S3 endpoint) — biri elle değiştirilip diğeri unutulursa kurulum sessizce bozulur.
       - name: site değerleri tutarlı mı (scripts/check-site.sh)
-        run: scripts/check-site.sh
+        run: pip install pyyaml && scripts/check-site.sh
       # F5 upstream chart'ları: monitoring/velero DEV-ONLY overlay'de (platform/apps/dev) olduğu için bir
       # şablon/tip hatası ancak küme kurulurken (30+ dk sonra) görünürdü; bu üç adım onu 1 dk'da yakalar.
       # KAPSAM SINIRI: velero 12.1.0 ve plugin-barman-cloud 0.8.0 `values.schema.json` TAŞIR (şema doğrulaması
