@@ -48,6 +48,9 @@ onu çalıştırır. **Özel imaj gerekmez** — ürünün resmi Spark imajı ku
    Bu yüzden `spark-tek-seferlik.yaml` örneği `kustomization.yaml`'da **yorumludur**; tekrar eden işler için
    `ScheduledSparkApplication` (bkz. `spark-zamanli.yaml`) kullanın, tek seferlik koşuyu elle yapın:
    ```sh
+   # ÖN KOŞUL: CR, Python kodunu ConfigMap `ornek-rapor`tan mount eder — ConfigMap kümede YOKSA pod başlamaz.
+   # Prod'da custom/ boştur, yani önce ConfigMap'i uygulayın (ya da tüm örnekleri):
+   kubectl apply -k custom/examples          # ConfigMap ornek-rapor + (askıda) zamanlı örnek
    kubectl -n lakehouse delete sparkapplication ornek-rapor --ignore-not-found
    kubectl apply -f custom/examples/spark-tek-seferlik.yaml
    ```

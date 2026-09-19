@@ -1,6 +1,9 @@
 # Müşteri CR'ları (custom/) — ürün chart'ına dokunmadan kendi kaynaklarınız. sync-wave 4: ürün bileşenlerinden
-# (glue 1, polaris 2, trino/jupyterhub 3) SONRA uygulanır. bootstrap.sh repo/revizyon/ns'i her `kind: Application`
-# için yeniden yazar -> bu dosyada özel bir şey gerekmez. Dev overlay'i path'i custom/examples'a çevirir.
+# (glue 1, polaris/trino/jupyterhub 2) SONRA uygulanır. Dev overlay'i path'i custom/examples'a çevirir.
+# DİKKAT: bootstrap.sh'ın genel `target: {kind: Application}` yaması YALNIZ /metadata/namespace'i yeniden yazar;
+# repoURL/targetRevision yamaları AD BAZLIDIR -> `custom` için bootstrap.sh'ta kendi patch girdisi vardır.
+# Buraya YENİ bir git kaynaklı Application eklerseniz bootstrap.sh'a da ona ait bir patch girdisi ekleyin,
+# yoksa uygulama `main`e sabit kalır ve PR/e2e eski revizyonu test eder.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata: {name: custom, namespace: argocd, annotations: {argocd.argoproj.io/sync-wave: "4"}}
