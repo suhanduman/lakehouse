@@ -10,7 +10,8 @@ maddeleri başka ekiplerde olduğu için takvimde günlerle ölçülür.
 `openshift-monitoring` ad alanı). S3 ve AD maddelerini ilgili ekipler yapar; bu bölümde
 siz yalnız **doğrularsınız**.
 **Nerede çalıştırılır:** `[bastion]` — `oc`, `aws` ve `ldapsearch` kurulu, kümeye
-`oc login` ile girilmiş yönetim makinesi.
+`oc login` ile girilmiş yönetim makinesi. **Tek istisna madde 8'dir:** oradaki iki komut
+nginx ajanının kurulacağı web sunucusunda (`[nginx ajan sunucusu]`) çalıştırılır.
 
 ---
 
@@ -22,6 +23,7 @@ Bu bölümdeki bütün komutlar `install/lakehouse.env` dosyasındaki değişken
 `[bastion]`
 
 ```bash
+cd ~/lakehouse                      # depoyu `git clone` ile nereye indirdiyseniz orası
 set -a; . install/lakehouse.env; set +a
 echo "$ARGOCD_NS / $LAKEHOUSE_NS / $APPS_DOMAIN"
 ```
@@ -32,7 +34,9 @@ echo "$ARGOCD_NS / $LAKEHOUSE_NS / $APPS_DOMAIN"
 openshift-gitops / lakehouse / apps.ocp.example.net
 ```
 
-**Ters giderse:** çıktı boşsa dosya yüklenmemiştir (`ls -l install/lakehouse.env`), üçüncü
+**Ters giderse:** `cd` komutu `No such file or directory` derse depo başka bir dizindedir
+(`find "$HOME" -maxdepth 3 -name lakehouse.env.example` ile bulabilirsiniz). Çıktı boşsa
+dosya yüklenmemiştir (`ls -l install/lakehouse.env`), üçüncü
 alan boşsa `APPS_DOMAIN` doldurulmamıştır — 10-planlama §3 Adım 1'e dönün.
 
 ---
@@ -40,7 +44,9 @@ alan boşsa `APPS_DOMAIN` doldurulmamıştır — 10-planlama §3 Adım 1'e dön
 ## Neler ön koşul DEĞİL
 
 > **OperatorHub'dan şu operatörleri KURMAYIN.** Ürün bunları ArgoCD ile kendisi kurar
-> (`platform/apps/` altındaki Application'lar, sync-wave sırasıyla): **Strimzi** Kafka
+> (`platform/apps/` altındaki Application'lar, sync-wave sırasıyla — sync-wave, ArgoCD'nin
+> uygulama sırasıdır: küçük numaralı dalga önce uygulanır, operatörler 0. dalgadadır):
+> **Strimzi** Kafka
 > operatörü, **CloudNativePG** + **Barman Cloud** eklentisi, **cert-manager**,
 > **spark-operator**, **Keycloak** operatörü, **Superset** operatörü. Aynı operatörü bir
 > de OperatorHub'dan kurmak CRD'lerin iki sahibi olması demektir: sürümler çakışır,
@@ -138,6 +144,10 @@ Operatör kurulumu bitince (1–3 dakika) `openshift-gitops` ad alanını ve iç
 oc get csv -n "$ARGOCD_NS"
 oc -n "$ARGOCD_NS" get deploy openshift-gitops-server
 ```
+
+`csv` burada **ClusterServiceVersion** demektir: OpenShift'in operatör yöneticisi OLM,
+kurduğu her operatör sürümü için bu nesneyi yaratır; kurulumun bitip bitmediği ondaki
+`PHASE` alanından okunur.
 
 **Beklenen çıktı** (örnek — operatör sürümü kümenize göre değişir):
 
@@ -256,8 +266,12 @@ AWS_ACCESS_KEY_ID=$S3_BACKUP_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$S3_BACKUP_SECRET_
   aws --endpoint-url "$S3_ENDPOINT" --region "$S3_REGION" s3 ls "s3://$S3_BUCKET_BACKUP"
 ```
 
-**Beklenen çıktı:** iki komut da **hatasız** biter. Yeni bucket'lar boş olduğu için çıktı
-boş olabilir; önemli olan hata satırı olmamasıdır.
+**Beklenen çıktı** (örnek — iki komut da **hatasız** biter; yeni bucket boşsa hiç satır
+basılmaz, önemli olan hata satırı olmamasıdır):
+
+```text
+                           PRE warehouse/
+```
 
 ### 4.2 Yazma doğrulaması
 
@@ -269,15 +283,24 @@ export AWS_ACCESS_KEY_ID=$S3_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$S3_SECRET_KEY
 aws --endpoint-url "$S3_ENDPOINT" s3 cp /tmp/lakehouse-on-kosul.txt \
   "s3://$S3_BUCKET_DATA/_on-kosul-testi.txt"
 aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$S3_BUCKET_DATA/_on-kosul-testi.txt"
+export AWS_ACCESS_KEY_ID=$S3_BACKUP_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$S3_BACKUP_SECRET_KEY
+aws --endpoint-url "$S3_ENDPOINT" s3 cp /tmp/lakehouse-on-kosul.txt \
+  "s3://$S3_BUCKET_BACKUP/_on-kosul-testi.txt"
+aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$S3_BUCKET_BACKUP/_on-kosul-testi.txt"
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — dört satır: veri bucket'ı yaz/sil, yedek bucket'ı yaz/sil):
 
 ```text
 upload: /tmp/lakehouse-on-kosul.txt to s3://lakehouse/_on-kosul-testi.txt
 delete: s3://lakehouse/_on-kosul-testi.txt
+upload: /tmp/lakehouse-on-kosul.txt to s3://lakehouse-backups/_on-kosul-testi.txt
+delete: s3://lakehouse-backups/_on-kosul-testi.txt
 ```
+
+**Her iki çift de yazabilmelidir.** Yedek anahtarı yalnız okuyabiliyorsa CNPG yedekleri
+kurulumdan sonra sessizce başarısız olur.
 
 **Geçici kimlik (STS) notu.** Polaris, istemcilere kalıcı anahtar yerine geçici S3 kimliği
 dağıtabilir; bunun için depolamanın STS desteklemesi gerekir. FlashBlade'in bu kurulumdaki
@@ -309,17 +332,21 @@ bağlanır. Secret yoksa build `unauthorized` ile başarısız olur, Connect hi�
 
 ```bash
 oc create namespace "$LAKEHOUSE_NS" --dry-run=client -o yaml | oc apply -f -
-oc registry info
+oc registry info --internal
 oc -n "$LAKEHOUSE_NS" create sa connect-build
 oc -n "$LAKEHOUSE_NS" policy add-role-to-user system:image-builder -z connect-build
 TOKEN=$(oc -n "$LAKEHOUSE_NS" create token connect-build --duration=8760h)
 oc -n "$LAKEHOUSE_NS" create secret docker-registry connect-push \
   --docker-server="$INTERNAL_REGISTRY" --docker-username=connect-build \
   --docker-password="$TOKEN"
+python3 -c 'import base64, json, sys, datetime
+t = sys.argv[1].split(".")[1]; t += "=" * (-len(t) % 4)
+print("jeton bitisi:", datetime.datetime.fromtimestamp(
+    json.loads(base64.urlsafe_b64decode(t))["exp"], datetime.timezone.utc))' "$TOKEN"
 unset TOKEN
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — son satırdaki tarih jetonun **gerçek** bitiş anıdır):
 
 ```text
 namespace/lakehouse created
@@ -327,14 +354,37 @@ image-registry.openshift-image-registry.svc:5000
 serviceaccount/connect-build created
 clusterrole.rbac.authorization.k8s.io/system:image-builder added: "connect-build"
 secret/connect-push created
+jeton bitisi: 2027-09-19 08:41:12+00:00
 ```
 
-`oc registry info` çıktısı `$INTERNAL_REGISTRY` değeriyle **birebir aynı** olmalıdır
-**(OpenShift'te doğrulanır)**.
+`--internal` bayrağı **şarttır**: bayraksız `oc registry info`, registry dışarı
+açılmışsa o Route'un genel adresini basar; Strimzi'nin ihtiyaç duyduğu
+küme içi adres yalnız `--internal` ile gelir. Çıktı `$INTERNAL_REGISTRY` değeriyle
+**birebir aynı** olmalıdır **(OpenShift'te doğrulanır)**.
+
+**ImageStream notu (OpenShift'te doğrulanır).** `system:image-builder` rolü itme yetkisi
+verir; ilk itişte hedef `ImageStream` nesnesinin kendiliğinden yaratılıp yaratılmadığı
+küme ayarına bağlıdır. Connect build'inden sonra kontrol edin — nesne yoksa elle
+yaratılır:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get imagestream connect
+# yoksa: oc -n "$LAKEHOUSE_NS" create imagestream connect
+```
+
+**Beklenen çıktı** (örnek):
+
+```text
+NAME      IMAGE REPOSITORY                                             TAGS
+connect   image-registry.openshift-image-registry.svc:5000/lakehouse/connect   2.0.0
+```
 
 **Jetonun ömrü ve yenilenmesi.** `oc create token ... --duration=8760h` bir yıllık
 **bağlı (bound) servis hesabı jetonu** ister; kümenin izin verdiği üst sınır daha kısaysa
-OpenShift jetonu kısaltır ve bunu uyarı olarak yazar **(OpenShift'te doğrulanır)**. Jeton
+OpenShift jetonu kısaltır ve bunu uyarı olarak yazar **(OpenShift'te doğrulanır)** —
+gerçek süre yukarıdaki `jeton bitisi:` satırından okunur, istenen süreden değil. Jeton
 dolduğunda Connect imajının **yeni** build'i `unauthorized` verir; çalışan Connect pod'u
 etkilenmez ama sürüm yükseltmesi durur. Bu yüzden jetonun bitiş tarihi kurumun takvimine
 yazılır ve `connect-push` Secret'ı aynı komutlarla yeniden yaratılır; yenileme adımı
@@ -402,21 +452,50 @@ ldapsearch -H "$LDAP_URL" -D "$LDAP_BIND_DN" -w "$LDAP_BIND_PASSWORD" \
 
 **Beklenen çıktı:** en az bir `sAMAccountName:` satırı ve `result: 0 Success`.
 
-Son olarak AD sertifikasını imzalayan **kök CA'nın PEM dosyası** elinizde olmalıdır
-(`$LDAP_CA_FILE`); zinciri sunucudan da alabilirsiniz:
+Son olarak AD sertifikasını imzalayan **kök CA'nın PEM dosyası** gerekir; bu dosyayı
+**AD ekibi verir** ve `$LDAP_CA_FILE` tam olarak onu göstermelidir. Sunucudan çekilen
+zincir bunun yerine **geçmez**: zincirin ilk sertifikası AD sunucusunun kendi (leaf)
+sertifikasıdır ve kök CA çoğu zaman zincire hiç konmaz. Elinizdeki dosyanın gerçekten
+CA olduğunu doğrulayın:
 
 `[bastion]`
 
 ```bash
-openssl s_client -showcerts -connect "${LDAP_URL#ldaps://}" </dev/null > "$LDAP_CA_FILE"
-openssl x509 -in "$LDAP_CA_FILE" -noout -subject -enddate
+openssl x509 -in "$LDAP_CA_FILE" -noout -subject -issuer -enddate
+openssl x509 -in "$LDAP_CA_FILE" -noout -text | grep -A1 "Basic Constraints"
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — kök CA'da `subject` = `issuer` ve `CA:TRUE` görünür):
 
 ```text
 subject=DC=com, DC=example, CN=example-CA
+issuer=DC=com, DC=example, CN=example-CA
 notAfter=Mar 14 09:21:07 2031 GMT
+            X509v3 Basic Constraints: critical
+                CA:TRUE
+```
+
+**Teşhis:** dosya elinizde yoksa ya da hangi CA'yı isteyeceğinizi bilmiyorsanız sunucunun
+sunduğu zincire bakın. Bu çıktı `$LDAP_CA_FILE` **yerine geçmez**, yalnız imzalayan CA'nın
+adını verir:
+
+`[bastion]`
+
+```bash
+host_port="${LDAP_URL#ldaps://}"
+case "$host_port" in *:*) ;; *) host_port="$host_port:636";; esac
+openssl s_client -showcerts -connect "$host_port" </dev/null > ad-chain.pem 2>&1
+grep -E "^(depth|verify return|subject=|issuer=)" ad-chain.pem | head -6
+```
+
+**Beklenen çıktı** (örnek — `issuer` satırındaki ad, AD ekibinden istenecek CA'dır):
+
+```text
+depth=1 DC = com, DC = example, CN = example-CA
+verify return:1
+depth=0 CN = ad.example.com
+subject=CN = ad.example.com
+issuer=DC = com, DC = example, CN = example-CA
 ```
 
 **Ters giderse:** `Can't contact LDAP server` → 636 portu kümeden ve bastion'dan kapalı ya
@@ -424,6 +503,10 @@ da `$LDAP_URL` yanlış. `Invalid credentials (49)` → bind DN/parola hatalı y
 parolasının süresi dolmuş. Üçten az `cn:` satırı geliyorsa gruplar açılmamış ya da
 `$LDAP_GROUPS_DN` yanlış alt ağacı gösteriyordur — AD ekibiyle grupların tam DN'ini
 karşılaştırın. `memberOf` sorgusu boş dönüyorsa gruplara henüz üye eklenmemiştir.
+`openssl x509` komutu `unable to load certificate` derse dosya PEM değildir (AD ekibi
+çoğu zaman `.cer`/DER verir): `openssl x509 -inform der -in ad-ca.cer -out ad-ca.pem`
+ile çevirin. `CA:TRUE` yerine `CA:FALSE` görüyorsanız elinizdeki dosya sunucu
+sertifikasıdır, kök CA değildir — AD ekibinden doğrusunu isteyin.
 Şifresiz LDAP (`ldap://`, 389) **kabul edilmez**: ürün bind parolasını ağdan açık
 geçirmez.
 
@@ -485,9 +568,9 @@ akışları bu maddeye ihtiyaç duymaz.
 2. Ajan sunucuları `$APPS_DOMAIN` altındaki adları çözebilmelidir.
 3. Ajan sunucuları kümenin Route sertifikasını imzalayan CA'ya güvenmelidir.
 
-Ajan sunucusunda:
+Ajan sunucusunda (kümede değil, nginx'in koştuğu web sunucusunda):
 
-`[kaynak DB]`
+`[nginx ajan sunucusu]`
 
 ```bash
 getent hosts "console-openshift-console.$APPS_DOMAIN" | head -1
@@ -581,9 +664,28 @@ ve ürünle birlikte gelir; OADP ad alanı düzeyindeki nesneler içindir.
 **Kimin işi:** platform ekibi (operatör), kurulumcu (değerler).
 
 Ön koşul olarak yalnız şu karar verilir: **ad alanı yedeği alınacak mı?** Alınacaksa
-OperatorHub'dan OADP operatörü `openshift-adp` ad alanına kurulur. Kurulum adımları,
-`DataProtectionApplication` içeriği ve site değerinin açılması yedekleme bölümündedir:
-docs/50-isletme/yedek-ve-geri-donus.md (bu bölüm bir sonraki görevde eklenir).
+OperatorHub'dan OADP operatörü `openshift-adp` ad alanına kurulur. Kurulu olup olmadığı:
+
+`[bastion]`
+
+```bash
+oc get csv -n openshift-adp
+```
+
+**Beklenen çıktı** (örnek — kurulmuşsa `PHASE: Succeeded`):
+
+```text
+NAME                   DISPLAY   VERSION   PHASE
+oadp-operator.v1.5.2   OADP      1.5.2     Succeeded
+```
+
+**Ters giderse:** `namespaces "openshift-adp" not found` ya da `No resources found` →
+operatör kurulu değildir. Ad alanı yedeği **almayacaksanız** bu normaldir: site
+değerlerinde `velero` kapalı kalır ve hiçbir şey yapmanız gerekmez. Alacaksanız operatörü
+kurun; `PHASE` `Succeeded` değilse katalog kaynağına bakın (madde 2.1'deki ile aynı
+teşhis). Kurulum adımları, `DataProtectionApplication` içeriği ve site değerinin açılması
+yedekleme bölümündedir: docs/50-isletme/yedek-ve-geri-donus.md (bu bölüm bir sonraki
+görevde eklenir).
 
 ### 9.3 Günlükler (Loki) — bilgi
 
@@ -612,7 +714,16 @@ erişilebilir olmalıdır.
 | `apachesuperset.docker.scarf.sh` | Superset operatörünün varsayılan imaj adresi (yönlendirici) | kurulum — kurumsal ayna kullanılırsa gerekmez |
 | `registry.redhat.io` ve `redhat-operators` kataloğu | OpenShift GitOps operatörü, (isteğe bağlı) OADP | operatör kurulumu |
 | `cloudnative-pg.github.io`, `kubeflow.github.io`, `trinodb.github.io`, `hub.jupyter.org`, `downloads.apache.org` | ArgoCD (Helm chart depoları) | kurulum ve her yükseltme |
+| `registry.k8s.io` | JupyterHub prePuller'ının `pause` imajı (`platform/values/jupyterhub.yaml` → `prePuller`) | kurulum ve her düğüm eklendiğinde |
 | `github.com` (`keycloak/keycloak-k8s-resources`) | ArgoCD (Keycloak operatörünün kustomize kaynağı) | kurulum ve her sync |
+
+**Ana bilgisayar adına göre izin veren (allowlist) güvenlik duvarlarında yukarıdaki
+adresler tek başına yetmez:** registry'ler kimlik doğrulama ve içerik dağıtımı için ayrı
+adlar kullanır. En az şunlar da açılmalıdır: `registry-1.docker.io`, `auth.docker.io`,
+`production.cloudflare.docker.com` (docker.io); `cdn01.quay.io`, `cdn02.quay.io`,
+`cdn03.quay.io` (quay.io); `pkg-containers.githubusercontent.com` (ghcr.io);
+`objects.githubusercontent.com` (github.com); `files.pythonhosted.org` (PyPI —
+tabloda ayrıca listelendi). Mümkünse ad yerine kurumsal registry aynası kullanın.
 
 Listenin türetildiği yerler: `platform/apps/` altındaki Application'lar (chart depoları),
 `glue/values.yaml` ve `platform/values/` altındaki değer dosyaları (imajlar),
@@ -625,13 +736,13 @@ Bastion'dan hızlı bir kontrol:
 
 ```bash
 for h in repo1.maven.org pypi.org quay.io ghcr.io docker.io downloads.apache.org; do
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$h/" || echo hata)
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$h/")
   echo "$h $code"
 done
 ```
 
-**Beklenen çıktı** (örnek — 200/301/403 "erişilebiliyor" demektir; `000` ya da `hata`
-erişilemiyor demektir):
+**Beklenen çıktı** (örnek — 200/301/403 "erişilebiliyor" demektir; `000` bağlantının hiç
+kurulamadığını gösterir ve `curl` ayrıca hata satırı basar):
 
 ```text
 repo1.maven.org 200
