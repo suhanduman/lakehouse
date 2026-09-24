@@ -3,19 +3,23 @@ on:
   push: {branches: [main]}
   pull_request: {branches: [main]}
 jobs:
-  # non_docs = değişen dosyalardan EN AZ BİRİ kod dosyası (docs/**, runbooks/**, **.md
+  # non_docs = değişen dosyalardan EN AZ BİRİ kod dosyası (docs/**, runbooks/**, **/*.md
   # dışında bir şey). Salt-belge push'unda (tüm dosyalar bu üç kalıptan birine uyuyorsa)
   # non_docs=false olur ve e2e-kind atlanır; 1 saatlik e2e zaten hiçbir kod yolunu
   # kanıtlamaz, belge kapısı helm-unittest içindeki check-docs.sh/check-site.sh'tir.
   # DİKKAT: predicate-quantifier 'every' burada "her değişen dosya belge kalıplarından
   # birine uyuyor mu" DEĞİL, "tek bir dosya listedeki TÜM kuralları karşılıyor mu" demektir
   # (patterns.every(...), bkz. dorny/paths-filter src/filter.ts). Bu yüzden filtre
-  # docs/**, runbooks/**, **.md'yi ayrı alternatifler olarak DEĞİL, '**' + üç negatif
-  # kuralın (!docs/**, !runbooks/**, !**.md) kesişimi olarak yazılır: bir dosya yalnız
+  # docs/**, runbooks/**, **/*.md'yi ayrı alternatifler olarak DEĞİL, '**' + üç negatif
+  # kuralın (!docs/**, !runbooks/**, !**/*.md) kesişimi olarak yazılır: bir dosya yalnız
   # docs/runbooks altında DEĞİLSE ve .md DEĞİLSE tüm kuralları birden karşılar, yani
-  # "kod dosyası"dır. changes işi düşerse (ör. checkout hatası) çıktı boş kalır; aşağıdaki
-  # e2e-kind kapısı bunu "boş != 'false'" olarak okuyup varsayılan güvenli tarafta kalır:
-  # ÇALIŞTIR.
+  # "kod dosyası"dır. `!**.md` (tek yıldız) KULLANILMAZ: picomatch 2.3.1'de bu kalıp
+  # yalnız KÖK dizindeki *.md dosyalarını dışlar (regex gövdesi [^/]*?\.md, "/" içeren
+  # yollarda eşleşmez) — custom/README.md, examples/dbt/README.md gibi iç içe .md
+  # dosyaları yanlışlıkla "kod dosyası" sayılırdı. `!**/*.md` hem kök hem iç içe
+  # tüm .md dosyalarını doğru dışlar. changes işi düşerse (ör. checkout hatası) çıktı
+  # boş kalır; aşağıdaki e2e-kind kapısı bunu "boş != 'false'" olarak okuyup varsayılan
+  # güvenli tarafta kalır: ÇALIŞTIR.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -34,7 +38,7 @@ jobs:
               - '**'
               - '!docs/**'
               - '!runbooks/**'
-              - '!**.md'
+              - '!**/*.md'
   helm-unittest:
     runs-on: ubuntu-latest
     steps:
