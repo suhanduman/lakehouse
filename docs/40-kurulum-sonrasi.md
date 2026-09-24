@@ -42,7 +42,7 @@ echo "ns=$LAKEHOUSE_NS domain=$APPS_DOMAIN"
 **Beklenen çıktı** (örnek — kendi değerlerinizle):
 
 ```text
-ns=lakehouse domain=apps.ocp.kurum.example.net
+ns=lakehouse domain=apps.ocp.example.net
 ```
 
 **Ters giderse:** `ns= domain=` gibi boş bir satır görürseniz dosya yüklenmemiştir; yolu ve
@@ -219,8 +219,7 @@ silme yordamının tamamı işletme bölümündeki kaynak veya tablo silme kıla
 
 **Neden:** Superset'in `lakehouse` veritabanı tanımı depoda **deklaratiftir**
 (`ConfigMap/superset-datasources` → pod içinde `/app/configs` altındaki `trino.yaml`), ama
-Superset
-bağlantıları kendi metastore'unda tutar. Tanım kurulum başına **bir kez** içe aktarılır.
+Superset bağlantıları kendi metastore'unda tutar. Tanım kurulum başına **bir kez** içe aktarılır.
 Parola dosyada değildir: `SQLALCHEMY_CUSTOM_PASSWORD_STORE` onu `TRINO_PASSWORD` ortam
 değişkeninden okur.
 
@@ -289,9 +288,11 @@ oc -n "$LAKEHOUSE_NS" exec deploy/superset-web-server -- \
 
 **Beklenen çıktı:** başlığın altında `username:… | email:… | role:[Admin]` biçiminde en az
 bir satır. Aşağıdaki, hiç kimsenin giriş yapmadığı bir kümeden alınmış gerçek çıktıdır —
-**bu hâlde import edilemez**:
+**bu hâlde import edilemez** (Superset'in ayrıntılı günlüğü stderr'e gider, `2>/dev/null`
+onu susturur):
 
 ```text
+Loaded your LOCAL configuration at [/app/pythonpath/superset_config.py]
 List of users
 -------------
 ```
@@ -411,20 +412,19 @@ done
 **Beklenen çıktı** (örnek — kendi `$APPS_DOMAIN` değerinizle):
 
 ```text
-https://keycloak-lakehouse.apps.ocp.kurum.example.net
-https://trino-lakehouse.apps.ocp.kurum.example.net
-https://superset-lakehouse.apps.ocp.kurum.example.net
-https://jupyterhub-lakehouse.apps.ocp.kurum.example.net
-https://zeppelin-lakehouse.apps.ocp.kurum.example.net
+https://keycloak-lakehouse.apps.ocp.example.net
+https://trino-lakehouse.apps.ocp.example.net
+https://superset-lakehouse.apps.ocp.example.net
+https://jupyterhub-lakehouse.apps.ocp.example.net
+https://zeppelin-lakehouse.apps.ocp.example.net
 ```
 
 `platform/values/site/glue.yaml` içinde kurumsal bir `hostname` ezmesi yaptıysanız gerçek
-adresleri
-`oc -n "$LAKEHOUSE_NS" get route` ile alın. Adreslerin ve portların tamamı:
+adresleri `oc -n "$LAKEHOUSE_NS" get route` ile alın. Adreslerin ve portların tamamı:
 [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md).
 
 **Ters giderse:** adresler doğru görünüyor ama tarayıcı açılmıyorsa Route'lar
-oluşmamıştır ([30-kurulum](30-kurulum.md) §7.2).
+oluşmamıştır ya da DNS çözülmüyordur ([30-kurulum](30-kurulum.md) §7.3).
 
 ### 5.2 Dört arayüz, dört giriş
 
