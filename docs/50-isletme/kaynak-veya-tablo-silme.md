@@ -668,7 +668,7 @@ için de gerekir — bunları ürün göremez.
 | Superset panosu tablo bulunamadı diyor | pano silinen tabloya bakıyor | Adım 9.4 |
 | Polaris ad alanı silinemiyor | içinde tablo kalmış | Adım 6'yı tamamlayın |
 
-Belirtilerin tam tablosu işletme bölümündeki sorun giderme sayfasındadır.
+Belirtilerin tam tablosu: [sorun-giderme.md](sorun-giderme.md) §3.
 
 ---
 
@@ -691,7 +691,9 @@ Belirtilerin tam tablosu işletme bölümündeki sorun giderme sayfasındadır.
 
 Kendi Spark uygulamanızı eklemek:
 [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md). Yeni bir kaynak bağlamak:
-[yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md). Kullanıcı ve yetki yönetimi,
-yedek ve geri dönüş, izleme ve sorun giderme: `docs/50-isletme/` altındaki diğer
-kılavuzlar. Ortak GitOps döngüsü her zaman aynıdır:
+[yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md).
+[kullanici-ve-yetki.md](kullanici-ve-yetki.md) — yetki yönetimi;
+[yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedek ve geri dönüş;
+[sorun-giderme.md](sorun-giderme.md) — belirti tablosu. Ortak GitOps döngüsü her zaman
+aynıdır:
 [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).

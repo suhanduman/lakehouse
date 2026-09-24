@@ -83,7 +83,8 @@ adlandırılır, Grafana yoktur ve ad alanı yedeği OADP ad alanındadır:
 `[bastion]`
 
 ```bash
-PROM_STS=prometheus-user-workload PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
+PATH="$PWD/.venv/bin:$PATH" PROM_STS=prometheus-user-workload \
+  PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
   scripts/acceptance.sh --ns "$LAKEHOUSE_NS" \
   --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
 ```
@@ -118,8 +119,9 @@ dokuzun altında kalırsa özet `KABUL EKSİK` der. Koşunun başında
 `UYARI --ns=… : e2e yol script'leri ve fixture'lar 'lakehouse' ns'ine sabitlidir` satırını
 görüyorsanız §1'deki ad alanı koşulu sağlanmamıştır — devam etmeyin, önce ad alanını
 düzeltin. `kubectl: command not found` → `kubectl` kurulu değildir (§1).
-`polaris CLI yok` → `PATH` önekini vermemişsinizdir. Belirtiden yola çıkan teşhis tablosu işletme
-bölümündeki sorun giderme sayfasındadır; yola özgü sık durumlar §5'tedir.
+`polaris CLI yok` → `PATH` önekini vermemişsinizdir. Belirtiden yola çıkan teşhis tablosu
+[50-isletme/sorun-giderme.md](../50-isletme/sorun-giderme.md) §3'tedir; yola özgü sık
+durumlar §5'tedir.
 
 ---
 

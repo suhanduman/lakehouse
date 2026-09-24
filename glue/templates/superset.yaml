@@ -25,7 +25,7 @@ data:
 ---
 # Superset asset bundle'ı (dashboard export formatı, canlı Superset'ten üretildi): Iceberg tablo-düzeyi
 # veri metrikleri dashboard'u. ConfigMap anahtarı alt dizin taşıyamaz -> "dizin__dosya" adlandırması;
-# runbooks/data-metrics.md import adımı adları dizin ağacına geri açar.
+# docs/40-kurulum-sonrasi.md §4 import adımı adları dizin ağacına geri açar.
 # SIR YOK: databases/lakehouse.yaml parolasızdır (Trino parolası SQLALCHEMY_CUSTOM_PASSWORD_STORE ile env'den).
 # Dosyalar `tpl` ile işlenir: bundle'daki databases/lakehouse.yaml YAPISAL OLARAK yukarıdaki ürün
 # datasource'u (trino.yaml) ile aynı olsun diye ad alanını aynı ifadeden alır. Import overwrite=True ile
@@ -37,7 +37,7 @@ metadata: {name: superset-assets, namespace: {{ $ns }}}
 data:
 {{- range $path, $_ := .Files.Glob "files/superset/iceberg-metadata/**.yaml" }}
   {{ $path | trimPrefix "files/superset/" | replace "/" "__" }}: |
-{{- /* Bundle dosyaları Helm şablonudur; canlı bir Superset'ten yeniden üretilirse SQL içinde kalan bir "{{" render'ı kırar (bkz. runbooks/data-metrics.md §5). */}}
+{{- /* Bundle dosyaları Helm şablonudur; canlı bir Superset'ten yeniden üretilirse SQL içinde kalan bir "{{" render'ı kırar (bkz. docs/50-isletme/veri-metrikleri.md §6). */}}
 {{ tpl ($.Files.Get $path) $ | indent 4 }}
 {{- end }}
 ---

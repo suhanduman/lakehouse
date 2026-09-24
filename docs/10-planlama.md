@@ -34,7 +34,7 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 | **Orta** | üretim, birkaç kaynak sistem; ~500 tabloya kadar, günde on milyonlarca olay; 25–50 eşzamanlı kullanıcı | Depodaki yorumlu "büyük tier" bloğu (`platform/values/glue.yaml` içinde kapalı duran `spark` bloğu) açılır, disk ve replika sayıları artırılır. |
 | **Büyük** | kurum geneli; binlerce tablo, sürekli yüksek hacim; 100+ kullanıcı | Orta kademenin çalıştırıcı sayısı ve bellek katları. **Bu sütun bir başlangıç noktasıdır, ölçüm değildir**: bir ay çalıştırıp gerçek kullanımı ölçmeden bu değerlere sabitlenmeyin. |
 
-> Küçük sütunu depodaki gerçek varsayılanlardır. Orta ve büyük sütunlar **başlangıç noktasıdır**; üretimde ilk ayın metriklerine (bkz. 50-isletme/izleme-ve-alarmlar.md — bu bölüm bir sonraki görevde eklenir) bakılarak düzeltilir.
+> Küçük sütunu depodaki gerçek varsayılanlardır. Orta ve büyük sütunlar **başlangıç noktasıdır**; üretimde ilk ayın metriklerine (bkz. [50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md)) bakılarak düzeltilir.
 
 ### 2.2 Bileşen başına istek/limit
 

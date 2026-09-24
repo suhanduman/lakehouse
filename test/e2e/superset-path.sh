@@ -34,7 +34,7 @@ with app.app_context():
     assert n == 3, n
     print('OK superset -> trino shop.orders == 3 (SQLALCHEMY_CUSTOM_PASSWORD_STORE + TLS)')"
 echo "== asset bundle pod'da (iceberg-metadata dashboard bundle'ı)"
-# glue superset-assets ConfigMap'i /app/assets'e mount eder; import adımı runbooks/data-metrics.md'dedir.
+# glue superset-assets ConfigMap'i /app/assets'e mount eder; import adımı docs/40-kurulum-sonrasi.md §4'tedir.
 # Bundle en az 5 dosya taşır (metadata + database + dataset + chart + dashboard).
 n=$(kubectl -n "$NS" exec "$POD" -- sh -c 'ls /app/assets 2>/dev/null | grep -c "^iceberg-metadata__"' || true)
 [[ "${n:-0}" -ge 5 ]] || { echo "HATA /app/assets içinde iceberg-metadata__* dosyası yok/eksik ($n)"; kubectl -n "$NS" exec "$POD" -- ls -l /app/assets || true; exit 1; }

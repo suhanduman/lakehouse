@@ -276,8 +276,8 @@ arasındaki bağ kopar.
 | `ComparisonError` ya da `rpc error` | chart render hatası (eksik zorunlu alan) | Adım 3'teki `helm template` |
 | Değişiklik uygulandı ama kümede geri alındı | aynı nesne `oc edit` ile elle değiştirilmiş; `selfHeal` geri aldı | Git'teki hâli otoriterdir |
 
-Belirtilerin tam tablosu ve komut komut çözümü işletme bölümündeki **sorun giderme**
-sayfasındadır.
+Belirtilerin tam tablosu ve komut komut çözümü:
+[sorun-giderme.md](sorun-giderme.md) §3.
 
 ---
 

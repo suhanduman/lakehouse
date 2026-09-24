@@ -1010,8 +1010,8 @@ kendi kullanıcı iş yükü izlemesi, ad alanı yedeğini OADP yapar.
 `oc -n "$LAKEHOUSE_NS" get pods` listesine bakın. `ImagePullBackOff` → egress listesi
 kapalıdır ([20-on-kosullar](20-on-kosullar.md) madde 10). `CreateContainerConfigError` →
 bir Secret eksiktir (Adım 5.14). PVC'ler `Pending` kalıyorsa StorageClass yoktur (madde 3).
-Ayrıntılı belirti tablosu: docs/50-isletme/sorun-giderme.md (bu bölüm bir sonraki görevde
-eklenir).
+Ayrıntılı belirti tablosu:
+[50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
 
 ---
 
@@ -1055,8 +1055,8 @@ keycloakrealmimport.k8s.keycloak.org/lakehouse-realm condition met
 `oc -n "$LAKEHOUSE_NS" get pods | grep connect-build` ile izlenir; `unauthorized` →
 `connect-push` jetonu geçersizdir. `keycloakrealmimport` `Done` olmuyorsa
 `oc -n "$LAKEHOUSE_NS" logs job/lakehouse-realm` çıktısında eksik yer tutucu arayın
-(Adım 5.6). Belirti tablosu: docs/50-isletme/sorun-giderme.md (bu bölüm bir sonraki
-görevde eklenir).
+(Adım 5.6). Belirti tablosu:
+[50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
 
 ### 7.2 Hiçbir pod hata durumunda değil
 
@@ -1163,8 +1163,8 @@ keycloakrealmimport.k8s.keycloak.org/lakehouse-realm condition met
 `config credentials` komutunu tekrarlayın. Aynı kural Polaris kataloğu için de geçerlidir:
 `polaris setup apply` katalog özelliklerini yalnız katalog **yaratılırken** yazar, var
 olan bir katalogda `polaris catalogs update --set-property ...` gerekir. Kullanıcı ve
-yetki yönetiminin tamamı docs/50-isletme/kullanici-ve-yetki.md dosyasındadır (bu bölüm bir
-sonraki görevde eklenir).
+yetki yönetiminin tamamı
+[50-isletme/kullanici-ve-yetki.md](50-isletme/kullanici-ve-yetki.md) sayfasındadır.
 
 ---
 

@@ -71,15 +71,20 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
   [yeni kaynak ve pipeline](docs/50-isletme/yeni-kaynak-ve-pipeline.md),
   [mevcut kaynağa tablo ekleme](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md),
   [kaynak ya da tablo kaldırma](docs/50-isletme/kaynak-veya-tablo-silme.md),
-  [yeni Spark uygulaması](docs/50-isletme/yeni-spark-uygulamasi.md);
-  ayrıca kullanıcı ve yetki, yedek ve geri dönüş, yükseltme, izleme ve
-  alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme
+  [yeni Spark uygulaması](docs/50-isletme/yeni-spark-uygulamasi.md),
+  [kullanıcı ve yetki](docs/50-isletme/kullanici-ve-yetki.md),
+  [yedek ve geri dönüş](docs/50-isletme/yedek-ve-geri-donus.md),
+  [yükseltme](docs/50-isletme/yukseltme.md),
+  [izleme ve alarmlar](docs/50-isletme/izleme-ve-alarmlar.md),
+  [veri metrikleri](docs/50-isletme/veri-metrikleri.md),
+  [günlük ve haftalık kontroller](docs/50-isletme/gunluk-haftalik-kontroller.md),
+  [sorun giderme](docs/50-isletme/sorun-giderme.md)
 - docs/90-referans/ — [değer anahtarları](docs/90-referans/values-anahtarlari.md),
   [Secret listesi](docs/90-referans/secret-listesi.md),
   [port ve servisler](docs/90-referans/port-ve-servisler.md),
   [sürümler ve lisanslar](docs/90-referans/surumler-ve-lisanslar.md),
   [kabul testleri](docs/90-referans/kabul-testleri.md),
-  [oc hızlı başvuru](docs/90-referans/oc-hizli-basvuru.md)
+  [oc hızlı başvuru](docs/90-referans/oc-hizli-basvuru.md),
+  [pre-ship kontrol listesi](docs/90-referans/pre-ship-kontrol-listesi.md)
 
-50 klasörünün kalan sayfaları sonraki görevlerde eklenir.
 Kurulum değişkenleri şablonu: `install/lakehouse.env.example`.

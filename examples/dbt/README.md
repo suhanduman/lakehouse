@@ -55,7 +55,7 @@ kalıcı dev kullanımı için `glue/templates/dev-secrets.yaml` genişletilmeli
 
 Servis hesapları varsayılan olarak **yalnız okuyabilir**. `dbt`'nin `gold` şemasına yazabilmesi için
 `platform/values/trino.yaml` → `accessControl.rules` içine **genel servis hesabı kuralından ÖNCE** ekleyin
-(ilk eşleşen kural kazanır — `runbooks/access-control.md`):
+(ilk eşleşen kural kazanır — `docs/50-isletme/kullanici-ve-yetki.md` §5):
 
 ```json
 "catalogs": [
@@ -134,11 +134,11 @@ Beklenen (e2e fixture verisiyle): `shop.orders`'ın günlük/durum bazlı özeti
 
 - **e2e'ye dâhil değildir**: `test/e2e/run.sh` ve `scripts/acceptance.sh` bu CronJob'u koşturmaz.
 - **Satır filtresi / kolon maskesi UYGULANMAZ**: dbt bir servis hesabıdır (HTTP Basic). Kullanıcı bazlı
-  güvenlik interaktif OIDC oturumları içindir (`runbooks/access-control.md`).
+  güvenlik interaktif OIDC oturumları içindir (`docs/50-isletme/kullanici-ve-yetki.md` §7).
 - **`materialized: table`** her koşuda tabloyu yeniden yazar (`CREATE OR REPLACE`). Artımlı ihtiyaçlar için
   dbt'nin `incremental` materyalizasyonu Iceberg'de çalışır ama `unique_key` + merge stratejisi ayrıca
   tasarlanmalıdır — bu referans örnek onu kapsamaz.
 - **Bakım:** Gold tabloları da `maint-*` işlerinin kapsamına girer (`maintain_namespaces`) — yeni namespace
   eklerken `glue` değerlerindeki bakım kapsamını gözden geçirin.
 - **Kapalı ağ:** pip (PyPI) erişimi zorunludur; Maven tarafındaki eşdeğer sorun ve çözümü
-  `runbooks/troubleshooting.md#maven`.
+  `docs/50-isletme/sorun-giderme.md` §6.2.

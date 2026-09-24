@@ -404,8 +404,8 @@ gerçek süre yukarıdaki `jeton bitisi:` satırından okunur, istenen süreden 
 dolduğunda Connect imajının **yeni** build'i `unauthorized` verir; çalışan Connect pod'u
 etkilenmez ama sürüm yükseltmesi durur. Bu yüzden jetonun bitiş tarihi kurumun takvimine
 yazılır ve `connect-push` Secret'ı aynı komutlarla yeniden yaratılır; yenileme adımı
-yükseltme bölümündedir: docs/50-isletme/yukseltme.md (bu bölüm bir sonraki görevde
-eklenir).
+yükseltme bölümündedir:
+[50-isletme/yukseltme.md](50-isletme/yukseltme.md) §6.
 
 **Ters giderse:** jeton komutu süreyle ilgili hata verirse küme daha kısa bir üst sınır
 uyguluyordur; komutu `--duration=24h` ile tekrarlayıp yenileme sıklığını ona göre
@@ -707,8 +707,8 @@ operatör kurulu değildir. Ad alanı yedeği **almayacaksanız** bu normaldir: 
 değerlerinde `velero` kapalı kalır ve hiçbir şey yapmanız gerekmez. Alacaksanız operatörü
 kurun; `PHASE` `Succeeded` değilse katalog kaynağına bakın (madde 2.1'deki ile aynı
 teşhis). Kurulum adımları, `DataProtectionApplication` içeriği ve site değerinin açılması
-yedekleme bölümündedir: docs/50-isletme/yedek-ve-geri-donus.md (bu bölüm bir sonraki
-görevde eklenir).
+yedekleme bölümündedir:
+[50-isletme/yedek-ve-geri-donus.md](50-isletme/yedek-ve-geri-donus.md) §7.
 
 ### 9.3 Günlükler (Loki) — bilgi
 

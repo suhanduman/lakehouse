@@ -155,7 +155,8 @@ backup:
   schedule: "0 0 2 * * *"                         # CNPG ScheduledBackup: 6 alan (saniye dâhil) -> her gün 02:00
   retentionPolicy: "30d"                          # ObjectStore spec.retentionPolicy (barman-cloud retention)
 
-# Velero namespace yedeği (dev: platform/apps/dev/40-velero.yaml chart'ı; prod: OADP — runbooks/dr.md).
+# Velero namespace yedeği (dev: platform/apps/dev/40-velero.yaml chart'ı; prod: OADP —
+# docs/50-isletme/yedek-ve-geri-donus.md).
 # Kapatmak: velero.enabled=false -> Schedule VE Kafka/MinIO fs-backup dışlama annotation'ları render EDİLMEZ.
 velero:
   enabled: false                # dev overlay'de true (platform/values/glue-dev.yaml); prod: OADP kurulduktan sonra namespace: openshift-adp ile açılır
@@ -219,7 +220,8 @@ spark:
   shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
   kafkaSecret: spark                 # KafkaUser spark'ın Secret'ı (sasl.jaas.config) — mongo-bronze Kafka okuması
   # boş = Maven Central (varsayılan); doluysa ConfigMap spark-ivysettings + tüm SSA'larda /opt/ivy/ivysettings.xml
-  # mount edilir ve spark.jars.ivySettings o yolu gösterir (F5 backlog — iç Maven aynası: runbooks/troubleshooting.md, Task 6)
+  # mount edilir ve spark.jars.ivySettings o yolu gösterir (iç Maven aynası:
+  # docs/50-isletme/sorun-giderme.md §6.2)
   ivySettingsXml: ""
   schedules:
     silverMerge: "*/15 * * * *"

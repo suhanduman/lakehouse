@@ -18,7 +18,8 @@ cnpg:
 # CNPG PITR yedekleri (F5): veri bucket'ından AYRI hedef. Endpoint/bucket site/glue.yaml'da (backup.s3);
 # `backup-s3-creds` Secret'ı (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) kurulumdan ÖNCE yaratılır.
 # Velero/OADP: prod'da OADP operatörü kurulduktan SONRA açılır (Schedule CR ns openshift-adp'ye yazılır).
-# Kapalıyken Kafka/MinIO fs-backup dışlama annotation'ları da render edilmez — runbooks/dr.md.
+# Kapalıyken Kafka/MinIO fs-backup dışlama annotation'ları da render edilmez —
+# docs/50-isletme/yedek-ve-geri-donus.md §7.2.
 velero: {enabled: false, namespace: openshift-adp}
 backup:
   enabled: true

@@ -707,7 +707,9 @@ Bilinmesi gereken üç şey:
 ## Sonraki bölüm
 
 Bir kaynağı ya da tabloyu — kendi yazdığınız tablolar dâhil — verisiyle birlikte kaldırmak:
-[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md). Kullanıcı ve yetki yönetimi,
-izleme ve alarmlar, sorun giderme: `docs/50-isletme/` altındaki diğer kılavuzlar. Ortak
-GitOps döngüsü her zaman aynıdır:
+[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md).
+[kullanici-ve-yetki.md](kullanici-ve-yetki.md) — yetki yönetimi;
+[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — alarmlar ve eşikler;
+[sorun-giderme.md](sorun-giderme.md) — belirti tablosu. Ortak GitOps döngüsü her zaman
+aynıdır:
 [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).

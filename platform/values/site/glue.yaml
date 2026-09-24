@@ -38,3 +38,14 @@ backup:
 tls: {caBundle: ""}                       # docs/30-kurulum.md: lakehouse-ca tls.crt PEM içeriği (Route reencrypt)
 sources: []                               # docs/50-isletme/yeni-kaynak-ve-pipeline.md
 pipelines: []
+# KAPALI AĞ — iç Maven aynası (docs/50-isletme/sorun-giderme.md §6.2). Spark işleri her koşuda Iceberg
+# runtime'ını Maven Central'dan çeker; dışarı erişim yoksa aşağıdaki bloğu açın ve `root` adresini kendi
+# Nexus/Artifactory aynanızla değiştirin. Boşken (varsayılan) hiçbir ek nesne render edilmez.
+# spark:
+#   ivySettingsXml: |
+#     <ivysettings>
+#       <settings defaultResolver="mirror"/>
+#       <resolvers>
+#         <ibiblio name="mirror" m2compatible="true" root="https://nexus.example.com/repository/maven-public/"/>
+#       </resolvers>
+#     </ivysettings>

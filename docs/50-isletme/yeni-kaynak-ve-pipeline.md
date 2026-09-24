@@ -708,8 +708,9 @@ durdurur ve izleme alarmıyla görünür.
 
 Bağlayıcı yeniden başlatmaya rağmen düzelmiyor ve tüketici konumu ileriye kaymışsa
 (kaydın işlenmeden geçilmesi) **offset sıfırlama** gerekir; bu, veri yinelemesine yol
-açabildiği için ayrı bir yordamdır ve işletme bölümündeki sorun giderme sayfasında
-anlatılır. Belirtilerin tam tablosu da oradadır.
+açabildiği için ayrı bir yordamdır ve
+[sorun-giderme.md](sorun-giderme.md) §4.1'de anlatılır. Belirtilerin tam tablosu da
+oradadır (§3).
 
 ---
 

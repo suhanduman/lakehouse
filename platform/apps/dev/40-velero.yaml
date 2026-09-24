@@ -1,6 +1,6 @@
 # DEV-ONLY yedekleme (Velero + node-agent). platform/apps/kustomization.yaml base listesine EKLENMEZ:
 # yalnız platform/envs/dev/kustomization.yaml `../../apps/dev` diziniyle alır. Prod (OpenShift) karşılığı OADP
-# operatörüdür (aynı velero.io/v1 CRD'leri, ns openshift-adp) — runbooks/dr.md.
+# operatörüdür (aynı velero.io/v1 CRD'leri, ns openshift-adp) — docs/50-isletme/yedek-ve-geri-donus.md §7.
 # sync-wave 0: velero.io CRD'leri (Schedule/Backup/Restore) glue'dan (wave 1) ÖNCE gelmeli; glue
 # `Schedule/lakehouse-daily`i velero ns'ine yazar. Bu yüzden Velero'nun S3 Secret'ı da glue'dan DEĞİL
 # chart'tan gelir (platform/values/velero-dev.yaml credentials.secretContents) — aksi hâlde wave kilitlenmesi.

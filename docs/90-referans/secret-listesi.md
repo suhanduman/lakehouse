@@ -59,7 +59,7 @@ yaratılır.
 | Secret | Anahtarlar | Kim okur | Değer nereden | Kılavuz |
 |---|---|---|---|---|
 | kaynak adı + `-db` (örnek: `shop-db`, `crm-db`) | `username`, `password` | Debezium bağlayıcısı (adı `dbz-` ile başlayan KafkaConnector) | kaynak veritabanı yöneticisi (CDC yetkili hesap) | [50-isletme/yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) |
-| OADP bulut kimliği (`cloud-credentials`, ad alanı `openshift-adp`) | `cloud` | Velero/OADP | yedek S3 anahtar çifti | docs/50-isletme/yedek-ve-geri-donus.md (bu bölüm bir sonraki görevde eklenir) |
+| OADP bulut kimliği (`cloud-credentials`, ad alanı `openshift-adp`) | `cloud` | Velero/OADP | yedek S3 anahtar çifti | [50-isletme/yedek-ve-geri-donus.md](../50-isletme/yedek-ve-geri-donus.md) §7 |
 
 > Geliştirme kümesinde görülen `velero-s3-creds` Secret'ı **yalnız kind içindir**
 > (`platform/values/velero-dev.yaml`); üretimde Velero chart'ı kurulmaz, yerine OADP

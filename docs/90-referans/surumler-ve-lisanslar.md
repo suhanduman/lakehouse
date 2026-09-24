@@ -118,8 +118,8 @@ Kurulum hiçbir bileşen için `PodDisruptionBudget` üretmez.
 **Gerekçe:** tek replikalı bir iş yüküne `minAvailable: 1` vermek düğüm boşaltmayı
 (`oc adm drain`) kalıcı olarak kilitler; `maxUnavailable: 1` ise zaten mevcut davranıştır.
 Yüksek erişilebilirlik gerekirse **önce replika sayısı** artırılır, PDB kararı o
-değişiklikle birlikte verilir. Kararın yeniden ele alınma koşulu pre-ship kontrol
-listesindedir.
+değişiklikle birlikte verilir. Kararın yeniden ele alınma koşulu
+[pre-ship-kontrol-listesi.md](pre-ship-kontrol-listesi.md) §5.1'dedir.
 
 ---
 
@@ -139,8 +139,8 @@ listesindedir.
 
 ## 8. Listeyi güncel tutma (J.3.2)
 
-1. Yükseltme, işletme bölümündeki yükseltme kılavuzundaki sırayla yapılır; **aynı PR'da bu
-   sayfadaki satır güncellenir**.
+1. Yükseltme, [50-isletme/yukseltme.md](../50-isletme/yukseltme.md) §3'teki sırayla
+   yapılır; **aynı PR'da bu sayfadaki satır güncellenir**.
 2. PR'ın CI kapısı: `helm unittest glue` + üretim/geliştirme render'ı + kind e2e
    (`.github/workflows/e2e.yaml`).
 3. Kurulumdan sonra fiilî sürümler kümeden doğrulanır:

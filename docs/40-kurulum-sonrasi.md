@@ -389,7 +389,7 @@ with create_app().app_context():
 ```
 
 Arayüzde **Dashboards → Iceberg metadata**. Panonun SQL'i ve yeni tablo ekleme yordamı
-işletme bölümündeki veri metrikleri kılavuzundadır.
+[50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md) sayfasındadır.
 
 **Ters giderse:** boş liste `[]` → import çalışmamıştır (Adım 4.2 çıktısına dönün). Pano
 açılıyor ama hücreler hata veriyorsa SQL hâlâ demo tablolarını gösteriyordur (yukarıdaki
@@ -552,7 +552,8 @@ periyodu **yoktur**: Trino onu yalnız açılışta okur. Orada bir grup adı de
 `trino` release'inin `helm upgrade` ile güncellenmesi **ve** ardından
 `oc -n "$LAKEHOUSE_NS" rollout restart deploy/trino-coordinator` çalıştırılması gerekir;
 aksi hâlde eski üyelik yürürlükte kalır. Kullanıcı ekleme, grup ↔ rol eşlemesi, satır
-filtresi ve kolon maskesi örnekleri işletme bölümündeki kullanıcı ve yetki sayfasındadır.
+filtresi ve kolon maskesi örnekleri
+[50-isletme/kullanici-ve-yetki.md](50-isletme/kullanici-ve-yetki.md) sayfasındadır.
 
 ### 5.6 İlk günden bilinmesi gereken dört davranış
 
@@ -647,7 +648,8 @@ OK ateşlenen alarm yok
 **Ters giderse:** hedefler görünmüyorsa UWM açık değildir
 ([20-on-kosullar](20-on-kosullar.md) madde 9.1). Hedef `Down` ise ilgili pod'un metrik portu
 kapalıdır; `oc -n "$LAKEHOUSE_NS" get pods` ile pod'un ayakta olduğunu doğrulayın. Alarm ve
-eşik yorumlarının tamamı işletme bölümündeki izleme ve alarmlar sayfasındadır.
+eşik yorumlarının tamamı
+[50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md) sayfasındadır.
 
 ---
 
@@ -737,16 +739,25 @@ Hepsi işaretliyse kurulum teslim edilebilir:
 
 ## Sonraki bölüm
 
-Gün-2 işleri (kaynak ve tablo ekleme, kullanıcı ve yetki, yedek ve geri dönüş, yükseltme,
-izleme ve alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme)
-`docs/50-isletme/` altındaki kılavuzlardadır; ilk üçü hazırdır:
-[50-isletme/degisiklik-nasil-uygulanir.md](50-isletme/degisiklik-nasil-uygulanir.md),
+Gün-2 işleri `docs/50-isletme/` altındaki kılavuzlardadır; ortak döngü
+[50-isletme/degisiklik-nasil-uygulanir.md](50-isletme/degisiklik-nasil-uygulanir.md)
+sayfasındadır. Sırasıyla:
 [50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md),
-[50-isletme/mevcut-kaynaga-tablo-ekleme.md](50-isletme/mevcut-kaynaga-tablo-ekleme.md).
+[50-isletme/mevcut-kaynaga-tablo-ekleme.md](50-isletme/mevcut-kaynaga-tablo-ekleme.md),
+[50-isletme/kaynak-veya-tablo-silme.md](50-isletme/kaynak-veya-tablo-silme.md),
+[50-isletme/yeni-spark-uygulamasi.md](50-isletme/yeni-spark-uygulamasi.md),
+[50-isletme/kullanici-ve-yetki.md](50-isletme/kullanici-ve-yetki.md),
+[50-isletme/yedek-ve-geri-donus.md](50-isletme/yedek-ve-geri-donus.md),
+[50-isletme/yukseltme.md](50-isletme/yukseltme.md),
+[50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md),
+[50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md),
+[50-isletme/gunluk-haftalik-kontroller.md](50-isletme/gunluk-haftalik-kontroller.md),
+[50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md).
 Başvuru tabloları:
 [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md),
 [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md),
 [90-referans/surumler-ve-lisanslar.md](90-referans/surumler-ve-lisanslar.md),
 [90-referans/oc-hizli-basvuru.md](90-referans/oc-hizli-basvuru.md),
 [90-referans/secret-listesi.md](90-referans/secret-listesi.md),
-[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md).
+[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md),
+[90-referans/pre-ship-kontrol-listesi.md](90-referans/pre-ship-kontrol-listesi.md).

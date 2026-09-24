@@ -13,8 +13,8 @@ Bütün komutlar `$LAKEHOUSE_NS` ve `$ARGOCD_NS` değişkenlerini kullanır; her
 yerine `kubectl` yazılır; komutların karşılıkları birebir aynıdır (`oc adm top` →
 `kubectl top`). Tek istisna 10 numaradır: kind'da Route yoktur.
 
-> **Bu sayfa teşhis etmez, komut verir.** Belirtiden yola çıkan teşhis tablosu işletme
-> bölümündeki sorun giderme sayfasındadır.
+> **Bu sayfa teşhis etmez, komut verir.** Belirtiden yola çıkan teşhis tablosu
+> [50-isletme/sorun-giderme.md](../50-isletme/sorun-giderme.md) §3'tedir.
 
 ---
 

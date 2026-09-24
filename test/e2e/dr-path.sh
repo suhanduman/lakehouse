@@ -68,7 +68,7 @@ p=""; for _ in $(seq 1 60); do p=$(kubectl -n "$VELERO_NS" get backups.velero.io
 # .spec.volume = POD hacim adı (PVC adı değil). kind NOTU: local-path PV'leri hostPath'tir ve Velero fs-backup
 # hostPath hacimleri ATLAR ("is a hostPath volume ... skipping", canlı) -> kind'da yalnız emptyDir hacimleri
 # (strimzi-tmp, scratch-data, shm, plugins, temp-dir …) PodVolumeBackup üretir; zeppelin-data/hub-db-dir PVC'leri
-# ÜRETMEZ. Gerçek CSI depolamada (OpenShift) PVC'ler de alınır — runbooks/dr.md.
+# ÜRETMEZ. Gerçek CSI depolamada (OpenShift) PVC'ler de alınır — docs/50-isletme/yedek-ve-geri-donus.md §6.5.
 pv=$(kubectl -n "$VELERO_NS" get podvolumebackups.velero.io -l velero.io/backup-name=e2e-lakehouse -o jsonpath='{range .items[*]}{.spec.volume}={.status.phase} {end}'); echo "PodVolumeBackups: $pv"
 grep -q 'Completed' <<<"$pv" || { echo "HATA node-agent fs-backup hiç koşmadı (emptyDir hacimleri bekleniyor)"; exit 1; }; echo "OK fs-backup (node-agent, Kopia) çalıştı"
 if grep -qE '(^| )(pgdata|data-0)=' <<<"$pv"; then echo "HATA Kafka/CNPG hacmi yedeğe girdi"; exit 1; fi; echo "OK Kafka/CNPG hacimleri dışlandı"

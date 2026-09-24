@@ -320,7 +320,7 @@ hâline eşittir):
 | Silver tablosu yaratılmıyor | `pipelines` girdisi yok ya da iş askıda | Adım 3; `SUSPEND` sütunu |
 | Silver'da `SchemaConflict` | kolon tipi güvenli genişletilemiyor | Silver'da elle `ALTER TABLE` ya da yeni kolon |
 
-Belirtilerin tam tablosu işletme bölümündeki sorun giderme sayfasındadır.
+Belirtilerin tam tablosu: [sorun-giderme.md](sorun-giderme.md) §3.
 
 ---
 
@@ -338,7 +338,11 @@ Belirtilerin tam tablosu işletme bölümündeki sorun giderme sayfasındadır.
 
 ## Sonraki bölüm
 
-Kaynak ya da tablo çıkarmak, kendi Spark uygulamanızı eklemek, kullanıcı ve yetki
-yönetimi, yedek ve geri dönüş, izleme ve sorun giderme: `docs/50-isletme/` altındaki
-diğer kılavuzlar. Değişikliğin kümeye geçtiği ortak yol her zaman aynıdır:
+[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) — kaynak ya da tablo çıkarmak;
+[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) — kendi Spark uygulamanız;
+[kullanici-ve-yetki.md](kullanici-ve-yetki.md) — yetki yönetimi;
+[yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedek ve geri dönüş;
+[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) ve
+[sorun-giderme.md](sorun-giderme.md) — izleme ve sorun giderme. Değişikliğin kümeye
+geçtiği ortak yol her zaman aynıdır:
 [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
