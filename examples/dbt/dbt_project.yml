@@ -1,5 +1,5 @@
 # Referans dbt projesi (şartname §14 kararı: "dbt = runbook + örnek proje", chart bileşeni DEĞİL).
-# Bu dosya ConfigMap olarak kümeye verilir (runbooks/dbt/cronjob.yaml) ya da yerelden `dbt run` ile koşturulur.
+# Bu dosya ConfigMap olarak kümeye verilir (examples/dbt/cronjob.yaml) ya da yerelden `dbt run` ile koşturulur.
 name: lakehouse_gold
 version: "1.0.0"
 config-version: 2

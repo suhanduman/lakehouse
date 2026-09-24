@@ -1,6 +1,6 @@
 # dbt-trino 1.10.4 profili. Kimlik: Trino SERVİS HESABI (HTTP Basic, htpasswd `password.db`) —
 # son kullanıcı OIDC akışı bir CronJob'da kullanılamaz. Bu yüzden satır filtresi/kolon maskesi
-# UYGULANMAZ (runbooks/access-control.md): dbt yalnız kendi Gold modellerini üretir.
+# UYGULANMAZ (docs/50-isletme/kullanici-ve-yetki.md §7): dbt yalnız kendi Gold modellerini üretir.
 lakehouse:
   target: prod
   outputs:

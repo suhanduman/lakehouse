@@ -113,6 +113,11 @@ Geliştirme yığınında bu listeye bir de `kube-state-metrics` satırı ekleni
 `Down` ise ilgili pod'un metrik portu kapalıdır; `oc -n "$LAKEHOUSE_NS" get pods` ile pod'un
 ayakta olduğunu doğrulayın.
 
+Aynı iddiaları komut satırından koşturan kabul yolu `test/e2e/monitoring-path.sh`'tir. Betik
+geliştirme yığınının nesne adlarını **varsayılan** alır; OpenShift'te üç ortam değişkeniyle
+(`PROM_STS`, `PROM_SVC`, `GRAFANA_SKIP`) uyarlanır ve ad alanı bayraklarıyla koşturulur —
+tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'tedir.
+
 ---
 
 ## 3. Beş alarm: anlamı ve karşılık gelen eylem

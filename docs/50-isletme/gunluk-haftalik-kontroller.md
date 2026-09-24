@@ -102,11 +102,12 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
 ```
 
-**Beklenen çıktı:** her satırda ikinci alan (askıya alınma) **`false`** ve `silver-merge`
-satırının üçüncü alanı (son koşu) son cron aralığı içinde. Aşağıdaki çıktı kind kümesinde alınmış **gerçek** çıktıdır
-ve tam da **istenmeyen** hâli gösterir — bir kabul koşusundan sonra bütün işler askıda
-kalmıştır (`ornek-rapor-zamanli`
-[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının örnek işidir):
+**Beklenen çıktı:** alanlar sırasıyla ad, askıya alınma ve son koşudur; ikinci alan her
+satırda **`false`**, `silver-merge` satırının üçüncü alanı ise son cron aralığı içinde
+olmalıdır. Aşağıdaki çıktı kind kümesinde alınmış **gerçek** çıktıdır ve tam da
+**istenmeyen** hâli gösterir — bir kabul koşusundan sonra bütün işler askıda kalmıştır
+(`ornek-rapor-zamanli` [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının
+örnek işidir):
 
 ```text
 maint-compact	true	null
