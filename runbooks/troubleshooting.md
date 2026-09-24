@@ -35,7 +35,7 @@ kubectl -n lakehouse logs -l strimzi.io/kind=KafkaConnect --tail=200
 ```
 **Ne yap**
 - Geçici hata (kaynak DB yeniden başladı, ağ): `kubectl -n lakehouse annotate kafkaconnector <ad> strimzi.io/restart=true`.
-- Kimlik/yetki hatası: `<source>-db` Secret'ı ve `runbooks/add-source.md` 1. adımı (replication rolü,
+- Kimlik/yetki hatası: `<source>-db` Secret'ı ve `docs/50-isletme/yeni-kaynak-ve-pipeline.md` 1. adımı (replication rolü,
   publication, sinyal tablosu, CDC etkinleştirme).
 - Converter/SMT hatası: `errors.tolerance: all` olduğundan kayıt `<prefix>.dlq` topic'ine düşer; oradan okuyun.
 - Task başarısızlığından sonra **consumer konumu ileri kalmış olabilir** (veri boşluğu):
@@ -94,7 +94,7 @@ kubectl -n lakehouse logs <ad>-driver --tail=200
 | Belirti | Kök | Çözüm |
 |---|---|---|
 | `UnresolvedAddressException` / Ivy hatası | Maven Central'a çıkış yok | [İç Maven aynası](#maven) |
-| `SchemaConflict` (silver-merge) | Silver kolon tipi güvenli genişletilemiyor | Elle `ALTER TABLE` ya da yeni kolon (`runbooks/add-table.md`) |
+| `SchemaConflict` (silver-merge) | Silver kolon tipi güvenli genişletilemiyor | Elle `ALTER TABLE` ya da yeni kolon (`docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md`) |
 | `KAFKA_JAAS` yok (mongo-bronze) | `KafkaUser spark` yalnız mongodb kaynağı varken oluşur | Kaynağı ekleyin ya da işi kapatın |
 | OOM / uzun GC (mongo-bronze, uzun kesinti sonrası) | Backlog `collect()` ile driver'a sığmıyor | Tek koşu için `spark.driver.memory` artırın ya da `lakehouse.kafka.offsets` tablo özelliğini elle ilerletin (offset yalnız başarıda ilerler) |
 | Driver `CreateContainerConfigError` | `polaris-spark` Secret'ı yok | `scripts/polaris-setup.sh` koşmamış |
@@ -196,7 +196,7 @@ Belirti: Spark ya da Connect `ForbiddenException: The Access Key Id you provided
 - **`mongo-bronze` OOM / uzun kesinti:** backlog `collect()` ile driver'a sığmıyor → tek koşu için
   `spark.driver.memory` artırın ya da `lakehouse.kafka.offsets` özelliğini elle ilerletin.
 - **nginx:** `nginx.dlq` doluysa `ts` dönüşümü başarısız olmuştur (Fluent Bit lua filtresi) —
-  `runbooks/nginx-agent.md`.
+  `docs/50-isletme/yeni-kaynak-ve-pipeline.md` §10.
 - **DLQ gerçeği:** Iceberg sink `ErrantRecordReporter` uygulamaz → `<prefix>.dlq` yalnız converter/SMT
   hatalarını alır; yazma hatası task'ı durdurur (bu yüzden [#connect](#connect) kuralı `critical`).
 

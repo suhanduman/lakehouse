@@ -739,7 +739,11 @@ Hepsi işaretliyse kurulum teslim edilebilir:
 
 Gün-2 işleri (kaynak ve tablo ekleme, kullanıcı ve yetki, yedek ve geri dönüş, yükseltme,
 izleme ve alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme)
-`docs/50-isletme/` altındaki kılavuzlardadır. Başvuru tabloları:
+`docs/50-isletme/` altındaki kılavuzlardadır; ilk üçü hazırdır:
+[50-isletme/degisiklik-nasil-uygulanir.md](50-isletme/degisiklik-nasil-uygulanir.md),
+[50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md),
+[50-isletme/mevcut-kaynaga-tablo-ekleme.md](50-isletme/mevcut-kaynaga-tablo-ekleme.md).
+Başvuru tabloları:
 [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md),
 [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md),
 [90-referans/surumler-ve-lisanslar.md](90-referans/surumler-ve-lisanslar.md),

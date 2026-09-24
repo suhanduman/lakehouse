@@ -19,7 +19,7 @@ Uçtan uca kanıt her kurulum/CI koşusunda alınır: `test/e2e/dr-path.sh` → 
 | **Kubernetes nesneleri** (`lakehouse` ns: CR'lar, ConfigMap, Secret, Deployment…) | ✅ | Velero `Schedule/lakehouse-daily` | `Restore` (§5) |
 | **Not defteri PVC'leri** (JupyterHub `hub-db-dir` + kullanıcı PVC'leri, Zeppelin `zeppelin-data`) | ✅ (gerçek CSI depolamada) | Velero node-agent fs-backup (Kopia) | `Restore` + PVC (§5.3); **kind'da çalışmaz** → §5.4 |
 | **Postgres PVC'leri (`pgdata`)** | ⛔ bilerek dışlandı | pod annotation `backup.velero.io/backup-volumes-excludes: pgdata` | Postgres'in dönüş yolu **Barman PITR**'dır (tutarlılık) |
-| **Kafka verisi** (`data-0`) | ❌ kapsam dışı | annotation ile fs-backup'tan dışlandı | Kaynaklardan **yeniden akıtma** (Debezium snapshot — `runbooks/add-table.md`) |
+| **Kafka verisi** (`data-0`) | ❌ kapsam dışı | annotation ile fs-backup'tan dışlandı | Kaynaklardan **yeniden akıtma** (Debezium snapshot — `docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md`) |
 | **Iceberg verisi + metadata dosyaları** (`s3://lakehouse/`) | ❌ kapsam dışı | — | **S3'ün kendi çoğaltması** (müşteri S3'ü / FlashBlade replikasyonu) |
 | **MinIO verisi (dev)** | ❌ | annotation `…backup-volumes-excludes: data` | DEV-ONLY, yedeklenmez |
 

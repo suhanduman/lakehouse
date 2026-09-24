@@ -125,7 +125,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   Beklenen: ajan dış Route'a SASL_SSL/SCRAM ile bağlanır, `nginx.access` topic'ine kayıt düşer, `nginx_raw`
   tablosunda satır sayısı artar, DLQ (`nginx.dlq`) boş kalır.
   *Kaynak: F3 notu 7. satır (küme içi ajan kanıtlandı) + F3 "Açık kalanlar" (gerçek sunucuda kurulum);
-  `runbooks/nginx-agent.md`.*
+  `docs/50-isletme/yeni-kaynak-ve-pipeline.md` §10.*
 
 - [ ] **1.10 AD kök CA'sı (`ad-ca`) → gerçek LDAPS el sıkışması**
   ```bash
@@ -293,7 +293,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   Beklenen: connector `Ready=True`; `database.encrypt=true` (varsayılan — `trustServerCertificate` YALNIZ özel
   CA'lı laboratuvarda `true`, üretimde truststore `extraConfig` ile verilir); `schema.history.internal.*`
   SASL_SSL + PEM truststore yolu (`/opt/kafka/connect-certs/lakehouse-cluster-ca-cert/ca.crt`) çalışıyor.
-  *Kaynak: F2 notu 11. ve 15. satırlar; `glue/templates/connectors.yaml`, `runbooks/add-source.md`.*
+  *Kaynak: F2 notu 11. ve 15. satırlar; `glue/templates/connectors.yaml`, `docs/50-isletme/yeni-kaynak-ve-pipeline.md`.*
 
 - [ ] **4.2 Connect `buildImage` iç registry'ye itiliyor**
   ```bash
@@ -384,7 +384,7 @@ verilir. Tek başına PDB eklemek erişilebilirlik kazandırmaz, yalnız bakım�
 
 **Gerekçe:** Kafka bu mimaride **taşıyıcıdır**, kayıt sistemi değil — kalıcı gerçek kaynak veritabanlarında
 (Debezium kaynakları) ve Iceberg/S3'tedir. Broker verisi kaybolursa doğru dönüş yolu Debezium'un yeniden
-snapshot'ıdır (tablo bazında artımlı snapshot sinyali: `runbooks/add-table.md`); bu, yedekten dönen bayat
+snapshot'ıdır (tablo bazında artımlı snapshot sinyali: `docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md`); bu, yedekten dönen bayat
 offset/şema geçmişiyle çalışmaktan daha tutarlıdır. MirrorMaker 2 bir yedekleme aracı **değil**, çoklu-site
 çoğaltma aracıdır: ikinci bir aktif küme gereksinimi doğmadan kurulması ek broker'lar, ayrı ACL/offset çevirisi
 ve sürekli çift trafik demektir — tek site kurulumda maliyeti faydasından büyüktür.

@@ -40,7 +40,7 @@ connect:
     limits: {memory: 2Gi}
 
 # Kaynak DB'ler → KafkaUser ACL'leri + KafkaConnector çifti (dbz-<name>, sink-<name>). Secret: <name>-db (username, password).
-# Bronze namespace <name>_raw (Polaris setup.yaml'da yaratılmış olmalı — runbooks/add-source.md)
+# Bronze namespace <name>_raw (Polaris setup.yaml'da yaratılmış olmalı — docs/50-isletme/yeni-kaynak-ve-pipeline.md)
 sources: []
 #  - name: shop                       # topic.prefix, slot/publication adı, Secret <name>-db
 #    type: postgres                   # postgres | sqlserver

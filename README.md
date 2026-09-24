@@ -26,8 +26,10 @@ Ayrıntılı diyagramlar ve sözlük: [docs/00-genel-bakis.md](docs/00-genel-bak
   [docs/10-planlama.md](docs/10-planlama.md) →
   [docs/20-on-kosullar.md](docs/20-on-kosullar.md) →
   [docs/30-kurulum.md](docs/30-kurulum.md)
-- **İşletmen** — kaynak/tablo eklemek, yetki vermek, yedek almak:
-  docs/50-isletme/ altındaki kılavuzlar
+- **İşletmen** — değişiklik uygulamak, kaynak/tablo eklemek:
+  [docs/50-isletme/degisiklik-nasil-uygulanir.md](docs/50-isletme/degisiklik-nasil-uygulanir.md) →
+  [docs/50-isletme/yeni-kaynak-ve-pipeline.md](docs/50-isletme/yeni-kaynak-ve-pipeline.md) →
+  [docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md)
 - **Analist** — ilk giriş, sorgu ve pano:
   [docs/40-kurulum-sonrasi.md](docs/40-kurulum-sonrasi.md)
 - **Geliştirici** — kendi Spark uygulaması/CronJob'ı:
@@ -64,9 +66,13 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
   değerleri, Secret'lar, bootstrap, doğrulama
 - [docs/40-kurulum-sonrasi.md](docs/40-kurulum-sonrasi.md) — Polaris kataloğu,
   Superset içe aktarma, ilk giriş, izleme hedefleri, kabul testi
-- docs/50-isletme/ — gün-2: değişiklik uygulama, kaynak/tablo ekleme ve
-  silme, kullanıcı ve yetki, yedek ve geri dönüş, yükseltme, izleme ve
-  alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme
+- docs/50-isletme/ — gün-2:
+  [değişiklik nasıl uygulanır](docs/50-isletme/degisiklik-nasil-uygulanir.md),
+  [yeni kaynak ve pipeline](docs/50-isletme/yeni-kaynak-ve-pipeline.md),
+  [mevcut kaynağa tablo ekleme](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md);
+  ayrıca kaynak/tablo silme, kullanıcı ve yetki, yedek ve geri dönüş,
+  yükseltme, izleme ve alarmlar, veri metrikleri, günlük/haftalık
+  kontroller, sorun giderme
 - docs/90-referans/ — [değer anahtarları](docs/90-referans/values-anahtarlari.md),
   [Secret listesi](docs/90-referans/secret-listesi.md),
   [port ve servisler](docs/90-referans/port-ve-servisler.md),
@@ -74,5 +80,5 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
   [kabul testleri](docs/90-referans/kabul-testleri.md),
   [oc hızlı başvuru](docs/90-referans/oc-hizli-basvuru.md)
 
-50 klasörü sonraki görevlerde eklenir.
+50 klasörünün kalan sayfaları sonraki görevlerde eklenir.
 Kurulum değişkenleri şablonu: `install/lakehouse.env.example`.

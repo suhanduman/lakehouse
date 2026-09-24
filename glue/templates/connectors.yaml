@@ -69,7 +69,7 @@ spec:
 {{- $_ := set $cfg "slot.name" (printf "debezium_%s" .name) }}
 {{- $_ := set $cfg "publication.name" (printf "dbz_%s_pub" .name) }}
 {{- $_ := set $cfg "publication.autocreate.mode" "filtered" }}
-{{- /* publication.autocreate.mode=filtered: superuser gerekmez; tablo sahibi dbz rolü (runbooks/add-source.md) */ -}}
+{{- /* publication.autocreate.mode=filtered: superuser gerekmez; tablo sahibi dbz rolü (docs/50-isletme/yeni-kaynak-ve-pipeline.md) */ -}}
 {{- else }}
 {{- $_ := set $cfg "database.names" .database }}
 {{- $_ := set $cfg "database.encrypt" "true" }}

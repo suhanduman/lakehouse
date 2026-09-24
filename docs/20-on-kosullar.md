@@ -608,7 +608,7 @@ timeout 5 bash -c "</dev/tcp/console-openshift-console.$APPS_DOMAIN/443" && echo
 ```
 
 Dinleyicinin açılması, ajan kurulumu ve konu/kullanıcı tanımları işletme bölümündedir:
-docs/50-isletme/yeni-kaynak-ve-pipeline.md (bu bölüm bir sonraki görevde eklenir).
+[50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md) §10.
 
 **Ters giderse:** komut son satırı yazmadan biterse güvenlik duvarı kapalıdır ve ajanlar
 kurulamaz. nginx akışını kullanmayacaksanız bu maddeyi atlayın, kontrol listesinde
