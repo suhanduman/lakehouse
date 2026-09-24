@@ -201,6 +201,11 @@ git commit -m "site: silver-merge eskime esigi 90 dk"
 git push origin main
 ```
 
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
+
 Eklenen satır (örnek):
 
 ```yaml

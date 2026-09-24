@@ -421,7 +421,7 @@ oc -n "$ARGOCD_NS" get application glue \
   -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü):
+**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**):
 
 ```text
 application.argoproj.io/glue patched
@@ -559,6 +559,11 @@ git add platform/values/site/glue.yaml
 git commit -m "site: ad alani yedegi acildi (OADP)"
 git push origin main
 ```
+
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
 
 Eşitleme bittikten sonra zamanlı yedek nesnesi **OADP ad alanında** doğar:
 

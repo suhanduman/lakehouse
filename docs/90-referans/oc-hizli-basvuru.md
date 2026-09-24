@@ -1,6 +1,6 @@
 # 90 — `oc` hızlı başvuru
 
-**Bu bölümde:** bu kurulumu işletirken en sık gereken **on beş** komut; her biri için ne
+**Bu bölümde:** bu kurulumu işletirken en sık gereken **on altı** komut; her biri için ne
 zaman kullanılacağı, komutun kendisi ve beklenen çıktı. Amaç, bir belirti karşısında hangi
 komutun çalıştırılacağını aramadan bulmaktır.
 **Süre:** okuma 10 dakika.
@@ -321,12 +321,64 @@ oc -n "$LAKEHOUSE_NS" cp "$POD":/app/assets ./superset-assets
 
 ---
 
+<a id="trino-sql"></a>
+## 16. Trino'ya komut satırından SQL çalıştırma
+
+**Ne zaman:** bir tablonun gerçekten dolduğunu (Bronze/Silver satır sayısı, `$snapshots`)
+tarayıcı açmadan doğrulamak gerektiğinde. İşletme sayfalarındaki doğrulama adımları
+JupyterHub not defteri hücresini kullanır; o hücre **tarayıcıdan OIDC** girişi ister ve
+geliştirme (kind) kümesinde çalışmaz ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.3).
+Bu komut aynı sorguyu bastion'dan çalıştırır: koordinatör pod'unda hazır gelen Trino CLI'yi
+(`/usr/bin/trino`) `superset` **servis hesabıyla** kullanır.
+
+`[bastion]`
+
+```bash
+SP=$(oc -n "$LAKEHOUSE_NS" get secret trino-service-accounts \
+  -o jsonpath='{.data.superset}' | base64 -d)
+oc -n "$LAKEHOUSE_NS" exec deploy/trino-coordinator -- env TRINO_PASSWORD="$SP" \
+  trino --server https://trino.lakehouse.svc:8443 \
+  --truststore-path /etc/trino/tls/ca.crt --user superset --password \
+  --execute 'select count(*) from lakehouse.shop_raw.orders'
+```
+
+**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; CLI her değeri tırnaklar):
+
+```text
+"6"
+```
+
+**Üretimde de çalışır.** `superset` servis hesabı üretim Secret'ında da vardır
+([secret-listesi.md](secret-listesi.md) madde 7) ve `platform/values/trino.yaml` ona
+`lakehouse` kataloğunda **read-only** `SELECT` verir. Üç sınırı bilin:
+
+- **Yalnız okur.** Şema değiştiren ifadeler `Access Denied` ile reddedilir; tablo düşüren
+  adımlar (ör. [50-isletme/kaynak-veya-tablo-silme.md](../50-isletme/kaynak-veya-tablo-silme.md)
+  §6.1) analist kimliği ister ve bu yolla yapılamaz.
+- **Satır filtresi ve kolon maskesi uygulanmaz.** Servis hesabı `lakehouse-users`
+  grubunda değildir; bir kullanıcının gerçekte ne göreceğini sınamak için
+  [50-isletme/kullanici-ve-yetki.md](../50-isletme/kullanici-ve-yetki.md) §7'deki kullanıcı
+  girişi gerekir.
+- **`--server` adresi Route değil, küme içi servistir.** Sertifika `trino.lakehouse.svc`
+  adına kesilmiştir; `localhost` yazarsanız `subjectAltNames` hatası alırsınız. Ad alanınız
+  `lakehouse` değilse adresi `trino.$LAKEHOUSE_NS.svc` olarak yazın.
+
+**Ters giderse:** `Authentication failed` → Secret'taki düz parola `password.db` içindeki
+bcrypt ile uyuşmuyordur ([secret-listesi.md](secret-listesi.md) madde 7). `executable file
+not found` → koordinatör imajında CLI yoktur; o durumda
+[50-isletme/veri-metrikleri.md](../50-isletme/veri-metrikleri.md) §3'teki Superset SQL Lab
+yolunu kullanın.
+
+---
+
 ## Kontrol listesi
 
 - [ ] `install/lakehouse.env` yüklendi (`$LAKEHOUSE_NS`, `$ARGOCD_NS` dolu).
 - [ ] Teşhise her zaman 1, 5 ve 8 numaralı komutlarla başlanacağı biliniyor.
 - [ ] 11 numaralı komutun çıktısının **sır** olduğu ve paylaşılmayacağı biliniyor.
 - [ ] 12 numaralı komutun GitOps dışı, bilinçli bir elle müdahale olduğu biliniyor.
+- [ ] 16 numaralı komutun **yalnız okuduğu** ve satır filtresi/kolon maskesi uygulamadığı
+      biliniyor.
 
 ## Sonraki bölüm
 

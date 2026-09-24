@@ -192,6 +192,21 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i 'commit\|iceberg\|s3'
 ```
 
+**Önce `LAG` sütununa bakın — teşhisi o belirler:**
+
+| `LAG` | Anlamı | Ne yap |
+|---|---|---|
+| `0` | Boru hattı **sağlıklı ve boşta**: tüketilecek yeni kayıt yok | Bir şey yapmayın; aşağıdaki nota bakın |
+| `> 0` ama her ölçümde **azalıyor** | Birikim eriyor | Bekleyin; kesinti sonrası normaldir |
+| `> 0` ve **sabit** (iki ölçüm arası değişmiyor) | Sink tüketiyor ama **commit edemiyor** | Aşağıdaki "Bronze tablosu var ama boş" akışı |
+
+> **`committed to 0 table(s)` bir arıza belirtisi DEĞİLDİR.** Sink koordinatörü
+> `iceberg.control.commit.interval-ms` (geliştirmede 30 sn, üretimde 300 sn) periyoduyla
+> **her zaman** bir commit turu başlatır; o turda yazılacak yeni veri yoksa günlüğe
+> `Coordinator … completed commit …, committed to 0 table(s)` ve `Commit timeout reached`
+> satırlarını yazar. Boşta duran sağlıklı bir kurulumda bu satırlar **sürekli** akar.
+> Ölçüt satırın kendisi değil, **`LAG` ile birlikte** okunmasıdır.
+
 **Ne yap**
 
 - Görev `RUNNING` ama commit yoksa: katalog ya da S3 erişimi bozuktur →
@@ -206,6 +221,54 @@ oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i 
 
 **Ters giderse:** komut `lakehouse-dual-role-0` pod'unu bulamazsa pod adları farklıdır;
 `oc -n "$LAKEHOUSE_NS" get pods -l strimzi.io/cluster=lakehouse` ile listeleyin.
+
+<a id="sink-bos-tablo"></a>
+#### Bronze tablosu var ama boş (`LAG` sabit, snapshot yok)
+
+Belirti: yeni tablonun Bronze karşılığı **yaratılmış**, S3'te veri dosyaları bile var, ama
+`select count(*)` `0` döndürüyor ve tüketici gecikmesi küçük bir sayıda (ör. `2`) **donmuş**.
+Nedeni şudur: Iceberg sink tüketici offset'lerini **ancak Iceberg commit'i başarılı olursa**
+işler. Commit tabloyu kapsamadığı sürece offset ilerlemez — bu yüzden `LAG` sonsuza kadar
+aynı sayıda kalır ve yazılan parquet dosyaları hiçbir snapshot'a girmez.
+
+`strimzi.io/restart=true` ve Connect pod'unu yeniden başlatmak bu durumu **çözmez**;
+sıradaki adımlar şunlardır — **sırayla**:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
+  -o jsonpath='{range .status.connectorStatus.tasks[*]}{.state}{"\n"}{.trace}{"\n"}{end}'
+oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
+  | grep -iE "NoSuchTable|Forbidden|403|AccessDenied|schema|Exception"
+oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
+  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group connect-sink-shop-coord
+```
+
+**Beklenen çıktı:** birinci komut `RUNNING` ve **boş** bir `trace` verir (görev ayakta;
+hata görev düzeyinde değildir). İkinci komut **sessizse** sorun yetki/şema değil,
+koordinatörün commit turudur. Üçüncü komutun `LAG` sütunu sürekli büyüyorsa koordinatör
+denetim konusunu okuyamıyordur.
+
+**Sıradaki adım — sebebe göre:**
+
+- İkinci komut `NoSuchTableException` / `403` / `AccessDenied` bastıysa: sink'in Polaris
+  principal'ı **yeni Bronze ad alanında tablo yaratamıyordur** →
+  [§5.1 Polaris / S3 403](#polaris-403). En sık neden, kaynağın Bronze ad alanının
+  Polaris'te hiç açılmamış olmasıdır
+  ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §5).
+- İkinci komut şema hatası bastıysa (`evolve-schema`): Bronze tablosu kaynağın yeni
+  kolonlarıyla uyuşmuyordur; tabloyu düşürüp sink'in yeniden yaratmasına izin verin
+  ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §6.2).
+- Üçüncü komutun `-coord` lag'i büyüyorsa: koordinatör takılmıştır → Connect pod'unu
+  tamamen yeniden yaratın (`oc -n "$LAKEHOUSE_NS" delete pod connect-connect-0`) ve lag'i
+  yeniden ölçün.
+- Üçü de temizse ve `LAG` hâlâ sabitse: bu, **ürün düzeyinde açık bir kusurdur**. Kanıt
+  paketini (üç komutun çıktısı + `oc get kafkaconnector sink-shop -o yaml`) toplayıp
+  [pre-ship kontrol listesine](../90-referans/pre-ship-kontrol-listesi.md) yazın. Veriyi
+  kurtarmak için Bronze tablosunu düşürüp kaynağı yeniden snapshot'layın
+  ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) §6).
 
 <a id="silver-merge"></a>
 ### 4.3 `LakehouseSilverMergeStale` — silver-merge eskidi

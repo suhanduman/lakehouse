@@ -54,8 +54,8 @@ curl -sSk -H "Authorization: Bearer $TOKEN" "https://$HOST/api/v1/rules" \
   | jq -r '.data.groups[] | select(.name=="lakehouse") | .rules[] | "\(.name)\t\(.health)\t\(.state)"'
 ```
 
-**Beklenen çıktı** (kind kümesindeki Prometheus'tan alınmış gerçek çıktı — beşi de `ok` ve
-`inactive`):
+**Beklenen çıktı** (geliştirme kümesindeki Prometheus'tan alınmış gerçek çıktı — beşi de
+`ok` ve `inactive`; yukarıdaki komut **üretim** yoludur, kind karşılığı hemen aşağıdadır):
 
 ```text
 LakehouseConnectTaskFailed	ok	inactive
@@ -63,6 +63,16 @@ LakehouseSinkStalled	ok	inactive
 LakehouseSilverMergeStale	ok	inactive
 LakehouseSparkScheduledRunFailed	ok	inactive
 LakehouseSparkRunTooLong	ok	inactive
+```
+
+**Geliştirme (kind) kümesinde:** `thanos-querier` Route'u **yoktur** (komut
+`the server doesn't have a resource type "route"` verir). Aynı listeyi `monitoring` ad
+alanındaki Prometheus'tan alın — yukarıdaki gerçek çıktı da oradan alınmıştır:
+
+```bash
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
+curl -sS localhost:9090/api/v1/rules \
+  | jq -r '.data.groups[] | select(.name=="lakehouse") | .rules[] | "\(.name)\t\(.health)\t\(.state)"'
 ```
 
 **Ters giderse:** `firing` gören satır için [sorun-giderme.md](sorun-giderme.md) §4'teki
@@ -75,10 +85,16 @@ demektir ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §2).
 
 ```bash
 oc -n "$LAKEHOUSE_NS" get kafkaconnector
+oc -n "$LAKEHOUSE_NS" get kafkaconnector \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.connectorStatus.connector.state}{"\t"}{range .status.connectorStatus.tasks[*]}{.state}{" "}{end}{"\n"}{end}'
+oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
+  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group connect-sink-shop
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; sizde kaynak sayısına göre satır
-sayısı değişir — **her satırın `READY` sütunu `True` olmalıdır**):
+sayısı değişir — **her satırın `READY` sütunu `True`, ikinci komutta hem bağlayıcı hem
+görev durumu `RUNNING`, üçüncü komutta `LAG` sütunu `0` ya da azalıyor olmalıdır**):
 
 ```text
 NAME         CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
@@ -86,12 +102,37 @@ dbz-crm      connect   io.debezium.connector.mongodb.MongoDbConnector       1   
 dbz-shop     connect   io.debezium.connector.postgresql.PostgresConnector   1           True
 sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
 sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
+
+dbz-crm	RUNNING	RUNNING
+dbz-shop	RUNNING	RUNNING
+sink-nginx	RUNNING	RUNNING
+sink-shop	RUNNING	RUNNING
+
+GROUP              TOPIC               PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+connect-sink-shop  shop.public.orders  0          2               2               0
+connect-sink-shop  shop.public.orders  1          3               3               0
+connect-sink-shop  shop.public.orders  2          1               1               0
 ```
+
+**Üç komut da gereklidir; biri ötekinin yerine geçmez:**
+
+- `READY True` yalnız **Strimzi'nin bağlayıcıyı Connect'e yazabildiğini** söyler; görevin
+  veri taşıdığını söylemez.
+- İkinci komut görev durumunu verir; `FAILED` gören satır için
+  [sorun-giderme.md §4.1](sorun-giderme.md#connect). **Dikkat:** Debezium kaynak görevi
+  kaynağa ulaşamadığında sonsuz yeniden deneme döngüsüne girer ve durumu `RUNNING`
+  **kalır** — bu yüzden üçüncü komut ve §2.1'deki alarm turu şarttır.
+- Üçüncü komut boru hattının gerçekten aktığını gösterir. `LAG` sabit bir sayıda donmuşsa
+  (azalmıyorsa) [sorun-giderme.md §4.2](sorun-giderme.md#sink). Sink adını kendi
+  kaynağınıza göre yazın (`connect-sink-` + kaynak adı); kaynak sayısı çoksa hepsini
+  `--all-groups` ile listeleyip `connect-sink` satırlarını süzün.
 
 **Ters giderse:** `False` gören satır için
 [sorun-giderme.md §4.1](sorun-giderme.md#connect). Beklediğiniz bir bağlayıcı **listede hiç
 yoksa** kaynak tanımı eşitlenmemiştir
-([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
+([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)). Bir kaynak görevi günlerdir
+`RUNNING` ama hedef tabloya hiç satır gelmiyorsa Connect günlüğünde yeniden deneme
+döngüsünü arayın: `oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 | grep -i "failed to poll records"`.
 
 ### 2.3 Silver birleştirme koşuyor mu
 
@@ -185,7 +226,7 @@ için ya saklama süresi kısaltılır ya da disk büyütülür
 | # | Kontrol | Sapma görülürse |
 |---|---|---|
 | 1 | Ateşlenen alarm yok, beş kural da `ok` | [sorun-giderme.md](sorun-giderme.md) §4 |
-| 2 | Bütün bağlayıcılar `READY True` | [sorun-giderme.md §4.1](sorun-giderme.md#connect) |
+| 2 | Bağlayıcılar `READY True`, **görevleri `RUNNING`**, sink `LAG`'i `0` ya da azalıyor | `READY`/görev: [sorun-giderme.md §4.1](sorun-giderme.md#connect); sabit `LAG`: [§4.2](sorun-giderme.md#sink) |
 | 3 | Zamanlı işlerin hiçbiri askıda değil, son koşu taze | [sorun-giderme.md §6.1](sorun-giderme.md#ssa-suspend) |
 | 4 | Veritabanlarında arşiv `True`, son yedek 24 saatten yeni | [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §4 |
 | 5 | Hiçbir disk %80'in üzerinde değil | [10-planlama](../10-planlama.md) §2 |

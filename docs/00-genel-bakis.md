@@ -263,6 +263,16 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Velero / OADP** | Ad alanı ve kalıcı disk yedekleme aracı. OADP, Red Hat'in OpenShift için paketlediği Velero'dur. |
 | **UWM** (kullanıcı iş yükü izleme) | OpenShift'in kullanıcı ad alanlarındaki metrikleri toplayan izleme yığını. Ayrı Prometheus kurulmaz. |
 | **PrometheusRule** | Alarm tanımını taşıyan CR. Bu üründe beş alarm tanımlıdır. |
+| **bastion** | Kümeye `oc login` ile girilmiş yönetim makinesi; belgelerdeki `[bastion]` etiketli komutlar burada koşar. Kurumun atlama sunucusu ya da yöneticinin dizüstü olabilir. |
+| **kind** (Kubernetes in Docker) | Tek makinede konteyner içinde koşan küçük Kubernetes kümesi. Bu üründe yalnız geliştirme ve deneme için kullanılır ([30-kurulum](30-kurulum.md) "Lokal deneme (kind)"). |
+| **fixture** | Deneme kümesinde gerçek kaynak yerine geçen örnek veri ve sahte kaynak sistemler (demo PostgreSQL/MongoDB, örnek tablolar). Üretimde bulunmaz. |
+| **STS** (Security Token Service) | S3'ün geçici kimlik veren servisi. Polaris, istemcilere kalıcı anahtar yerine kısa ömürlü kimlik dağıtmak için kullanır; depolama STS desteklemiyorsa `sts_unavailable: true` ile kapatılır. |
+| **vended credentials** | Polaris'in bir istemciye tablo bazında verdiği **geçici** S3 kimliği. Böylece Spark/Trino/sink kalıcı S3 anahtarı taşımaz. |
+| **SMT** (Single Message Transform) | Kafka Connect'in tek bir olayı geçerken dönüştüren küçük eklentisi. Bu üründe Debezium olayını Iceberg satırına çeviren dönüşüm bir SMT'dir. |
+| **DLQ** (dead letter queue) | İşlenemeyen olayların atıldığı ayrı Kafka konusu; adı kaynak adının sonuna `.dlq` eklenerek oluşur (`shop.dlq`). Boru hattı durmaz, bozuk olay kenara alınır. |
+| **CTAS / CVAS** | `CREATE TABLE AS SELECT` ve `CREATE VIEW AS SELECT`: bir sorgunun sonucundan tablo ya da görünüm yaratan SQL kalıbı. |
+| **sync-wave** | ArgoCD'nin nesneleri hangi sırayla uygulayacağını belirleyen numara. Küçük numara önce uygulanır; operatörler CR'lardan önce gelsin diye kullanılır. |
+| **prune / selfHeal** | ArgoCD'nin iki kendiliğinden davranışı: `prune`, Git'ten silinen nesneyi kümeden de siler; `selfHeal`, kümede elle yapılan değişikliği Git'teki hâle geri çevirir. |
 
 ---
 
@@ -280,5 +290,5 @@ Bu bölümü bitirdiğinizde aşağıdakileri **yazılı kaynağa bakmadan** sö
 
 ## Sonraki bölüm
 
-10-planlama.md — boyutlandırma, ağ/port özeti, doldurmanız gereken değerlerin çalışma
-sayfası ve hangi ekipten neyi isteyeceğiniz.
+[10-planlama.md](10-planlama.md) — boyutlandırma, ağ/port özeti, doldurmanız gereken
+değerlerin çalışma sayfası ve hangi ekipten neyi isteyeceğiniz.

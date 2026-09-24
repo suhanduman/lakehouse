@@ -181,6 +181,11 @@ git commit -m "site: shop kaynagindan public.customers cikarildi"
 git push origin main
 ```
 
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
+
 **Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde):
 
 ```text
@@ -319,6 +324,13 @@ gönderir ve S3 dosyaları aynı anda gider. Doğrulama Adım 7'dedir.
 **Ters giderse:** `Access Denied: Cannot drop table …` → kullanıcı analist grubunda
 değildir. `Failed to drop table …` → tablo `sandbox` dışındadır; Adım 6.2'ye geçin.
 
+> **Geliştirme (kind) kümesinde bu adım uygulanamaz.** Analist girişi tarayıcıdan OIDC
+> ister ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.3) ve
+> [90-referans/oc-hizli-basvuru.md §16](../90-referans/oc-hizli-basvuru.md#trino-sql)
+> yolundaki servis hesabı **yalnız okur** — `Access Denied` alırsınız. Kind'da `sandbox`
+> tablolarını da **Adım 6.2**'deki tek seferlik Spark işiyle düşürün; o yol Polaris'in
+> `spark` kimliğini kullanır ve analist gerektirmez.
+
 ### 6.2 Bronze ve Silver tabloları — tek seferlik Spark işi
 
 Trino ürünün ad alanlarına **yazamaz**: Polaris'teki `trino` kimliği yalnız okuma ve
@@ -357,7 +369,11 @@ Betik bir ConfigMap'e konur ve tek seferlik CR elle uygulanır; adım adım yord
 ```bash
 oc -n "$LAKEHOUSE_NS" logs tablo-sil-driver --tail=200 | grep DROP_OK
 oc -n "$LAKEHOUSE_NS" delete sparkapplication tablo-sil --ignore-not-found
+oc -n "$LAKEHOUSE_NS" delete configmap tablo-sil --ignore-not-found
 ```
+
+İkinci silme satırı **atlanmamalıdır**: §5.2'deki yordam betiği bir ConfigMap'e koyar ve
+`SparkApplication` silindiğinde ConfigMap kümede **kalır**.
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek satır):
 
@@ -451,11 +467,39 @@ kalmıştır, ikinci liste hiçbir satır basmaz — klasör boştur):
 Silmeden **önce** aynı komut `customers/` satırını da basıyordu; karşılaştırma yapabilmek
 için silme işinden önce bir kez çalıştırmanız yararlıdır.
 
-**Ters giderse:** dosyalar duruyorsa `PURGE` yazılmamıştır (Adım 6.2) ya da katalogda
-veriyle birlikte silme kapalıdır. İkincisi `platform/polaris/setup.yaml` içindeki
-`polaris.config.drop-with-purge.enabled` anahtarıyla açılır; **var olan** bir katalogda bu
-özelliğin ayrıca `polaris catalogs update` ile uygulanması gerekir. Dosyalar katalog kaydı
-olmadan kalmışsa Adım 6.3'teki yetim toplama işi onları alır.
+**Ters giderse — önce hangi dosyaların kaldığına bakın:**
+
+- **Klasörde `metadata/` ve dolu bir `data/` duruyorsa** `PURGE` yazılmamıştır (Adım 6.2)
+  ya da katalogda veriyle birlikte silme kapalıdır. İkincisi
+  `platform/polaris/setup.yaml` içindeki `polaris.config.drop-with-purge.enabled`
+  anahtarıyla açılır; **var olan** bir katalogda bu özelliğin ayrıca
+  `polaris catalogs update` ile uygulanması gerekir.
+- **Yalnız `data/` altında birkaç parquet kaldıysa (metadata yok)** `PURGE` doğru
+  çalışmıştır: bunlar sink'in yazdığı ama **hiçbir snapshot'a girmemiş** dosyalardır.
+  `PURGE` yalnız katalogun bildiği dosyaları siler, bu yüzden **kapsam dışıdırlar**. Bu
+  durum, tablo silinmeden önce sink'in commit edemediği hâllerde olur
+  ([sorun-giderme.md §4.2](sorun-giderme.md#sink-bos-tablo)). Normal yolu Adım 6.3'teki
+  yetim toplama işidir — ama o iş geliştirme kurulumunda **askıdadır** ve üretimde de
+  eşiği 3 gündür, yani dosyalar hemen gitmez. Hemen temizlemek isterseniz klasörü elle
+  silin:
+
+`[bastion]` — geliştirme kurulumu (MinIO)
+
+```bash
+oc -n "$LAKEHOUSE_NS" exec deploy/minio -- sh -c \
+  'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+   mc rm --recursive --force local/lakehouse/shop_raw/customers/'
+```
+
+`[bastion]` — üretim (kurumun S3 istemcisi)
+
+```bash
+aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$S3_BUCKET_DATA/shop_raw/customers/" --recursive
+```
+
+**Bu komut geri alınamaz.** Yalnız **silinmiş** bir tablonun klasöründe, yukarıdaki
+listeleme komutu metadata bulunmadığını gösterdikten sonra çalıştırın; canlı bir tablonun
+klasöründe çalıştırırsanız tabloyu okunamaz hâle getirirsiniz.
 
 ---
 

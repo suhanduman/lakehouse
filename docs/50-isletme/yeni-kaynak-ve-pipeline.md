@@ -425,7 +425,7 @@ Alanların tamamı:
 
 **Ters giderse:** `signalTable zorunlu` uyarısı → alan yazılmamıştır.
 `postgres|sqlserver|mongodb olmalı` → desteklenmeyen tür. İkisi de `helm template`
-aşamasında görülür ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §3).
+aşamasında görülür ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §3.2).
 
 ---
 
@@ -483,6 +483,11 @@ git add platform/values/site/glue.yaml platform/polaris/setup.yaml
 git commit -m "site: erp kaynagi ve pipeline eklendi"
 git push origin main
 ```
+
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
 
 ArgoCD eşitlediğinde şunlar yaratılır ya da güncellenir: `KafkaUser/connect` ACL'leri
 (kaynağın konu ön eki için), `Role/connect-secrets-reader` (Connect'in `erp-db`

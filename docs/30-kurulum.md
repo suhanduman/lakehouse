@@ -315,15 +315,21 @@ mv platform/polaris/setup.new platform/polaris/setup.yaml
 grep -nE "endpoint|base_location|allowed_locations|region:" platform/polaris/setup.yaml
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — `sed` **değiştirdikten sonraki** hâl; kendi `$S3_*`
+değerlerinizi görmelisiniz. Aşağıdaki satırlar `S3_BUCKET_DATA=kurum-veri`,
+`S3_REGION=eu-central-1`, `S3_ENDPOINT=https://s3.kurum.example.net` ile üretilmiştir):
 
 ```text
-    default_base_location: s3://lakehouse/
-    allowed_locations: [s3://lakehouse/]
-    region: us-east-1
-    endpoint: https://s3.example.com
-    endpoint_internal: https://s3.example.com
+    default_base_location: s3://kurum-veri/
+    allowed_locations: [s3://kurum-veri/]
+    region: eu-central-1
+    endpoint: https://s3.kurum.example.net
+    endpoint_internal: https://s3.kurum.example.net
 ```
+
+Çıktıda hâlâ `s3://lakehouse/`, `region: us-east-1` ya da `s3.example.com` görüyorsanız
+`sed` eşleşmemiştir: ilgili `$S3_*` değişkeni boştur (Adım 1) ya da dosya daha önce elle
+düzenlenmiştir. §4.1'in "örnek değer kalmasın" kuralı tam olarak bu satırlar içindir.
 
 STS yoksa aynı katalog bloğuna `sts_unavailable: true` satırını da ekleyin
 (`endpoint_internal` satırının altına, aynı girinti ile).
@@ -1202,12 +1208,118 @@ Küme zaten ayaktaysa `test/e2e/kind.sh` onu **silmez**, var olan kümeyi kullan
 
 | Adım | kind'da | Not |
 |---|---|---|
-| 1 — değişkenler | aynı | `install/lakehouse.env` aynı biçimde yüklenir |
+| 1 — değişkenler | **farklı** | `install/lakehouse.env` kind kurulumunda **yaratılmaz**; aşağıdaki "Değişkenler" kutusuna bakın |
 | 2–3 — Git kopyası ve ArgoCD depo kimliği | yalnız ArgoCD modunda | helm modunda ArgoCD yoktur |
-| 4 — site değerleri | aynı | `scripts/check-site.sh` aynı denetimi yapar |
+| 4 — site değerleri | **farklı** | helm modunda `platform/values/site/*` **hiç okunmaz**; aşağıdaki "Gün-2 değişikliği" kutusuna bakın |
 | 5 — Secret'lar | **atlanır** | `components.devSecrets: true` iken glue chart'ı sentetik Secret'ları kendisi üretir (`glue/templates/dev-secrets.yaml`). **Üretimde bu adımların hepsi elle yapılır.** |
 | 6 — bootstrap | `--env dev --mode helm` | ArgoCD yerine doğrudan `helm upgrade --install` |
 | 7 — doğrulama | aynı | aynı bekleme komutları çalışır |
+
+<a id="kind-degiskenler"></a>
+### Değişkenler (kind)
+
+Bütün işletme sayfaları `set -a; . install/lakehouse.env; set +a` ile başlar. Bu dosya
+**yalnız üretim kurulumunda** (Adım 1) yaratılır; `test/e2e/kind.sh` yaratmaz ve komut
+`install/lakehouse.env: no such file or directory` verir. Geliştirme kümesinde tek gereken
+iki değişkendir:
+
+`[bastion]`
+
+```bash
+export LAKEHOUSE_NS=lakehouse
+export APPS_DOMAIN=127.0.0.1.nip.io
+```
+
+`ARGOCD_NS` helm modunda **kullanılmaz**: `$ARGOCD_NS` geçen her komut (ArgoCD Application
+durumu, `annotate … refresh=hard`, `patch … syncPolicy`) bu kurulumda karşılıksızdır.
+`S3_*`, `LDAP_*`, `GIT_REPO_URL` değerlerinin de karşılığı yoktur — MinIO, sentetik
+Secret'lar ve yerel chart kullanılır. Kalıcı olsun isterseniz bu iki satırı
+`install/lakehouse.env` adıyla kendiniz yazabilirsiniz; dosya `.gitignore`'dadır.
+
+<a id="kind-gun2"></a>
+### Gün-2 değişikliği (kind / helm modu)
+
+**Bu kutu, helm modunda değişiklik uygulamanın tek doğru yoludur; bütün işletme sayfaları
+"commit + push → ArgoCD" adımında buraya gönderir.**
+
+Helm modunda glue release'i **yalnız** `platform/values/glue-dev.yaml` ile yüklenir
+(`helm -n "$LAKEHOUSE_NS" get values glue` ile görebilirsiniz). Bu yüzden
+`platform/values/site/glue.yaml` dosyasına yazdığınız bir anahtar kind'da **hiçbir etki
+yapmaz ve hata da vermez** — değişiklik sessizce yok sayılır.
+
+İşletme sayfalarının site dosyasına yazmanızı istediği anahtarları kind'da uygulamak
+için **aynı anahtarları** yerel bir ek değer dosyasına yazıp ikinci `-f` olarak verin.
+Dosyayı `kind-yerel.yaml` adıyla depo kökünde tutun; **commit edilmez** (`.gitignore`
+`*-yerel.yaml` kalıbını kapsamıyorsa `git add` etmemeye dikkat edin):
+
+`[bastion]`
+
+```bash
+cat > kind-yerel.yaml <<'YAML'
+sources:
+  - name: shop
+    type: postgres
+    tables: [public.orders, public.customers]
+YAML
+helm upgrade glue glue -n "$LAKEHOUSE_NS" \
+  -f platform/values/glue-dev.yaml -f kind-yerel.yaml
+```
+
+**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; başındaki
+`Warning: Please migrate to v2beta1` satırları **normaldir**, Helm 4'ün eski API
+sürümlerini kullanan alt chart'lar için yazdığı uyarıdır):
+
+```text
+Release "glue" has been upgraded. Happy Helming!
+NAME: glue
+NAMESPACE: lakehouse
+STATUS: deployed
+REVISION: 13
+```
+
+**Neyin karşılığı YOKTUR:** ArgoCD'nin kendiliğinden eşitlemesi, `prune`, `selfHeal` ve
+Application durumu. Yani (1) değişikliğiniz `helm upgrade` koşana kadar **uygulanmaz**,
+(2) kümede elle yaptığınız bir değişiklik geri alınmaz, (3)
+`oc -n "$ARGOCD_NS" get application glue` biçimindeki bütün doğrulama komutları
+çalışmaz — onların yerine `helm -n "$LAKEHOUSE_NS" history glue` ve
+`helm -n "$LAKEHOUSE_NS" get values glue` kullanılır. Geri alma da ArgoCD'ye değil
+`helm -n "$LAKEHOUSE_NS" rollback glue` komutuna (revizyon numarasıyla) dayanır.
+
+**`scripts/check-site.sh` uyarısı:** betik **yalnız** `platform/values/site/*` dosyalarını
+denetler. Helm modunda değişikliğiniz `kind-yerel.yaml`'da olduğu için betik ona **hiç
+bakmadan** `check-site: OK` basar — bu çıktı sizin değişikliğinizin kanıtı **değildir**.
+Kind'da denetim şudur:
+
+`[bastion]`
+
+```bash
+helm template glue glue -n "$LAKEHOUSE_NS" \
+  -f platform/values/glue-dev.yaml -f kind-yerel.yaml >/dev/null && echo "render OK"
+```
+
+<a id="kind-kaynak-db"></a>
+### Demo kaynaklara bağlanma (kind)
+
+İşletme sayfalarındaki `[kaynak DB]` etiketli komutlar kind'da demo kaynaklarda koşar:
+
+`[bastion]`
+
+```bash
+kubectl -n "$LAKEHOUSE_NS" exec -it demo-pg-1 -c postgres -- psql -U postgres -d shop
+kubectl -n "$LAKEHOUSE_NS" exec -it deploy/demo-mongo -- mongosh -u dbz -p dbz \
+  --authenticationDatabase admin crm
+```
+
+Demo `shop` veritabanında CDC rolünün adı `dbz`'dir (üretimde kendi kullanıcınız).
+
+<a id="kind-trino"></a>
+### Trino'ya komut satırından sorgu (kind ve üretim)
+
+İşletme sayfalarındaki doğrulama adımlarının çoğu JupyterHub not defteri hücresini
+kullanır; o hücre **tarayıcıdan OIDC** girişi ister ve geliştirme kümesinde çalışmaz
+([40-kurulum-sonrasi](40-kurulum-sonrasi.md) §5.3). Bastion'dan aynı sorguyu
+koordinatör pod'undaki Trino CLI ile çalıştırabilirsiniz — ayrıntı ve örnek çıktı:
+[90-referans/oc-hizli-basvuru.md](90-referans/oc-hizli-basvuru.md) §16.
 
 Bu bölümdeki "Beklenen çıktı" bloklarının bir kısmı doğrudan çalışan bir kind
 kümesinden alınmıştır: Adım 4.5 (`check-site: OK`), Adım 5.10 (`gecerli JSON`),

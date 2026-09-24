@@ -57,8 +57,23 @@ tabloyu publication'a kendisi ekler, ama bunu ancak tablo sahibiyse yapabilir.
 `[kaynak DB]` — PostgreSQL
 
 ```sql
-ALTER TABLE public.customers OWNER TO debezium;
+ALTER TABLE public.customers OWNER TO dbz;
 ```
+
+Buradaki `dbz`, **kaynağın CDC kullanıcısının adıdır**; kendi kurulumunuzda kaynağın
+Secret'ındaki `username` değeri ne ise onu yazın
+(`oc -n "$LAKEHOUSE_NS" get secret src-shop -o jsonpath='{.data.username}' | base64 -d`).
+Geliştirme kümesinin demo `shop` kaynağında bu ad `dbz`'dir.
+
+> **Prova yapıyorsanız:** geliştirme kümesinin demo `shop` veritabanında `public.customers`
+> **yoktur**; bu sayfayı kind'da birebir izlemek için tabloyu önce kendiniz yaratın
+> (bağlanma: [30-kurulum.md](../30-kurulum.md#kind-kaynak-db)).
+>
+> ```sql
+> CREATE TABLE public.customers (id int primary key, name text, updated_at timestamptz default now());
+> INSERT INTO public.customers (id, name) VALUES (1, 'Ada'), (2, 'Kerem');
+> ALTER TABLE public.customers OWNER TO dbz;
+> ```
 
 `[kaynak DB]` — SQL Server (tablo düzeyinde CDC ayrıca açılır)
 
@@ -140,6 +155,10 @@ git add platform/values/site/glue.yaml
 git commit -m "site: shop kaynagina public.customers eklendi"
 git push origin main
 ```
+
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
 
 Eşitleme sırasında Debezium bağlayıcısı **yeniden başlar** (yapılandırması değişmiştir);
 akış birkaç saniye duraklar ve kaldığı yerden sürer. PostgreSQL'de publication da
@@ -232,11 +251,14 @@ db.getSiblingDB("shop").debezium_signal.insertOne({
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=500 | grep -i "incremental snapshot"
+oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=500 \
+  | grep -iE "incremental snapshot|'INCREMENTAL' snapshot"
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek satırlar; tablo iki satırlıydı, bu
-yüzden ilk parçadan sonra snapshot hemen bitti):
+yüzden ilk parçadan sonra snapshot hemen bitti). Kalıbın iki alternatifli olması
+şarttır: Debezium ilk satırı `'INCREMENTAL'` biçiminde **tırnaklı** yazar ve düz
+`grep -i "incremental snapshot"` onu **hiç yakalamaz**:
 
 ```text
 2026-09-24 09:17:52 INFO  [debezium-postgresconnector-shop-change-event-source-coordinator] ExecuteSnapshot:64 - Requested 'INCREMENTAL' snapshot of data collections '[public.customers]' with additional conditions '[]' and surrogate key 'PK of table will be used'
@@ -253,7 +275,8 @@ ama satır gelmiyorsa tablonun birincil anahtarı yoktur; o durumda sinyalin `da
 ## 7. Bronze ve Silver'ı doğrulayın
 
 Bronze tablosu, sink'in ilk commit'inden sonra kendiliğinden yaratılır (üretimde 300
-saniyelik commit aralığı, geliştirme kurulumunda 30 saniye).
+saniyelik commit aralığı, geliştirme kurulumunda 30 saniye). **Ne kadar beklenir:**
+üretimde iki commit aralığı, yani **10 dakika**; geliştirme kurulumunda **2 dakika**.
 
 `[pod]` (JupyterHub not defteri hücresi)
 
@@ -265,12 +288,22 @@ conn = trino.dbapi.connect(host=os.environ["TRINO_HOST"], port=8443, http_scheme
 cur = conn.cursor(); cur.execute("select count(*) from shop_raw.customers"); cur.fetchall()
 ```
 
-**Beklenen çıktı** (satır sayısı kind provasından gerçektir — tablo iki satırlıydı; blok,
-Trino istemcisinin dönüş biçimidir):
+**Beklenen çıktı** (satır sayısı geliştirme kümesinde gerçekten gözlendi — tablo iki
+satırlıydı; blok, Trino Python istemcisinin dönüş biçimidir):
 
 ```text
 [[2]]
 ```
+
+> **Not defteri hücresi geliştirme kümesinde çalışmaz.** `OAuth2Authentication()`
+> tarayıcıdan OIDC girişi ister ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.3).
+> Kind'da — ve genel olarak bastion'dan — aynı sayımı
+> [90-referans/oc-hizli-basvuru.md §16](../90-referans/oc-hizli-basvuru.md#trino-sql)
+> ile alın; o komutun çıktı biçimi farklıdır (Trino CLI değeri tırnaklar: `"2"`).
+
+**Süre dolduğu hâlde `[[0]]` geliyorsa** tablo yaratılmış ama hiçbir snapshot commit
+edilmemiştir; bu bir bekleme sorunu **değildir** →
+[sorun-giderme.md §4.2](sorun-giderme.md#sink) "Bronze tablosu var ama boş".
 
 Silver tablosu bir sonraki `silver-merge` koşusunda Spark tarafından yaratılır. Koşunun
 yeni pipeline'ı gördüğü sürücü günlüğünden okunur:
@@ -295,8 +328,9 @@ MERGE_OK
 cur = conn.cursor(); cur.execute("select count(*) from shop.customers"); cur.fetchall()
 ```
 
-**Beklenen çıktı** (satır sayısı kind provasından gerçektir; Silver, kaynağın **güncel**
-hâline eşittir):
+**Beklenen çıktı** (satır sayısı geliştirme kümesinde gerçekten gözlendi; Silver,
+kaynağın **güncel** hâline eşittir. Bastion'dan aynı sayım:
+[90-referans/oc-hizli-basvuru.md §16](../90-referans/oc-hizli-basvuru.md#trino-sql)):
 
 ```text
 [[2]]

@@ -232,6 +232,11 @@ git commit -m "site: muhasebe grubuna satir filtresi"
 git push origin main
 ```
 
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
+
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `UYARI` satırı depodaki örnek dosya
 içindir, kendi kurulumunuzda çıkmayabilir):
 

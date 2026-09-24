@@ -90,7 +90,9 @@ bash scripts/check-site.sh
 
 `scripts/check-site.sh` üç site dosyasını birbiriyle çapraz doğrular (ör. AD kök CA
 Secret'ı ile Trino'nun truststore yolu birlikte açılıp kapanmış mı) ve örnek değer kalıp
-kalmadığına bakar.
+kalmadığına bakar. **Kapsamı yalnız `platform/values/site/` altındaki dosyalardır:**
+başka bir dosyada yaptığınız bir değişikliğe hiç bakmadan da `check-site: OK` basar —
+helm modunda bu çıktı değişikliğinizin kanıtı **değildir** (§5.2).
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `UYARI` satırı depodaki örnek
 `setup.yaml` içindir, kendi kurulumunuzda çıkmayabilir):
@@ -172,6 +174,10 @@ To ssh://git.kurum.example.net/lakehouse.git
    4ff2cc4..9a13b7c  main -> main
 ```
 
+**ArgoCD'siz (helm/kind) kurulumda:** push yeterli değildir; değişikliği
+[30-kurulum.md kind kutusundaki](../30-kurulum.md#kind-gun2) `helm upgrade` ile elle
+uygulamanız gerekir (§5.2).
+
 **Ters giderse:** `rejected ... non-fast-forward` alırsanız depoda sizden sonra başka bir
 commit vardır; `git pull --rebase origin main` çalıştırıp Adım 3'ü tekrarlayın. Çakışma
 çıkarsa **elle çözmeden önce** değişikliği yapan kişiyle konuşun: aynı `sources`
@@ -239,9 +245,19 @@ erişemiyordur; `lakehouse-repo` Secret'ındaki anahtar ya da adres bozulmuş ol
 
 ### 5.2 ArgoCD'siz (helm modu) kurulumlar
 
-Geliştirme ve deneme kümeleri ArgoCD'siz "helm modunda" kurulmuş olabilir
-([30-kurulum](../30-kurulum.md) "Lokal deneme (kind)" bölümü). Orada Adım 5 geçerli
-değildir; commit'ten sonra değişiklik elle uygulanır:
+Geliştirme ve deneme kümeleri ArgoCD'siz "helm modunda" kurulmuş olabilir. **Bu modun
+tam tarifi tek bir yerdedir:** [30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2).
+Orada Adım 4 ve Adım 5 geçerli değildir; özetle:
+
+- **Site dosyası okunmaz.** Helm modunda release yalnız `platform/values/glue-dev.yaml`
+  ile yüklenir; bu sayfanın Adım 2/3'ünde `platform/values/site/glue.yaml` dosyasına
+  yazdığınız anahtar kind'da **hiçbir etki yapmaz ve hata da vermez**. Aynı anahtarlar
+  yerel bir ek değer dosyasına yazılıp ikinci `-f` olarak verilir.
+- **`scripts/check-site.sh` sizin değişikliğinizi denetlemez** (yalnız site dosyalarına
+  bakar) — Adım 3.1'deki `check-site: OK` çıktısı bu modda **kanıt değildir**; yerine
+  Adım 3.2'deki `helm template` denetimi kullanılır.
+- **ArgoCD karşılığı yoktur:** kendiliğinden eşitleme, `prune`, `selfHeal` ve Application
+  durumu komutları çalışmaz; geri alma `helm rollback` ile yapılır.
 
 `[bastion]`
 
@@ -249,7 +265,9 @@ değildir; commit'ten sonra değişiklik elle uygulanır:
 helm upgrade glue ./glue -n "$LAKEHOUSE_NS" -f platform/values/glue-dev.yaml
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `REVISION` her koşuda bir artar):
+**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `REVISION` her koşuda bir artar).
+Çıktının başında dört adet `Warning: Please migrate to v2beta1` satırı görürseniz
+**normaldir**: Helm 4, eski API sürümü kullanan alt chart'lar için bu uyarıyı yazar:
 
 ```text
 Release "glue" has been upgraded. Happy Helming!
@@ -334,3 +352,23 @@ Bu döngüyü kullanan ilk iki işletme görevi:
 (PostgreSQL, SQL Server, MongoDB) ve nginx erişim günlüğü akışının eklenmesi;
 [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan bir kaynağa
 tablo ekleme ve artımlı snapshot.
+
+**İşletme bölümünün okuma sırası.** Bu sayfa (1) bölümün girişidir; baştan sona okumak
+isteyen şu sırayı izler. Sayfalar birbirine konu bazında da bağlanır, bu liste yalnız
+tam turun sırasıdır:
+
+1. [degisiklik-nasil-uygulanir.md](degisiklik-nasil-uygulanir.md) — ortak döngü (bu sayfa)
+2. [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) — yeni kaynak, nginx akışı
+3. [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan kaynağa tablo
+4. [kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) — kaynak/tablo kaldırma
+5. [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) — kendi Spark işiniz, `custom/`
+6. [kullanici-ve-yetki.md](kullanici-ve-yetki.md) — AD grupları, Trino kuralları, Polaris
+7. [veri-metrikleri.md](veri-metrikleri.md) — tablo düzeyi ölçümler ve pano
+8. [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — izleme kapsamı ve beş alarm
+9. [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) — sabit günlük/haftalık tur
+10. [sorun-giderme.md](sorun-giderme.md) — belirti → neden → çare
+11. [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedek yolları ve geri dönüş provaları
+12. [yukseltme.md](yukseltme.md) — sürüm yükseltme
+
+Başvuru sayfaları ([90-referans/](../90-referans/oc-hizli-basvuru.md)) sıraya girmez;
+ihtiyaç duyulduğunda açılır.

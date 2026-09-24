@@ -33,7 +33,8 @@ tls: {selfSignedCA: true}
 trino: {hostname: trino.127.0.0.1.nip.io}
 monitoring: {silverMergeStaleSeconds: 172800}   # dev: silver-merge cron gecelik (0 3 * * *) -> 48 saat
 networkPolicy: {enabled: true}       # kindnetd NetworkPolicy'yi ENFORCE EDER (F4 canlı bulgu) -> dev'de de açık; canlı doğrulama
-                                      # (izin verilen/verilmeyen ns, apiserver->webhook) F5 raporunda (task-5-report.md)
+                                      # (izin verilen/verilmeyen ns, apiserver->webhook) pre-ship kutusu 1.7:
+                                      # docs/90-referans/pre-ship-kontrol-listesi.md
 keycloak:
   hostname: http://keycloak-service.lakehouse.svc:8080   # dev: iss küme içinden çözülür (Trino OIDC discovery); tarayıcı akışı küme dışından çalışmaz
   # ldap.enabled dev'de KAPALI (AD yok) ama caSecret AÇIK: sentetik ad-ca Secret'ı (dev-secrets.yaml) ile

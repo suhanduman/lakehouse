@@ -367,6 +367,11 @@ git commit -m "custom: gunluk-ozet zamanli spark isi"
 git push origin main
 ```
 
+**ArgoCD'siz (helm/kind) kurulumda:** bkz.
+[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
+modda okunmaz.
+
+
 ArgoCD `custom` uygulamasını en geç üç dakikada bir yoklar.
 
 `[bastion]`
@@ -421,6 +426,17 @@ komutun iki bilinçli yan etkisi de aynı başlıkta yazılıdır.
 **Ters giderse:** sürücü pod'unun olay listesinde ConfigMap bulunamadı hatası varsa ilk
 satır atlanmıştır — ya da ConfigMap ile CR farklı ad alanlarına düşmüştür (yukarıdaki ad
 alanı notu).
+
+**Tek seferlik işi geri alırken ConfigMap'i de silin.** `SparkApplication` silindiğinde
+ilk satırda yarattığınız ConfigMap kümede **kalır**; deneme bittiğinde ikisi birden
+kaldırılır:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" delete sparkapplication gunluk-ozet --ignore-not-found
+oc -n "$LAKEHOUSE_NS" delete configmap gunluk-ozet --ignore-not-found
+```
 
 ---
 
@@ -501,6 +517,16 @@ oc -n "$LAKEHOUSE_NS" logs gunluk-ozet-driver --tail=2000 | grep -E "GUNLUK_OZET
 ```text
 GUNLUK_OZET_OK 1
 ```
+
+> **İlk koşuda bir `Exception` satırı daha görürsünüz ve bu normaldir.** Hedef tablo henüz
+> yokken `createOrReplace` önce tabloyu **arar**, bulamaz ve Iceberg bunu günlüğe yazar:
+>
+> ```text
+> org.apache.iceberg.exceptions.RESTException: Unable to process (code: 404, type: NoSuchTableException): Table does not exist: sandbox.gunluk_ozet
+> ```
+>
+> Ölçüt `_OK` satırının **varlığıdır**; yoksa koşu gerçekten düşmüştür. Yalnız sonucu
+> görmek isterseniz kalıbı daraltın: `grep -E "GUNLUK_OZET_OK"`.
 
 Koşu sürerken günlüğü canlı izlemek için `--tail=20 -f` kullanılır. İlk koşuda günlüğün
 başında Iceberg paketlerinin Maven'den indiği satırlar görünür; bu normaldir ve ikinci
@@ -668,7 +694,8 @@ dosyasındaki `print` çağrısından; satır sayısı sizin dosyanıza göre de
 S3_REGISTER_OK s3://kurum-veri/musteri-dosyalari/ -> lakehouse.sandbox.musteri_dosyalari (10432 satır)
 ```
 
-İş bitince CR elle silinir:
+İş bitince CR elle silinir. Burada silinecek bir ConfigMap **yoktur**: bu iş ürünün kendi
+`lakehouse-jobs` ConfigMap'ini kullanır (yukarıya bakın), siz bir ConfigMap yaratmadınız.
 
 `[bastion]`
 
@@ -706,10 +733,11 @@ Bilinmesi gereken üç şey:
 
 ## Sonraki bölüm
 
-Bir kaynağı ya da tabloyu — kendi yazdığınız tablolar dâhil — verisiyle birlikte kaldırmak:
-[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md).
-[kullanici-ve-yetki.md](kullanici-ve-yetki.md) — yetki yönetimi;
+[kullanici-ve-yetki.md](kullanici-ve-yetki.md) — kimin hangi veriyi göreceği; işletme
+sırasında bu sayfadan devam edin (sıranın tamamı:
+[değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) "Sonraki bölüm").
+
+Yan başvurular: yazdığınız tabloyu verisiyle birlikte kaldırmak
+[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §6.2;
 [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — alarmlar ve eşikler;
-[sorun-giderme.md](sorun-giderme.md) — belirti tablosu. Ortak GitOps döngüsü her zaman
-aynıdır:
-[değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
+[sorun-giderme.md](sorun-giderme.md) — belirti tablosu.

@@ -112,7 +112,8 @@ apps.ocp.example.net
 oc get storageclass
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — değer kümenize göre değişir; sınıf ve sağlayıcı adları
+depolama satıcınıza bağlıdır, aşağıdaki iki satır yalnızca biçimi gösterir):
 
 ```text
 NAME                   PROVISIONER   RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE
