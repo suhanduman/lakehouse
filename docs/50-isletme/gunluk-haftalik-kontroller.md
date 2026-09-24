@@ -132,7 +132,14 @@ connect-sink-shop  shop.public.orders  2          1               1             
 yoksa** kaynak tanımı eşitlenmemiştir
 ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)). Bir kaynak görevi günlerdir
 `RUNNING` ama hedef tabloya hiç satır gelmiyorsa Connect günlüğünde yeniden deneme
-döngüsünü arayın: `oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 | grep -i "failed to poll records"`.
+döngüsünü arayın:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
+  | grep -i "failed to poll records"
+```
 
 ### 2.3 Silver birleştirme koşuyor mu
 

@@ -97,8 +97,9 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
   | jq -r '.data.result[].metric.job' | sort | uniq -c
 ```
 
-**Beklenen çıktı** (kind kümesindeki Prometheus'tan alınmış gerçek çıktı; OpenShift'te iş
-adları da ad alanı önekiyle gelir):
+**Beklenen çıktı** (geliştirme kümesindeki Prometheus'tan alınmış gerçek çıktı; yukarıdaki
+komut **üretim** yoludur, kind karşılığı hemen aşağıdadır. OpenShift'te iş adları da ad
+alanı önekiyle gelir):
 
 ```text
      3 lakehouse/kafka-resources-metrics
@@ -108,6 +109,17 @@ adları da ad alanı önekiyle gelir):
 
 Geliştirme yığınında bu listeye bir de `kube-state-metrics` satırı eklenir; o bileşen
 **yalnız geliştirme kümesinde** kurulur, OpenShift'te görünmemesi normaldir.
+
+**Geliştirme (kind) kümesinde:** yukarıdaki komut **koşmaz** — `thanos-querier` Route'u ve
+`openshift-monitoring` ad alanı yoktur (`the server doesn't have a resource type "route"`).
+Sorgu, `monitoring` ad alanındaki Prometheus'a doğrudan sorulur; aynı yöntem
+[gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) §2.1'de de kullanılır:
+
+```bash
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
+curl -sS --data-urlencode 'query=up{namespace="lakehouse"} == 1' \
+  localhost:9090/api/v1/query | jq -r '.data.result[].metric.job' | sort | uniq -c
+```
 
 **Ters giderse:** hiç satır dönmüyorsa kullanıcı iş yükü izlemesi kapalıdır. Tek bir hedef
 `Down` ise ilgili pod'un metrik portu kapalıdır; `oc -n "$LAKEHOUSE_NS" get pods` ile pod'un

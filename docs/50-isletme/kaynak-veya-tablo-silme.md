@@ -104,6 +104,29 @@ baştan okumuş sayılır ve **snapshot almaz** — tablolarınız boş kalır.
 bağlayıcının kümede **hâlâ var olması** gerekir; bağlayıcı prune edildikten sonra aynı
 çağrı `404` döner.
 
+> **UYARI — offset sıfırlamak, bağlayıcı yeniden çalıştığında TAM SNAPSHOT demektir.**
+> Ürün bütün kaynak bağlayıcılarını `snapshot.mode: initial` ile yazar
+> (`glue/templates/connectors.yaml`: MongoDB dalında ve PostgreSQL/SQL Server dalında
+> ayrı ayrı). Bu kipte Debezium, konumunu bulamadığı her açılışta "ilk kez başlıyorum"
+> sayar ve kaynağın **tamamını** yeniden okur; üç kaynak türü için de geçerlidir.
+>
+> Sonucu: offset silinmiş bir bağlayıcı yeniden çalıştığında bütün satırlar Kafka'ya
+> **ikinci kez** basılır. Bronze tablosu hâlâ duruyorsa çift kayıt alır — `mongo-bronze`
+> Spark işi **append** yapar, idempotent değildir; Iceberg sink de aynı olayları yeniden
+> yazar.
+>
+> **Bu yüzden sıra şudur:** offset sıfırlama **yalnız** Bronze/Silver tabloları
+> düşürüldükten sonra (Adım 6) ya da kaynağı sıfırdan yeniden eklerken yapılır. Tabloları
+> yerinde bırakıp offset silerseniz veriyi bozarsınız.
+>
+> **Kind provasından gerçek kanıt (geliştirme kümesi).** Görev 12'nin offset sıfırlama
+> provasından sonra `dbz-crm` bağlayıcısı, MongoDB'ye yeniden erişebildiği anda
+> günlüğüne `Connector started for the first time.` / `No previous offset has been found`
+> yazdı ve üç belgeyi yeniden bastı: `crm.crm.customers` konusunun uç offset'leri
+> `0:6, 1:0, 2:3` (6 → 9 kayıt) oldu. Bronze tablosu o sırada düşürülmüş ve
+> `mongo-bronze` askıda olduğu için tabloya çift kayıt **girmedi** — tablo yerinde
+> olsaydı girerdi.
+
 Üç çağrı sırayla yapılır: durdur, offset'leri sil, sonucu doğrula.
 
 `[bastion]`
