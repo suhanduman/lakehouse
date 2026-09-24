@@ -1265,8 +1265,12 @@ bir hata değildir ama üretimde `reencrypt` tercih edilir.
 
 ## Sonraki bölüm
 
-docs/40-kurulum-sonrasi.md — Polaris kataloğunun kurulması (`scripts/polaris-setup.sh`),
-Superset'e Trino bağlantısının içe aktarılması, AD kullanıcısıyla ilk giriş, izleme
-hedefleri ve kabul testi (bu bölüm bir sonraki görevde eklenir). Başvuru tabloları:
-[90-referans/secret-listesi.md](90-referans/secret-listesi.md) ve
-[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md).
+[40-kurulum-sonrasi.md](40-kurulum-sonrasi.md) — Polaris kataloğunun kurulması
+(`scripts/polaris-setup.sh`), Superset'e Trino bağlantısının içe aktarılması, AD
+kullanıcısıyla ilk giriş, izleme hedefleri ve kabul testi. Başvuru tabloları:
+[90-referans/secret-listesi.md](90-referans/secret-listesi.md),
+[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md),
+[90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md),
+[90-referans/surumler-ve-lisanslar.md](90-referans/surumler-ve-lisanslar.md),
+[90-referans/kabul-testleri.md](90-referans/kabul-testleri.md) ve
+[90-referans/oc-hizli-basvuru.md](90-referans/oc-hizli-basvuru.md).

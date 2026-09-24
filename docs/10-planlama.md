@@ -128,7 +128,7 @@ thin-csi             csi.vsphere.vmware.com     Delete          WaitForFirstCons
 
 ## 4. Ağ ve portlar (özet)
 
-Ayrıntılı liste (her servis, port, yön, protokol) 90-referans/port-ve-servisler.md dosyasındadır (bu bölüm bir sonraki görevde eklenir). Planlama için gereken kadarı:
+Ayrıntılı liste (her servis, port, yön, protokol) [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md) dosyasındadır. Planlama için gereken kadarı:
 
 | Yön | Kimden | Kime | Port / protokol | Ne için |
 |---|---|---|---|---|

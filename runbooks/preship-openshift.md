@@ -10,7 +10,7 @@ kümesinde karşılığı olmayan ya da kind'ın sınırlarına takılan her şe
 2. Bu listeyi baştan sona koşun; her maddeyi kutusunu işaretleyerek ve **ölçülen çıktıyı** yanına yazarak kapatın
    (kanıt = çıktı, "bakıldı" değil).
 3. Kapanış kanıtı: `scripts/acceptance.sh` 9/9 + bu listede açık kutu kalmaması
-   (`runbooks/acceptance-tests.md`).
+   (`docs/90-referans/kabul-testleri.md`).
 
 **Kapsam dışı:** kind/CI'da zaten yeşil olan her şey (10 e2e işareti) — onların kanıtı
 dahili planlama notlarında (F1–F5) kayıtlıdır. Bu liste yalnız **eksik kalan canlı kanıtı** izler.
@@ -31,7 +31,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   oturum açılması ve grup→rol eşlemesinin tutması (`lakehouse-analysts` → Superset `Alpha`, JupyterHub
   `allowed_groups`, Zeppelin `groupRolesMap`).
   *Kaynak: F4 notu "Açık kalanlar (F5/pre-ship)" — dev'de `keycloak.hostname` küme içi URL olduğu için tarayıcı
-  akışı kanıtlanamaz, e2e yalnız password-grant Bearer ile kanıtlıyor (`runbooks/user-facing.md` "Dev/kind sınırı").*
+  akışı kanıtlanamaz, e2e yalnız password-grant Bearer ile kanıtlıyor — `docs/40-kurulum-sonrasi.md` §5, dev/kind sınırı.*
 
 - [ ] **1.2 Trino Route `reencrypt` (`tls.caBundle` dolu)**
   ```bash
@@ -86,7 +86,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   coordinator/worker **restart sayısı artmaz** ve açık oturumlar düşmez (Trino'nun
   `http-server.https.ssl-context.refresh-time` varsayılanı 1 dk'dır — biz ayarlamıyoruz). Prova için sertifikayı
   elle yeniletip (cert-manager renew) restart sayacını yeniden okuyun.
-  *Kaynak: F4 notu açık kalanlar; `glue/templates/tls.yaml`, `runbooks/user-facing.md` "Bilinen açıklar".*
+  *Kaynak: F4 notu açık kalanlar; `glue/templates/tls.yaml`, `docs/40-kurulum-sonrasi.md` §5.*
 
 - [ ] **1.7 NetworkPolicy OVN altında: apiserver → webhook yolu**
   ```bash
@@ -277,7 +277,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   Beklenen: `KABUL: 9/9 yol geçti`. **Uyarı:** izleme yolu için 2.6 maddesi geçerlidir; DR yolu
   (`test/e2e/dr-path.sh`) ns'i `VELERO_NS` ile doğru alır ve Velero nesnelerini **tam adla**
   (`backups.velero.io`) sorgular — kısa `backup` adı kümede CNPG'ye çözülür.
-  *Kaynak: F5 notu "Açık kalanlar (F6/pre-ship)" + 20. satır; `runbooks/acceptance-tests.md`.*
+  *Kaynak: F5 notu "Açık kalanlar (F6/pre-ship)" + 20. satır; `docs/90-referans/kabul-testleri.md`.*
 
 ---
 
@@ -316,7 +316,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
   değil) ve `6.1.0-dev` etiketi aynada *tag immutability* ile kilitli — operator `spec.image` **digest kabul
   etmez** (`repository:tag`), dolayısıyla etiketin taşınmaması aynanın sorumluluğudur. `imageID` digest'i kayda
   geçirilir; yükseltmede sürücülerin (psycopg2/trino/authlib) hâlâ imajda olduğu doğrulanır.
-  *Kaynak: F4 notu 8. satır + açık kalanlar, F5 notu "Açık kalanlar (F6/pre-ship)"; `runbooks/versions.md`.*
+  *Kaynak: F4 notu 8. satır + açık kalanlar, F5 notu "Açık kalanlar (F6/pre-ship)"; `docs/90-referans/surumler-ve-lisanslar.md`.*
 
 - [ ] **4.4 Maven Central egress ya da iç ayna**
   ```bash
@@ -342,7 +342,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
 - [ ] **4.6 Superset Alerts & Reports kararı**
   Şu an **kapalı**. Açılacaksa Valkey (broker) + `celeryWorker` + headless tarayıcı üçlüsü gerekir; karar
   pre-ship'te müşteriyle verilir, açılırsa canlı kanıt bu maddenin altına yazılır.
-  *Kaynak: F4 notu açık kalanlar; `runbooks/user-facing.md` "Alerts & Reports (varsayılan KAPALI)".*
+  *Kaynak: F4 notu açık kalanlar; `docs/40-kurulum-sonrasi.md` §5.6 — Alerts & Reports varsayılan KAPALI.*
 
 - [ ] **4.7 Veri metrikleri dashboard'u: SQL müşteri tablolarına uyarlandı → import → render**
   ```bash
@@ -375,7 +375,7 @@ Komutlarda `oc` ve `kubectl` birbirinin yerine kullanılabilir; OpenShift'e özg
 **Ne zaman yeniden ele alınır:** bir bileşende HA isteniyorsa önce **replika sayısı** artırılır (Trino ikinci
 coordinator'ı desteklemez; Connect/Polaris/Superset ölçeklenebilir) ve PDB kararı o değişiklikle **birlikte**
 verilir. Tek başına PDB eklemek erişilebilirlik kazandırmaz, yalnız bakımı zorlaştırır. Özet tablo:
-`runbooks/versions.md`.
+`docs/90-referans/surumler-ve-lisanslar.md`.
 
 ### 5.2 Kafka verisi DR kapsamı dışıdır — dönüş yolu yeniden akıtma (MirrorMaker 2 yok)
 
@@ -409,7 +409,7 @@ deneme taze kümede CNPG'nin hazır olma süresini (~4 dk) rahatça kapsar ve ca
 ## 6. Kabul
 
 - [ ] **6.1 Kabul koşusu ve kanıt paketi**
-  `runbooks/acceptance-tests.md` (madde ↔ kanıt tablosu) + `scripts/acceptance.sh` çıktısı; 3.6
+  `docs/90-referans/kabul-testleri.md` (madde ↔ kanıt tablosu) + `scripts/acceptance.sh` çıktısı; 3.6
   maddesindeki ns bayraklarıyla koşulur ve çıktı müşteriye teslim edilen kanıt paketine konur.
 
 - [ ] **6.2 Bu listede açık kutu kalmadı**

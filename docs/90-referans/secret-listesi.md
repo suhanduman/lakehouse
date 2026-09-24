@@ -74,7 +74,7 @@ yaratılırsa çakışır; kurulumun başında eksik görünmeleri bir hata değ
 
 | Secret | Üreten | Ne zaman oluşur |
 |---|---|---|
-| `polaris-connect`, `polaris-spark`, `polaris-trino`, `polaris-notebooks` | `scripts/polaris-setup.sh` | Polaris kataloğu kurulurken (docs/40-kurulum-sonrasi.md — bu bölüm bir sonraki görevde eklenir) |
+| `polaris-connect`, `polaris-spark`, `polaris-trino`, `polaris-notebooks` | `scripts/polaris-setup.sh` | Polaris kataloğu kurulurken ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
 | `polaris-db-app`, `keycloak-db-app`, `superset-db-app` ve bunların `-ca` / `-server` / `-replication` eşleri | CloudNativePG | PostgreSQL kümeleri açılırken |
 | `lakehouse-cluster-ca-cert`, `lakehouse-clients-ca-cert`, `connect`, `fluentbit` | Strimzi (Kafka CA'ları ve KafkaUser'lar) | Kafka ve Connect ayağa kalkarken |
 | `trino-tls` | cert-manager (`Issuer/lakehouse-ca` imzalar) | glue sync'inden sonra ~1 dakika |

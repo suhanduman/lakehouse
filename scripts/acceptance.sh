@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kabul testi orkestratörü (şartname kabul maddeleri — runbooks/acceptance-tests.md).
+# Kabul testi orkestratörü (şartname kabul maddeleri — docs/90-referans/kabul-testleri.md).
 #   scripts/acceptance.sh [--ns lakehouse] [--mon-ns monitoring] [--velero-ns velero]
 #
 # ZATEN KURULU bir kümede koşar: kind/bootstrap adımı YOKTUR (onlar test/e2e/run.sh'ta).

@@ -4,7 +4,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata: {name: superset-datasources, namespace: {{ $ns }}}
 data:
-  # superset legacy-import-datasources -p /app/configs/trino.yaml  (runbooks/user-facing.md; parola SQLALCHEMY_CUSTOM_PASSWORD_STORE ile env'den)
+  # superset legacy-import-datasources -p /app/configs/trino.yaml  (docs/40-kurulum-sonrasi.md §3; parola SQLALCHEMY_CUSTOM_PASSWORD_STORE ile env'den)
   trino.yaml: |
     databases:
     - database_name: lakehouse
@@ -54,7 +54,7 @@ spec:
   secretKeyFrom: {name: {{ .Values.superset.secretName }}, key: secret-key}
   metastore:
     uriFrom: {name: superset-db-app, key: uri}      # CNPG: postgresql://superset:…@superset-db-rw:5432/superset
-  # Valkey/Redis YOK (plan R9): SimpleCache, worker/beat yok. Alerts&Reports için runbooks/user-facing.md
+  # Valkey/Redis YOK (plan R9): SimpleCache, worker/beat yok. Alerts&Reports için docs/40-kurulum-sonrasi.md §5.6
   config: |
     import os
     from flask_appbuilder.security.manager import AUTH_OAUTH

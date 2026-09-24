@@ -117,7 +117,7 @@ kubectl -n $NS exec deploy/superset-web-server -- superset import-dashboards -p 
   olduğundan, import'un her zaman açık olan `overwrite=True` davranışı ürün datasource'unu bozmaz: mevcut
   satır aynı değerlerle güncellenir, ikinci bir `lakehouse` satırı açılmaz.
 - **Taze kurulum sırası:** önce datasource import'u
-  (`superset legacy-import-datasources -p /app/configs/trino.yaml` — `runbooks/user-facing.md`), sonra bu
+  (`superset legacy-import-datasources -p /app/configs/trino.yaml` — `docs/40-kurulum-sonrasi.md` §3), sonra bu
   bölümdeki bundle import'u. Sabit uuid'li `lakehouse` veritabanını ilk adım yaratır, bundle onu bulur.
 - Parola bundle'da **yoktur**: Trino parolası `SQLALCHEMY_CUSTOM_PASSWORD_STORE` ile env'den gelir, bu yüzden
   import parola sormaz.

@@ -61,7 +61,7 @@ singleuser:
     # REQUESTS_CA_BUNDLE YOK (Superset'teki kararla aynı gerekçe, glue/templates/superset.yaml): bu env TEK kök
     # dayatır ve not defterindeki HER `requests`/`urllib3` çağrısını (PyPI, müşteri API'leri, S3 HTTPS) yalnız
     # lakehouse-ca ile doğrulatır -> hepsi SSLCertVerificationError. CA yine /etc/lakehouse-ca/tls.crt'te mount'lu;
-    # Trino'ya bağlanan örnekler açık `verify='/etc/lakehouse-ca/tls.crt'` verir (runbooks/user-facing.md).
+    # Trino'ya bağlanan örnekler açık `verify='/etc/lakehouse-ca/tls.crt'` verir (docs/40-kurulum-sonrasi.md §5.6).
   # singleuser netpol z2jh tarafından; egress yalnız Trino/Polaris (+dev MinIO), dış ağ (PyPI/S3) nonPrivateIPs
   # varsayılanı. glue'nun NetworkPolicy'leri yalnız Ingress'tir (glue/templates/networkpolicy.yaml: "egress
   # kısıtlanmaz") -> tek egress kontrolü budur; kullanıcılar dahil TÜM özel IP'lere izin vermek yerine podSelector ile

@@ -1,6 +1,6 @@
 # Yükseltme (sürüm bump'ları, sıra, geri alma)
 
-Tüm sürümler Git'te sabittir (`runbooks/versions.md` "Kurulum yolu" sütunu). Yükseltme = **dosyada sürümü
+Tüm sürümler Git'te sabittir (`docs/90-referans/surumler-ve-lisanslar.md` "Kurulum yolu" sütunu). Yükseltme = **dosyada sürümü
 değiştir → PR → CI yeşil → merge → ArgoCD sync**. Kümede elle `helm upgrade` YOKTUR (yalnız `--mode helm`
 ile kurulan dev kümesinde; orada da aynı sıra geçerlidir).
 
@@ -10,7 +10,7 @@ ile kurulan dev kümesinde; orada da aynı sıra geçerlidir).
    anlaşılamaz; e2e 40–55 dk sürer.
 2. **Sıra: operatörler önce, uygulamalar sonra.** Operatör CRD'leri eski uygulama CR'larını okuyabilir;
    tersi garanti değildir.
-3. **Her bump'ta `runbooks/versions.md`'deki satır aynı PR'da güncellenir** (şartname J.3.2).
+3. **Her bump'ta `docs/90-referans/surumler-ve-lisanslar.md`'deki satır aynı PR'da güncellenir** (şartname J.3.2).
 4. Yükseltme öncesi yedek durumu yeşil olmalı: `kubectl -n lakehouse get cluster` → hepsi
    `ContinuousArchiving=True`, son `Backup` `completed` (`runbooks/dr.md`).
 5. Upstream sürüm notları okunur (özellikle Strimzi, CNPG, Superset operator `v1alpha1`).
@@ -176,7 +176,7 @@ helm unittest glue
 helm template glue -f platform/values/glue.yaml >/dev/null && helm template glue -f platform/values/glue-dev.yaml >/dev/null
 ```
 Var olan bir kümede yükseltme sonrası kabul kanıtı: `scripts/acceptance.sh`
-(`runbooks/acceptance-tests.md`).
+(`docs/90-referans/kabul-testleri.md`).
 
 ## 7. Geri alma
 
@@ -190,5 +190,5 @@ Var olan bir kümede yükseltme sonrası kabul kanıtı: `scripts/acceptance.sh`
 | Superset operator CR'ı reddediyor | Operator'ı revert edin (CR şeması eski CRD ile uyumlu kalır) |
 | Not defteri/PVC kaybı | Velero restore (`runbooks/dr.md` → "Seçili kaynak / PVC geri yükleme") |
 
-Revert'ten sonra `runbooks/versions.md` satırını da eski değere döndürün — liste her zaman kümedeki gerçeği
+Revert'ten sonra `docs/90-referans/surumler-ve-lisanslar.md` satırını da eski değere döndürün — liste her zaman kümedeki gerçeği
 göstermelidir.

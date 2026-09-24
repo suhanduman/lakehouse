@@ -19,7 +19,7 @@ CronJob resmi `python:3.13-slim` imajını kullanır ve `dbt-trino` her koşuda 
 - **PyPI erişimi gerekir** (kapalı ağda iç PyPI aynası; `pip install -i https://nexus…/simple`).
 - Kurulum her koşuda ~20–40 sn ekler; kabul edilebilir bir maliyettir (günlük iş).
 - Sürümü **sabitleyin** (`dbt-trino==1.10.4`) — `latest` kurmak sessiz kırılma demektir
-  (`runbooks/versions.md`).
+  (`docs/90-referans/surumler-ve-lisanslar.md`).
 
 Bunu kalıcı bir üretim bileşeni yapacaksanız doğru yol, müşterinin kendi imaj deposunda dbt imajını üretip
 `image:` alanını oraya çevirmektir (bu repo öyle bir imaj üretmez).
