@@ -219,8 +219,7 @@ spec:
 
 **Cron saatini ürünün işleriyle çakıştırmayın.** Ürünün gecelik bakım işleri ve
 `silver-merge` koşuları aynı düğümlerde çalışır; kendi işinizi onların arasına değil,
-sonrasına koyun (varsayılan bakım pencereleri
-[90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) dosyasında
+sonrasına koyun (ürünün varsayılan koşu saatleri `glue/values.yaml` içinde
 `spark.schedules` başlığındadır).
 
 ### 4.1 Dokunulmayan ve siteye özel satırlar
@@ -238,7 +237,7 @@ satırlar dosyalarda `# SİTE` ile işaretlidir ve **üretimde
 | `spark.sql.catalog.lakehouse.warehouse` | `iceberg.warehouse` |
 | `spark.sql.catalog.lakehouse.s3.endpoint` | site `s3.endpoint` (`$S3_ENDPOINT`) |
 | `spark.sql.catalog.lakehouse.client.region` | site `s3.region` (`$S3_REGION`) |
-| `spark.sql.catalog.lakehouse.s3.path-style-access` | site `s3.pathStyleAccess` |
+| `spark.sql.catalog.lakehouse.s3.path-style-access` | `s3.pathStyleAccess` (ürün varsayılanı `glue/values.yaml`; gerekirse site dosyasında ezilir) |
 | `spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation` | site `s3.vendedCredentials`: açıksa `vended-credentials`, kapalıysa `none` |
 | `image`, `sparkVersion`, `spark.jars.packages` içindeki Iceberg sürümü | ürün sürümleri: `glue/values.yaml` `spark.image`, `spark.version`, `versions.iceberg` |
 
@@ -527,8 +526,9 @@ Tek sınır Adım 2'deki kuraldır: yeni bir ArgoCD **Application** eklenmez; he
 Kaynak sistemi olmayan, S3'te hazır duran düz CSV ya da Parquet dosyalarını doğrudan bir
 Iceberg tablosuna yazmak için ürünle birlikte gelen bir betik vardır:
 `glue/jobs/s3_register_example.py`. Debezium/Kafka yolundan geçmez, kabul testinin parçası
-değildir ve ürünün iş ConfigMap'inde zaten kümededir — yani ConfigMap üretmenize gerek
-yoktur, yalnız tek seferlik bir CR gerekir.
+değildir ve ürünün iş ConfigMap'i (`lakehouse-jobs`, `glue/jobs/` altındaki bütün `.py`
+dosyalarını taşır) ile zaten kümededir — yani ConfigMap üretmenize gerek yoktur, yalnız
+tek seferlik bir CR gerekir.
 
 En kolay yol, var olan bir zamanlı işin şablonundan tek seferlik CR türetmektir; böylece
 `sparkConf`, kimlik ve S3 ayarları ürünün işiyle birebir aynı olur:

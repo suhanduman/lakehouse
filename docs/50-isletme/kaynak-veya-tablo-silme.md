@@ -77,7 +77,7 @@ ns=lakehouse argocd=openshift-gitops
 | Silinecek Iceberg tablosu | Bronze + Silver (+ varsa karantina) | kaynağın bütün tabloları |
 | Kaynak DB temizliği | tablo düzeyi (SQL Server'da CDC kapatma; PostgreSQL'de bir şey gerekmez) | çoğaltma yuvası + publication (PostgreSQL), veritabanı düzeyi CDC (SQL Server) |
 | Ek temizlik | yok | Secret, Polaris ad alanı, pano referansları (Adım 9) |
-| İzlenecek adımlar | 1, 3, 4, 5, 6, 7, 8 | hepsi |
+| İzlenecek adımlar | 1, 2, 4, 5, 6, 7, 8 (Adım 3 gerekmez) | hepsi |
 
 **Append-only tablolarda Silver yoktur.** `pipelines` listesinde yer almayan bir tablo
 yalnız Bronze'da durur; Adım 6'da tek tablo düşürülür.
@@ -90,9 +90,14 @@ sonuna `__quarantine` eklenmiş ikinci bir tablosu bulunur
 
 ## 3. Aynı adla yeniden ekleyecekseniz: önce offset'leri sıfırlayın
 
-Bu adım **yalnız** ileride aynı kaynak adını (aynı konu ön ekini) yeniden kullanacaksanız
-gerekir. Kafka Connect, bağlayıcının nerede kaldığını `connect-offsets` konusunda
-bağlayıcının **adıyla** saklar; aynı adla kurulan yeni bir bağlayıcı bu konumu bulur,
+Bu adım **yalnız kaynağın tamamı kalkıyorsa ve** ileride aynı kaynak adı (aynı konu ön
+eki) yeniden kullanılacaksa gerekir. Tek tablo çıkarırken bağlayıcı yerinde kaldığı için
+offset'lere dokunulmaz; o tabloyu ileride geri eklerseniz geçmiş satırları **artımlı
+snapshot** getirir
+([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) §6).
+
+Kafka Connect, bağlayıcının nerede kaldığını `connect-offsets` konusunda bağlayıcının
+**adıyla** saklar; aynı adla kurulan yeni bir bağlayıcı bu konumu bulur,
 baştan okumuş sayılır ve **snapshot almaz** — tablolarınız boş kalır.
 
 **Sıra önemlidir: bu adım Adım 4'ten önce yapılır.** Offset uçlarının çalışması için
@@ -356,6 +361,11 @@ cur = conn.cursor(); cur.execute("show tables from shop_raw"); cur.fetchall()
 [['orders']]
 ```
 
+**Ters giderse:** iş `FAILED` olduysa sürücü günlüğüne bakın
+([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) §7); `403` kimlik satırının
+eksikliğidir, `404` tablonun zaten silinmiş olduğunu söyler. Tablo listede duruyorsa
+betikte tablo adını yanlış yazmışsınızdır — `IF EXISTS` yanlış adı sessizce geçer.
+
 ### 6.3 Yetim dosyalar
 
 Bir tablo düşürüldükten sonra hiçbir tabloya ait olmayan dosyalar kalabilir (yarım kalmış
@@ -520,6 +530,11 @@ Commands completed successfully.
 `sp_cdc_disable_table` çağrılmazsa CDC değişiklik tabloları dolmaya devam eder ve kaynak
 veritabanı büyür.
 
+**Ters giderse:** `The specified '@capture_instance' is not valid` → tabloda CDC zaten
+kapalıdır ya da yakalama örneğinin adı farklıdır; adları
+`SELECT capture_instance FROM cdc.change_tables;` ile listeleyin. Yetki hatası alıyorsanız
+bağlandığınız hesap `db_owner` değildir.
+
 ### 8.3 MongoDB
 
 MongoDB'de kaynak tarafında **yapılacak bir şey yoktur**: Debezium change stream okur,
@@ -550,6 +565,11 @@ Secret'ı **Adım 4'ten önce silmeyin**: bağlayıcı hâlâ ayaktayken kimlik 
 prune edilmeden önce hata durumuna düşer ve `glue` uygulaması gereksiz yere `Degraded`
 görünür.
 
+**Ters giderse:** `NotFound` → Secret zaten silinmiştir, bir şey yapmanız gerekmez.
+Secret'ı erken sildiyseniz aynı adla ve aynı iki anahtarla (`username`, `password`) geri
+yaratın ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §4), eşitlemenin
+bitmesini bekleyin ve sonra silin.
+
 ### 9.2 Polaris ad alanları
 
 Kaynağın Bronze ve Silver ad alanları katalogda kalır. **Boş olmadıkça silinemezler**;
@@ -576,7 +596,8 @@ PATH="$PWD/.venv/bin:$PATH" polaris --client-id "$POLARIS_ID" --client-secret "$
 
 `polaris` komut satırı aracı `scripts/polaris-setup.sh` ile aynı sanal ortamdan gelir
 ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.1). Silme komutunun kendisi başarılı
-olduğunda hiçbir şey basmaz; son satır ad alanının listeden düştüğünü gösterir.
+olduğunda hiçbir şey basmaz; son satır ad alanının listeden düştüğünü gösterir. İş bitince
+arka planda bıraktığınız port yönlendirmesini kapatın (`kill %1`).
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek `namespaces list` çıktısı — o kümede
 `erp` kaynağı hiç kurulmadığı için listede yalnız oradaki ad alanları vardır; sizde
@@ -619,7 +640,7 @@ için de gerekir — bunları ürün göremez.
 | Belirti | Neden | Çözüm |
 |---|---|---|
 | Bağlayıcı prune edildi ama Kafka konuları duruyor | kaynak konuları `KafkaTopic` nesnesi değildir | Adım 5 (ya da saklama süresi dolsun) |
-| Trino'da `Access Denied: Cannot drop table …` | kullanıcı yönetici grubunda değil | `sandbox` dışı tablolar için Adım 6.2 |
+| Trino'da `Access Denied: Cannot drop table …` | `sandbox` tablosunda: kullanıcı analist grubunda değil; başka ad alanında: hiçbir Trino kullanıcısı düşüremez | Adım 6.1 (yetki) ya da Adım 6.2 (Spark işi) |
 | Trino'da `Failed to drop table …`, Polaris günlüğünde yetki reddi | Trino'nun katalog kimliği yalnız `sandbox`'a yazabilir | Adım 6.2'deki Spark işi |
 | Tablo katalogdan gitti ama S3'te klasör duruyor | `PURGE` yazılmadı ya da katalogda veriyle silme kapalı | Adım 7'nin "Ters giderse" satırı |
 | Kaynak PostgreSQL'in diski doluyor | kimsenin okumadığı çoğaltma yuvası WAL'ı tutuyor | Adım 8.1 |
