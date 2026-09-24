@@ -39,8 +39,9 @@ verilmiştir.
 Sıra:
 
 ```text
-(offset sıfırlama) -> values'tan çıkar -> commit -> ArgoCD prune -> Kafka konuları
-  -> Iceberg tabloları (PURGE) -> S3 boş mu -> kaynak DB temizliği -> (kaynağın tamamı)
+(offset sıfırlama: durdur + sil, resume YOK) -> values'tan çıkar -> commit -> ArgoCD prune
+  -> Kafka konuları -> Iceberg tabloları (PURGE) -> S3 boş mu -> kaynak DB temizliği
+  -> (kaynağın tamamı)
 ```
 
 ---
@@ -104,30 +105,44 @@ baştan okumuş sayılır ve **snapshot almaz** — tablolarınız boş kalır.
 bağlayıcının kümede **hâlâ var olması** gerekir; bağlayıcı prune edildikten sonra aynı
 çağrı `404` döner.
 
-> **UYARI — offset sıfırlamak, bağlayıcı yeniden çalıştığında TAM SNAPSHOT demektir.**
+> **UYARI — offset'i sıfırlanan bağlayıcı bir daha ÇALIŞTIRILMAZ.**
 > Ürün bütün kaynak bağlayıcılarını `snapshot.mode: initial` ile yazar
 > (`glue/templates/connectors.yaml`: MongoDB dalında ve PostgreSQL/SQL Server dalında
 > ayrı ayrı). Bu kipte Debezium, konumunu bulamadığı her açılışta "ilk kez başlıyorum"
 > sayar ve kaynağın **tamamını** yeniden okur; üç kaynak türü için de geçerlidir.
 >
-> Sonucu: offset silinmiş bir bağlayıcı yeniden çalıştığında bütün satırlar Kafka'ya
-> **ikinci kez** basılır. Bronze tablosu hâlâ duruyorsa çift kayıt alır — `mongo-bronze`
+> Yani offset'i silinmiş bir bağlayıcı **yeniden çalıştırılırsa** bütün satırları Kafka'ya
+> ikinci kez basar. Bronze tablosu o sırada hâlâ duruyorsa çift kayıt alır — `mongo-bronze`
 > Spark işi **append** yapar, idempotent değildir; Iceberg sink de aynı olayları yeniden
 > yazar.
 >
-> **Bu yüzden sıra şudur:** offset sıfırlama **yalnız** Bronze/Silver tabloları
-> düşürüldükten sonra (Adım 6) ya da kaynağı sıfırdan yeniden eklerken yapılır. Tabloları
-> yerinde bırakıp offset silerseniz veriyi bozarsınız.
+> **Bu yordamda böyle bir şey olmaz, çünkü bağlayıcı `resume` EDİLMEZ.** Aşağıdaki üç
+> çağrı bağlayıcıyı `stop` durumunda bırakır; o hâlde kalır ve Adım 4'te ArgoCD tarafından
+> **prune edilerek kaldırılır**. Durdurulmuş bir bağlayıcı kaynaktan okumaz, dolayısıyla
+> silme sırasında yeniden snapshot da almaz.
+>
+> **Kural:** silme sırasında offset sıfırladıktan sonra `PUT …/resume` **çağırmayın**.
+> Yanlışlıkla çağırırsanız bağlayıcı tam snapshot'a başlar; o durumda hemen tekrar `stop`
+> edin ve Adım 6'da tabloları zaten düşüreceğiniz için Bronze'a giren çift kayıtlar
+> temizlenir — ama Kafka konusuna basılan yinelenen olaylar Adım 5'e kadar orada kalır.
+>
+> Tam snapshot **istenen** tek yer, kaynağı ileride **yeniden eklediğiniz** andır: o zaman
+> bağlayıcı sıfırdan yaratılır ve Bronze zaten boştur, yani snapshot doğru davranıştır
+> (bu sayfanın "Yapmak istemiyorsanız alternatif" notu ve
+> [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
 >
 > **Kind provasından gerçek kanıt (geliştirme kümesi).** Görev 12'nin offset sıfırlama
 > provasından sonra `dbz-crm` bağlayıcısı, MongoDB'ye yeniden erişebildiği anda
 > günlüğüne `Connector started for the first time.` / `No previous offset has been found`
 > yazdı ve üç belgeyi yeniden bastı: `crm.crm.customers` konusunun uç offset'leri
-> `0:6, 1:0, 2:3` (6 → 9 kayıt) oldu. Bronze tablosu o sırada düşürülmüş ve
-> `mongo-bronze` askıda olduğu için tabloya çift kayıt **girmedi** — tablo yerinde
-> olsaydı girerdi.
+> `0:6, 1:0, 2:3` (6 → 9 kayıt) oldu. O bağlayıcı prova sonrası **durdurulmamıştı**
+> (çalışır hâlde bırakılmıştı) — yani tam olarak bu kuralın önlediği durumdu. Bronze
+> tablosu o sırada düşürülmüş ve `mongo-bronze` askıda olduğu için tabloya çift kayıt
+> **girmedi**; tablo yerinde olsaydı girerdi.
 
-Üç çağrı sırayla yapılır: durdur, offset'leri sil, sonucu doğrula.
+Üç çağrı sırayla yapılır: **durdur**, offset'leri **sil**, sonucu **doğrula**. Dördüncü
+bir `resume` çağrısı **yoktur ve olmamalıdır** (yukarıdaki uyarı): bağlayıcı durdurulmuş
+hâlde bırakılır ve Adım 4'te prune edilir.
 
 `[bastion]`
 
@@ -743,7 +758,8 @@ Belirtilerin tam tablosu: [sorun-giderme.md](sorun-giderme.md) §3.
 
 - [ ] Tablonun ya da kaynağın kullanılmadığı doğrulandı; saklanacak veri varsa kopyası
       alındı.
-- [ ] (Aynı ad yeniden kullanılacaksa) bağlayıcı **kalkmadan önce** offset'ler sıfırlandı.
+- [ ] (Aynı ad yeniden kullanılacaksa) bağlayıcı **kalkmadan önce** offset'ler sıfırlandı
+      ve bağlayıcı `resume` **edilmeden** durdurulmuş hâlde prune'a bırakıldı.
 - [ ] `tables`/`collections` ve `pipelines` girdileri values'tan çıkarıldı; commit itildi;
       `glue` uygulaması `Synced Healthy`.
 - [ ] Kaynağın Kafka konuları silindi ya da saklama süresine bırakıldı.
