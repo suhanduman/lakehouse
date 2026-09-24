@@ -54,8 +54,10 @@ kalıcı dev kullanımı için `glue/templates/dev-secrets.yaml` genişletilmeli
 ### 2. Trino yetkileri (`rules.json`)
 
 Servis hesapları varsayılan olarak **yalnız okuyabilir**. `dbt`'nin `gold` şemasına yazabilmesi için
-`platform/values/trino.yaml` → `accessControl.rules` içine **genel servis hesabı kuralından ÖNCE** ekleyin
-(ilk eşleşen kural kazanır — `docs/50-isletme/kullanici-ve-yetki.md` §5):
+erişim kurallarına **genel servis hesabı kuralından ÖNCE** eklenir (ilk eşleşen kural kazanır).
+Üretimde düzenlenecek dosya `platform/values/site/trino.yaml`'dır ve blok **bütünüyle** oraya
+taşınır (`docs/50-isletme/kullanici-ve-yetki.md` §5.2); geliştirme kümesinde kuralı doğrudan
+ürün dosyasında (`platform/values/trino.yaml` → `accessControl.rules`) denemek yeterlidir:
 
 ```json
 "catalogs": [

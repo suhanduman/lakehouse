@@ -41,6 +41,8 @@ pipelines: []
 # KAPALI AĞ — iç Maven aynası (docs/50-isletme/sorun-giderme.md §6.2). Spark işleri her koşuda Iceberg
 # runtime'ını Maven Central'dan çeker; dışarı erişim yoksa aşağıdaki bloğu açın ve `root` adresini kendi
 # Nexus/Artifactory aynanızla değiştirin. Boşken (varsayılan) hiçbir ek nesne render edilmez.
+# DİKKAT: aynı dosyada ikinci bir `spark:` anahtarı açmayın (YAML tekrarlanan anahtarı reddeder);
+# dosyada zaten bir `spark:` bloğu varsa `ivySettingsXml` satırını ONUN içine taşıyın.
 # spark:
 #   ivySettingsXml: |
 #     <ivysettings>

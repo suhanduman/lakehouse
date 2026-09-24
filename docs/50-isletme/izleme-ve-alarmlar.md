@@ -178,7 +178,7 @@ eksiktir (§2). Liste boşsa kural nesnesi toplanmıyordur.
 
 ## 4. Eşikler ve nereden değiştirilir
 
-Dört anahtar vardır; hepsi `glue` değerlerindedir ve müşteriye özel hâli
+Beş anahtar vardır; hepsi `glue` değerlerindedir ve müşteriye özel hâli
 `platform/values/site/glue.yaml` dosyasına yazılır.
 
 | Anahtar | Neyi belirler | Ürün varsayılanı | Ne zaman değiştirilir |
@@ -187,6 +187,7 @@ Dört anahtar vardır; hepsi `glue` değerlerindedir ve müşteriye özel hâli
 | `monitoring.sinkLagThreshold` | `LakehouseSinkStalled` eşiği (birikmiş kayıt) | 1000 | Normal yükte sürekli ateşleniyorsa; önce gerçek birikimi ölçün |
 | `monitoring.sparkRunMaxSeconds` | `LakehouseSparkRunTooLong` eşiği (saniye) | 1800 | Veri hacmi büyüdükçe koşular doğal olarak uzar |
 | `monitoring.enabled` | Bütün izleme nesnelerinin üretilmesi | `true` | Kapatmak yalnız izlemesiz bir deneme kurulumunda anlamlıdır |
+| `monitoring.namespace` | Metrikleri toplayan Prometheus'un ad alanı; ağ politikasındaki toplama izni bundan üretilir | `monitoring` | **OpenShift'te değiştirilmez**: kullanıcı iş yükü izlemesi sabit `openshift-*` ad alanlarındadır ve şablon onu bilir. Anahtar geliştirme/vanilla yığını içindir |
 
 Değiştirme yolu her zaman aynıdır:
 

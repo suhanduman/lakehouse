@@ -102,12 +102,13 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
 ```
 
-**Beklenen çıktı:** alanlar sırasıyla ad, askıya alınma ve son koşudur; ikinci alan her
-satırda **`false`**, `silver-merge` satırının üçüncü alanı ise son cron aralığı içinde
-olmalıdır. Aşağıdaki çıktı kind kümesinde alınmış **gerçek** çıktıdır ve tam da
-**istenmeyen** hâli gösterir — bir kabul koşusundan sonra bütün işler askıda kalmıştır
-(`ornek-rapor-zamanli` [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının
-örnek işidir):
+**Beklenen çıktı:** alanlar sırasıyla ad, askıya alınma ve son koşudur. İkinci alan her
+satırda **boş ya da `false`** olmalıdır — ürün bu alanı hiç yazmaz, bu yüzden taze kurulumda
+**boş** basar; `false` değeri ancak bir askıya almadan sonra elle geri açıldığında görünür.
+`silver-merge` satırının üçüncü alanı son cron aralığı içinde olmalıdır. Aşağıdaki çıktı kind
+kümesinde alınmış **gerçek** çıktıdır ve tam da **istenmeyen** hâli gösterir — bir kabul
+koşusundan sonra bütün işler askıda kalmıştır (`ornek-rapor-zamanli`
+[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının örnek işidir):
 
 ```text
 maint-compact	true	null
@@ -118,7 +119,7 @@ ornek-rapor-zamanli	true
 silver-merge	true	null
 ```
 
-**Ters giderse:** ikinci alan `true` ise işleri geri açın —
+**Ters giderse:** ikinci alan **`true`** ise işleri geri açın —
 [sorun-giderme.md §6.1](sorun-giderme.md#ssa-suspend). Son koşu eskiyse
 [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge).
 

@@ -224,8 +224,9 @@ oc -n "$LAKEHOUSE_NS" get sparkapplication | grep silver-merge
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — işler kabul koşusundan sonra
-askıda kaldığı için `suspend=true`; sağlıklı kurulumda `false` olmalı ve `sonKosu`
-dolu olmalıdır):
+askıda kaldığı için `suspend=true`. Sağlıklı kurulumda `suspend` **boş ya da `false`**
+olmalıdır: ürün bu alanı hiç yazmaz, taze kurulumda boş basar; `false` ancak elle geri
+açmadan sonra görünür. `sonKosu` da dolu olmalıdır):
 
 ```text
 suspend=true sonKosu=null sonraki=2026-09-19T03:00:00Z
@@ -234,7 +235,7 @@ suspend=true sonKosu=null sonraki=2026-09-19T03:00:00Z
 **Ne yap**
 
 - `suspend=true` ise iş askıya alınmıştır → [§6.1](#ssa-suspend). Gecikmiş bu alarmın
-  **en sık nedeni** budur.
+  **en sık nedeni** budur. (Boş ya da `false` normaldir; ürün bu alanı hiç yazmaz.)
 - Son koşu `FAILED` ise → [§4.4](#spark).
 - Kural boş veride **ateşlenmez**: hiç `silver-merge-*` koşusu yoksa alarm gelmez. "Hiç
   koşmuyor" durumu ayrı bakılır (`sonraki` alanı boşsa cron hesaplanmamıştır).
@@ -367,6 +368,11 @@ koşmuyor" durumu [§4.3](#silver-merge) ile bakılır.
 - **Ağ politikaları.** Üretimde açıktır; listede olmayan bir ad alanından gelen istek
   sessizce zaman aşımına uğrar. İzinli platform ad alanları
   [90-referans/port-ve-servisler.md](../90-referans/port-ve-servisler.md) §5'tedir.
+  Bir bağlantı sorununun ağ politikasından mı geldiğini **ayırt etmek** için site
+  değerlerinde `networkPolicy.enabled: false` ile geçici olarak kapatılabilir; bu **yalnız
+  teşhis içindir**, üretimde açık kalır ve nedeni bulunur bulunmaz geri açılır
+  ([90-referans/pre-ship-kontrol-listesi.md](../90-referans/pre-ship-kontrol-listesi.md)
+  madde 1.7).
 
 - **Polaris.** Sağlık ucu `:8182/q/health`, API `:8181`; kurulum günlüğü
   `oc -n "$LAKEHOUSE_NS" logs job/polaris-bootstrap`.

@@ -74,8 +74,8 @@ dışındadır. Kararın gerekçesi:
 | | PostgreSQL (sürekli yedek) | Ad alanı yedeği |
 |---|---|---|
 | Zamanlama | `"0 0 2 * * *"` — **altı alanlı** cron (saniye dâhil) → her gün 02:00 | `"0 3 * * *"` — beş alanlı → her gün 03:00 |
-| Nerede tanımlı | `platform/values/site/glue.yaml` → `backup.schedule` | `glue/values.yaml` → `velero.schedule` |
-| Saklama | `backup.retentionPolicy: 30d` | `velero.ttl: 720h` (30 gün) |
+| Ürün varsayılanı nerede | `glue/values.yaml` → `backup.schedule` | `glue/values.yaml` → `velero.schedule` |
+| Saklama | `backup.retentionPolicy: 30d` (ürün varsayılanı `glue/values.yaml`, üretim değeri `platform/values/glue.yaml`) | `velero.ttl: 720h` (30 gün) — `glue/values.yaml` |
 | Hedef | `$S3_BUCKET_BACKUP` kovasının `cnpg/` öneki | aynı kovanın `velero/` öneki |
 | Kimlik | `backup-s3-creds` Secret'ı | OADP'nin `cloud-credentials` Secret'ı |
 | İlk yedek | Nesne yaratılır yaratılmaz | İlk zamanlanan koşuda |
@@ -84,6 +84,15 @@ dışındadır. Kararın gerekçesi:
 **Yedek kovası veri kovasından ayrı olmalıdır** — geri yükleme hedefiyle kaynağı aynı kovaya
 koymak, kaynağı kaybettiğinizde yedeği de kaybetmek demektir
 ([30-kurulum](../30-kurulum.md) §5.3).
+
+**Müşteri hangi satırı nerede değiştirir?** `platform/values/site/glue.yaml` içindeki
+`backup:` bloğu yalnız `s3:` alanlarını (uç nokta, kova, bölge) taşır; zamanlama ve saklama
+**ürün varsayılanıdır**. Farklı bir saat ya da saklama süresi isteniyorsa aynı site
+dosyasına `backup.schedule` / `backup.retentionPolicy` anahtarı **eklenir** (site dosyası
+değer listesinde sonra yüklendiği için ürün değerini ezer) — anahtarların anlamı ve biçim
+kuralı [90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) §1'deki
+"eklenebilen isteğe bağlı anahtarlar" tablosundadır. `glue/values.yaml` ve
+`platform/values/glue.yaml` ürün dosyalarıdır; onlara dokunulmaz.
 
 **Aynı kovada iki önek kullanılıyorsa** (varsayılan) sürekli yedek yalnız `cnpg/` altını, ad
 alanı yedeği yalnız `velero/` altını yönetir; biri diğerinin dosyalarına dokunmaz. Ancak
@@ -320,7 +329,60 @@ Ad ile filtreleme **yoktur**; daraltma yalnız kaynak türü ve etiketle yapıl�
 
 ### 6.3 Disk içeriği geri yükleme
 
-Dosya sistemi yedeği hedef diski **pod yaratılırken** doldurur → iş yükü önce durdurulur:
+Dosya sistemi yedeği hedef diski **pod yaratılırken** doldurur; bu yüzden disk önce
+**silinmek** zorundadır. Dört adım sırayla uygulanır ve **sıra atlanamaz**.
+
+> **YIKICI ADIM — okumadan koşmayın.** Bu yordam `zeppelin-data` diskini **siler**. İki
+> koşuldan biri sağlanmazsa not defterleri **geri gelmez**:
+> (1) seçtiğiniz yedekte o diskin gerçekten bir dosya sistemi yedeği vardır (Adım 1),
+> (2) diski silmeden önce `glue` uygulamasının kendiliğinden eşitlemesi durdurulmuştur
+> (Adım 2). İkincisi atlanırsa ArgoCD **boş** bir diski saniyeler içinde yeniden yaratır;
+> geri yükleme var olan nesneye dokunmadığı için (§6.1 "Kapsam notu") sessizce hiçbir şey
+> yapmaz ve elinizde boş bir disk kalır. Provayı önce bir deneme ad alanında yapın.
+
+**Adım 1 — Kapı: yedekte bu disk var mı?** Yoksa **DURUN**.
+
+`[bastion]`
+
+```bash
+oc -n openshift-adp get podvolumebackups.velero.io \
+  -l velero.io/backup-name=lakehouse-daily-20260924081157 \
+  -o custom-columns='POD:.spec.pod.name,HACIM:.spec.volume,FAZ:.status.phase' | grep -i zeppelin
+```
+
+**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**): Zeppelin
+pod'unun `data` hacmi için `Completed` bir satır. `HACIM` sütunu **pod hacim adıdır**, disk
+(PVC) adı değil: Zeppelin'in `data` hacmi `zeppelin-data` diskine karşılık gelir.
+
+**Ters giderse:** satır yoksa o yedekte bu diskin içeriği **yoktur** — silmeyin. Geliştirme
+kümesinde bu satır hiçbir zaman çıkmaz (§6.5). CSI anlık görüntüsü + veri taşıyıcı
+kullanılıyorsa karşılığı `datauploads.velero.io` nesnesidir; aynı kapı onunla kurulur
+(**OpenShift'te doğrulanır**).
+
+**Adım 2 — `glue` uygulamasının kendiliğinden eşitlemesini durdurun.** `platform/apps/10-glue.yaml`
+uygulamayı `automated: {prune: true, selfHeal: true}` ile tanımlar; `selfHeal` silinen diski
+**hemen** Git'teki hâliyle (yani boş olarak) geri koyar. `automated` alanını kaldırmak ikisini
+birden durdurur:
+
+`[bastion]`
+
+```bash
+oc -n "$ARGOCD_NS" patch application glue --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":null}}}'
+oc -n "$ARGOCD_NS" get application glue -o jsonpath='automated={.spec.syncPolicy.automated}{"\n"}'
+```
+
+**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**):
+
+```text
+application.argoproj.io/glue patched
+automated=
+```
+
+**Ters giderse:** ikinci satır hâlâ `map[prune:true selfHeal:true]` gösteriyorsa yama
+uygulanmamıştır; **devam etmeyin**.
+
+**Adım 3 — İş yükünü durdurun, diski silin, geri yüklemeyi başlatın.**
 
 `[bastion]`
 
@@ -336,30 +398,49 @@ spec:
   includedNamespaces: [lakehouse]
   includedResources: [persistentvolumeclaims, persistentvolumes, pods]
 YAML
+oc -n openshift-adp get restores.velero.io zeppelin-pvc -o jsonpath='{.status.phase}{"\n"}'
+oc -n "$LAKEHOUSE_NS" get pvc zeppelin-data
 oc -n "$LAKEHOUSE_NS" scale deploy/zeppelin --replicas=1
 oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -- ls /data | head
 ```
 
-**Kapsam notu:** ad ile filtre olmadığı ve `zeppelin-data` diskinde etiket bulunmadığı için
-yukarıdaki geri yükleme ad alanındaki **bütün** diskleri kapsar. Var olan nesnelere
-dokunulmaz (varsayılan davranış mevcut olanı atlar), yalnız silinmiş olan disk yeniden
-yaratılır. Tek bir diski hedeflemek istiyorsanız **yedek alınmadan önce** diski etiketleyin
-ve geri yüklemeye bir etiket seçicisi ekleyin.
+**Beklenen çıktı** (örnek): geri yükleme `Completed`, disk `Bound` ve son komut not defteri
+dizinlerini listeliyor. Disk **geri yükleme tarafından** yaratılmış olmalıdır; eşitleme
+tarafından yaratılmışsa boş olur.
 
-Hangi disklerin gerçekten yedeklendiğini görmek için:
+**Adım 4 — Kendiliğinden eşitlemeyi geri açın.** Prova biter bitmez, disk `Bound` ve pod
+`Running` olduktan **sonra**:
 
 `[bastion]`
 
 ```bash
-oc -n openshift-adp get podvolumebackups.velero.io \
-  -l velero.io/backup-name=lakehouse-daily-20260924081157 \
-  -o custom-columns='POD:.spec.pod.name,HACIM:.spec.volume,FAZ:.status.phase'
+oc -n "$ARGOCD_NS" patch application glue --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+oc -n "$ARGOCD_NS" get application glue \
+  -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
 ```
 
-`HACIM` sütunu **pod hacim adıdır**, disk (PVC) adı değil.
+**Beklenen çıktı** (örnek — OpenShift'e özgü):
 
-**Ters giderse:** geri yükleme `Completed` ama dizin boşsa disk hiç yedeklenmemiştir —
-§6.5'teki geliştirme kümesi sınırına bakın.
+```text
+application.argoproj.io/glue patched
+Synced Healthy
+```
+
+Bu yama `platform/apps/10-glue.yaml` dosyasındaki değeri geri koyar; unutulursa **uygulama
+kendini iyileştirmeyi yapmaz** ve elle yapılan her değişiklik kümede kalır. Kurulum betiği
+(`bootstrap/bootstrap.sh`) yeniden koşturulursa dosyadaki hâl zaten geri yüklenir, ama buna
+güvenmeyin — provanın son adımı bu yamadır.
+
+**Kapsam notu:** ad ile filtre olmadığı ve `zeppelin-data` diskinde etiket bulunmadığı için
+yukarıdaki geri yükleme ad alanındaki **bütün** diskleri kapsar. Var olan nesnelere
+dokunulmaz (varsayılan davranış mevcut olanı atlar), yalnız silinmiş olan disk yeniden
+yaratılır — Adım 2'nin nedeni tam olarak budur. Tek bir diski hedeflemek istiyorsanız **yedek
+alınmadan önce** diski etiketleyin ve geri yüklemeye bir etiket seçicisi ekleyin.
+
+**Ters giderse:** geri yükleme `Completed` ama dizin boşsa iki olasılık vardır: (1) diski
+eşitleme yeniden yarattı (Adım 2 atlandı ya da yama tutmadı), (2) o yedekte diskin içeriği
+hiç yoktu (Adım 1) — geliştirme kümesi sınırı için §6.5.
 
 ### 6.4 İki tuzak
 
@@ -509,7 +590,7 @@ henüz kurulmamıştır; değeri geri kapatın, operatörü kurun, sonra yeniden
 | Her kurulum ve her kabul koşusu | PostgreSQL yedek + geri yükleme, ad alanı yedeği + geri yükleme | `scripts/acceptance.sh` → `E2E F5 DR OK` ([90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md)) |
 | Haftalık | Arşiv ve son yedek sağlığı | §4 komutları ([gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) §4) |
 | **Çeyreklik** | **Zaman noktasına dönüş provası** (Polaris veritabanı): dünkü bir zamana geri yükleme, tablo sayımı, kümeyi silme | §5 |
-| **Çeyreklik** | **Disk geri yükleme provası** (Zeppelin ya da bir kullanıcı diski) | §6.3 — geliştirme kümesinde anlamsız (§6.5), üretimde yapılır |
+| **Çeyreklik** | **Disk geri yükleme provası** (Zeppelin ya da bir kullanıcı diski): yedek kapısı → `glue` otomasyonunu durdur → disk sil + geri yükle → otomasyonu geri aç | §6.3 (dört adımın tamamı; **adım atlanmaz**) — geliştirme kümesinde anlamsız (§6.5), üretimde yapılır |
 | **Yılda bir** | **Tam ad alanı geri yükleme** provası (ayrı bir ad alanı ya da küme) + kurtarma süresi ölçümü | §6.1 |
 
 Ölçülen değerler (geliştirme kümesi, 2026-09-18): PostgreSQL tam yedeği **8–12 saniye** ·
@@ -528,6 +609,11 @@ saat (günlük zamanlama). Üretim hedefleri müşteriyle bu ölçümler üzerin
 - [ ] Ad alanı yedeği `Completed`; depolama konumu `Available`.
 - [ ] `oc get backup` yerine daima `backups.velero.io` yazıldığı ekipçe biliniyor.
 - [ ] Çeyreklik zaman noktası provası yapıldı ve geri yükleme kümesi silindi.
+- [ ] Disk geri yükleme provasında sıra izlendi: yedekte diskin varlığı doğrulandı (§6.3
+      Adım 1), `glue` uygulamasının kendiliğinden eşitlemesi durduruldu (Adım 2), disk
+      **ancak ondan sonra** silindi.
+- [ ] Prova bittikten sonra `glue` uygulamasının `automated` ayarı geri açıldı ve uygulama
+      `Synced Healthy` (§6.3 Adım 4).
 - [ ] Kafka verisinin ve S3'teki tablo dosyalarının kapsam dışı olduğu, dönüş yollarının ne
       olduğu yazılı olarak kayda geçti.
 
