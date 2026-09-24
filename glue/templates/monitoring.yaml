@@ -41,6 +41,11 @@ spec:
 # glue/templates/zeppelin.yaml'daki ZEPPELIN_METRIC_ENABLE_PROMETHEUS env'i de bu kararla kaldırıldı.
 # Lakehouse alarm kuralları. alertmanager kapalı (dev) -> hiçbir yere bildirim gitmez; doğrulama
 # /api/v1/rules (health) + /api/v1/alerts (ALERTS serisi) üzerinden yapılır.
+# runbook annotation'ları docs/50-isletme/sorun-giderme.md'nin BÖLÜM ÇAPALARINA işaret eder. Çapalar o
+# sayfada başlığın hemen üstündeki HTML <a id="..."></a> satırlarıdır (GitHub Türkçe başlıklardan bu
+# slug'ları üretmez, {#id} sözdizimi de GitHub'da çalışmaz). Çapa adları kilitlidir: glue/tests/monitoring_test.yaml
+# her alarmın runbook'unun bu dosya + geçerli bir çapa ile başladığını doğrular; çapayı değiştirmeden
+# ÖNCE sorun-giderme.md'deki <a id> satırını değiştirin.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata: {name: lakehouse, namespace: {{ $ns }}}
@@ -52,7 +57,7 @@ spec:
       expr: kafka_connect_connector_task_status{status="failed"} == 1
       for: 5m
       labels: {severity: critical}
-      annotations: {summary: "Connect task FAILED: {{ "{{ $labels.connector }}" }}/{{ "{{ $labels.task }}" }}", runbook: runbooks/troubleshooting.md#connect}
+      annotations: {summary: "Connect task FAILED: {{ "{{ $labels.connector }}" }}/{{ "{{ $labels.task }}" }}", runbook: docs/50-isletme/sorun-giderme.md#connect}
     - alert: LakehouseSinkStalled
       # lag tabanlı (Task 2b, kapsam kararı): kafka-exporter'ın kafka_consumergroup_lag'i (glue kafka.yaml
       # kafkaExporter). Iceberg sink upstream commit aralığı 300 s (prod) / 30 s (dev, connect.sinkCommitIntervalMs)
@@ -63,7 +68,7 @@ spec:
       expr: sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}) > {{ .Values.monitoring.sinkLagThreshold }}
       for: 15m
       labels: {severity: warning}
-      annotations: {summary: "Iceberg sink lag eşiği aştı: {{ "{{ $labels.consumergroup }}" }}/{{ "{{ $labels.topic }}" }}", runbook: runbooks/troubleshooting.md#sink}
+      annotations: {summary: "Iceberg sink lag eşiği aştı: {{ "{{ $labels.consumergroup }}" }}/{{ "{{ $labels.topic }}" }}", runbook: docs/50-isletme/sorun-giderme.md#sink}
     - alert: LakehouseSilverMergeStale
       # en son COMPLETED silver-merge koşusundan bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
       # BİLİNÇLİ absence-safe tasarım: kube_customresource_sparkapp_* yalnız CR VARKEN üretilir (Task 1 notu);
@@ -74,12 +79,12 @@ spec:
       expr: time() - max(kube_customresource_sparkapp_termination_time{name=~"silver-merge-.*"} and on (name) kube_customresource_sparkapp_state{state="COMPLETED"} == 1) > {{ .Values.monitoring.silverMergeStaleSeconds }}
       for: 10m
       labels: {severity: warning}
-      annotations: {summary: "silver-merge son başarı yaşı eşiği aştı", runbook: runbooks/troubleshooting.md#silver-merge}
+      annotations: {summary: "silver-merge son başarı yaşı eşiği aştı", runbook: docs/50-isletme/sorun-giderme.md#silver-merge}
     - alert: LakehouseSparkScheduledRunFailed
       expr: kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1
       for: 1m
       labels: {severity: warning}
-      annotations: {summary: "Zamanlanmış Spark koşusu FAILED: {{ "{{ $labels.name }}" }}", runbook: runbooks/troubleshooting.md#spark}
+      annotations: {summary: "Zamanlanmış Spark koşusu FAILED: {{ "{{ $labels.name }}" }}", runbook: docs/50-isletme/sorun-giderme.md#spark}
     - alert: LakehouseSparkRunTooLong
       # spark_application_success_execution_time_seconds bir SUMMARY'dir (canlı /api/v1/metadata doğrulandı) VE
       # spark-operator 2.5.2'nin exporter'ı per-app etiket YAYMAZ (tüm seriler app_type="Unknown", canlı
@@ -95,7 +100,7 @@ spec:
       expr: rate(spark_application_success_execution_time_seconds_sum[6h]) / rate(spark_application_success_execution_time_seconds_count[6h]) > {{ .Values.monitoring.sparkRunMaxSeconds }}
       for: 10m
       labels: {severity: warning}
-      annotations: {summary: "Spark koşularının son 6 saatteki ortalama süresi eşiği aştı (>{{ .Values.monitoring.sparkRunMaxSeconds }}s)", runbook: runbooks/troubleshooting.md#spark-duration}
+      annotations: {summary: "Spark koşularının son 6 saatteki ortalama süresi eşiği aştı (>{{ .Values.monitoring.sparkRunMaxSeconds }}s)", runbook: docs/50-isletme/sorun-giderme.md#spark-duration}
 ---
 # Grafana dashboard ConfigMap'leri: sidecar etiketi grafana_dashboard, searchNamespace ALL (monitoring-dev.yaml) ->
 # bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.
