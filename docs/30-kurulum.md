@@ -1101,6 +1101,7 @@ yönlendirmeleri `302` verir):
 ```text
 NAME         HOST/PORT                                    PORT    TERMINATION
 keycloak     keycloak-lakehouse.apps.ocp.example.net      http    edge
+polaris      polaris-lakehouse.apps.ocp.example.net       8181    edge
 superset     superset-lakehouse.apps.ocp.example.net      http    edge
 jupyterhub   jupyterhub-lakehouse.apps.ocp.example.net    http    edge
 zeppelin     zeppelin-lakehouse.apps.ocp.example.net      http    edge
@@ -1113,7 +1114,9 @@ zeppelin     zeppelin-lakehouse.apps.ocp.example.net      200
 
 Trino Route'unun sonlandırması `tls.caBundle` doluysa `reencrypt`, boşsa `passthrough`
 olur. Trino'yu bu listede sınamayın: kimlik doğrulaması zorunlu olduğu için `401` döner,
-bu da beklenen davranıştır.
+bu da beklenen davranıştır. `polaris` Route'u katalog API'sidir (kullanıcı arayüzü değil),
+adresi şablonda verilmez; OpenShift `polaris-$LAKEHOUSE_NS.$APPS_DOMAIN` olarak üretir ve
+döngüde denenmez.
 
 **Ters giderse:** `NotFound` → glue henüz Route'ları yazmamıştır (Adım 6.1). `000` → DNS
 çözülmüyor ya da güvenlik duvarı kapalıdır ([20-on-kosullar](20-on-kosullar.md) madde 7);

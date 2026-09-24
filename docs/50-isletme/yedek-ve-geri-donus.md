@@ -404,7 +404,8 @@ oc -n "$LAKEHOUSE_NS" scale deploy/zeppelin --replicas=1
 oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -- ls /data | head
 ```
 
-**Beklenen çıktı** (örnek): geri yükleme `Completed`, disk `Bound` ve son komut not defteri
+**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**): geri yükleme
+`Completed`, disk `Bound` ve son komut not defteri
 dizinlerini listeliyor. Disk **geri yükleme tarafından** yaratılmış olmalıdır; eşitleme
 tarafından yaratılmışsa boş olur.
 

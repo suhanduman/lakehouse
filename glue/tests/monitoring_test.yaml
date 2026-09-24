@@ -49,9 +49,9 @@ tests:
       - matchRegex: {path: 'spec.groups[0].rules[1].annotations.summary', pattern: '\{\{ \$labels\.consumergroup \}\}'}
   # runbook annotation'ları docs/50-isletme/sorun-giderme.md'nin BÖLÜM ÇAPALARINI gösterir: o sayfada
   # başlığın hemen üstündeki HTML <a id="..."></a> satırı (GitHub Türkçe başlıklardan bu slug'ları
-  # üretmez, {#id} sözdizimi de GitHub'da çalışmaz). Yol + çapa burada KİLİTLİDİR: runbooks/ altına
-  # dönüş ya da çapanın sessizce değişmesi bu testi düşürür. Çapa adı değişecekse ÖNCE
-  # docs/50-isletme/sorun-giderme.md içindeki <a id> satırı değişir.
+  # üretmez, {#id} sözdizimi de GitHub'da çalışmaz). Yol + çapa burada KİLİTLİDİR: sayfanın başka
+  # bir dosyaya taşınması ya da çapanın sessizce değişmesi bu testi düşürür. Çapa adı değişecekse
+  # ÖNCE docs/50-isletme/sorun-giderme.md içindeki <a id> satırı değişir.
   - it: every alert runbook points at a docs/50-isletme/sorun-giderme.md anchor
     template: monitoring.yaml
     documentSelector: {path: kind, value: PrometheusRule}

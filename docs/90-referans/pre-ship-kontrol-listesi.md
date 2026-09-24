@@ -296,6 +296,25 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   yeniden üretilmez. Prova canlı ortamda bir kez yapılır ve sonucu buraya yazılır.
   *Kaynak: [50-isletme/kullanici-ve-yetki.md](../50-isletme/kullanici-ve-yetki.md) §9.*
 
+- [ ] **1.12 `allow-platform-namespaces` içindeki ArgoCD ad alanı seçicisi**
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" get networkpolicy allow-platform-namespaces \
+    -o jsonpath='{range .spec.ingress[0].from[*]}{.namespaceSelector.matchLabels}{"\n"}{end}'
+  echo "$ARGOCD_NS"
+  ```
+
+  Beklenen: listede `kubernetes.io/metadata.name: argocd` görünür, `$ARGOCD_NS` ise
+  `openshift-gitops`'tur — yani seçici **hiçbir ad alanıyla eşleşmez**. Bu bir kod kusurudur:
+  `glue/templates/networkpolicy.yaml` ArgoCD ad alanını **sabit `argocd`** yazar, `$ARGOCD_NS`
+  değerinden türetmez. Kurulumda sorun çıkarmaz (ArgoCD kube-apiserver ile konuşur,
+  `$LAKEHOUSE_NS` pod'larına doğrudan bağlanmaz); ArgoCD'den pod'a doğrudan erişim gerekiyorsa
+  ya da politika sıkılaştırılacaksa şablon `$ARGOCD_NS` ile parametreleştirilir (birim testi +
+  e2e ister, bu yüzden teslim öncesi **karar kutusu**dur: düzeltilecek mi, kabul mü edilecek).
+  *Kaynak: [port-ve-servisler.md](port-ve-servisler.md) §5.*
+
 ---
 
 ## 2. İzleme ve günlükler

@@ -3,16 +3,16 @@ on:
   push: {branches: [main]}
   pull_request: {branches: [main]}
 jobs:
-  # non_docs = değişen dosyalardan EN AZ BİRİ kod dosyası (docs/**, runbooks/**, **/*.md
-  # dışında bir şey). Salt-belge push'unda (tüm dosyalar bu üç kalıptan birine uyuyorsa)
+  # non_docs = değişen dosyalardan EN AZ BİRİ kod dosyası (docs/**, **/*.md dışında bir
+  # şey). Salt-belge push'unda (tüm dosyalar bu iki kalıptan birine uyuyorsa)
   # non_docs=false olur ve e2e-kind atlanır; 1 saatlik e2e zaten hiçbir kod yolunu
   # kanıtlamaz, belge kapısı helm-unittest içindeki check-docs.sh/check-site.sh'tir.
   # DİKKAT: predicate-quantifier 'every' burada "her değişen dosya belge kalıplarından
   # birine uyuyor mu" DEĞİL, "tek bir dosya listedeki TÜM kuralları karşılıyor mu" demektir
   # (patterns.every(...), bkz. dorny/paths-filter src/filter.ts). Bu yüzden filtre
-  # docs/**, runbooks/**, **/*.md'yi ayrı alternatifler olarak DEĞİL, '**' + üç negatif
-  # kuralın (!docs/**, !runbooks/**, !**/*.md) kesişimi olarak yazılır: bir dosya yalnız
-  # docs/runbooks altında DEĞİLSE ve .md DEĞİLSE tüm kuralları birden karşılar, yani
+  # docs/**, **/*.md'yi ayrı alternatifler olarak DEĞİL, '**' + iki negatif
+  # kuralın (!docs/**, !**/*.md) kesişimi olarak yazılır: bir dosya yalnız
+  # docs/ altında DEĞİLSE ve .md DEĞİLSE tüm kuralları birden karşılar, yani
   # "kod dosyası"dır. `!**.md` (tek yıldız) KULLANILMAZ: picomatch 2.3.1'de bu kalıp
   # yalnız KÖK dizindeki *.md dosyalarını dışlar (regex gövdesi [^/]*?\.md, "/" içeren
   # yollarda eşleşmez) — custom/README.md, examples/dbt/README.md gibi iç içe .md
@@ -37,7 +37,6 @@ jobs:
             non_docs:
               - '**'
               - '!docs/**'
-              - '!runbooks/**'
               - '!**/*.md'
   helm-unittest:
     runs-on: ubuntu-latest

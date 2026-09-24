@@ -76,6 +76,8 @@ Secret'ın **adını** taşır. Liste:
 
 ## 3. Değişikliği yapın ve yerelde denetleyin
 
+### 3.1 Dosyayı düzenleyin ve site değerlerini denetleyin
+
 Önce deponun güncel olduğundan emin olun, sonra dosyayı düzenleyin.
 
 `[bastion]`
@@ -98,21 +100,56 @@ UYARI: platform/polaris/setup.yaml: endpoint 'https://s3.example.com' değil —
 check-site: OK
 ```
 
+**Ters giderse:** `check-site: OK` yerine `HATA` satırı basılırsa değişiklik **itilmez**;
+hata satırı hangi dosyadaki hangi anahtarın tutarsız olduğunu söyler.
+
+### 3.2 Chart'ı render edip nesne listesine bakın
+
 Değişiklik `glue` chart'ının ürettiği nesneleri etkiliyorsa (kaynak ekleme, nginx akışı,
-hostname) kümeye gitmeden **render edip** bakabilirsiniz:
+hostname) kümeye gitmeden **render edip** bakabilirsiniz. Bu adım isteğe bağlıdır ama
+nesne sayısını değiştiren değişikliklerde (kaynak ekleme/çıkarma) atlanmamalıdır.
 
 `[bastion]`
 
 ```bash
 helm template glue ./glue -n "$LAKEHOUSE_NS" \
   -f platform/values/glue.yaml -f platform/values/site/glue.yaml \
-  | grep -E "^kind: |^  name: "
+  | grep -E '^kind: ' | sort | uniq -c | sort -rn
 ```
 
-**Ters giderse:** `check-site: OK` yerine `HATA` satırı basılırsa değişiklik **itilmez**;
-hata satırı hangi dosyadaki hangi anahtarın tutarsız olduğunu söyler. `helm template`
-`Error: ... required` ile duruyorsa zorunlu bir alan boş bırakılmıştır (ör. bir kaynağın
-`signalTable` alanı).
+**Beklenen çıktı** (depodaki ürün değerleriyle alınmış gerçek çıktı; kendi site
+dosyanızda `sources`/`pipelines` ve `nginx` açıksa ConfigMap ve `KafkaConnector`
+satırları artar):
+
+```text
+   7 kind: ConfigMap
+   6 kind: Route
+   3 kind: ScheduledBackup
+   3 kind: NetworkPolicy
+   3 kind: Cluster
+   1 kind: Superset
+   1 kind: Service
+   1 kind: RoleBinding
+   1 kind: Role
+   1 kind: PrometheusRule
+   1 kind: PodMonitor
+   1 kind: PersistentVolumeClaim
+   1 kind: ObjectStore
+   1 kind: KeycloakRealmImport
+   1 kind: Keycloak
+   1 kind: KafkaUser
+   1 kind: KafkaNodePool
+   1 kind: KafkaConnect
+   1 kind: Kafka
+   1 kind: Job
+   1 kind: Issuer
+   1 kind: Deployment
+   1 kind: Certificate
+```
+
+**Ters giderse:** `helm template` `Error: ... required` ile duruyorsa zorunlu bir alan boş
+bırakılmıştır (ör. bir kaynağın `signalTable` alanı); hata satırı eksik anahtarın adını
+verir.
 
 ---
 
@@ -273,7 +310,7 @@ arasındaki bağ kopar.
 | `OutOfSync` kalıyor, işlem mesajı boş | ArgoCD depoyu okuyamıyor | `lakehouse-repo` Secret'ı, `git remote -v` |
 | `OutOfSync Progressing` dakikalarca sürüyor | bir pod yeniden başlayamıyor | `oc -n "$LAKEHOUSE_NS" get pods` |
 | `Synced Degraded` | nesne uygulandı ama sağlıksız (ör. `KafkaConnector` FAILED) | `oc -n "$LAKEHOUSE_NS" get kafkaconnector` |
-| `ComparisonError` ya da `rpc error` | chart render hatası (eksik zorunlu alan) | Adım 3'teki `helm template` |
+| `ComparisonError` ya da `rpc error` | chart render hatası (eksik zorunlu alan) | Adım 3.2'deki `helm template` |
 | Değişiklik uygulandı ama kümede geri alındı | aynı nesne `oc edit` ile elle değiştirilmiş; `selfHeal` geri aldı | Git'teki hâli otoriterdir |
 
 Belirtilerin tam tablosu ve komut komut çözümü:

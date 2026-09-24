@@ -115,9 +115,9 @@ oc get storageclass
 **Beklenen çıktı** (örnek):
 
 ```text
-NAME                 PROVISIONER                RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
-ocs-storagecluster-ceph-rbd (default)   openshift-storage.rbd.csi.ceph.com   Delete   Immediate   true   41d
-thin-csi             csi.vsphere.vmware.com     Delete          WaitForFirstConsumer   true                   41d
+NAME                   PROVISIONER   RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE
+pure-block (default)   pure-csi      Delete          Immediate           true                   41d
+pure-file              pure-csi      Delete          Immediate           true                   41d
 ```
 
 `(default)` işaretli sınıf varsa `$STORAGE_CLASS` boş bırakılabilir. Sınıf **ReadWriteOnce** blok depolama sağlamalı ve **disk büyütmeyi desteklemelidir** (`ALLOWVOLUMEEXPANSION: true`) — aksi hâlde Kafka diskini büyütmek için pod'ları yeniden yaratmak gerekir.

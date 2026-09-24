@@ -772,8 +772,10 @@ oc -n "$LAKEHOUSE_NS" get secret lakehouse-cluster-ca-cert \
 oc -n "$LAKEHOUSE_NS" get secret fluentbit -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü; ilk satır Route host'u ve 443, ikinci satır
-ajanın SCRAM parolasıdır):
+**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**): blok üç komut
+içerir ama ekrana **iki** satır basar — ortadaki komut hiçbir şey yazdırmaz, CA'yı
+`lakehouse-ca.crt` dosyasına yazar (`ls -l lakehouse-ca.crt` ile doğrulayın). Birinci satır
+Route host'u ve 443, ikinci satır ajanın SCRAM parolasıdır:
 
 ```text
 lakehouse-kafka-bootstrap-lakehouse.apps.ocp.example.net:443
