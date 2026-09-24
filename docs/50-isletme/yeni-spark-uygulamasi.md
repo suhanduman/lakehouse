@@ -66,7 +66,7 @@ iştir:
 
 ```yaml
 resources:
-- spark-gunluk-ozet.yaml
+- spark-gunluk-ozet-zamanli.yaml
 ```
 
 **Müşteri yeni bir ArgoCD Application eklemez.** Uygulama listesi bootstrap'ın parçasıdır;
@@ -85,9 +85,78 @@ Klasörün kendi kısa anlatımı ve hazır örnekleri:
 | `custom/examples/dbt-cronjob.yaml` | Spark dışı örnek: dbt → Gold `CronJob`'ı |
 | `custom/examples/kustomization.yaml` | yukarıdakilerden hangilerinin uygulanacağı + `.py` dosyasından ConfigMap üretimi |
 
-**Özel imaj gerekmez.** Python kodu bir imaja gömülmez: `kustomization.yaml` içindeki
-`configMapGenerator` `.py` dosyasından bir ConfigMap üretir, CR onu `/opt/job` altına
-bağlar ve `mainApplicationFile` o yolu gösterir. Çalışan imaj ürünün resmi Spark imajıdır.
+**Tek dosyalık betikler için özel imaj gerekmez.** Python kodu bir imaja gömülmez:
+`kustomization.yaml` içindeki `configMapGenerator` `.py` dosyasından bir ConfigMap üretir,
+CR onu `/opt/job` altına bağlar ve `mainApplicationFile` o yolu gösterir. Çalışan imaj
+ürünün resmi Spark imajıdır.
+
+### 2.1 Sınır: ConfigMap 1 MiB'dir
+
+ConfigMap'in **tamamı** (bütün anahtarların toplamı) 1 MiB'ı (1.048.576 bayt) aşamaz; bu
+Kubernetes'in kendi sınırıdır ve aşıldığında nesne hiç yaratılmaz. Tek dosyalık bir PySpark
+betiği bu sınırın çok altında kalır — bu bölümün örneği 1 KB'dir. Sınıra takılan
+uygulamalar şunlardır: birden çok modüle bölünmüş paketler, depoya gömülmüş üçüncü parti
+kütüphaneler, veri dosyası taşıyan işler.
+
+Büyük uygulamalar için iki desteklenen yol vardır.
+
+**(a) Kendi Spark imajınız.** Ürünün imajından türetip paketinizi içine kopyalar ve
+kurumun iç registry'sine (`$INTERNAL_REGISTRY`) itersiniz; CR'da yalnız `image` satırı
+değişir. Kapalı ağda zaten iç registry kullanıldığı için ek bir ağ izni gerekmez.
+
+```dockerfile
+FROM apache/spark:4.1.0-java21-python3
+COPY benim_paketim/ /opt/job/benim_paketim/
+```
+
+CR'da: `image: image-registry.openshift-image-registry.svc:5000/lakehouse/benim-spark:1.0`
+ve `mainApplicationFile: local:///opt/job/benim_paketim/ana.py`. Ürün yükseltmesinde
+taban imajın sürümünü de yükseltmeniz gerekir (Adım 4.1'deki sürüm senkronu notu).
+
+**(b) S3'ten `pyFiles`.** Paketi bir `.zip` olarak S3'e koyar ve CR'ın `deps` bloğunda
+gösterirsiniz; Spark onu sürücü ve executor'ların `PYTHONPATH`'ine ekler. İmaj üretmeden
+çok modüllü uygulama çalıştırmanın yoludur.
+
+```yaml
+spec:                            # zamanlı CR'da: spec.template altında
+  mainApplicationFile: local:///opt/job/gunluk_ozet.py   # giriş noktası yine ConfigMap'ten
+  deps:
+    pyFiles:
+    - s3a://kurum-veri/spark-paketleri/benim_paketim.zip
+```
+
+Alan adını kümenizde doğrulayabilirsiniz:
+
+`[bastion]`
+
+```bash
+oc explain sparkapplication.spec.deps.pyFiles
+```
+
+**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; zamanlı CR'da aynı alan
+`scheduledsparkapplication.spec.template.deps.pyFiles` yolundadır):
+
+```text
+GROUP:      sparkoperator.k8s.io
+KIND:       SparkApplication
+VERSION:    v1beta2
+
+FIELD: pyFiles <[]string>
+
+
+DESCRIPTION:
+    PyFiles is a list of Python files the Spark application depends on.
+```
+
+`s3a://` yolunu okuyabilmek için sürücü ve executor'ın S3 kimliğine ihtiyacı vardır: iş
+zaten `vended-credentials` ile çalışıyorsa Polaris'in verdiği geçici anahtar **yalnız
+katalog tabloları içindir**, paket dosyası için ayrıca `s3-creds` Secret'ındaki
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` çiftini (Adım 4.1'de yorumlu duran satırlar)
+açmanız gerekir.
+
+**Ters giderse:** ConfigMap'i uygularken boyut hatası alıyorsanız Adım 10'daki ilgili
+satıra bakın; `ModuleNotFoundError` alıyorsanız paket sürücüye ulaşmamıştır — (a) yolunda
+`COPY` hedefini, (b) yolunda `pyFiles` girdisini ve S3 kimliğini denetleyin.
 
 ---
 
@@ -182,8 +251,17 @@ spark.sql(f"""
 > yüzden depodaki `custom/examples/kustomization.yaml` dosyasında tek seferlik örnek
 > **yorumludur**; tek seferlik işler elle uygulanır, tekrar edenler GitOps'tan geçer.
 
-Kopyalanan dosyada değişen satırlar **üç** tanedir (zamanlı dosyada ek olarak `schedule`
-ve `suspend`):
+Kopyalanan dosyada **üç** şey değişir: CR'ın adı, çalıştırılacak `.py` dosyasının yolu ve
+kodun geldiği ConfigMap'in adı.
+
+> **İki dosyada bu üç alan aynı düzeyde durmaz.** Tek seferlik `SparkApplication`'da işin
+> tanımı doğrudan `spec:` altındadır. Zamanlı `ScheduledSparkApplication`'da `spec:`
+> **yalnız zamanlama alanlarını** taşır; işin tanımının tamamı (`mainApplicationFile`,
+> `sparkConf`, `driver`, `executor`, `volumes`) bir düzey aşağıda, **`spec.template:`**
+> altındadır. Alanı yanlış düzeye yazarsanız API sunucusu nesneyi reddeder.
+
+**Tek seferlik** — `custom/examples/spark-tek-seferlik.yaml` kopyası, kendi deponuzda
+`spark-gunluk-ozet-tek.yaml`:
 
 ```yaml
 metadata:
@@ -193,6 +271,34 @@ spec:
   volumes:
   - name: job
     configMap: {name: gunluk-ozet}              # configMapGenerator'ın ürettiği ad
+```
+
+**Zamanlı** — `custom/examples/spark-zamanli.yaml` kopyası, kendi deponuzda
+`spark-gunluk-ozet-zamanli.yaml`. Aynı üç alan burada `template:` altındadır:
+
+```yaml
+metadata:
+  name: gunluk-ozet-zamanli        # koşular bu adın sonuna zaman damgası eklenerek doğar
+spec:
+  schedule: "0 4 * * *"          # gecelik 04:00 UTC — bakım ve silver-merge koşularından sonra
+  suspend: false                 # örnekte `true`; işi gerçekten zamanlamak için false yapın
+  concurrencyPolicy: Forbid      # önceki koşu bitmeden yenisi başlamaz (uzun işlerde şart)
+  successfulRunHistoryLimit: 3
+  failedRunHistoryLimit: 3
+  template:                      # BURADAN AŞAĞISI tek seferlik dosyanın `spec:` içeriğidir
+    mainApplicationFile: local:///opt/job/gunluk_ozet.py
+    volumes:
+    - name: job
+      configMap: {name: gunluk-ozet}
+    # sparkConf, driver, executor ve geri kalan her şey de template'in altında kalır
+```
+
+**Ters giderse:** alanları zamanlı dosyada `template:` altına indirmeyi unutursanız API
+sunucusu nesneyi geri çevirir — hata, hangi alanların yanlış düzeyde olduğunu adlarıyla
+söyler (kind kümesinde `oc apply --dry-run=server` ile alınmış gerçek satır):
+
+```text
+Error from server (BadRequest): error when creating "yanlis-zamanli.yaml": ScheduledSparkApplication in version "v1beta2" cannot be handled as a ScheduledSparkApplication: strict decoding error: unknown field "spec.mainApplicationFile", unknown field "spec.volumes"
 ```
 
 ConfigMap'i üreten satır `custom/kustomization.yaml` dosyasına eklenir; `.py` dosyası
@@ -205,17 +311,6 @@ configMapGenerator:
 
 `disableNameSuffixHash: true` **bilerek** vardır: CR ConfigMap'e sabit adla baktığı için
 üretilen adın sonuna karma eklenmemelidir.
-
-Zamanlı dosyada ayrıca:
-
-```yaml
-spec:
-  schedule: "0 4 * * *"          # gecelik 04:00 UTC — bakım ve silver-merge koşularından sonra
-  suspend: false                 # örnekte `true`; işi gerçekten zamanlamak için false yapın
-  concurrencyPolicy: Forbid      # önceki koşu bitmeden yenisi başlamaz (uzun işlerde şart)
-  successfulRunHistoryLimit: 3
-  failedRunHistoryLimit: 3
-```
 
 **Cron saatini ürünün işleriyle çakıştırmayın.** Ürünün gecelik bakım işleri ve
 `silver-merge` koşuları aynı düğümlerde çalışır; kendi işinizi onların arasına değil,
@@ -296,12 +391,17 @@ dakikadan uzun sürüyorsa push kurumun deposuna gitmemiştir.
 CR, Python kodunu ConfigMap'ten bağlar; **ConfigMap kümede önce olmalıdır**. Üretimde
 `custom/` klasörü boş olduğundan ConfigMap'i de siz uygularsınız:
 
+**Ad alanı dosyadan gelir.** Örnek CR'lar `metadata.namespace: lakehouse` taşır ve
+`oc apply -f` komutundaki `-n` bayrağı bunu **ezmez**. `$LAKEHOUSE_NS` değeriniz `lakehouse`
+değilse son satırı çalıştırmadan **önce** dosyadaki `namespace:` alanını kendi ad alanınıza
+çevirin; bu yüzden aşağıdaki üçüncü komutta `-n` bilerek yoktur.
+
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" create configmap gunluk-ozet --from-file=custom/gunluk_ozet.py
 oc -n "$LAKEHOUSE_NS" delete sparkapplication gunluk-ozet --ignore-not-found
-oc apply -f custom/spark-gunluk-ozet.yaml
+oc apply -f custom/spark-gunluk-ozet-tek.yaml     # ad alanı dosyadaki namespace: alanından
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı):
@@ -319,8 +419,8 @@ Depodaki hazır örneği olduğu gibi denemek isterseniz aynı yordamın kısa y
 komutun iki bilinçli yan etkisi de aynı başlıkta yazılıdır.
 
 **Ters giderse:** sürücü pod'unun olay listesinde ConfigMap bulunamadı hatası varsa ilk
-satır atlanmıştır. CR'ın `metadata.namespace` alanı `lakehouse` diyorsa `-n` bayrağı bunu
-**ezmez**; farklı bir ad alanı kullanıyorsanız dosyadaki değeri değiştirin.
+satır atlanmıştır — ya da ConfigMap ile CR farklı ad alanlarına düşmüştür (yukarıdaki ad
+alanı notu).
 
 ---
 
@@ -486,6 +586,8 @@ anlatılır.
 | Sürücü ya da executor pod'u `Pending` | düğümde istenen CPU/bellek yok | `coreRequest` ve `memory` değerlerini düşürün (Adım 9) |
 | `SUBMISSION_FAILED` | CR şemaya uymuyor ya da servis hesabı yok | `oc -n "$LAKEHOUSE_NS" describe sparkapplication gunluk-ozet` |
 | Pod başlamıyor, olay listesinde ConfigMap bulunamadı hatası | ConfigMap uygulanmadı | Adım 5.2'nin ilk satırı |
+| ConfigMap uygulanmıyor: `Too long: may not be more than 1048576 bytes` | betik(ler) 1 MiB ConfigMap sınırını aşıyor | Adım 2.1: kendi imajınız ya da `deps.pyFiles` |
+| `ModuleNotFoundError` (kendi modülünüz) | çok modüllü uygulama ConfigMap'e sığmıyor ya da `pyFiles` eksik | Adım 2.1 |
 | `custom` Application `Degraded` | içeride `FAILED` bir `SparkApplication` duruyor | tek seferlik işi GitOps'tan çıkarın (Adım 4 kutusu); başarısız CR'ı silin |
 
 Uygulamadan önce manifest'i kümeye yazmadan denemek için `--dry-run=server` kullanılır;
@@ -494,7 +596,7 @@ CRD şeması ve admission webhook'u gerçekten devreye girer, nesne yaratılmaz:
 `[bastion]`
 
 ```bash
-oc apply -f custom/spark-gunluk-ozet.yaml --dry-run=server
+oc apply -f custom/spark-gunluk-ozet-tek.yaml --dry-run=server
 ```
 
 **Beklenen çıktı** (örnek):
@@ -591,7 +693,8 @@ Bilinmesi gereken üç şey:
 - [ ] Betik `custom/` klasöründe ve yalnız veri mantığı içeriyor; `POLARIS_CREDENTIAL`
       satırları yerinde.
 - [ ] CR kopyalandı; ad, `mainApplicationFile` ve `volumes` altındaki ConfigMap adı
-      değiştirildi.
+      değiştirildi — **zamanlı dosyada bu üç alan `spec.template:` altındadır**, tek
+      seferlik dosyada doğrudan `spec:` altında.
 - [ ] `configMapGenerator` girdisi `custom/kustomization.yaml` dosyasına eklendi.
 - [ ] `# SİTE` işaretli satırlar `platform/values/site/glue.yaml` ile aynı.
 - [ ] Tekrar eden iş `ScheduledSparkApplication`; tek seferlik iş GitOps'a **konmadı**.

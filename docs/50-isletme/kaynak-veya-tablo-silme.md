@@ -153,11 +153,16 @@ Ortak döngü: [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
 `pipelines` girdisi de listeden **silinir**. Kaynağın tamamı kalkıyorsa `sources` altındaki
 girdinin bütünü ve o kaynağa ait bütün `pipelines` satırları silinir.
 
+Aşağıdaki parça, bu bölümün provasının koştuğu **geliştirme** kurulumundan alınmıştır
+(`platform/values/glue-dev.yaml`); `host` bu yüzden küme içi bir servis adıdır. Üretimde
+aynı alanlar `platform/values/site/glue.yaml` dosyasında, kaynak sunucunun gerçek DNS
+adıyla durur.
+
 ```yaml
 sources:
 - name: shop
   type: postgres
-  host: demo-pg-rw.lakehouse.svc
+  host: demo-pg-rw.lakehouse.svc                # üretimde kaynak sunucunun DNS adı
   port: 5432
   database: shop
   tables: [public.orders]                       # public.customers satırdan çıkarıldı
@@ -233,9 +238,9 @@ Konuyu gerçekten silmek için broker'ın kendi aracı kullanılır:
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -- bin/kafka-topics.sh \
+oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 --list | grep '^shop\.'
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -- bin/kafka-topics.sh \
+oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 --delete --topic shop.public.customers
 ```
 
@@ -280,6 +285,19 @@ olduğuna göre silme yolu değişir.
 Bu yol yalnız **analist** grubundaki kullanıcılar içindir: `sandbox` şemasının sahipliği o
 gruba verilmiştir. Salt okuma yetkisiyle bağlanan servis hesapları ve sıradan kullanıcılar
 `Access Denied: Cannot drop table …` alır.
+
+Aşağıdaki hücreler bir Trino bağlantısı (`conn`) bekler; not defterinde bir kez kurulur
+ve bu bölümün geri kalanında yeniden kullanılır
+([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5 ile aynı hücre):
+
+`[pod]` (JupyterHub not defteri hücresi)
+
+```python
+import os, trino
+conn = trino.dbapi.connect(host=os.environ["TRINO_HOST"], port=8443, http_scheme="https",
+                           verify="/etc/lakehouse-ca/tls.crt",
+                           auth=trino.auth.OAuth2Authentication(), catalog="lakehouse")
+```
 
 `[pod]` (JupyterHub not defteri hücresi)
 
