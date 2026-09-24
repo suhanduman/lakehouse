@@ -18,7 +18,7 @@ hub:
   existingSecret: jupyterhub-secrets
   config:
     # authenticate_prometheus / networkPolicy.ingress (monitoring/UWM) BİLEREK YOK: izleme kapsamı "boru hattı
-    # sağlığı"na daraltıldı (kullanıcı kararı 2026-09-18, Task 2b) — hub uygulama metriği (/hub/metrics) artık
+    # sağlığı"na daraltıldı (kullanıcı kararı 2026-09-18) — hub uygulama metriği (/hub/metrics) artık
     # toplanmaz (ServiceMonitor kaldırıldı, glue/templates/monitoring.yaml). Chart varsayılanına dönüldü:
     # authenticate_prometheus true (uç nokta yine token ister).
     JupyterHub: {authenticator_class: generic-oauth}

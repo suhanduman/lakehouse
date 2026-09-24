@@ -36,7 +36,7 @@ spec:
     - {sourceLabels: [__meta_kubernetes_pod_name], separator: ";", regex: (.*), targetLabel: kubernetes_pod_name, replacement: $1, action: replace}
 ---
 # hub/zeppelin ServiceMonitor'ları BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (kullanıcı
-# kararı 2026-09-18, Task 2b) — gösterim bileşenlerinin (JupyterHub hub, Zeppelin) uygulama metriği toplanmaz.
+# kararı 2026-09-18) — gösterim bileşenlerinin (JupyterHub hub, Zeppelin) uygulama metriği toplanmaz.
 # platform/values/jupyterhub{,-dev}.yaml'daki authenticate_prometheus/networkPolicy override'ları ve
 # glue/templates/zeppelin.yaml'daki ZEPPELIN_METRIC_ENABLE_PROMETHEUS env'i de bu kararla kaldırıldı.
 # Lakehouse alarm kuralları. alertmanager kapalı (dev) -> hiçbir yere bildirim gitmez; doğrulama
@@ -59,7 +59,7 @@ spec:
       labels: {severity: critical}
       annotations: {summary: "Connect task FAILED: {{ "{{ $labels.connector }}" }}/{{ "{{ $labels.task }}" }}", runbook: docs/50-isletme/sorun-giderme.md#connect}
     - alert: LakehouseSinkStalled
-      # lag tabanlı (Task 2b, kapsam kararı): kafka-exporter'ın kafka_consumergroup_lag'i (glue kafka.yaml
+      # lag tabanlı (kapsam kararı): kafka-exporter'ın kafka_consumergroup_lag'i (glue kafka.yaml
       # kafkaExporter). Iceberg sink upstream commit aralığı 300 s (prod) / 30 s (dev, connect.sinkCommitIntervalMs)
       # -> 15 dk pencere birkaç commit'i kapsar; birikim gerçek takılma demektir (yalnız consumer geride kalma
       # DEĞİL, offset commit döngüsünün durduğu senaryo dahil). connect-sink-* öneki: sink connector grupları
@@ -71,7 +71,7 @@ spec:
       annotations: {summary: "Iceberg sink lag eşiği aştı: {{ "{{ $labels.consumergroup }}" }}/{{ "{{ $labels.topic }}" }}", runbook: docs/50-isletme/sorun-giderme.md#sink}
     - alert: LakehouseSilverMergeStale
       # en son COMPLETED silver-merge koşusundan bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
-      # BİLİNÇLİ absence-safe tasarım: kube_customresource_sparkapp_* yalnız CR VARKEN üretilir (Task 1 notu);
+      # BİLİNÇLİ absence-safe tasarım: kube_customresource_sparkapp_* yalnız CR VARKEN üretilir;
       # taze kümede (e2e run_spark_once SparkApplication'ları siler) seri hiç yoktur. `max(...)` boş vektör
       # üzerinde SONUÇSUZ döner (0 değil) -> `time() - max(...)` de sonuçsuz kalır -> kural INACTIVE olur,
       # YANLIŞ ateşlemez. `or absent()` bilerek eklenmedi: absent() dev'de CR hiç yokken sürekli true döner ve
@@ -106,7 +106,7 @@ spec:
 # bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.
 # Yalnız Strimzi (Kafka Connect pipeline sağlığı) — kapsam kontrolör kararıyla daraltıldı (2026-09-18): izleme
 # "pipeline health" odaklı, sunum bileşenleri (Trino dashboard'u) dışarıda bırakıldı; 5 PrometheusRule (Kafka
-# consumer lag/Connect/Spark tabanlı, Task 2b) etkilenmedi. Superset: /metrics yok (Task 1 sapma 2) -> Superset
+# consumer lag/Connect/Spark tabanlı) etkilenmedi. Superset: /metrics yok (glue/templates/superset.yaml) -> Superset
 # dashboard'u YOK.
 apiVersion: v1
 kind: ConfigMap

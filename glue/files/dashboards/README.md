@@ -12,16 +12,16 @@ ConfigMap'lere gömer; kube-prometheus-stack Grafana sidecar'ı (`searchNamespac
 
 **Trino dashboard'u (grafana.com 20208) BİLEREK YOK**: kapsam kontrolör kararıyla daraltıldı (2026-09-18) —
 izleme "pipeline health" odaklı tutuluyor, sunum bileşenleri (dashboard'lar) yalnız pipeline'ın kendisiyle
-(Kafka/Kafka Connect, Strimzi) ilgili olanlarla sınırlandı; Trino/hub/Zeppelin metrik kaynaklarına (Task 1)
+(Kafka/Kafka Connect, Strimzi) ilgili olanlarla sınırlandı; Trino/hub/Zeppelin metrik kaynaklarına
 dokunulmadı, yalnız bu görevin dashboard eklemesi kapsamdan çıkarıldı.
 
-Superset için dashboard YOK: Superset 6.1.0 imajında `/metrics` uç noktası yok (Task 1 sapma 2,
-`glue/templates/superset.yaml` notu) — üretilecek bir metrik serisi olmadığından dashboard da anlamsız olurdu.
+Superset için dashboard YOK: Superset 6.1.0 imajında `/metrics` uç noktası yok (`glue/templates/superset.yaml`
+notu) — üretilecek bir metrik serisi olmadığından dashboard da anlamsız olurdu.
 
 ## Datasource notu (`${DS_...}` girdileri)
 
 - `strimzi-kafka.json` / `strimzi-kafka-connect.json`: paneller `${DS_PROMETHEUS}` değişkenine referans verir.
-  **Düzeltme (Task 2b):** bu dosyalarda `__inputs` alanı YOK (canlı `python3 -c "import json; ... '__inputs' in
+  **Düzeltme:** bu dosyalarda `__inputs` alanı YOK (canlı `python3 -c "import json; ... '__inputs' in
   json.load(...)"` → `False`) — dolayısıyla import sihirbazı zaten hiç devreye girmiyor. Gerçek mekanizma
   `templating.list[]` içindeki `{name: DS_PROMETHEUS, type: datasource, query: prometheus}` girdisidir (Grafana
   şablon değişkeni, dashboard içi `${DS_PROMETHEUS}` referanslarını bu değişkenin seçtiği datasource'a çözer).

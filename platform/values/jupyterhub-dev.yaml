@@ -9,7 +9,7 @@ hub:
       authorize_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/auth
       token_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token
       userdata_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/userinfo
-  # hub networkPolicy.ingress (monitoring ns) BİLEREK YOK: izleme kapsamı daraltıldı (Task 2b) — hub
+  # hub networkPolicy.ingress (monitoring ns) BİLEREK YOK: izleme kapsamı daraltıldı — hub
   # ServiceMonitor kaldırıldı, Prometheus'un hub'a erişmesi gerekmiyor. z2jh varsayılan hub netpol'ü
   # (yalnız AYNI ns podSelector) geçerli kalır.
   services:

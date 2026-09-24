@@ -72,7 +72,7 @@ spec:
         - {name: ZEPPELIN_CONFIG_FS_DIR, value: /data/conf}
         - {name: ZEPPELIN_DEP_LOCALREPO, value: /data/local-repo}
         # ZEPPELIN_METRIC_ENABLE_PROMETHEUS BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı
-        # (kullanıcı kararı 2026-09-18, Task 2b) — Zeppelin ServiceMonitor kaldırıldı (glue monitoring.yaml).
+        # (kullanıcı kararı 2026-09-18) — Zeppelin ServiceMonitor kaldırıldı (glue monitoring.yaml).
         - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
         - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
         {{- if .Values.keycloak.ldap.caSecret }}
@@ -103,7 +103,7 @@ spec:
 apiVersion: v1
 kind: Service
 # label app: zeppelin — Service'in kendi selector'ı ve NetworkPolicy/`kubectl -l` seçimleri içindir.
-# (ServiceMonitor DEĞİL: Zeppelin ServiceMonitor'ü Task 2b'de kaldırıldı — glue/templates/monitoring.yaml.)
+# (ServiceMonitor DEĞİL: Zeppelin ServiceMonitor'ü izleme kapsamı daraltılırken kaldırıldı — glue/templates/monitoring.yaml.)
 metadata: {name: zeppelin, namespace: {{ $ns }}, labels: {app: zeppelin}}
 spec: {selector: {app: zeppelin}, ports: [{name: http, port: 8080, targetPort: http}]}
 {{- end }}

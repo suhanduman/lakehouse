@@ -1,4 +1,4 @@
-# appsDomain türetimi (Task 3): hostname'ler tek kaynaktan (platform/values/site/glue.yaml) gelir.
+# appsDomain türetimi: hostname'ler tek kaynaktan (platform/values/site/glue.yaml) gelir.
 # Boş hostname -> <bileşen>-<ns>.<appsDomain>; açık hostname her zaman ezer; ikisi de yoksa render hata verir.
 suite: appsDomain türetimi
 templates:

@@ -2,7 +2,7 @@ suite: monitoring (metrik kaynakları + PodMonitor)
 templates: [monitoring.yaml, kafka.yaml, kafka-connect.yaml, superset.yaml]
 set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h", appsDomain: apps.ocp.example.net}   # süit tüm şablonları render eder (appsDomain: superset.yaml keycloakUrl için)
 tests:
-  - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor and the rule (hub/zeppelin ServiceMonitor YOK - kapsam daraltıldı, Task 2b)
+  - it: renders both metric ConfigMaps, dashboard ConfigMaps, the Strimzi PodMonitor and the rule (hub/zeppelin ServiceMonitor YOK - kapsam daraltıldı)
     template: monitoring.yaml
     asserts:
       - hasDocuments: {count: 6}
@@ -39,7 +39,7 @@ tests:
       - equal: {path: 'spec.groups[0].rules[3].alert', value: LakehouseSparkScheduledRunFailed}
       - equal: {path: 'spec.groups[0].rules[4].alert', value: LakehouseSparkRunTooLong}
       - equal: {path: 'spec.groups[0].rules[0].expr', value: 'kafka_connect_connector_task_status{status="failed"} == 1'}
-      # LakehouseSinkStalled: lag tabanlı (Task 2b, kafka-exporter kafka_consumergroup_lag)
+      # LakehouseSinkStalled: lag tabanlı (kafka-exporter kafka_consumergroup_lag)
       - equal: {path: 'spec.groups[0].rules[1].expr', value: 'sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}) > 1000'}
       - equal: {path: 'spec.groups[0].rules[1].for', value: 15m}
       - equal: {path: 'spec.groups[0].rules[3].expr', value: 'kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1'}
@@ -104,7 +104,7 @@ tests:
       - equal: {path: spec.kafka.metricsConfig.type, value: jmxPrometheusExporter}
       - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.name, value: kafka-metrics}
       - equal: {path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.key, value: kafka-metrics-config.yml}
-  - it: Kafka kafkaExporter is enabled for consumer group lag (Task 2b)
+  - it: Kafka kafkaExporter is enabled for consumer group lag
     template: kafka.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
     documentSelector: {path: kind, value: Kafka}
@@ -125,7 +125,7 @@ tests:
     documentSelector: {path: kind, value: Superset}
     asserts:
       - isNull: {path: spec.monitoring}
-  # ZEPPELIN_METRIC_ENABLE_PROMETHEUS env'i BİLEREK YOK: Zeppelin ServiceMonitor kaldırıldı (Task 2b, izleme
+  # ZEPPELIN_METRIC_ENABLE_PROMETHEUS env'i BİLEREK YOK: Zeppelin ServiceMonitor kaldırıldı (izleme
   # kapsamı daraltıldı) -> env de kaldırıldı (glue/templates/zeppelin.yaml).
   - it: monitoring.enabled=false drops every monitoring object, both metricsConfigs and kafkaExporter
     set: {monitoring.enabled: false, connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}

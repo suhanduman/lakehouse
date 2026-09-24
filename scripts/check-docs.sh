@@ -59,7 +59,7 @@ if [ "${#FILES[@]}" -gt 0 ] && grep -nE 'lakehouse-students|student1|\bTODO\b|\b
   fail=1
 fi
 
-# 4) site anahtarları docs/90-referans/values-anahtarlari.md'de belgelenmiş mi (dosya yoksa atla — Görev 9'da gelecek)
+# 4) site anahtarları docs/90-referans/values-anahtarlari.md'de belgelenmiş mi (dosya yoksa atla)
 if [ -f docs/90-referans/values-anahtarlari.md ]; then
   python3 - <<'PY' || fail=1
 import yaml, sys
@@ -84,6 +84,51 @@ for m in miss:
     print("HATA values-anahtarlari.md eksik:", m)
 sys.exit(1 if miss else 0)
 PY
+fi
+
+# 6) satır uzunluğu: 100 Unicode karakteri aşan satır HATA.
+# MUAF: fenced kod bloğu içi (```), tablo satırları (| ile başlar) ve gerçek çıktı taşıyan
+# alıntı satırları (> ile başlar). Ölçüm python3 ile: UTF-8 bayt değil KARAKTER sayılır.
+printf '%s\n' "${FILES[@]}" > "$tmp/files.txt"
+python3 - "$tmp/files.txt" <<'PY6' || fail=1
+import sys
+bad = 0
+for path in open(sys.argv[1], encoding="utf-8").read().split():
+    infence = False
+    for n, line in enumerate(open(path, encoding="utf-8"), 1):
+        line = line.rstrip("\n")
+        st = line.lstrip()
+        if st.startswith("```"):
+            infence = not infence
+            continue
+        if infence or st.startswith("|") or st.startswith(">"):
+            continue
+        if len(line) > 100:
+            print(f"HATA {path}:{n}: satir {len(line)} karakter (>100)")
+            bad += 1
+sys.exit(1 if bad else 0)
+PY6
+
+# 7) glue/templates/monitoring.yaml'daki her `runbook: <dosya>.md#<çapa>` değeri hedef dosyada
+# `<a id="<çapa>"></a>` olarak bulunmalı. Böylece alarm annotation'ı ile belge çapası ÇİFT yönlü
+# kilitlenir (glue/tests/monitoring_test.yaml annotation değerinin kendisini kilitler).
+if [ -f glue/templates/monitoring.yaml ]; then
+  python3 - <<'PY7' || fail=1
+import re, sys
+src = open("glue/templates/monitoring.yaml", encoding="utf-8").read()
+miss = []
+for f, anchor in sorted(set(re.findall(r"""runbook:\s*([^\s,}"']+\.md)#([A-Za-z0-9_-]+)""", src))):
+    try:
+        doc = open(f, encoding="utf-8").read()
+    except OSError:
+        miss.append(f"{f}#{anchor} (dosya yok)")
+        continue
+    if f'<a id="{anchor}"></a>' not in doc:
+        miss.append(f"{f}#{anchor}")
+for m in miss:
+    print("HATA runbook capasi yok:", m)
+sys.exit(1 if miss else 0)
+PY7
 fi
 
 [ "$fail" = 0 ] && echo "check-docs: OK"

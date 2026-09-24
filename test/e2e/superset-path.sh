@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse
 echo "== Superset CR"
 for _ in $(seq 1 90); do [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}' 2>/dev/null)" == "Running" ]] && break; sleep 10; done
 [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}')" == "Running" ]] || { kubectl -n "$NS" describe superset superset | tail -30; exit 1; }
-# Etiketler operator 0.2.0'dan doğrulandı (Task 4 Step 2): web Deployment/Service <CR adı>-web-server, pod etiketi instance=<CR adı>
+# Etiketler operator 0.2.0'dan doğrulandı: web Deployment/Service <CR adı>-web-server, pod etiketi instance=<CR adı>
 # Pod seçimi deterministik olsun: rollout bitmeden seçersek Terminating eski pod'a düşebiliriz
 # (--field-selector=status.phase=Running Terminating pod'ları DIŞLAMAZ — onlar da Running fazındadır).
 kubectl -n "$NS" rollout status deploy/superset-web-server --timeout=600s

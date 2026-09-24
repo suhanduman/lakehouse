@@ -55,7 +55,7 @@ prometheusOperator:
   resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
 prometheus:
   prometheusSpec:
-    # Limitler ÖLÇÜLEN gerçek kullanıma göre (Task 7 fix turu, canlı `crictl stats` + VM dmesg):
+    # Limitler ÖLÇÜLEN gerçek kullanıma göre (canlı `crictl stats` + VM dmesg):
     # prometheus RSS **153 MB** (retention 24h, 30s scrape, ~2000 seri) -> 640Mi ≈ 4x marj.
     # NOT (kalıcı ders): limit toplamı bir tavandır, kullanımı ÖLÇMEZ ve Kubernetes onu zorlamaz;
     # düğümün "limit taahhüdü %108" olması tek başına hiçbir şeyi öldürmez. VM'in kernel log'unda
@@ -71,7 +71,7 @@ prometheus:
     podMonitorNamespaceSelector: {}
     ruleNamespaceSelector: {}
     # podMetadata hub.jupyter.org/network-access-hub etiketi BİLEREK YOK: hub ServiceMonitor kaldırıldı
-    # (Task 2b, izleme kapsamı daraltıldı), Prometheus'un artık hub netpol'ünü geçmesi gerekmiyor.
+    # (izleme kapsamı daraltıldı), Prometheus'un artık hub netpol'ünü geçmesi gerekmiyor.
 grafana:
   enabled: true
   # Grafana limiti 256Mi/384Mi DEĞİL **768Mi**: canlı ölçümde boştaki RSS **235 MB** (CPU %20) ve ana

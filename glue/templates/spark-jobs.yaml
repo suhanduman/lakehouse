@@ -8,7 +8,7 @@
 {{- $nsList = append $nsList (.bronzeNamespace | default (printf "%s_raw" .name)) }}
 {{- end }}
 {{- $nsList = uniq $nsList }}
-{{- /* mongo-bronze'un okuyacağı Kafka topic'i -> Bronze tablo eşlemesi (Task 1 mongo_bronze.py pipelines.json.mongo sözleşmesi) */ -}}
+{{- /* mongo-bronze'un okuyacağı Kafka topic'i -> Bronze tablo eşlemesi (mongo_bronze.py pipelines.json.mongo sözleşmesi) */ -}}
 {{- $mongoList := list }}
 {{- range .Values.sources }}{{ if eq .type "mongodb" }}
 {{- $bn := .bronzeNamespace | default (printf "%s_raw" .name) }}{{ $pfx := .topicPrefix | default .name }}

@@ -61,7 +61,7 @@ tests:
     set: {velero.enabled: true}
     documentSelector: {path: kind, value: Cluster, matchMany: true}
     asserts:
-      # Task 4 (Velero): pgdata volume'u dosya-sistemi yedeğinden hariç (volume adı canlı doğrulandı)
+      # Velero: pgdata volume'u dosya-sistemi yedeğinden hariç (volume adı canlı doğrulandı)
       - equal: {path: 'spec.inheritedMetadata.annotations["backup.velero.io/backup-volumes-excludes"]', value: pgdata}
   - it: OADP açık + Barman kapalı bileşiminde bile pgdata dışlanır (canlı pgdata fs-backup'a GİRMEZ)
     template: cnpg.yaml

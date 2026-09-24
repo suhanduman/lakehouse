@@ -34,8 +34,8 @@ catalogs:
   # lakehouse kataloğu BURADA YOK (aynı gerekçe: s3.endpoint/s3.region müşteri değeri, blok bütünüyle ezilir):
   # prod platform/values/site/trino.yaml, dev platform/values/trino-dev.yaml.
 # JMX/serviceMonitor BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (kullanıcı kararı
-# 2026-09-18, Task 2b) — gösterim bileşenlerinin (Trino) uygulama metriği toplanmaz. Chart varsayılanına
-# dönüldü (jmx.enabled/serviceMonitor.enabled kapalı). Geçmiş: Task 1/2'de vardı (plan kararı R13).
+# 2026-09-18) — gösterim bileşenlerinin (Trino) uygulama metriği toplanmaz. Chart varsayılanına
+# dönüldü (jmx.enabled/serviceMonitor.enabled kapalı).
 accessControl:
   type: configmap
   refreshPeriod: 60s

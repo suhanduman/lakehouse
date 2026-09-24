@@ -11,7 +11,7 @@
   plugins: [{name: barman-cloud.cloudnative-pg.io, enabled: true, isWALArchiver: true, parameters: {barmanObjectName: lakehouse-backups}}]
 {{- end }}
 {{- if .Values.velero.enabled }}
-  # Velero (Task 4): pgdata PVC'si dosya-sistemi yedeğinden HARİÇ — Postgres verisi CNPG/Barman PITR ile korunur
+  # Velero: pgdata PVC'si dosya-sistemi yedeğinden HARİÇ — Postgres verisi CNPG/Barman PITR ile korunur
   # (canlı doğrulandı: CNPG pod'unun veri volume adı `pgdata`). inheritedMetadata pod'lara/PVC'lere miras kalır.
   # Kapı `velero.enabled`'dır, `backup.enabled` DEĞİL (kafka.yaml/minio.yaml ile aynı kalıp): geçerli bir
   # bileşimde (OADP açık + Barman kapalı) dışlama düşerdi ve Velero CANLI pgdata'yı fs-backup'a alırdı ->

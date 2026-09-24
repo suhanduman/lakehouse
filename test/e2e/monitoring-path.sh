@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; MON="${MON_NS:-monito
 # E2E_EXPECT_NO_FIRING=1 (varsayılan): "0 firing Lakehouse alarmı" iddiasını uygular. Bu makinede F4 gecesinden
 # kalan FAILED cron koşuları (maint-compact/maint-expire-orphan-ttl) LakehouseSparkScheduledRunFailed'i
 # GERÇEKTEN ateşleyebilir — bu, kural adının/metriklerin doğru çalıştığının POZİTİF kanıtıdır, bug değil.
-# Assert'i sessizce zayıflatmak yerine belgelenmiş bir değişkenle atlıyoruz; Task 7'nin taze kümesinde varsayılan
+# Assert'i sessizce zayıflatmak yerine belgelenmiş bir değişkenle atlıyoruz; taze bir kümede varsayılan
 # açık kalır ve gerçek anlamda "0 firing" doğrular.
 E2E_EXPECT_NO_FIRING="${E2E_EXPECT_NO_FIRING:-1}"
 # İzleme yığınının NESNE ADLARI değişkenlerle ezilebilir: varsayılanlar kube-prometheus-stack (dev/CI) adlarıdır,
@@ -23,7 +23,7 @@ PF2=""
 kubectl -n "$MON" port-forward "svc/$PROM_SVC" 19090:9090 >/dev/null 2>&1 & PF=$!; trap 'kill $PF $PF2 2>/dev/null' EXIT; sleep 3
 Q() { curl -sS "localhost:19090/api/v1/query" --data-urlencode "query=$1" | jq -r '.data.result | length'; }
 UP() { local job="$1" n; for _ in $(seq 1 30); do n=$(Q "up{job=~\"$job\"} == 1"); [[ "$n" -ge 1 ]] && { echo "OK up $job ($n)"; return; }; sleep 10; done; echo "HATA up $job"; exit 1; }
-# Trino/hub/zeppelin BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (Task 2b, kullanıcı kararı
+# Trino/hub/zeppelin BİLEREK YOK: izleme kapsamı "boru hattı sağlığı"na daraltıldı (kullanıcı kararı
 # 2026-09-18) — gösterim bileşenlerinin uygulama metriği toplanmaz (ServiceMonitor'lar kaldırıldı).
 UP ".*kafka-resources-metrics.*"
 # kafka-exporter AYNI PodMonitor'e (kafka-resources-metrics) düşüyor (job adı aynı, canlı doğrulandı) — burada

@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
-import sys, yaml
+import re, sys, yaml
 
 def dump(path):
     return yaml.safe_dump(yaml.safe_load(open(path)) or {}, width=10**9, allow_unicode=True)
@@ -111,9 +111,37 @@ if ca and ts not in t:
 if not ca and ts in t:
     errs.append(f"site/trino.yaml: keycloak.ldap.caSecret boşken '{ts}' satırı kalmamalı (ad-ca bağlanmıyor)")
 
+# 3c) site/trino.yaml accessControl.rules."rules.json" AÇIKÇA verildiyse (kullanici-ve-yetki.md §5.2),
+# Helm bloğu bütünüyle ezdiği için ürünün servis hesabı satırları da orada olmak ZORUNDADIR. Düşerse
+# Superset panoları ve Zeppelin not defterleri Trino'dan sessizce `Access Denied` alır.
+# `e2e` yalnız test/e2e koşusunun kullandığı hesaptır; ÜRETİM site dosyasında bulunması gerekmez, bu
+# yüzden kural `|e2e` ekini İSTEĞE BAĞLI kabul eder (varsa da hata değildir).
+tr_site = yaml.safe_load(open("platform/values/site/trino.yaml")) or {}
+site_rules = get(tr_site, "accessControl.rules") or {}
+rules_json = site_rules.get("rules.json") if isinstance(site_rules, dict) else None
+if rules_json:
+    for pat, shown in [
+        (r'"user"\s*:\s*"superset\|zeppelin(\|e2e)?"\s*,\s*"catalog"\s*:\s*"lakehouse\|system"\s*,\s*"allow"\s*:\s*"read-only"',
+         '{"user": "superset|zeppelin|e2e", "catalog": "lakehouse|system", "allow": "read-only"}'),
+        (r'"user"\s*:\s*"superset\|zeppelin(\|e2e)?"\s*,\s*"privileges"\s*:\s*\[\s*"SELECT"\s*\]',
+         '{"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]}')]:
+        if not re.search(pat, rules_json):
+            errs.append(f'site/trino.yaml: ürün satırı eksik -> {shown} '
+                        f'(accessControl.rules."rules.json" içinde bulunmalı)')
+
 # 4) Polaris sunucusunun kendi endpoint'i ayrı bir dosyada ve dev'de MinIO'yu gösterir (test/e2e) -> UYARI
 if s3 and s3 not in p:
     warns.append(f"platform/polaris/setup.yaml: endpoint '{s3}' değil — Polaris sunucusu için ayrıca düzenlenir (docs/30-kurulum.md)")
+
+# 5) Yedek bucket'ı veri bucket'ından AYRI olmalıdır: geri yükleme hedefi ile kaynağı aynı olamaz.
+# Veri bucket'ı site değerlerinde yoktur; platform/polaris/setup.yaml'daki default_base_location'tadır.
+m = re.search(r"^\s*default_base_location:\s*s3://([^/\s]+)", p, re.M)
+data_bucket = m.group(1) if m else None
+backup_bucket = str(get(g, "backup.s3.bucket") or "").strip()
+if data_bucket and backup_bucket and data_bucket == backup_bucket:
+    errs.append(f"site/glue.yaml: backup.s3.bucket '{backup_bucket}' veri bucket'ı ile AYNI "
+                f"(platform/polaris/setup.yaml default_base_location: s3://{data_bucket}/) — "
+                f"yedek bucket'ı ayrı olmalıdır")
 
 for w in warns:
     print("UYARI:", w)

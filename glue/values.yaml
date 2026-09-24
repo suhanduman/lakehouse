@@ -176,7 +176,7 @@ networkPolicy:
   enabled: true
 
 monitoring:
-  enabled: true                 # PodMonitor + PrometheusRule + Grafana dashboard ConfigMap'leri (bu chart ServiceMonitor RENDER ETMEZ — Task 2b)
+  enabled: true                 # PodMonitor + PrometheusRule + Grafana dashboard ConfigMap'leri (bu chart ServiceMonitor RENDER ETMEZ)
   namespace: monitoring         # dev/vanilla Prometheus/Grafana ns'i — networkpolicy.yaml scrape girişini bundan üretir (OpenShift'te openshift-* sabit)
   silverMergeStaleSeconds: 2700 # LakehouseSilverMergeStale eşiği (prod 15 dk cron -> 45 dk); dev gecelik cron -> glue-dev 172800
   sinkLagThreshold: 1000        # LakehouseSinkStalled eşiği (kafka_consumergroup_lag toplamı, connect-sink-*)
