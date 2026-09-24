@@ -3,6 +3,26 @@ on:
   push: {branches: [main]}
   pull_request: {branches: [main]}
 jobs:
+  # Değişen dosyalar SADECE belge ise (docs/**, runbooks/**, **.md) e2e-kind atlanır:
+  # salt-belge push'unda 1 saatlik e2e hiçbir kod yolunu kanıtlamaz; belge kapısı zaten
+  # helm-unittest içindeki check-docs.sh/check-site.sh'tir. Karar veremezse varsayılan
+  # "çalıştır"dır — predicate-quantifier 'every' ile yalnız TÜM dosyalar belge ise
+  # docs_only=true olur.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.3
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            docs_only:
+              - 'docs/**'
+              - 'runbooks/**'
+              - '**.md'
   helm-unittest:
     runs-on: ubuntu-latest
     steps:
@@ -58,9 +78,16 @@ jobs:
           helm template velero vmware-tanzu/velero --version 12.1.0 -f platform/values/velero-dev.yaml >/dev/null
           helm template plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 --set-json 'resources={"requests":{"cpu":"10m","memory":"64Mi"}}' >/dev/null
   e2e-kind:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
     timeout-minutes: 90
+    # Aynı ref'e ardışık push: öncekinin e2e'si hâlâ koşuyorsa iptal edilir, yalnız sonuncu
+    # push'un sonucu beklenir (60 dk'lık koşuyu tekrar tekrar kuyruğa yığmamak için).
+    concurrency:
+      group: e2e-kind-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v5
