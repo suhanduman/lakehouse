@@ -227,7 +227,9 @@ echo
 
 **Ne zaman:** zamanlı işi beklemeden bir Spark uygulamasını hemen çalıştırmak gerektiğinde.
 Tek seferlik `SparkApplication` **GitOps'a uygun değildir** (ArgoCD `selfHeal` onu tekrar
-tekrar yaratır), bu yüzden bilinçli olarak elle uygulanır.
+tekrar yaratır), bu yüzden bilinçli olarak elle uygulanır. Sıra `custom/README.md`'deki
+yordamın aynısıdır: CR, Python kodunu `ornek-rapor` ConfigMap'inden mount eder, o yüzden
+ConfigMap kümede **önce** olmalıdır.
 
 `[bastion]`
 
@@ -237,9 +239,32 @@ oc -n "$LAKEHOUSE_NS" delete sparkapplication ornek-rapor --ignore-not-found
 oc apply -f custom/examples/spark-tek-seferlik.yaml
 ```
 
-**Beklenen:** `configmap/ornek-rapor created` (ya da `unchanged`) ve
-`sparkapplication.sparkoperator.k8s.io/ornek-rapor created`. İlerleme:
-`oc -n "$LAKEHOUSE_NS" get sparkapplication`.
+**Beklenen:**
+
+```text
+configmap/ornek-rapor created
+scheduledsparkapplication.sparkoperator.k8s.io/ornek-rapor-zamanli created
+sparkapplication.sparkoperator.k8s.io/ornek-rapor created
+```
+
+İlerleme: `oc -n "$LAKEHOUSE_NS" get sparkapplication`.
+
+**Bilerek olan iki yan etki:**
+
+1. İlk komut yalnız ConfigMap'i değil, `custom/examples/kustomization.yaml`'daki bütün
+   kaynakları uygular — bugün bu, **`ornek-rapor-zamanli` adlı bir
+   `ScheduledSparkApplication`**'dır (gecelik cron `0 4 * * *`). Örnek `suspend: true` ile
+   gelir, yani kendiliğinden koşmaz; yine de kümede **GitOps dışında** duran bir nesnedir.
+   İstemiyorsanız ya yalnız ConfigMap'i uygulayın
+   (`oc -n "$LAKEHOUSE_NS" create configmap ornek-rapor
+   --from-file=custom/examples/ornek_rapor.py`) ya da işiniz bitince silin
+   (`oc -n "$LAKEHOUSE_NS" delete scheduledsparkapplication ornek-rapor-zamanli`).
+2. Bu örnek dosyalar **ad alanına sabittir**: `custom/examples/kustomization.yaml`
+   `namespace: lakehouse` der ve `custom/examples/spark-tek-seferlik.yaml` da
+   `metadata.namespace: lakehouse` taşır. `$LAKEHOUSE_NS` başka bir değerse komutlar yine
+   `lakehouse` ad alanına yazar — `-n` bayrağı bunu **ezmez**. Farklı bir ad alanı
+   kullanıyorsanız dosyaları kendi `custom/` klasörünüze kopyalayıp ad alanını
+   değiştirin.
 
 ---
 

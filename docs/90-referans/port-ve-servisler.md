@@ -170,7 +170,13 @@ serbest bırakılmıştır — Connect'in artefakt çekişi, S3 ve LDAP bu yüzd
 |---|---|
 | `default-deny-ingress` | Ad alanındaki bütün pod'lara gelen trafiği varsayılan olarak kapatır |
 | `allow-same-namespace` | Aynı ad alanındaki pod'ların birbirine erişmesine izin verir |
-| `allow-platform-namespaces` | Operatör ve platform ad alanlarını açar: `cnpg-system`, ArgoCD, router (`openshift-ingress`), `openshift-monitoring`, `openshift-user-workload-monitoring`; `velero.enabled` açıksa yedekleme ad alanı da eklenir |
+| `allow-platform-namespaces` | Operatör ve platform ad alanlarını açar: `cnpg-system`, ArgoCD **(şablonda sabit `argocd`)**, router (`openshift-ingress`), `openshift-monitoring`, `openshift-user-workload-monitoring`; `velero.enabled` açıksa yedekleme ad alanı da eklenir |
+
+ArgoCD satırındaki ad alanı seçicisi `glue/templates/networkpolicy.yaml` içinde **sabit
+`argocd`** yazılıdır: OpenShift'te ArgoCD `$ARGOCD_NS` (`openshift-gitops`) ad alanında
+koştuğu için bu seçici hiçbir ad alanıyla eşleşmez. Pratikte sorun çıkarmaz — ArgoCD
+kube-apiserver ile konuşur, `$LAKEHOUSE_NS` pod'larına doğrudan bağlanmaz — ama ArgoCD'den
+pod'a doğrudan erişim gerekirse politikaya kendi ad alanınızı eklemeniz gerekir.
 
 JupyterHub not defteri pod'larının **çıkış** trafiği ayrıca daraltılmıştır (z2jh'nin kendi
 `singleuser.networkPolicy.egress` ayarı): küme içinde yalnız Trino 8443 ve Polaris 8181'e

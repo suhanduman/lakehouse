@@ -9,8 +9,14 @@ durumdadır.
 **Gereken yetki:** `$LAKEHOUSE_NS` ad alanında yönetici (Secret okuma/yazma, `exec`,
 `port-forward`); izleme hedeflerini görmek için kümede okuma yetkisi. Tarayıcı adımları
 için `lakehouse-admins` grubunda bir Active Directory hesabı.
-**Nerede çalıştırılır:** `[bastion]` — `oc`, `git`, `python3` kurulu ve `oc login` ile
-kümeye girilmiş yönetim makinesi; birkaç adım `[pod]` etiketiyle konteyner içinde koşar.
+**Nerede çalıştırılır:** `[bastion]` — `oc`, **`kubectl`**, `git`, `python3` kurulu ve
+`oc login` ile kümeye girilmiş yönetim makinesi. `kubectl` ayrıca gereklidir:
+`scripts/polaris-setup.sh` (Adım 2) ve `scripts/acceptance.sh` (Adım 7) küme çağrılarını
+doğrudan `kubectl` ile yapar; yalnız `oc` kurulu bir makinede
+`kubectl: command not found` ile dururlar. (`oc`, `kubectl`'in üst kümesidir ama ikili
+adı farklıdır; `oc` istemcisiyle gelen `kubectl` ikilisini `PATH`'e koymak da yeterlidir.)
+Adım 5.4'teki iki `[pod]` bloğu yönetim makinesinde değil, JupyterHub not defteri
+hücresinde çalıştırılır.
 
 > **Bu bölüme başlamadan önce [30-kurulum](30-kurulum.md) kontrol listesinin bütün
 > maddeleri işaretli olmalıdır.** Tek istisna `trino` uygulamasıdır: o, `polaris-trino`
@@ -318,7 +324,8 @@ iceberg-metadata__metadata.yaml
 Aşağıdaki ilk komut bu adları dizin ağacına geri açıp zip'ler. `oc exec` heredoc'u
 **`-i` ister**: stdin aktarılmazsa betik sessizce hiçbir şey yapmaz ve zip oluşmaz.
 
-`[pod]` (komutlar `[bastion]` üzerinden başlatılır, Superset konteynerinde koşar)
+`[bastion]` (üçüncü komut `oc exec` ile Superset konteynerinde koşar; ilk ikisi yönetim
+makinesinde)
 
 ```bash
 SUPERSET_ADMIN=$(oc -n "$LAKEHOUSE_NS" exec deploy/superset-web-server -- \
@@ -474,16 +481,60 @@ ezmesi yaptıysanız realm'i o adresle yeniden üretmeniz gerekir
    Route'u `reencrypt` yapın ([30-kurulum](30-kurulum.md) §5.11).
 2. **JupyterHub** — giriş sonrası **Start My Server**. Not defteri imajı ilk çekimde ~4,5
    dakika sürer; sunucu açıldıktan sonra `pyiceberg` ve `trino` paketleri **her** açılışta
-   yeniden kurulur (~1 dakika, PyPI erişimi gerekir). Hazır ortam değişkenleri:
-   `POLARIS_URI`, `POLARIS_CREDENTIAL`, `TRINO_HOST`, `S3_ENDPOINT`.
+   yeniden kurulur (~1 dakika, PyPI erişimi gerekir). Her kullanıcıya **kişisel bir disk**
+   (PVC) yaratılır: üretimde 10 Gi (`platform/values/jupyterhub.yaml` →
+   `singleuser.storage.capacity`), geliştirme kümesinde 1 Gi
+   (`platform/values/jupyterhub-dev.yaml`). Hazır ortam değişkenleri: `POLARIS_URI`,
+   `POLARIS_CREDENTIAL` (paylaşımlı `notebooks` principal'ı), `TRINO_HOST` ve
+   `S3_ENDPOINT`.
 3. **Zeppelin** — giriş sonrası yeni bir not açıp `%jdbc` ile sorgu çalıştırın. İlk açılışta
    Trino JDBC sürücüsü Maven Central'dan indirilir (ölçülen ~64 saniye; disk üzerinde
    kalıcıdır). O sırada `Interpreter Setting 'jdbc' is not ready … DOWNLOADING_DEPENDENCIES`
    alırsanız bekleyin.
 
+#### Not defterinden ilk sorgu
+
+Aşağıdaki iki hücre, bir not defterinin ürüne bağlanmasının **tam** yoludur; analistlere
+verilecek başlangıç örneği budur. Ortam değişkenleri yukarıda sayılanlardır, kullanıcı
+bunları yazmaz.
+
+`[pod]` (JupyterHub not defteri hücresi)
+
+```python
+# PyIceberg -> Polaris (paylaşımlı notebooks principal'ı; yazma yalnız sandbox namespace'inde)
+import os
+from pyiceberg.catalog import load_catalog
+cat = load_catalog("lakehouse", type="rest", uri=os.environ["POLARIS_URI"],
+                   warehouse="lakehouse", credential=os.environ["POLARIS_CREDENTIAL"],
+                   scope="PRINCIPAL_ROLE:ALL")
+cat.list_namespaces()
+tbl = cat.load_table("shop.orders"); tbl.scan(limit=10).to_pandas()
+```
+
+`[pod]` (JupyterHub not defteri hücresi)
+
+```python
+# Trino: KENDİ kimliğinizle -> satır filtresi ve kolon maskesi UYGULANIR.
+# Tarayıcıda Keycloak onayı istenir; token yerel olarak saklanır (geliştirme kümesinde
+# çalışmaz, bkz. Adım 5 girişi).
+import os, trino
+conn = trino.dbapi.connect(host=os.environ["TRINO_HOST"], port=8443, http_scheme="https",
+                           verify="/etc/lakehouse-ca/tls.crt",
+                           auth=trino.auth.OAuth2Authentication(), catalog="lakehouse")
+cur = conn.cursor(); cur.execute("select * from shop.orders limit 10"); cur.fetchall()
+```
+
+`verify=` yolu **açıkça** verilir: `REQUESTS_CA_BUNDLE` bilerek tanımlı değildir
+(Adım 5.6, 2. madde). PyIceberg → Polaris çağrısı küme içinde düz HTTP olduğu için CA
+istemez. Tarayıcısız/otomatik işlerde `OAuth2Authentication` yerine
+`trino.auth.BasicAuthentication` ile bir **servis hesabı** kullanılır; o durumda satır ve
+kolon kuralları kullanıcı bazında işlemez (Adım 5.6, 1. madde).
+
+`shop.orders` geliştirme demo tablosudur; üretimde kendi Silver tablonuzun adını yazın.
+
 **Beklenen sonuç (OpenShift'te doğrulanır):** üç arayüzde de kendi AD kullanıcı adınızla
-oturum açılır; JupyterHub'da kişisel bir disk (PVC) yaratılır, Zeppelin'de `%jdbc` sorgusu
-sonuç döndürür.
+oturum açılır; JupyterHub'da kişisel bir disk (PVC) yaratılır ve yukarıdaki iki hücre
+sonuç döndürür, Zeppelin'de `%jdbc` sorgusu satır basar.
 
 **Ters giderse:** JupyterHub'da sunucu zaman aşımıyla düşerse imaj çekimi 20 dakikayı
 aşmıştır (kapalı ağda iç imaj aynası gerekir). Zeppelin'de `401` alan kullanıcı
@@ -580,7 +631,9 @@ bilerek "veri yokken ateşlemez" biçiminde yazılmıştır).
 listeleniyor ve hiçbiri **Firing** değil.
 
 Aynı iddiaları komut satırından koşturan e2e yolu `test/e2e/monitoring-path.sh`'tir; CI
-koşusunda ürettiği gerçek satırlar:
+koşusunda ürettiği gerçek satırlar (aşağıdaki `kube-state-metrics` satırı **yalnız
+geliştirme yığınında** çıkar — OpenShift'te kube-state-metrics bu kurulumla gelmez, o
+satırı görmezsiniz):
 
 ```text
 OK up .*kafka-resources-metrics.* (3)
@@ -604,8 +657,14 @@ eşik yorumlarının tamamı işletme bölümündeki izleme ve alarmlar sayfası
 `scripts/acceptance.sh` dokuz e2e yolunu sırayla koşturur ve sonunda **KABUL** özeti basar.
 Betik kurulum **yapmaz**; zaten kurulu bir kümede çalışır.
 
-**Ön koşul:** demo kaynaklarının açık olması (`sources`, `pipelines`, `nginx.enabled`). Bu
-kaynaklar üretim değerlerinde **kapalıdır**; kabul koşusu bu yüzden ya demo değerleriyle
+**Ön koşul — ad alanı:** e2e yol betikleri ve fixture manifest'leri `lakehouse` ad alanına
+**sabittir** (`test/e2e/*.sh`, `test/e2e/*-fixture.yaml`). `$LAKEHOUSE_NS` başka bir değere
+ayarlandıysa `--ns` bayrağı yalnız betiğin kendi adımlarını taşır; yollar yine `lakehouse`
+arar ve koşu düşer. Ayrıntı: [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md)
+§1.
+
+**Ön koşul — demo kaynaklar:** `sources`, `pipelines` ve `nginx.enabled` açık olmalıdır. Bu
+üçü üretim değerlerinde **kapalıdır**; kabul koşusu bu yüzden ya demo değerleriyle
 kurulmuş bir doğrulama kümesinde ya da müşteri kaynakları tanımlandıktan sonra kendi
 tablolarınızla yapılır. Madde ↔ kanıt tablosu, süre beklentileri ve yola özgü sık durumlar:
 [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md).

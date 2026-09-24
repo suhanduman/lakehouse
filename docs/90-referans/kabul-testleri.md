@@ -6,8 +6,9 @@ beklentileri ve kabul koşusuna özgü sık durumlar.
 **Süre:** okuma 15 dakika; koşu kurulu bir kümede 25–30 dakika.
 **Gereken yetki:** `$LAKEHOUSE_NS` ad alanında yönetici; izleme ve yedekleme ad
 alanlarında okuma.
-**Nerede çalıştırılır:** `[bastion]` — `oc`/`kubectl`, `jq`, `python3` ve `polaris` CLI'si
-kurulu yönetim makinesi.
+**Nerede çalıştırılır:** `[bastion]` — **`kubectl`**, `oc`, `jq`, `python3` ve `polaris`
+CLI'si kurulu yönetim makinesi. `kubectl` **zorunludur**: `scripts/acceptance.sh` ve
+`scripts/polaris-setup.sh` küme çağrılarını doğrudan `kubectl` ile yapar.
 
 Kabul, **kümede koşan kanıtla** yapılır: her madde için bir e2e yolu vardır ve her yol kendi
 iddialarını yüksek sesle basar (`OK …` satırları, sonunda `E2E … OK`). Kabul koşusunun adım
@@ -29,8 +30,16 @@ tablosudur.
   `nginx.enabled` — `platform/values/glue-dev.yaml` kalıbı). Üretim değerlerinde bu üçü
   kapalıdır; kaynaklar kapalıyken pg, mongo ve nginx yolları bekledikleri connector'ları
   bulamaz.
-- Yerelde `kubectl` (ya da `oc`), `jq`, `python3` ve `polaris` CLI'si
-  (`pip install 'apache-polaris==1.7.0'`).
+- Yerelde **`kubectl`**, `jq`, `python3` ve `polaris` CLI'si
+  (`pip install 'apache-polaris==1.7.0'`). `kubectl` yerine yalnız `oc` kurulu olması
+  **yetmez**: `scripts/acceptance.sh` ve `scripts/polaris-setup.sh` `kubectl` ikilisini adıyla
+  çağırır, aksi hâlde `kubectl: command not found` ile dururlar.
+- **Ad alanı `lakehouse` olmalıdır.** e2e yol betikleri (`test/e2e/*.sh`) ve fixture
+  manifest'leri bu ad alanına **sabittir** (`NS=lakehouse` / `metadata.namespace`).
+  `--ns` bayrağı yalnız `scripts/acceptance.sh`'in kendi adımlarını (ön kontrol,
+  `polaris-setup`) taşır; `$LAKEHOUSE_NS` başka bir değere ayarlandıysa betik yüksek sesle
+  `UYARI --ns=…` basar ve koşu büyük olasılıkla düşer. Farklı bir ad alanı gerekiyorsa
+  `test/e2e/` altındaki dosyalar da uyarlanmalıdır.
 - Betik **kurulum yapmaz**: kind yaratmaz, `bootstrap/bootstrap.sh` çağırmaz. Taze bir
   kümede aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
   (`.github/workflows/e2e.yaml`).
@@ -65,7 +74,7 @@ Kurulu bir kümede, geliştirme/vanilla adlandırmasıyla:
 `[bastion]`
 
 ```bash
-scripts/acceptance.sh --ns "$LAKEHOUSE_NS"
+PATH="$PWD/.venv/bin:$PATH" scripts/acceptance.sh --ns "$LAKEHOUSE_NS"
 ```
 
 OpenShift'te üç ortam değişkeni ve iki bayrak eklenir — UWM'nin Prometheus nesneleri farklı
@@ -105,7 +114,11 @@ KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, 
 
 **Ters giderse:** bir yol düşerse betik orada durur, çıkış kodu **1** olur ve özet
 `KABUL BAŞARISIZ` satırıyla biter (düşen yolun adını yazar). Tamamlanan yol sayısı
-dokuzun altında kalırsa özet `KABUL EKSİK` der. Belirtiden yola çıkan teşhis tablosu işletme
+dokuzun altında kalırsa özet `KABUL EKSİK` der. Koşunun başında
+`UYARI --ns=… : e2e yol script'leri ve fixture'lar 'lakehouse' ns'ine sabitlidir` satırını
+görüyorsanız §1'deki ad alanı koşulu sağlanmamıştır — devam etmeyin, önce ad alanını
+düzeltin. `kubectl: command not found` → `kubectl` kurulu değildir (§1).
+`polaris CLI yok` → `PATH` önekini vermemişsinizdir. Belirtiden yola çıkan teşhis tablosu işletme
 bölümündeki sorun giderme sayfasındadır; yola özgü sık durumlar §5'tedir.
 
 ---

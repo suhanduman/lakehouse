@@ -9,9 +9,25 @@ maddeleri başka ekiplerde olduğu için takvimde günlerle ölçülür.
 **Gereken yetki:** kümede **cluster-admin** (operatör kurulumu, ClusterRoleBinding,
 `openshift-monitoring` ad alanı). S3 ve AD maddelerini ilgili ekipler yapar; bu bölümde
 siz yalnız **doğrularsınız**.
-**Nerede çalıştırılır:** `[bastion]` — `oc`, `aws` ve `ldapsearch` kurulu, kümeye
-`oc login` ile girilmiş yönetim makinesi. **Tek istisna madde 8'dir:** oradaki iki komut
-nginx ajanının kurulacağı web sunucusunda (`[nginx ajan sunucusu]`) çalıştırılır.
+**Nerede çalıştırılır:** `[bastion]` — kümeye `oc login` ile girilmiş yönetim makinesi.
+**Tek istisna madde 8'dir:** oradaki iki komut nginx ajanının kurulacağı web sunucusunda
+(`[nginx ajan sunucusu]`) çalıştırılır.
+
+Yönetim makinesinde kurulu olması gereken araçlar (kitabın tamamı için):
+
+| Araç | Nerede gerekir |
+|---|---|
+| `oc` | her bölüm |
+| `kubectl` | `scripts/polaris-setup.sh` ve `scripts/acceptance.sh` bu ikiliyi **adıyla** çağırır ([40-kurulum-sonrasi](40-kurulum-sonrasi.md) §2 ve §7); yalnız `oc` kurulu makinede `kubectl: command not found` alınır |
+| `aws` | madde 4 (S3 doğrulaması) |
+| `ldapsearch` | madde 6 (Active Directory doğrulaması) |
+| `getent` | madde 7 (DNS doğrulaması) |
+| `curl` | madde 4, madde 10 ve [30-kurulum](30-kurulum.md) §7.3 (Route denetimi) |
+| `openssl` | [30-kurulum](30-kurulum.md) §5 (rastgele sır üretimi, sertifika incelemesi) |
+| `python3` | [30-kurulum](30-kurulum.md) §5 (Secret doğrulaması), `scripts/polaris-setup.sh` |
+| `git` | [30-kurulum](30-kurulum.md) §2–§4 |
+| `htpasswd` | [30-kurulum](30-kurulum.md) §5.7 (RHEL/Fedora: `httpd-tools`, Debian/Ubuntu: `apache2-utils`) |
+| `jq` | kabul koşusu ([90-referans/kabul-testleri.md](90-referans/kabul-testleri.md) §1) |
 
 ---
 
