@@ -33,7 +33,7 @@ Ayrıntılı diyagramlar ve sözlük: [docs/00-genel-bakis.md](docs/00-genel-bak
 - **Analist** — ilk giriş, sorgu ve pano:
   [docs/40-kurulum-sonrasi.md](docs/40-kurulum-sonrasi.md)
 - **Geliştirici** — kendi Spark uygulaması/CronJob'ı:
-  docs/50-isletme/yeni-spark-uygulamasi.md
+  [docs/50-isletme/yeni-spark-uygulamasi.md](docs/50-isletme/yeni-spark-uygulamasi.md)
 
 ## Bileşenler ve sürümler
 
@@ -69,10 +69,11 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
 - docs/50-isletme/ — gün-2:
   [değişiklik nasıl uygulanır](docs/50-isletme/degisiklik-nasil-uygulanir.md),
   [yeni kaynak ve pipeline](docs/50-isletme/yeni-kaynak-ve-pipeline.md),
-  [mevcut kaynağa tablo ekleme](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md);
-  ayrıca kaynak/tablo silme, kullanıcı ve yetki, yedek ve geri dönüş,
-  yükseltme, izleme ve alarmlar, veri metrikleri, günlük/haftalık
-  kontroller, sorun giderme
+  [mevcut kaynağa tablo ekleme](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md),
+  [kaynak ya da tablo kaldırma](docs/50-isletme/kaynak-veya-tablo-silme.md),
+  [yeni Spark uygulaması](docs/50-isletme/yeni-spark-uygulamasi.md);
+  ayrıca kullanıcı ve yetki, yedek ve geri dönüş, yükseltme, izleme ve
+  alarmlar, veri metrikleri, günlük/haftalık kontroller, sorun giderme
 - docs/90-referans/ — [değer anahtarları](docs/90-referans/values-anahtarlari.md),
   [Secret listesi](docs/90-referans/secret-listesi.md),
   [port ve servisler](docs/90-referans/port-ve-servisler.md),

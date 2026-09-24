@@ -62,4 +62,7 @@ ConfigMap üretir, CR onu `/opt/job` altına mount eder ve `mainApplicationFile:
    region, delegation header ve katalog `uri`/`warehouse` **`platform/values/site/glue.yaml` ile aynı** olmalıdır;
    ilgili satırlar örneklerde `# SİTE` ile işaretlidir.
 
-Ayrıntılı, adım adım anlatım: işletme kılavuzunda "yeni Spark uygulaması ekleme" bölümü (kılavuz Task 7/12'de eklenecek).
+Ayrıntılı, adım adım anlatım:
+[docs/50-isletme/yeni-spark-uygulamasi.md](../docs/50-isletme/yeni-spark-uygulamasi.md).
+Bir tabloyu ya da kaynağı verisiyle kaldırmak:
+[docs/50-isletme/kaynak-veya-tablo-silme.md](../docs/50-isletme/kaynak-veya-tablo-silme.md).

@@ -1,6 +1,6 @@
 """s3_register_example — tek seferlik: S3'teki düz CSV/Parquet dosyalarını doğrudan bir Iceberg tablosuna kaydeder
-(spec dışı backlog örneği — kaynak sistemi olmayan tek seferlik toplu yükleme). e2e'ye eklenmez; runbooks/s3-register.md
-bunu bir SparkApplication'a nasıl çevireceğini anlatır (mevcut bir ScheduledSparkApplication şablonundan türetme).
+(spec dışı backlog örneği — kaynak sistemi olmayan tek seferlik toplu yükleme). e2e'ye eklenmez; docs/50-isletme/yeni-spark-uygulamasi.md
+Ek A bunu bir SparkApplication'a nasıl çevireceğini anlatır (mevcut bir ScheduledSparkApplication şablonundan türetme).
 --source s3://bucket/prefix/ --format csv|parquet --table ns.tbl [--header true|false]"""
 import argparse
 import os
