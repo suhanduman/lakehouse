@@ -3,26 +3,38 @@ on:
   push: {branches: [main]}
   pull_request: {branches: [main]}
 jobs:
-  # Değişen dosyalar SADECE belge ise (docs/**, runbooks/**, **.md) e2e-kind atlanır:
-  # salt-belge push'unda 1 saatlik e2e hiçbir kod yolunu kanıtlamaz; belge kapısı zaten
-  # helm-unittest içindeki check-docs.sh/check-site.sh'tir. Karar veremezse varsayılan
-  # "çalıştır"dır — predicate-quantifier 'every' ile yalnız TÜM dosyalar belge ise
-  # docs_only=true olur.
+  # non_docs = değişen dosyalardan EN AZ BİRİ kod dosyası (docs/**, runbooks/**, **.md
+  # dışında bir şey). Salt-belge push'unda (tüm dosyalar bu üç kalıptan birine uyuyorsa)
+  # non_docs=false olur ve e2e-kind atlanır; 1 saatlik e2e zaten hiçbir kod yolunu
+  # kanıtlamaz, belge kapısı helm-unittest içindeki check-docs.sh/check-site.sh'tir.
+  # DİKKAT: predicate-quantifier 'every' burada "her değişen dosya belge kalıplarından
+  # birine uyuyor mu" DEĞİL, "tek bir dosya listedeki TÜM kuralları karşılıyor mu" demektir
+  # (patterns.every(...), bkz. dorny/paths-filter src/filter.ts). Bu yüzden filtre
+  # docs/**, runbooks/**, **.md'yi ayrı alternatifler olarak DEĞİL, '**' + üç negatif
+  # kuralın (!docs/**, !runbooks/**, !**.md) kesişimi olarak yazılır: bir dosya yalnız
+  # docs/runbooks altında DEĞİLSE ve .md DEĞİLSE tüm kuralları birden karşılar, yani
+  # "kod dosyası"dır. changes işi düşerse (ör. checkout hatası) çıktı boş kalır; aşağıdaki
+  # e2e-kind kapısı bunu "boş != 'false'" olarak okuyup varsayılan güvenli tarafta kalır:
+  # ÇALIŞTIR.
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
-      docs_only: ${{ steps.filter.outputs.docs_only }}
+      non_docs: ${{ steps.filter.outputs.non_docs }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           predicate-quantifier: 'every'
           filters: |
-            docs_only:
-              - 'docs/**'
-              - 'runbooks/**'
-              - '**.md'
+            non_docs:
+              - '**'
+              - '!docs/**'
+              - '!runbooks/**'
+              - '!**.md'
   helm-unittest:
     runs-on: ubuntu-latest
     steps:
@@ -79,7 +91,12 @@ jobs:
           helm template plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 --set-json 'resources={"requests":{"cpu":"10m","memory":"64Mi"}}' >/dev/null
   e2e-kind:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # `if:` çıplak yazılırsa örtük olarak success() ile AND'lenir -> changes işi düşerse
+    # (skip/failure) e2e-kind SESSİZCE atlanır; bu, "karar veremezse çalıştır" kuralının
+    # tersidir. !cancelled() bu örtük success() şartını iptal eder; non_docs != 'false'
+    # hem 'true' (kod dosyası değişti) hem boş/undefined (changes işi düştü, çıktı yok)
+    # durumunda çalıştırır — yalnız tam olarak 'false' (tüm dosyalar belge) atlanır.
+    if: ${{ !cancelled() && needs.changes.outputs.non_docs != 'false' }}
     runs-on: ubuntu-latest
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
     timeout-minutes: 90
