@@ -131,7 +131,7 @@ bağlayıcının kümede **hâlâ var olması** gerekir; bağlayıcı prune edil
 > (bu sayfanın "Yapmak istemiyorsanız alternatif" notu ve
 > [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
 >
-> **Kind provasından gerçek kanıt (geliştirme kümesi).** Görev 12'nin offset sıfırlama
+> **Kind provasından gerçek kanıt (geliştirme kümesi).** Bu bölümün geliştirme kümesindeki
 > provasından sonra `dbz-crm` bağlayıcısı, MongoDB'ye yeniden erişebildiği anda
 > günlüğüne `Connector started for the first time.` / `No previous offset has been found`
 > yazdı ve üç belgeyi yeniden bastı: `crm.crm.customers` konusunun uç offset'leri
@@ -683,21 +683,27 @@ Secret'ından okunur:
 `[bastion]`
 
 ```bash
-POLARIS_ID=$(oc -n "$LAKEHOUSE_NS" get secret polaris-root \
+CLIENT_ID=$(oc -n "$LAKEHOUSE_NS" get secret polaris-root \
   -o jsonpath='{.data.clientId}' | base64 -d)
-POLARIS_SECRET=$(oc -n "$LAKEHOUSE_NS" get secret polaris-root \
+CLIENT_SECRET=$(oc -n "$LAKEHOUSE_NS" get secret polaris-root \
   -o jsonpath='{.data.clientSecret}' | base64 -d)
-oc -n "$LAKEHOUSE_NS" port-forward svc/polaris 8181:8181 &
-PATH="$PWD/.venv/bin:$PATH" polaris --client-id "$POLARIS_ID" --client-secret "$POLARIS_SECRET" \
-  namespaces delete --catalog lakehouse erp_raw
-PATH="$PWD/.venv/bin:$PATH" polaris --client-id "$POLARIS_ID" --client-secret "$POLARIS_SECRET" \
-  namespaces list --catalog lakehouse
+export CLIENT_ID CLIENT_SECRET
+oc -n "$LAKEHOUSE_NS" port-forward svc/polaris 8181:8181 >/dev/null 2>&1 &
+PF=$!
+sleep 5
+PATH="$PWD/.venv/bin:$PATH" polaris namespaces delete --catalog lakehouse erp_raw
+PATH="$PWD/.venv/bin:$PATH" polaris namespaces list --catalog lakehouse
+kill "$PF"
 ```
 
 `polaris` komut satırı aracı `scripts/polaris-setup.sh` ile aynı sanal ortamdan gelir
-([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.1). Silme komutunun kendisi başarılı
-olduğunda hiçbir şey basmaz; son satır ad alanının listeden düştüğünü gösterir. İş bitince
-arka planda bıraktığınız port yönlendirmesini kapatın (`kill %1`).
+([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.1). Kimlik komut satırına değil
+`CLIENT_ID`/`CLIENT_SECRET` ortam değişkenlerine yazılır — aynı kalıp
+[40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.4'tedir; `--client-secret` bayrağı sırrı
+`ps` çıktısında görünür kılar. Silme komutunun kendisi başarılı olduğunda hiçbir şey
+basmaz; `namespaces list` ad alanının listeden düştüğünü gösterir. Son satır arka plandaki
+port yönlendirmesini PID'siyle kapatır (`kill %1` iş denetimi etkileşimsiz kabukta
+çalışmaz).
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek `namespaces list` çıktısı — o kümede
 `erp` kaynağı hiç kurulmadığı için listede yalnız oradaki ad alanları vardır; sizde

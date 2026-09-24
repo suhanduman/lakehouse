@@ -249,27 +249,32 @@ bakın. Denetim bilerek **yalnız ürün şablonundaki dört literal yer tutucuy
 Dosyaları bozduysanız `git checkout -- platform/values/site/` ile şablonlara dönüp
 baştan başlayın.
 
-### 4.2 Ad alanı adı `lakehouse` değilse
+<a id="ad-alani-sabit"></a>
+### 4.2 Ad alanı adı üründe sabittir
 
-Yalnız `$LAKEHOUSE_NS` değerini değiştirdiyseniz gereklidir.
+Bu bölümde yapılacak bir iş yoktur; okuyup geçin.
 
-`[bastion]`
-
-```bash
-if [ "$LAKEHOUSE_NS" != "lakehouse" ]; then
-  printf 'namespace: %s\n' "$LAKEHOUSE_NS" >> platform/values/site/glue.yaml
-fi
-grep -c "^namespace:" platform/values/site/glue.yaml
-```
-
-**Beklenen çıktı** (`$LAKEHOUSE_NS` varsayılansa `0`, değiştirdiyseniz `1`):
-
-```text
-0
-```
-
-**Ters giderse:** `1`'den büyük bir sayı görürseniz satır birden fazla eklenmiştir;
-fazlalıkları silin — Helm son değeri alır ama dosyanın okunabilirliği bozulur.
+> **`$LAKEHOUSE_NS` = `lakehouse` sabittir — değiştirmeyin.** Ad alanı adı müşterinin
+> dokunmadığı ürün dosyalarının **içine yazılıdır**:
+>
+> - `platform/apps/*.yaml` — her Application'ın `destination.namespace` alanı
+>   (`00-strimzi`, `00-spark-operator`, `00-superset-operator`, `00-keycloak-operator`,
+>   `10-glue`, `15-custom`, `20-polaris`, `30-trino`, `30-jupyterhub`).
+> - `platform/values/jupyterhub.yaml` — not defterlerine verilen `POLARIS_URI` ve
+>   `TRINO_HOST` değerleri (`polaris.lakehouse.svc`, `trino.lakehouse.svc`).
+> - `custom/examples/*` — örnek CR'lardaki `namespace: lakehouse` satırları.
+> - `test/e2e/*.sh` ve fixture manifest'leri (`NS=lakehouse`).
+>
+> Trino ve JupyterHub alt chart'ları nesnelerini `.Release.Namespace` ile, yani
+> `destination.namespace` ile kurar; glue chart'ı ise `metadata.namespace`'i kendi yazar.
+> `.env`'deki değeri tek başına değiştirirseniz kurulum **iki ad alanına bölünür**:
+> Trino, Polaris Secret'ını bulamaz; not defterleri hâlâ `polaris.lakehouse.svc`'ye bakar.
+> Kitaptaki komutlar `$LAKEHOUSE_NS` değişkenini kullanmayı sürdürür — değeri `lakehouse`'tur.
+>
+> Kurumsal ad alanı standardınız başka bir ad gerektiriyorsa bu **ayrı bir ürün (kod)
+> görevidir**: yukarıdaki dosyaların parametreleştirilmesi, `glue` değerlerine yeni bir
+> anahtar ve e2e koşusu ister; site değerlerine `namespace:` satırı eklemek **yetmez**
+> ([90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md) §1).
 
 ### 4.3 Depolamada STS yoksa
 
@@ -859,9 +864,10 @@ secret-ad-ca
 147
 ```
 
-Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: imajın
-varsayılan kökleri **artı** sizin AD kökünüz; onlarca olması beklenir. `1` görürseniz
-depoda yalnız AD kökü vardır (kopyalama yapılmamış) ve bu, dış TLS bağlantılarını kırar. AD kökünün gerçekten içeride olduğunu görmek için:
+Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: imajın varsayılan kökleri
+**artı** sizin AD kökünüz; onlarca olması beklenir. `1` görürseniz depoda yalnız AD kökü vardır
+(kopyalama yapılmamış) ve bu, dış TLS bağlantılarını kırar. AD kökünün gerçekten içeride olduğunu
+görmek için:
 
 `[bastion]`
 

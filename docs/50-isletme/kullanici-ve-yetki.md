@@ -220,7 +220,12 @@ Yol:
 2. `platform/values/site/trino.yaml` dosyasına `accessControl.rules` altında `rules.json`
    anahtarıyla yapıştırın.
 3. Kendi kuralınızı **doğru sıraya** ekleyin: özel kurallar genel `SELECT` kuralından önce.
-4. Ürün satırlarının eksilmediğini denetleyip commit edin.
+4. Ürün satırlarının eksilmediğini denetleyip commit edin. `scripts/check-site.sh`,
+   blok verilmişse ürünün **servis hesabı** satırlarını arar
+   (`{"user": "superset|zeppelin|e2e", …}` — `catalogs` ve `tables` dizilerindeki iki
+   satır); bunlar düşerse Superset panoları ve Zeppelin not defterleri Trino'dan sessizce
+   `Access Denied` alır. `|e2e` eki isteğe bağlıdır: yalnız e2e koşusunun kullandığı
+   hesaptır, üretimde çıkarabilirsiniz.
 
 `[bastion]`
 
@@ -246,7 +251,10 @@ check-site: OK
 ```
 
 **Ters giderse:** `check-site.sh` `HATA` satırı basarsa değişiklik itilmez; satır hangi ürün
-satırının eksildiğini söyler.
+satırının eksildiğini söyler — örneğin
+`HATA: site/trino.yaml: ürün satırı eksik -> {"user": "superset|zeppelin|e2e", "privileges":
+["SELECT"]} (accessControl.rules."rules.json" içinde bulunmalı)`. Eksik satırı
+`platform/values/trino.yaml` içindeki bloktan kopyalayıp doğru diziye geri koyun.
 
 ### 5.3 Örnek: bir gruba satır filtresi ve kolon maskesi
 

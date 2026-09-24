@@ -1,15 +1,19 @@
 # 10 — Planlama
 
-**Bu bölümde:** kuruluma başlamadan önce verilmesi gereken kararlar, bileşen başına kaynak ihtiyacı (küçük/orta/büyük), ağ ve port özeti, doldurmanız gereken değerlerin çalışma sayfası, gerçekçi süre tahmini ve hangi işin hangi ekipte olduğu.
+**Bu bölümde:** kuruluma başlamadan önce verilmesi gereken kararlar, bileşen başına kaynak
+ihtiyacı (küçük/orta/büyük), ağ ve port özeti, doldurmanız gereken değerlerin çalışma sayfası,
+gerçekçi süre tahmini ve hangi işin hangi ekipte olduğu.
 **Süre:** 45 dakika okuma + değerlerin ilgili ekiplerden toplanması (pratikte 2–5 iş günü bekleme).
-**Gereken yetki:** iki komut için kümede `oc` ile okuma yetkisi (`cluster-reader` yeterlidir). Geri kalanı okumadır.
+**Gereken yetki:** iki komut için kümede `oc` ile okuma yetkisi (`cluster-reader` yeterlidir).
+Geri kalanı okumadır.
 **Nerede çalıştırılır:** `[bastion]` — `oc` kurulu ve kümeye giriş yapılmış yönetim makinesi.
 
 ---
 
 ## 1. Mimari kararlar (verilmiş kararlar, kısa gerekçeleriyle)
 
-Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçları bütün belgeleri etkilediği için burada topluca verilir.
+Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçları bütün belgeleri
+etkilediği için burada topluca verilir.
 
 | Karar | Sonuç |
 |---|---|
@@ -19,7 +23,7 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 | **Adresler türetilir.** | Bileşen adresi = bileşen adı + `-` + `$LAKEHOUSE_NS` + `.` + `$APPS_DOMAIN`. Yani yalnız `appsDomain` doldurulur; Keycloak yönlendirme adresleri de aynı kaynaktan üretilir. Kurumsal bir DNS adı isteyen bileşen için `platform/values/site/glue.yaml` içinde tek satır açılır. |
 | **Active Directory gün-1'den zorunludur.** | AD'siz bir başlangıç tasarlanmamıştır. Kurulum günü AD bilgileri hazır değilse kurulum başlamaz. |
 | **Gruplar sabittir:** `lakehouse-admins`, `lakehouse-analysts`, `lakehouse-users`. | Bu üç grup AD'de kurulumdan **önce** açılmış olmalıdır. Yetki kuralları (Trino, Superset, JupyterHub) bu adlara göre yazılıdır. |
-| **Özel konteyner imajı yoktur.** | Bütün imajlar üreticinin resmi imajlarıdır. Bağlantısız (air-gapped) kurulumda aynalanacak imaj listesi bu yüzden sabittir ve sürüm tablosundan okunur. |
+| **Ürünün hiçbir bileşeni özel imaj kullanmaz.** | Ürünün bütün imajları üreticinin resmi imajlarıdır. Bağlantısız (air-gapped) kurulumda aynalanacak imaj listesi bu yüzden sabittir ve sürüm tablosundan okunur. (Kendi Spark uygulamanız için kendi imajınızı üretmeyi seçerseniz o imajı da aynalamanız gerekir: [50-isletme/yeni-spark-uygulamasi.md](50-isletme/yeni-spark-uygulamasi.md) §2.1.) |
 | **Kurumun kendi kaynakları `custom/` klasöründedir.** | Kendi Spark uygulamanız, CronJob'ınız ya da ConfigMap'iniz ürün chart'ına dokunmadan buraya eklenir; ayrı bir ArgoCD Application izler. Örnekler: `custom/examples/spark-tek-seferlik.yaml`, `custom/examples/spark-zamanli.yaml`, `custom/examples/dbt-cronjob.yaml`. |
 
 ---
@@ -38,7 +42,8 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 
 ### 2.2 Bileşen başına istek/limit
 
-"İstek" (request), pod'un düğümde yer ayırtmak için beyan ettiği asgari kaynaktır; kapasite planı bunun üzerinden yapılır.
+"İstek" (request), pod'un düğümde yer ayırtmak için beyan ettiği asgari kaynaktır; kapasite planı
+bunun üzerinden yapılır.
 
 > **Değişiklik nereye yazılır.** Aşağıdaki "Küçük" sütunu `glue/values.yaml` ve `platform/values/*.yaml`
 > dosyalarındaki ürün varsayılanlarını gösterir; bu dosyalar **yükseltmede üzerine yazılır**, bu yüzden
@@ -68,9 +73,15 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 
 **Dikkat edilecek üç nokta.**
 
-1. **Trino'nun JVM yığını Kubernetes isteği değildir.** Değer dosyasında istek/limit yoktur ama her Trino pod'u 8 GiB yığın ayırır; koordinatör + 2 işçi için **düğümlerde en az 3 × 10 GiB boş bellek** bulunmalıdır. Küçük kademede bile bu böyledir.
-2. **Kafka diski geriye dönük doldurmayı da karşılamalıdır.** İlk tam okuma (snapshot) sırasında kaynak tabloların tamamı Kafka'dan geçer. Kaynak veritabanının toplam boyutunun **en az yarısı kadar** boş Kafka diski planlayın.
-3. **JupyterHub kapasitesi kullanıcı sayısıyla çarpılır.** Eşzamanlı 20 kullanıcı, küçük kademede 20 × 1G garanti bellek ve 20 × 10Gi kalıcı disk demektir. Not defteri diskleri kullanıcı ayrılsa da silinmez.
+1. **Trino'nun JVM yığını Kubernetes isteği değildir.** Değer dosyasında istek/limit yoktur ama her
+   Trino pod'u 8 GiB yığın ayırır; koordinatör + 2 işçi için **düğümlerde en az 3 × 10 GiB boş
+   bellek** bulunmalıdır. Küçük kademede bile bu böyledir.
+2. **Kafka diski geriye dönük doldurmayı da karşılamalıdır.** İlk tam okuma (snapshot) sırasında
+   kaynak tabloların tamamı Kafka'dan geçer. Kaynak veritabanının toplam boyutunun **en az yarısı
+   kadar** boş Kafka diski planlayın.
+3. **JupyterHub kapasitesi kullanıcı sayısıyla çarpılır.** Eşzamanlı 20 kullanıcı, küçük
+   kademede 20 × 1G garanti bellek ve 20 × 10Gi kalıcı disk demektir. Not defteri diskleri
+   kullanıcı ayrılsa da silinmez.
 
 ### 2.3 Kaba toplam (kabaca, kurulum anı)
 
@@ -80,13 +91,16 @@ Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçlar
 | Orta | ~20 vCPU | ~96 GiB | ~800 GiB |
 | Büyük | ~48 vCPU | ~200 GiB | ~2 TiB |
 
-Bu satırlar Iceberg verisini **içermez**: veri S3'tedir ve tabloların boyutu kaynak sistemlere bağlıdır. S3 tarafında kaynak veritabanlarının toplam boyutunun 2–3 katını planlayın (Bronze tarihçesi + Silver kopyası + bakım sırasında geçici dosyalar).
+Bu satırlar Iceberg verisini **içermez**: veri S3'tedir ve tabloların boyutu kaynak sistemlere
+bağlıdır. S3 tarafında kaynak veritabanlarının toplam boyutunun 2–3 katını planlayın (Bronze
+tarihçesi + Silver kopyası + bakım sırasında geçici dosyalar).
 
 ---
 
 ## 3. Ön ölçüm: kümenin size söyleyeceği iki değer
 
-Bu iki değeri şimdi alın; [30-kurulum.md](30-kurulum.md) bölümünde `$APPS_DOMAIN` ve `$STORAGE_CLASS` olarak kullanılacaklar.
+Bu iki değeri şimdi alın; [30-kurulum.md](30-kurulum.md) bölümünde `$APPS_DOMAIN` ve
+`$STORAGE_CLASS` olarak kullanılacaklar.
 
 ### Adım 1 — Uygulama alan adını öğrenin
 
@@ -102,7 +116,9 @@ oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
 apps.ocp.example.net
 ```
 
-**Ters giderse:** komut `Error from server (Forbidden)` derse hesabınızda küme düzeyinde okuma yetkisi yoktur; küme yöneticisinden `cluster-reader` isteyin ya da değeri doğrudan ondan alın. Boş çıktı, kümeye giriş yapılmadığı anlamına gelir (`oc whoami` ile doğrulayın).
+**Ters giderse:** komut `Error from server (Forbidden)` derse hesabınızda küme düzeyinde okuma
+yetkisi yoktur; küme yöneticisinden `cluster-reader` isteyin ya da değeri doğrudan ondan alın. Boş
+çıktı, kümeye giriş yapılmadığı anlamına gelir (`oc whoami` ile doğrulayın).
 
 ### Adım 2 — Kullanılabilir StorageClass'ları listeleyin
 
@@ -121,15 +137,20 @@ pure-block (default)   pure-csi      Delete          Immediate           true   
 pure-file              pure-csi      Delete          Immediate           true                   41d
 ```
 
-`(default)` işaretli sınıf varsa `$STORAGE_CLASS` boş bırakılabilir. Sınıf **ReadWriteOnce** blok depolama sağlamalı ve **disk büyütmeyi desteklemelidir** (`ALLOWVOLUMEEXPANSION: true`) — aksi hâlde Kafka diskini büyütmek için pod'ları yeniden yaratmak gerekir.
+`(default)` işaretli sınıf varsa `$STORAGE_CLASS` boş bırakılabilir. Sınıf **ReadWriteOnce** blok
+depolama sağlamalı ve **disk büyütmeyi desteklemelidir** (`ALLOWVOLUMEEXPANSION: true`) — aksi hâlde
+Kafka diskini büyütmek için pod'ları yeniden yaratmak gerekir.
 
-**Ters giderse:** hiç StorageClass yoksa küme depolamasız kurulmuştur; bu ürün kalıcı disk olmadan kurulamaz, platform ekibine başvurun.
+**Ters giderse:** hiç StorageClass yoksa küme depolamasız kurulmuştur; bu ürün kalıcı disk olmadan
+kurulamaz, platform ekibine başvurun.
 
 ---
 
 ## 4. Ağ ve portlar (özet)
 
-Ayrıntılı liste (her servis, port, yön, protokol) [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md) dosyasındadır. Planlama için gereken kadarı:
+Ayrıntılı liste (her servis, port, yön, protokol)
+[90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md) dosyasındadır. Planlama için
+gereken kadarı:
 
 | Yön | Kimden | Kime | Port / protokol | Ne için |
 |---|---|---|---|---|
@@ -145,13 +166,20 @@ Ayrıntılı liste (her servis, port, yön, protokol) [90-referans/port-ve-servi
 | Küme içi | Trino, Spark, not defterleri | Polaris | 8181/HTTP | Iceberg kataloğu |
 | Küme içi | Polaris, Keycloak, Superset | kendi PostgreSQL kümeleri | 5432/TCP | veritabanı |
 
-**DNS ve sertifika:** bütün arayüz adresleri `$APPS_DOMAIN` altındaki joker DNS kaydından gelir; ek DNS kaydı **gerekmez**. Trino kendi TLS'ini sonlandırdığı için Route'u `passthrough`'tur: tarayıcıların iç kök CA'ya güvenmesi gerekir. Kurumsal CA kullanılacaksa sertifika talebi bu aşamada açılmalıdır (teslim süresi çoğu kurumda kurulumun önündeki en uzun beklemedir).
+**DNS ve sertifika:** bütün arayüz adresleri `$APPS_DOMAIN` altındaki joker DNS kaydından gelir; ek
+DNS kaydı **gerekmez**. Trino kendi TLS'ini sonlandırdığı için Route'unun **varsayılanı**
+`passthrough`'tur ve tarayıcıların iç kök CA'ya güvenmesini gerektirir; önerilen yol,
+`platform/values/site/glue.yaml` içindeki `tls.caBundle` doldurularak Route'un `reencrypt`
+olmasıdır ([30-kurulum.md](30-kurulum.md) §5.11). Kurumsal CA kullanılacaksa sertifika
+talebi bu aşamada açılmalıdır (teslim süresi çoğu kurumda kurulumun önündeki en uzun
+beklemedir).
 
 ---
 
 ## 5. Değerler çalışma sayfası
 
-Aşağıdaki tablo `install/lakehouse.env.example` dosyasının okunabilir hâlidir. Kurulum gününden **önce** bütün satırların "alındı" sütunu işaretlenmiş olmalıdır. Şablonu kopyalayıp doldurun:
+Aşağıdaki tablo `install/lakehouse.env.example` dosyasının okunabilir hâlidir. Kurulum gününden
+**önce** bütün satırların "alındı" sütunu işaretlenmiş olmalıdır. Şablonu kopyalayıp doldurun:
 
 `[bastion]`
 
@@ -159,16 +187,18 @@ Aşağıdaki tablo `install/lakehouse.env.example` dosyasının okunabilir hâli
 cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lakehouse.env
 ```
 
-**Beklenen çıktı:** komut sessizce biter (çıkış kodu 0). Dosya izni `-rw-------` olmalıdır (`ls -l install/lakehouse.env` ile doğrulayın).
+**Beklenen çıktı:** komut sessizce biter (çıkış kodu 0). Dosya izni `-rw-------` olmalıdır
+(`ls -l install/lakehouse.env` ile doğrulayın).
 
-**Ters giderse:** `Permission denied` alırsanız depoyu yazma izniniz olan bir dizine klonlayın. Dosya zaten varsa üzerine yazmaz — `cp -i` uyarısını dikkate alın.
+**Ters giderse:** `Permission denied` alırsanız depoyu yazma izniniz olan bir dizine klonlayın.
+Dosya zaten varsa üzerine yazmaz — `cp -i` uyarısını dikkate alın.
 
 | Değişken | Kimden alınır | Nasıl / örnek | Alındı |
 |---|---|---|---|
 | `GIT_REPO_URL` | Git yöneticisi | müşteri deposunun klonlama adresi; `git ls-remote` ile doğrulanır | ☐ |
 | `GIT_HTTPS_TOKEN` | Git yöneticisi | yalnız HTTPS depoda; salt okuma erişim jetonu (SSH kullanılıyorsa boş) | ☐ |
 | `ARGOCD_NS` | — (sabit) | `openshift-gitops` | ☐ |
-| `LAKEHOUSE_NS` | lakehouse kurulumcusu | `lakehouse` (kurumsal ad standardı varsa değiştirilir) | ☐ |
+| `LAKEHOUSE_NS` | — (sabit) | `lakehouse` — üründe sabittir, **değiştirmeyin** ([30-kurulum.md](30-kurulum.md) §4.2) | ☐ |
 | `APPS_DOMAIN` | küme (bkz. Adım 1) | `oc get ingresses.config cluster -o jsonpath='{.spec.domain}'` | ☐ |
 | `STORAGE_CLASS` | küme (bkz. Adım 2) | `oc get storageclass`; varsayılan varsa boş bırakılabilir | ☐ |
 | `INTERNAL_REGISTRY` | — (sabit) | `image-registry.openshift-image-registry.svc:5000` | ☐ |
@@ -187,7 +217,8 @@ cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lake
 | `AD_UPN_SUFFIX` | AD ekibi | kullanıcı adlarının UPN son eki (`@` dâhil); Zeppelin AD girişinde kullanılır | ☐ |
 | `KEYCLOAK_ADMIN_PASSWORD` | lakehouse kurulumcusu | isteğe bağlı; boş bırakılırsa kurulum `openssl rand -hex 24` ile üretir | ☐ |
 
-Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakehouse-analysts`, `lakehouse-users` gruplarının açılması ve ilk yöneticinin `lakehouse-admins` grubuna eklenmesi.
+Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakehouse-analysts`,
+`lakehouse-users` gruplarının açılması ve ilk yöneticinin `lakehouse-admins` grubuna eklenmesi.
 
 ---
 
@@ -232,15 +263,19 @@ Toplam: değerler hazırsa **bir iş günü**; değerler beklenerek **bir hafta*
 
 ## Kontrol listesi
 
-- [ ] Kurumun hangi kademeye (küçük/orta/büyük) girdiğine karar verildi ve düğüm kapasitesi platform ekibiyle doğrulandı.
+- [ ] Kurumun hangi kademeye (küçük/orta/büyük) girdiğine karar verildi ve düğüm kapasitesi platform
+  ekibiyle doğrulandı.
 - [ ] Trino için düğümlerde en az 3 × 10 GiB boş bellek olduğu teyit edildi.
 - [ ] Kafka diski, kaynak veritabanlarının toplam boyutunun en az yarısı olacak şekilde planlandı.
 - [ ] `oc get ingresses.config cluster` ve `oc get storageclass` çıktıları alındı.
-- [ ] `install/lakehouse.env` kopyalandı, izni 600 yapıldı ve Git'e girmediği `git status` ile doğrulandı.
-- [ ] Çalışma sayfasındaki bütün değerler ilgili ekiplerden istendi; AD grupları açılmak üzere talep edildi.
+- [ ] `install/lakehouse.env` kopyalandı, izni 600 yapıldı ve Git'e girmediği `git status` ile
+  doğrulandı.
+- [ ] Çalışma sayfasındaki bütün değerler ilgili ekiplerden istendi; AD grupları açılmak üzere talep
+  edildi.
 - [ ] Güvenlik duvarı izinleri (S3, AD, kaynak veritabanları, gerekiyorsa PyPI/Maven) talep edildi.
 - [ ] Sorumluluk matrisi ilgili ekiplere gönderildi ve kurulum günü için randevu alındı.
 
 ## Sonraki bölüm
 
-[20-on-kosullar.md](20-on-kosullar.md) — kümede neyin kurulu olması gerektiği, operatörlerin kurulumu ve kuruluma başlamadan önceki doğrulamalar.
+[20-on-kosullar.md](20-on-kosullar.md) — kümede neyin kurulu olması gerektiği, operatörlerin
+kurulumu ve kuruluma başlamadan önceki doğrulamalar.

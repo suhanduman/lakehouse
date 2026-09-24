@@ -360,8 +360,9 @@ oc -n "$LAKEHOUSE_NS" exec deploy/trino-coordinator -- env TRINO_PASSWORD="$SP" 
   [50-isletme/kullanici-ve-yetki.md](../50-isletme/kullanici-ve-yetki.md) §7'deki kullanıcı
   girişi gerekir.
 - **`--server` adresi Route değil, küme içi servistir.** Sertifika `trino.lakehouse.svc`
-  adına kesilmiştir; `localhost` yazarsanız `subjectAltNames` hatası alırsınız. Ad alanınız
-  `lakehouse` değilse adresi `trino.$LAKEHOUSE_NS.svc` olarak yazın.
+  adına kesilmiştir; `localhost` yazarsanız `subjectAltNames` hatası alırsınız. Ad alanı
+  adı üründe sabit olduğu için (`lakehouse`, [30-kurulum](../30-kurulum.md) §4.2) bu adres
+  her kurulumda aynıdır; `trino.$LAKEHOUSE_NS.svc` yazmak da aynı sonucu verir.
 
 **Ters giderse:** `Authentication failed` → Secret'taki düz parola `password.db` içindeki
 bcrypt ile uyuşmuyordur ([secret-listesi.md](secret-listesi.md) madde 7). `executable file

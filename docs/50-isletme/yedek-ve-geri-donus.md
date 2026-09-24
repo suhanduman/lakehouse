@@ -372,7 +372,8 @@ oc -n "$ARGOCD_NS" patch application glue --type merge \
 oc -n "$ARGOCD_NS" get application glue -o jsonpath='automated={.spec.syncPolicy.automated}{"\n"}'
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**):
+**Beklenen çıktı** (örnek — saf ArgoCD çıktısı, OpenShift'e özgü değil;
+**ArgoCD modunda doğrulanır**):
 
 ```text
 application.argoproj.io/glue patched
@@ -421,7 +422,8 @@ oc -n "$ARGOCD_NS" get application glue \
   -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**):
+**Beklenen çıktı** (örnek — saf ArgoCD çıktısı, OpenShift'e özgü değil;
+**ArgoCD modunda doğrulanır**):
 
 ```text
 application.argoproj.io/glue patched

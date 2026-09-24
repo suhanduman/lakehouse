@@ -55,7 +55,7 @@ müşteriye özel değerleri. **21 anahtar.**
 
 | Anahtar | Ne zaman eklenir | Örnek |
 |---|---|---|
-| `namespace` | Ürün, `$LAKEHOUSE_NS` olarak `lakehouse` dışında bir ad alanına kurulacaksa **zorunlu** | `namespace: veri-golu` |
+| `namespace` | **Eklemeyin.** Ad alanı adı üründe sabittir (`lakehouse`): `platform/apps/*.yaml` `destination.namespace`, `platform/values/jupyterhub.yaml` (`POLARIS_URI`, `TRINO_HOST`) ve `custom/examples/*` bu adı taşır; Trino ve JupyterHub alt chart'ları `.Release.Namespace` kullanır. Bu anahtarı tek başına değiştirmek kurulumu iki ad alanına böler. Başka bir ad desteklemek için sayılan dosyaların parametreleştirilmesi + e2e gerekir — ayrı bir kod görevidir | — |
 | `trino.hostname`, `superset.hostname`, `jupyterhub.hostname`, `zeppelin.hostname` | Bir bileşen için kurumsal DNS adı isteniyorsa (o ad için CNAME kaydı kümenin joker adına yönlendirilir) | `trino: {hostname: trino.kurum.example.net}` |
 | `keycloak.hostname` | Keycloak için kurumsal ad. **Çıplak host değil, TAM URL** yazılır; jetondaki `iss` değeri budur ve şemasız yazılırsa render hata verir | `keycloak: {hostname: https://sso.kurum.example.net}` |
 | `kafka.externalListener` ve `nginx.enabled` | nginx erişim günlüğü akışı kullanılacaksa (ikisi birlikte) | `true` |
@@ -73,8 +73,9 @@ müşteriye özel değerleri. **21 anahtar.**
 ## 2. `platform/values/site/trino.yaml`
 
 Trino chart'ı ayrı bir ArgoCD Application'dır ve glue değerlerini **göremez**; bu yüzden
-Keycloak, LDAP ve S3 değerleri burada tekrarlanır. **3 anahtar** — ama her biri çok satırlı
-bir metin bloğudur.
+Keycloak, LDAP ve S3 değerleri burada tekrarlanır. **3 zorunlu anahtar** — ama her biri çok
+satırlı bir metin bloğudur. Gerektiğinde eklenen isteğe bağlı anahtarlar aşağıdaki ikinci
+tablodadır.
 
 > **Blokların tamamı buradadır, çünkü Helm çok satırlı metin bloklarını birleştirmez:**
 > son yüklenen dosyanınki bütünüyle geçer. Bu yüzden bloklar ürün satırlarını da tekrar
@@ -87,6 +88,22 @@ bir metin bloğudur.
 | `server.coordinatorExtraConfig` | Yalnız coordinator'a giden OAuth2 (Keycloak) ayarları | **Evet** |
 | `coordinator.additionalConfigFiles.group-provider.properties` | Trino'nun grupları doğrudan AD'den okuması (LDAP group provider) | **Evet** |
 | `catalogs.lakehouse` | `lakehouse` Iceberg kataloğunun tanımı (Polaris REST katalog + S3) | **Evet** |
+
+### Bu dosyaya eklenebilen isteğe bağlı anahtarlar
+
+Şablonda yoktur; gerekmedikçe eklemeyin. Dördü de Trino chart'ı 1.42.2'nin kendi
+anahtarlarıdır (`helm show values trino/trino --version 1.42.2`).
+
+| Anahtar | Ne zaman eklenir | Örnek |
+|---|---|---|
+| `accessControl.rules."rules.json"` | Trino erişim kurallarına kendi satırınızı eklerken. Helm çok satırlı bloğu **bütünüyle ezer**: ürünün satırlarını da taşımak zorundasınız; `scripts/check-site.sh` servis hesabı satırlarının düşmediğini denetler. Adım adım: [50-isletme/kullanici-ve-yetki.md](../50-isletme/kullanici-ve-yetki.md) §5.2 | `accessControl: {type: configmap, rules: {rules.json: \|- …}}` |
+| `coordinator.jvm` | Koordinatörün JVM yığını büyütülürken (ürün varsayılanı `maxHeapSize: 8G`; büyük kademede 16G — [10-planlama](../10-planlama.md) §2.2) | `coordinator: {jvm: {maxHeapSize: "16G"}}` |
+| `server.workers` | İşçi sayısı değiştirilirken (ürün varsayılanı **2**; orta kademede 4, büyükte 8) | `server: {workers: 4}` |
+| `worker.jvm` | İşçilerin JVM yığını büyütülürken (ürün varsayılanı `maxHeapSize: 8G`) | `worker: {jvm: {maxHeapSize: "16G"}}` |
+
+> **JVM yığını Kubernetes isteği değildir.** `coordinator.jvm`/`worker.jvm` değerini
+> büyütürken düğümde o kadar boş bellek bulunduğunu doğrulayın
+> ([10-planlama](../10-planlama.md) §2.2 "Dikkat edilecek üç nokta").
 
 ### `server.coordinatorExtraConfig` içindeki doldurulan satır
 

@@ -23,9 +23,11 @@ Directory kimlikleriyle sorgulanabilir kılar.
    işleri Helm şablonları üretir.
 2. **Her şey Git'ten gelir.** Kümede elle değişiklik yapılmaz; Git'e yazılır, ArgoCD kümeyi
    Git'e eşitler. Böylece "kümede ne var" sorusunun cevabı her zaman depodadır.
-3. **Özel imaj yoktur.** Bütün konteyner imajları üreticinin resmi imajlarıdır; Kafka Connect
-   imajı bile kümede, Strimzi'nin kendi yapı mekanizmasıyla üretilir. Dockerfile bakımı diye
-   bir iş yoktur.
+3. **Ürünün hiçbir bileşeni özel imaj kullanmaz.** Bütün konteyner imajları üreticinin resmi
+   imajlarıdır; Kafka Connect imajı bile kümede, Strimzi'nin kendi yapı mekanizmasıyla
+   üretilir. Ürün tarafında Dockerfile bakımı diye bir iş yoktur. (Kendi Spark uygulamanız
+   için isterseniz kendi imajınızı üretebilirsiniz — bu sizin seçiminizdir:
+   [50-isletme/yeni-spark-uygulamasi.md](50-isletme/yeni-spark-uygulamasi.md) §2.1.)
 
 ---
 
@@ -191,8 +193,10 @@ nginx akışında olduğu gibi, açılana kadar hiçbir zamanlama render edilmez
 kendisi **kopyalanmaz**: terabaytlarca veriyi ikinci kez yazmak yerine S3 tarafının kendi
 koruması (sürümleme, çoğaltma) kullanılır, buna karşılık Iceberg'in kendi
 [Iceberg snapshot](#4-kavramlar-sözlüğü)'ları son yedi günlük yanlışlıkla silmeyi tablo
-düzeyinde geri alabilir. Yedek bucket'ı veri bucket'ından ayrı olmalıdır;
-`scripts/check-site.sh` aynı olmadıklarını denetler.
+düzeyinde geri alabilir. Yedek bucket'ı veri bucket'ından ayrı olmalıdır:
+`scripts/check-site.sh`, `platform/values/site/glue.yaml` içindeki `backup.s3.bucket`
+değerini `platform/polaris/setup.yaml` içindeki `default_base_location` bucket'ı ile
+karşılaştırır ve ikisi aynıysa **HATA** basar.
 
 ### 3.7 İzleme akışı
 

@@ -217,6 +217,12 @@ Hangi işlemin uygulandığını görmek için:
 oc -n "$ARGOCD_NS" get application glue -o jsonpath='{.status.operationState.message}{"\n"}'
 ```
 
+**Beklenen çıktı** (örnek — ArgoCD'nin başarılı eşitleme için bastığı sabit ifadedir):
+
+```text
+successfully synced (all tasks run)
+```
+
 **Ters giderse:** beş dakikadan uzun süre `Synced` görünmüyorsa değişiklik ArgoCD'ye
 ulaşmamıştır — Adım 4'teki push'un gerçekten kurumun deposuna gittiğini
 (`git remote -v`) ve `platform/apps/10-glue.yaml` içindeki `targetRevision` dalının

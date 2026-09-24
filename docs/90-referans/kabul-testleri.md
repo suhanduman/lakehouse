@@ -34,12 +34,12 @@ tablosudur.
   (`pip install 'apache-polaris==1.7.0'`). `kubectl` yerine yalnız `oc` kurulu olması
   **yetmez**: `scripts/acceptance.sh` ve `scripts/polaris-setup.sh` `kubectl` ikilisini adıyla
   çağırır, aksi hâlde `kubectl: command not found` ile dururlar.
-- **Ad alanı `lakehouse` olmalıdır.** e2e yol betikleri (`test/e2e/*.sh`) ve fixture
-  manifest'leri bu ad alanına **sabittir** (`NS=lakehouse` / `metadata.namespace`).
+- **Ad alanı `lakehouse`'tur.** Ad alanı adı üründe sabittir
+  ([30-kurulum](../30-kurulum.md) §4.2); e2e yol betikleri (`test/e2e/*.sh`) ve fixture
+  manifest'leri de bu ad alanına **sabittir** (`NS=lakehouse` / `metadata.namespace`).
   `--ns` bayrağı yalnız `scripts/acceptance.sh`'in kendi adımlarını (ön kontrol,
-  `polaris-setup`) taşır; `$LAKEHOUSE_NS` başka bir değere ayarlandıysa betik yüksek sesle
-  `UYARI --ns=…` basar ve koşu büyük olasılıkla düşer. Farklı bir ad alanı gerekiyorsa
-  `test/e2e/` altındaki dosyalar da uyarlanmalıdır.
+  `polaris-setup`) taşır; başka bir değer verilirse betik yüksek sesle `UYARI --ns=…` basar
+  ve koşu büyük olasılıkla düşer.
 - Betik **kurulum yapmaz**: kind yaratmaz, `bootstrap/bootstrap.sh` çağırmaz. Taze bir
   kümede aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
   (`.github/workflows/e2e.yaml`).

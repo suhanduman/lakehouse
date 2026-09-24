@@ -660,9 +660,9 @@ eşik yorumlarının tamamı
 Betik kurulum **yapmaz**; zaten kurulu bir kümede çalışır.
 
 **Ön koşul — ad alanı:** e2e yol betikleri ve fixture manifest'leri `lakehouse` ad alanına
-**sabittir** (`test/e2e/*.sh`, `test/e2e/*-fixture.yaml`). `$LAKEHOUSE_NS` başka bir değere
-ayarlandıysa `--ns` bayrağı yalnız betiğin kendi adımlarını taşır; yollar yine `lakehouse`
-arar ve koşu düşer. Ayrıntı: [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md)
+**sabittir** (`test/e2e/*.sh`, `test/e2e/*-fixture.yaml`) — ürünün geri kalanı gibi
+([30-kurulum](30-kurulum.md) §4.2). `$LAKEHOUSE_NS` zaten `lakehouse`'tur, `--ns` bayrağı da
+bu değeri taşır. Ayrıntı: [90-referans/kabul-testleri.md](90-referans/kabul-testleri.md)
 §1.
 
 **Ön koşul — demo kaynaklar:** `sources`, `pipelines` ve `nginx.enabled` açık olmalıdır. Bu
