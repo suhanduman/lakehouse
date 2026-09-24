@@ -35,8 +35,8 @@ kubectl -n lakehouse logs -l strimzi.io/kind=KafkaConnect --tail=200
 ```
 **Ne yap**
 - Geçici hata (kaynak DB yeniden başladı, ağ): `kubectl -n lakehouse annotate kafkaconnector <ad> strimzi.io/restart=true`.
-- Kimlik/yetki hatası: `<source>-db` Secret'ı ve `docs/50-isletme/yeni-kaynak-ve-pipeline.md` 1. adımı (replication rolü,
-  publication, sinyal tablosu, CDC etkinleştirme).
+- Kimlik/yetki hatası: `<source>-db` Secret'ı ve `docs/50-isletme/yeni-kaynak-ve-pipeline.md` Adım 3 (3.1–3.3:
+  replication rolü, publication, sinyal tablosu, CDC etkinleştirme) ile Adım 4 (Secret).
 - Converter/SMT hatası: `errors.tolerance: all` olduğundan kayıt `<prefix>.dlq` topic'ine düşer; oradan okuyun.
 - Task başarısızlığından sonra **consumer konumu ileri kalmış olabilir** (veri boşluğu):
   `spec.state: stopped` → `kafka-consumer-groups.sh --group connect-<sink> --reset-offsets --to-earliest --execute` → `running`.

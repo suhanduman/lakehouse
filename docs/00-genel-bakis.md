@@ -100,7 +100,8 @@ gerek yoktur: sinyal tablosuna bir satır yazılır ve
 
 MongoDB'de belgeler şemasızdır, bu yüzden Iceberg sink'i doğrudan kullanılamaz: arada
 `glue/jobs/mongo_bronze.py` adlı bir [Spark](#4-kavramlar-sözlüğü) işi vardır. Bu iş beş
-dakikada bir Kafka'dan okur, belgeleri düzleştirip Bronze tablosuna yazar ve nerede kaldığını
+dakikada bir Kafka'dan okur, belgeleri `(_id, _doc)` biçiminde — belgenin tamamı JSON metni
+olarak `_doc` kolonunda — Bronze tablosuna yazar ve nerede kaldığını
 Kafka tüketici grubunda saklar. Diğer iki fark: MongoDB kaynağı `replicaSet` modunda
 çalışmalıdır (tek düğümlü bir `replicaSet` yeterlidir) ve koleksiyon başına bir Bronze
 tablosu oluşur. Gecikme bu yüzden CDC akışından biraz yüksektir (en fazla ~5 dakika + Spark

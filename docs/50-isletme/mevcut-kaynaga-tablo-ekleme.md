@@ -90,11 +90,16 @@ eklenir. Tablo **entity** tablosuysa (birincil anahtarı olan, güncellenen bir 
 `pipelines` listesine de bir satır girer; append-only bir olay tablosuysa yalnız Bronze'da
 kalır ve `pipelines` girdisi yazılmaz.
 
+Aşağıdaki parça, bu bölümün provasının koştuğu **geliştirme** kurulumundan alınmıştır
+(`platform/values/glue-dev.yaml`); `host` bu yüzden küme içi bir servis adıdır. Üretimde
+aynı alanlar `platform/values/site/glue.yaml` dosyasında, kaynak sunucunun gerçek adıyla
+durur.
+
 ```yaml
 sources:
 - name: shop
   type: postgres
-  host: demo-pg-rw.lakehouse.svc
+  host: demo-pg-rw.lakehouse.svc                # üretimde kaynak sunucunun DNS adı
   port: 5432
   database: shop
   tables: [public.orders, public.customers]     # eklenen: public.customers
@@ -104,8 +109,16 @@ pipelines:
 - {bronze: shop_raw.customers, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}
 ```
 
-MongoDB kaynaklarında `tables` yerine `collections` listesine `db.koleksiyon` yazılır ve
-`keys` genellikle `[_id]` olur.
+**`casts` körlemesine kopyalanmaz.** Yeni satırdaki `casts` yalnız **o tabloda gerçekten
+bulunan** kolonları sayabilir: örnekteki `public.customers` tablosunun bir `updated_at`
+kolonu vardır, bu yüzden satır `orders` ile aynı görünür. Tabloda olmayan bir kolon
+yazılırsa `silver-merge` `casts bilinmeyen kolon(lar)` hatasıyla düşer. Zaman kolonu
+olmayan bir tabloda `casts` alanı hiç yazılmaz.
+
+MongoDB kaynaklarında `tables` yerine `collections` listesine `db.koleksiyon` yazılır,
+`keys` her zaman `[_id]`'dir ve `casts` kullanılmaz (Bronze'da iş kolonu yoktur; belge
+`_doc` içinde JSON metni olarak durur —
+[yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §3.3).
 
 `pipelines` alanlarının anlamı ve `keys`, `bucket_count`, `casts` seçim ölçütleri:
 [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §7.

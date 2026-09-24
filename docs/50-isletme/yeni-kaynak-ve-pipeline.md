@@ -94,6 +94,26 @@ kurumun parola kasasında üretip aynı değişkene okutun (`read -r -s ERP_DB_P
 Bu adım **kaynak veritabanı yöneticisinin** işidir ve kümede değil, kaynakta yapılır.
 Kaynak türüne göre yalnız bir alt bölüm uygulanır.
 
+**Önce parolayı bu makineye alın.** Adım 2'deki `ERP_DB_PASSWORD` değişkeni yönetim
+makinesinin kabuğundadır; aşağıdaki komutlar kaynak veritabanı istemcisinin koştuğu
+**başka bir makinede** çalışır ve aynı adlı değişkeni orada da bekler. Veritabanı
+yöneticisi, Adım 2'de kendisine güvenli kanalla iletilen parolayı bu bloğa yazar
+(`read -r -s` parolayı ekrana basmaz ve kabuk geçmişine düşürmez):
+
+`[kaynak DB]`
+
+```bash
+read -r -s ERP_DB_PASSWORD
+export ERP_DB_PASSWORD
+```
+
+Parolayı yazıp `Enter`'a bastığınızda ekranda hiçbir şey görünmez; bu normaldir. Oturumun
+sonunda `unset ERP_DB_PASSWORD` ile silin.
+
+**Ters giderse:** bu bloğu atlarsanız değişken **boştur** ve aşağıdaki komutlar sessizce
+**parolasız** bir hesap yaratır; bağlayıcı sonra `password authentication failed for user
+"debezium"` ile düşer (Adım 9.4).
+
 ### 3.1 PostgreSQL
 
 Debezium, PostgreSQL'in mantıksal çoğaltma günlüğünü okur. Üç şey gerekir: `logical`
@@ -256,6 +276,37 @@ gerekmez.
 **Ters giderse:** `not running with --replSet` → sunucu replica set değildir;
 `command createUser requires authentication` → yönetici kimliğiyle bağlanmadınız.
 
+#### MongoDB tablolarının şekli pg/mssql'den farklıdır
+
+Belgeler şemasız olduğu için Bronze ve Silver tabloları kolon kolon açılmaz; koleksiyon
+başına **iki** iş kolonu vardır (`glue/jobs/mongo_bronze.py`):
+
+| Kolon | Tip | İçerik |
+|---|---|---|
+| `_id` | `string` | belgenin `_id` alanı, metne çevrilmiş |
+| `_doc` | `string` | **belgenin tamamı JSON metni olarak**; silme olaylarında silinmeden önceki hâli |
+| `_cdc` | struct | pg/mssql ile aynı: `op`, `ts`, `offset`, `source`, `target`, `key` |
+
+Alanlara Trino'da `json_extract(_doc, '$.alan')` ile erişilir; tek bir metin/sayı değeri
+istendiğinde `json_extract_scalar` daha kullanışlıdır (`json_extract` sonucu yine JSON
+değeridir). Örnek sorgu Adım 9.2'dedir. Kolon kolon sorgulanabilir bir Gold tablosu
+isteniyorsa bu dönüşüm kurumun kendi dbt/Spark işiyle yapılır.
+
+Ayrıca her koleksiyon için bir **karantina** tablosu yaratılır: Bronze adının sonuna
+`__quarantine` eklenir (ör. `erp_raw.orders__quarantine`). İşlenemeyen kayıt buraya
+`_key`, `_value`, `reason`, `ts`, `partition`, `offset` ile düşer; `reason` dört değerden
+biridir (`glue/jobs/mongo_lib.py`):
+
+| `reason` | Anlamı |
+|---|---|
+| `bad-envelope` | Debezium zarfı çözülemedi ya da `op` tanınmadı |
+| `no-key` | olayın anahtarından `_id` çıkarılamadı |
+| `no-ts` | zaman damgası (`ts_ms`) yok ya da sayı değil |
+| `after-null` | ekleme/güncelleme olayında `after` belgesi boş |
+
+Karantina tablosunun **boş kalması beklenir**; dolmaya başlarsa kaynak tarafındaki
+belgelerde ya da bağlayıcı ayarlarında bir sorun var demektir.
+
 ---
 
 ## 4. Kaynağın Secret'ını yaratın
@@ -405,6 +456,15 @@ pipelines:
 birleştirilmiş katmandır; günlük ve olay tabloları yalnız Bronze'da kalır ve oradan
 sorgulanır.
 
+**MongoDB pipeline'ı.** Koleksiyonlarda anahtar her zaman `keys: [_id]`'dir ve `casts`
+kullanılmaz: Bronze'da iş kolonu yoktur, belge `_doc` içinde JSON metni olarak durur
+(Adım 3.3). Silver de aynı `(_id, _doc)` şeklini taşır.
+
+```yaml
+pipelines:
+- {bronze: erp_raw.orders, keys: [_id], bucket_count: 16}
+```
+
 **Ters giderse:** `'bronze' ve boş olmayan 'keys' zorunlu` → anahtar verilmemiştir.
 `casts bilinmeyen kolon(lar)` → `casts` içinde Bronze'da olmayan bir kolon adı vardır.
 
@@ -425,8 +485,10 @@ git push origin main
 ```
 
 ArgoCD eşitlediğinde şunlar yaratılır ya da güncellenir: `KafkaUser/connect` ACL'leri
-(kaynağın konu ön eki için), `KafkaConnector/dbz-erp` ve `KafkaConnector/sink-erp`,
-`ConfigMap/lakehouse-jobs` (Silver pipeline tanımları) ve — ilk pipeline eklendiğinde —
+(kaynağın konu ön eki için), `Role/connect-secrets-reader` (Connect'in `erp-db`
+Secret'ını okuyabilmesi için; `glue/templates/kafka-connect.yaml`),
+`KafkaConnector/dbz-erp` ve `KafkaConnector/sink-erp`, `ConfigMap/lakehouse-jobs`
+(Silver pipeline tanımları) ve — ilk pipeline eklendiğinde —
 `ScheduledSparkApplication/silver-merge` ile üç bakım işi.
 
 **Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde):
@@ -521,9 +583,53 @@ Bronze satırı, iş kolonlarının yanında bir `_cdc` yapısı taşır: `op` (
 `D`), `ts`, `offset`, `source`, `target`, `key`. Silme olayları da satır olarak durur;
 bu yüzden Bronze sayısı kaynaktakinden **büyüktür**.
 
+**MongoDB kaynaklarında sorgu farklıdır.** Bronze'da iş kolonu yoktur; belge `_doc`
+içinde JSON metni olarak durur (Adım 3.3), bu yüzden alanlara `json_extract` ile
+bakılır. Aşağıdaki hücre hem satır sayısını hem bir alanın gerçekten geldiğini gösterir:
+
+`[pod]` (JupyterHub not defteri hücresi)
+
+```python
+cur = conn.cursor()
+cur.execute("""select _id,
+                      json_extract_scalar(_doc, '$.status') as status,
+                      _cdc.op
+               from erp_raw.orders
+               order by _cdc.ts desc
+               limit 5""")
+cur.fetchall()
+```
+
+**Beklenen çıktı** (örnek — kendi belgelerinizin alanlarıyla):
+
+```text
+[['66f0c1a2e4b09a7d3c5f1234', 'new', 'I'], ['66f0c1a2e4b09a7d3c5f1235', 'paid', 'U']]
+```
+
+MongoDB kaynağında ayrıca **karantina tablosunun boş olduğunu** doğrulayın; dolu bir
+tablo, işlenemeyen olay demektir (`reason`: `bad-envelope`, `no-key`, `no-ts`,
+`after-null` — Adım 3.3):
+
+`[pod]` (JupyterHub not defteri hücresi)
+
+```python
+cur = conn.cursor()
+cur.execute("select reason, count(*) from erp_raw.orders__quarantine group by 1")
+cur.fetchall()
+```
+
+**Beklenen çıktı** (örnek — sağlıklı bir akışta karantina boştur):
+
+```text
+[]
+```
+
 **Ters giderse:** beş dakika sonra hâlâ 0 satır varsa Connect günlüğünde snapshot
 satırlarını arayın:
-`oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=200 | grep -i snapshot`.
+`oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=200 | grep -i snapshot`. MongoDB'de
+Bronze'u Iceberg sink değil, beş dakikada bir koşan `mongo-bronze` Spark işi yazar:
+`oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication mongo-bronze` ile askıda olmadığını
+doğrulayın.
 
 ### 9.3 Silver
 
@@ -536,12 +642,13 @@ dakikada bir). Zamanlamayı görmek için:
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge
 ```
 
-**Beklenen çıktı** (örnek — üretim zamanlaması; geliştirme kurulumunda cron gecelik
-`0 3 * * *`'tır):
+**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; oradaki cron gecelik
+`0 3 * * *`'tır ve işler önceki kabul koşusundan **askıda** kalmıştır. Üretimde
+`SCHEDULE` sütunu `*/15 * * * *`, `SUSPEND` sütunu `false` olur ve `LAST RUN` dolar):
 
 ```text
-NAME           SCHEDULE        TIMEZONE   SUSPEND   LAST RUN               LAST RUN NAME
-silver-merge   */15 * * * *               false     2026-09-24T09:15:00Z   silver-merge-1758705300
+NAME           SCHEDULE    TIMEZONE   SUSPEND   LAST RUN   LAST RUN NAME   AGE
+silver-merge   0 3 * * *              true                                 5d14h
 ```
 
 Koşu bittikten sonra Silver'ı sorgulayın:
@@ -566,6 +673,7 @@ askıya alır ve kendiliğinden geri açmaz).
 
 | Belirti | Neden | Çözüm |
 |---|---|---|
+| `dbz-erp` FAILED, `password authentication failed for user "debezium"` (mssql/mongo: `Login failed` / `Authentication failed`) | kaynakta hesap **boş parolayla** yaratılmış: Adım 3'ün başındaki `read -r -s ERP_DB_PASSWORD` bloğu atlanmış ya da `erp-db` Secret'ındaki değer farklı | parolayı kaynakta yenileyin (`ALTER ROLE debezium WITH PASSWORD :'parola';`) ve `erp-db` Secret'ını aynı değerle yeniden yaratın (Adım 4) |
 | `dbz-erp` FAILED, izde `must be superuser or replication role` | rolde `REPLICATION` yok | Adım 3.1.2'deki `CREATE ROLE ... REPLICATION` |
 | `dbz-erp` FAILED, `replication slot ... already exists and is active` | aynı adla başka bir bağlayıcı yuvayı tutuyor | eski kaynağı kaldırın ya da kaynağa başka bir ad verin |
 | `dbz-erp` FAILED, publication hatası ve rol tablo sahibi değil | `filtered` publication yaratılamıyor | tabloların sahibini CDC rolüne alın (Adım 3.1.2) |
@@ -596,8 +704,12 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector dbz-erp \
 
 **Ölü mektup kuyruğu hakkında bir uyarı:** Iceberg sink hatalı kaydı kuyruğa **yazmaz**;
 sonu `.dlq` olan konu yalnız dönüştürücü ve SMT hatalarını alır. Yazma hatası görevi
-durdurur ve izleme alarmıyla görünür. Belirtilerin tam tablosu işletme bölümündeki sorun
-giderme sayfasındadır.
+durdurur ve izleme alarmıyla görünür.
+
+Bağlayıcı yeniden başlatmaya rağmen düzelmiyor ve tüketici konumu ileriye kaymışsa
+(kaydın işlenmeden geçilmesi) **offset sıfırlama** gerekir; bu, veri yinelemesine yol
+açabildiği için ayrı bir yordamdır ve işletme bölümündeki sorun giderme sayfasında
+anlatılır. Belirtilerin tam tablosu da oradadır.
 
 ---
 
@@ -739,9 +851,17 @@ not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
   nginx'te `real_ip` modülü ya da `X-Forwarded-For` taşıyan bir `log_format` gerekir; bu
   durumda `parsers.conf` de güncellenir.
 - **Zaman.** Ay adları ajanda `%b` ile çözülür; sunucunun yerel dili sorun çıkarmaz.
+- **`nginx.dlq` doluysa `ts` üretilememiştir.** `ts` alanını ajandaki Lua filtresi
+  (`agents/fluent-bit/fluent-bit.conf` → `[FILTER] name lua`, `call add_ts`) epoch
+  milisaniye olarak ekler; sink bunu `TimestampConverter` ile zaman tipine çevirir.
+  Satır ayrıştırılamazsa (`parsers.conf` düzenli ifadesi tutmazsa) `ts` oluşmaz,
+  dönüşüm başarısız olur ve kayıt `nginx.dlq` konusuna düşer. Çözüm ajan tarafındadır:
+  `parsers.conf` ifadesini kurumun `log_format` tanımına uydurun.
 
 **Ters giderse:** `sink-nginx` `True` ama tablo boşsa ajan yazamıyordur;
 `journalctl -u fluent-bit` çıktısına ve `fluentbit` Secret'ındaki parolaya bakın.
+`oc -n "$LAKEHOUSE_NS" get kafkatopic nginx.dlq` bir konu gösteriyorsa yukarıdaki
+madde geçerlidir.
 
 ---
 
