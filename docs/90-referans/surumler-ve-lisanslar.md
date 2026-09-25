@@ -13,8 +13,11 @@ kararı; lisans özeti; listenin güncel tutulması.
 Aşağıdaki tablolar tek doğrudur: **Kurulum yolu** sütunu sürümün repoda hangi dosyada
 sabitlendiğini gösterir — yükseltme o dosyada yapılır.
 
-**Özel imaj sıfırdır.** Bütün imajlar upstream'in resmi imajlarıdır; Kafka Connect imajı
-Strimzi'nin `spec.build` mekanizmasıyla kümede üretilir (Dockerfile yoktur). Hızlı denetim:
+**Üretim yığınında özel imaj sıfırdır.** Üretimde kurulan bütün imajlar upstream'in resmi
+imajlarıdır; Kafka Connect imajı Strimzi'nin `spec.build` mekanizmasıyla kümede üretilir
+(Dockerfile yoktur). Tek istisna **üretimde kurulmayan** MinIO ve `mc` imajlarıdır: MinIO
+Inc. topluluk imajlarını geri çektiği için bunlar kaynaktan derlenip kendi kayıt
+defterimize yayımlanır (bkz. §5 altındaki not). Hızlı denetim:
 
 `[bastion]`
 
@@ -92,12 +95,30 @@ tabloda karşılığı olmayan bir satır, güncellenmemiş liste demektir.
 
 | Bileşen | Sürüm | Lisans | Kaynak | Kurulum yolu | Not |
 |---|---|---|---|---|---|
-| MinIO | `RELEASE.2025-09-07T16-13-09Z` | **AGPL-3.0** | `quay.io/minio/minio` | `glue/templates/minio.yaml` (`components.minio: true`) | Yalnız kind/dev S3'ü (veri ve yedek bucket'ları). Üretimde müşterinin S3'ü |
-| MinIO `mc` | `RELEASE.2025-08-13T08-35-41Z` | AGPL-3.0 | `quay.io/minio/mc` | aynı (bucket-init Job'ı) | |
+| MinIO | `RELEASE.2025-09-07T16-13-09Z` | **AGPL-3.0** | `ghcr.io/suhanduman/minio` (kaynaktan derlenmiş ayna) | `glue/templates/minio.yaml` (`components.minio: true`) | Yalnız kind/dev S3'ü (veri ve yedek bucket'ları). Üretimde müşterinin S3'ü |
+| MinIO `mc` | `RELEASE.2025-08-13T08-35-41Z` | AGPL-3.0 | `ghcr.io/suhanduman/mc` (kaynaktan derlenmiş ayna) | aynı (bucket-init Job'ı) | |
 | MongoDB (e2e fixture'ı) | 8.0 | **SSPL** | `mongo:8.0` | `test/e2e/mongo-fixture.yaml` | Yalnız test fixture'ı; müşteri MongoDB'si kaynak sistemdir |
 | kind | ≥ 0.33 (CI: v0.33.0) | Apache-2.0 | kind.sigs.k8s.io | `test/e2e/kind.sh`, `.github/workflows/e2e.yaml` | Podman 6 uyumu için ≥ 0.33 |
 | Helm | v4.2.4 (CI) | Apache-2.0 | `azure/setup-helm` | `.github/workflows/e2e.yaml` | Yerelde ≥ 3.14 yeterlidir |
 | helm-unittest | 1.1.2 | MIT | GitHub eklentisi | `.github/workflows/e2e.yaml` | `glue/tests/` |
+
+<a id="minio-aynasi"></a>
+
+**MinIO imajları neden bizim kayıt defterimizde?** MinIO Inc. 2026-09'da topluluk container
+imajlarını geri çekti: `quay.io/minio/minio` ve `quay.io/minio/mc` anonim çekişte 401 döndürüyor.
+Kaynak kodu AGPL-3.0 olarak yerinde duruyor ve sürüm etiketleri okunabilir. Bu yüzden dev/e2e
+yığını **aynı iki etiketi kaynaktan derlenmiş kendi aynamızdan** çeker. Ayna resmî değildir ve
+MinIO Inc. ile ilişkisi yoktur; imaj etiketleri (`org.opencontainers.image.source`,
+`.revision`, `.licenses`) bunu açıkça yazar, `LICENSE` ve `CREDITS` dosyaları imajın içinde
+`/licenses/` altında korunur.
+
+- **Kaynak:** `https://github.com/suhanduman/minio` ve `https://github.com/suhanduman/mc`
+  (arşivlenmiş upstream depoların fork'ları, aynı etiketlerde).
+- **Yeniden üretme yordamı:** `scripts/build-minio-mirror.sh` — fork'ları etiketten klonlar,
+  commit'i doğrular, upstream ldflags ile `linux/amd64` + `linux/arm64` derler ve manifest
+  listesini iter. Betiğin başlığı upstream tarifinden bilinçli sapmaları tek tek sayar.
+- **Üretimi ilgilendirmez:** MinIO üretim yığınının parçası **değildir**; üretimde nesne deposu
+  müşterinin S3'üdür. Ayna yalnız kind/dev kümesini ve CI e2e koşusunu ayakta tutar.
 
 ---
 

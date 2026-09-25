@@ -50,7 +50,9 @@ spec:
     spec:
       containers:
       - name: minio
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        # Topluluk imajları 2026-09'da geri çekildi (quay/Docker Hub 401) -> aynı etiketten
+        # kaynaktan derlenmiş kendi AGPL-3.0 aynamız (scripts/build-minio-mirror.sh).
+        image: ghcr.io/suhanduman/minio:RELEASE.2025-09-07T16-13-09Z
         args: ["server", "/data", "--console-address", ":9001"]
         env:
         - {name: MINIO_ROOT_USER, value: {{ .Values.minio.rootUser | quote }}}
@@ -83,7 +85,8 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: mc
-        image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+        # Yukarıdakiyle aynı neden: kaynaktan derlenmiş GHCR aynası.
+        image: ghcr.io/suhanduman/mc:RELEASE.2025-08-13T08-35-41Z
         command: ["/bin/sh","-c"]
         args:
         - |

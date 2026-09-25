@@ -101,6 +101,16 @@ render adımında yazılıdır (`.github/workflows/e2e.yaml`). Birini değiştir
 unutursanız CI, kümede koşmayacak bir sürümü doğrular. **İkisini aynı değişiklikte
 güncelleyin.**
 
+**Geliştirme yığınının MinIO/`mc` imajları elle derlenir.** Yukarıdaki tablodaki hiçbir satır
+bu ikisini kapsamaz, çünkü üretimde kurulmazlar: MinIO yalnız kind/dev kümesinin S3'üdür.
+MinIO Inc. topluluk imajlarını geri çektiğinden `glue/templates/minio.yaml` artık bir kayıt
+defteri etiketini değil, **kaynaktan derlenmiş kendi AGPL-3.0 aynamızı** gösterir. MinIO ya da
+`mc` sürümünü yükseltmek, yeni etiketi şablona yazmadan önce o etiketi derleyip itmeyi
+gerektirir: `MINIO_TAG=... MC_TAG=... scripts/build-minio-mirror.sh`. Betik fork'ları etiketten
+klonlar, commit'i doğrular ve iki mimarili manifest listesini iter; yükümlülüklerin ayrıntısı
+`docs/90-referans/surumler-ve-lisanslar.md` §5'tedir. **Ayna itilmeden şablonu güncellerseniz**
+dev kümesi ve CI e2e koşusu `ImagePullBackOff` ile durur.
+
 ---
 
 ## 4. Adım adım
