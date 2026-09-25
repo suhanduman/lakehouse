@@ -27,7 +27,8 @@ spec:
   ingress:
   - from:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: cnpg-system}}
-    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}
+    # ArgoCD ns'i DEĞERDEN gelir: OpenShift GitOps `openshift-gitops` kullanır, sabit `argocd` eşleşmezdi.
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.argocdNamespace }}}}
 {{- if .Values.velero.enabled }}
     # Velero: node-agent pod hacimlerini hostPath (/var/lib/kubelet/pods) üzerinden okur, AĞ gerekmez; sunucu da
     # yalnız kube-apiserver + S3 ile konuşur. Yine de yedek hook'ları (exec/HTTP) ileride eklenirse kapı kapalı kalmasın.

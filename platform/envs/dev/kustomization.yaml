@@ -15,11 +15,14 @@ patches:
     - op: replace
       path: /spec/sources/0/helm/valueFiles
       value: [$values/platform/values/trino.yaml, $values/platform/values/trino-dev.yaml]
+# REPLACE (add DEĞİL): prod listesi site/jupyterhub.yaml'ı da taşır; `add` ile dev/e2e o dosyayı da
+# yüklerdi ve yalnız sahaya özgü anahtarlar (Keycloak URL'leri, S3_ENDPOINT) dev render'ına sızardı.
+# glue ve trino yamaları da aynı nedenle replace. Liste = prod listesi EKSİ site + jupyterhub-dev.yaml.
 - target: {kind: Application, name: jupyterhub}
   patch: |-
-    - op: add
-      path: /spec/sources/0/helm/valueFiles/-
-      value: $values/platform/values/jupyterhub-dev.yaml
+    - op: replace
+      path: /spec/sources/0/helm/valueFiles
+      value: [$values/platform/values/jupyterhub.yaml, $values/platform/values/jupyterhub-dev.yaml]
 # custom/: prod'da müşterinin kendi CR'ları (kök boştur); dev/e2e'de ÖRNEKLERİ dağıtırız ki mekanizma
 # gerçekten doğrulansın (test/e2e/custom-path.sh -> "E2E CUSTOM OK").
 - target: {kind: Application, name: custom}

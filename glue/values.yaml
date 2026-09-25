@@ -175,6 +175,13 @@ velero:
 networkPolicy:
   enabled: true
 
+# ArgoCD'nin koştuğu ad alanı — networkpolicy.yaml `allow-platform-namespaces` girişini bundan üretir.
+# install/lakehouse.env.example içindeki $ARGOCD_NS ile AYNI olmalıdır; farklıysa seçici hiçbir ad
+# alanıyla eşleşmez ve ArgoCD'den pod'a doğrudan erişim sessizce kapalı kalır.
+# OpenShift GitOps operatörü `openshift-gitops` kullanır -> prod değeri platform/values/site/glue.yaml'da.
+# Varsayılan `argocd`: upstream ArgoCD ve kind/CI bootstrap'ı (bootstrap/bootstrap.sh --argocd-ns) bu adı kullanır.
+argocdNamespace: argocd
+
 monitoring:
   enabled: true                 # PodMonitor + PrometheusRule + Grafana dashboard ConfigMap'leri (bu chart ServiceMonitor RENDER ETMEZ)
   namespace: monitoring         # dev/vanilla Prometheus/Grafana ns'i — networkpolicy.yaml scrape girişini bundan üretir (OpenShift'te openshift-* sabit)

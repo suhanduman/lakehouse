@@ -306,14 +306,14 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   echo "$ARGOCD_NS"
   ```
 
-  Beklenen: listede `kubernetes.io/metadata.name: argocd` görünür, `$ARGOCD_NS` ise
-  `openshift-gitops`'tur — yani seçici **hiçbir ad alanıyla eşleşmez**. Bu bir kod kusurudur:
-  `glue/templates/networkpolicy.yaml` ArgoCD ad alanını **sabit `argocd`** yazar, `$ARGOCD_NS`
-  değerinden türetmez. Kurulumda sorun çıkarmaz (ArgoCD kube-apiserver ile konuşur,
-  `$LAKEHOUSE_NS` pod'larına doğrudan bağlanmaz); ArgoCD'den pod'a doğrudan erişim gerekiyorsa
-  ya da politika sıkılaştırılacaksa şablon `$ARGOCD_NS` ile parametreleştirilir (birim testi +
-  e2e ister, bu yüzden teslim öncesi **karar kutusu**dur: düzeltilecek mi, kabul mü edilecek).
-  *Kaynak: [port-ve-servisler.md](port-ve-servisler.md) §5.*
+  Beklenen: listede görünen ArgoCD ad alanı `echo "$ARGOCD_NS"` çıktısıyla **birebir aynıdır**
+  (OpenShift GitOps'ta `openshift-gitops`). Seçici artık sabit değil, `argocdNamespace` değerinden
+  üretilir; prod değeri `platform/values/site/glue.yaml` içindedir. Uyuşmuyorsa o dosyadaki
+  `argocdNamespace` satırını `$ARGOCD_NS` ile eşitleyip ArgoCD'yi yeniden eşitleyin — aksi hâlde
+  seçici hiçbir ad alanıyla eşleşmez ve ArgoCD'den pod'a doğrudan erişim kapalı kalır (kurulumun
+  kendisi yürür: ArgoCD kube-apiserver ile konuşur, `$LAKEHOUSE_NS` pod'larına bağlanmaz).
+  *Kaynak: [port-ve-servisler.md](port-ve-servisler.md) §5,
+  [values-anahtarlari.md](values-anahtarlari.md) §1.*
 
 ---
 

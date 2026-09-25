@@ -6,6 +6,9 @@ appsDomain: apps.ocp.example.net          # $APPS_DOMAIN — oc get ingresses.co
 # trino: {hostname: trino.kurum.edu.tr}
 # İSTİSNA — keycloak.hostname AÇIK verilirse ÇIPLAK HOST DEĞİL, TAM URL olmalı (token iss bu değerdir):
 # keycloak: {hostname: https://sso.kurum.edu.tr}      # şemasız yazılırsa render hata verir (glue.keycloakUrl)
+# ArgoCD ad alanı — NetworkPolicy `allow-platform-namespaces` seçicisi bundan üretilir; $ARGOCD_NS ile
+# AYNI olmalı. OpenShift GitOps operatörü openshift-gitops kullanır (ürün varsayılanı: argocd).
+argocdNamespace: openshift-gitops         # $ARGOCD_NS
 s3:
   endpoint: https://s3.example.com        # $S3_ENDPOINT (FlashBlade; platform/polaris/setup.yaml ile aynı olmalı)
   region: us-east-1                       # $S3_REGION

@@ -23,11 +23,12 @@ Dosyaların doldurulması: [30-kurulum](../30-kurulum.md) §4. Tutarlılık dene
 ## 1. `platform/values/site/glue.yaml`
 
 Ürünün ana chart'ının (Kafka, Connect, Keycloak, Superset, Zeppelin, CNPG, yedek, TLS)
-müşteriye özel değerleri. **21 anahtar.**
+müşteriye özel değerleri. **22 anahtar.**
 
 | Anahtar | Anlam | `.env` karşılığı | Örnek | Zorunlu mu |
 |---|---|---|---|---|
 | `appsDomain` | OpenShift uygulama alan adı; bütün Route adresleri bundan türetilir (bileşen adı + `-` + ad alanı + `.` + bu değer) | `$APPS_DOMAIN` | `apps.ocp.example.net` | **Evet** |
+| `argocdNamespace` | ArgoCD'nin koştuğu ad alanı; `allow-platform-namespaces` NetworkPolicy'sinin ArgoCD seçicisi bundan üretilir. Ürün varsayılanı `argocd` (upstream ArgoCD ve kind/CI bootstrap'ı); OpenShift GitOps operatörü `openshift-gitops` kullanır. Değer `$ARGOCD_NS` ile aynı değilse seçici hiçbir ad alanıyla eşleşmez | `$ARGOCD_NS` | `openshift-gitops` | **Evet** (OpenShift'te) |
 | `s3.endpoint` | Iceberg verisinin yazıldığı S3 uç noktası; istemciler (Iceberg sink, Spark) bunu kullanır. `https://` ile başlamak **zorundadır** | `$S3_ENDPOINT` | `https://s3.example.com` | **Evet** |
 | `s3.region` | S3 bölge adı; S3 uyumlu depolamalarda çoğu zaman anlamsızdır ama istemciler zorunlu tutar | `$S3_REGION` | `us-east-1` | Hayır (varsayılan `us-east-1`) |
 | `s3.vendedCredentials` | Polaris'in istemcilere geçici S3 kimliği dağıtması. Depolamada STS yoksa `false` yapın; o zaman istemciler `s3-creds` Secret'ını kullanır | — (depolama ekibine sorulur) | `true` | Hayır (varsayılan `true`) |

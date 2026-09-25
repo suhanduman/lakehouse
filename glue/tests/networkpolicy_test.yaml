@@ -1,0 +1,47 @@
+suite: networkpolicy (ad alanı seçicileri)
+templates: [networkpolicy.yaml]
+tests:
+  - it: renders the three ingress policies (default-deny + same-namespace + platform)
+    asserts:
+      - hasDocuments: {count: 3}
+      - documentIndex: 0
+        containsDocument: {kind: NetworkPolicy, apiVersion: networking.k8s.io/v1, name: default-deny-ingress}
+      - documentIndex: 1
+        containsDocument: {kind: NetworkPolicy, apiVersion: networking.k8s.io/v1, name: allow-same-namespace}
+      - documentIndex: 2
+        containsDocument: {kind: NetworkPolicy, apiVersion: networking.k8s.io/v1, name: allow-platform-namespaces}
+  # Varsayılan (upstream ArgoCD / kind bootstrap): argocd
+  - it: allow-platform-namespaces uses the default argocd namespace
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}}}
+  # OpenShift GitOps: seçici DEĞERDEN gelir; sabit yazılsaydı hiçbir ad alanıyla eşleşmezdi
+  - it: argocdNamespace overrides the selector (OpenShift GitOps)
+    set: {argocdNamespace: openshift-gitops}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - contains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-gitops}}}}
+      - notContains: {path: 'spec.ingress[0].from', content: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: argocd}}}}
+  # Öteki seçiciler argocdNamespace'ten ETKİLENMEZ (vanilla: cnpg-system + ingress-nginx + monitoring)
+  - it: the other namespace selectors are unchanged on vanilla
+    set: {argocdNamespace: openshift-gitops}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - lengthEqual: {path: 'spec.ingress[0].from', count: 4}
+      - equal: {path: 'spec.ingress[0].from[0]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: cnpg-system}}}}
+      - equal: {path: 'spec.ingress[0].from[2]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}}
+      - equal: {path: 'spec.ingress[0].from[3]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}}
+  # OpenShift + Velero: router/izleme ad alanları sabit, yedekleme ns'i velero.namespace'ten gelir
+  - it: openshift keeps its fixed platform namespaces next to the values-driven ones
+    set: {platform: openshift, argocdNamespace: openshift-gitops, velero.enabled: true, velero.namespace: openshift-adp}
+    documentSelector: {path: metadata.name, value: allow-platform-namespaces}
+    asserts:
+      - lengthEqual: {path: 'spec.ingress[0].from', count: 6}
+      - equal: {path: 'spec.ingress[0].from[2]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-adp}}}}
+      - equal: {path: 'spec.ingress[0].from[3]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-ingress}}}}
+      - equal: {path: 'spec.ingress[0].from[4]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}}}
+      - equal: {path: 'spec.ingress[0].from[5]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}}}
+  - it: nothing renders when networkPolicy is disabled
+    set: {networkPolicy.enabled: false}
+    asserts:
+      - hasDocuments: {count: 0}
