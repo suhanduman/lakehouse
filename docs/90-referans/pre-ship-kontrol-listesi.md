@@ -312,6 +312,8 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   `argocdNamespace` satırını `$ARGOCD_NS` ile eşitleyip ArgoCD'yi yeniden eşitleyin — aksi hâlde
   seçici hiçbir ad alanıyla eşleşmez ve ArgoCD'den pod'a doğrudan erişim kapalı kalır (kurulumun
   kendisi yürür: ArgoCD kube-apiserver ile konuşur, `$LAKEHOUSE_NS` pod'larına bağlanmaz).
+  `scripts/check-site.sh` dosya düzeyindeki eşitliği (site/glue.yaml ↔ `$ARGOCD_NS`) zaten
+  denetler; bu kutu RENDER EDİLMİŞ seçiciyi canlı kümede doğrular.
   *Kaynak: [port-ve-servisler.md](port-ve-servisler.md) §5,
   [values-anahtarlari.md](values-anahtarlari.md) §1.*
 

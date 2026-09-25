@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
-import json, re, sys, yaml
+import json, os, re, sys, yaml
 
 def dump(path):
     return yaml.safe_dump(yaml.safe_load(open(path)) or {}, width=10**9, allow_unicode=True)
@@ -167,6 +167,31 @@ if data_bucket and backup_bucket and data_bucket == backup_bucket:
     errs.append(f"site/glue.yaml: backup.s3.bucket '{backup_bucket}' veri bucket'ı ile AYNI "
                 f"(platform/polaris/setup.yaml default_base_location: s3://{data_bucket}/) — "
                 f"yedek bucket'ı ayrı olmalıdır")
+
+# 6) site/glue.yaml argocdNamespace, kurulumun ARGOCD_NS'i ile ÇAPRAZ denetlenir: NetworkPolicy
+# seçicisi argocdNamespace'ten üretilir (bkz. yukarıdaki `namespace` notu ve values-anahtarlari.md
+# §1); uyuşmazsa seçici hiçbir ad alanıyla eşleşmez. Kaynak sırası: install/lakehouse.env varsa
+# (müşterinin gerçek dosyası, .gitignore'lu) o, yoksa install/lakehouse.env.example (izlenen
+# şablon) kullanılır. Değişken env dosyasında yoksa UYARI (HATA değil): dosya eksik olabilir ama
+# bu denetim canlı kümedeki gerçek değeri göremez.
+env_path = "install/lakehouse.env" if os.path.exists("install/lakehouse.env") else "install/lakehouse.env.example"
+env_argocd_ns = None
+env_match = re.search(r"^ARGOCD_NS=(.*)$", open(env_path).read(), re.M)
+if env_match:
+    raw = re.sub(r"\s*#.*$", "", env_match.group(1)).strip()
+    env_argocd_ns = raw.strip("'\"")
+if not env_argocd_ns:
+    warns.append(f"{env_path}: ARGOCD_NS tanımlı değil — site/glue.yaml argocdNamespace ile "
+                 f"çapraz denetlenemedi")
+else:
+    site_argocd_ns = get(g, "argocdNamespace")
+    if site_argocd_ns is None:
+        chart_defaults = yaml.safe_load(open("glue/values.yaml")) or {}
+        site_argocd_ns = get(chart_defaults, "argocdNamespace") or "argocd"
+    if str(site_argocd_ns) != env_argocd_ns:
+        errs.append(f"site/glue.yaml: argocdNamespace='{site_argocd_ns}' {env_path} "
+                    f"ARGOCD_NS='{env_argocd_ns}' ile uyuşmuyor (docs/90-referans/"
+                    f"values-anahtarlari.md §1 'argocdNamespace' satırı, pre-ship 1.12)")
 
 for w in warns:
     print("UYARI:", w)
