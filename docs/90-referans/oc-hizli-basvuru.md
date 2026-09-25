@@ -261,10 +261,10 @@ sparkapplication.sparkoperator.k8s.io/ornek-rapor created
    (`oc -n "$LAKEHOUSE_NS" delete scheduledsparkapplication ornek-rapor-zamanli`).
 2. Bu örnek dosyalar **ad alanına sabittir**: `custom/examples/kustomization.yaml`
    `namespace: lakehouse` der ve `custom/examples/spark-tek-seferlik.yaml` da
-   `metadata.namespace: lakehouse` taşır. `$LAKEHOUSE_NS` başka bir değerse komutlar yine
-   `lakehouse` ad alanına yazar — `-n` bayrağı bunu **ezmez**. Farklı bir ad alanı
-   kullanıyorsanız dosyaları kendi `custom/` klasörünüze kopyalayıp ad alanını
-   değiştirin.
+   `metadata.namespace: lakehouse` taşır — `-n` bayrağı bunu **ezmez**. Değiştirilecek bir
+   şey yoktur: ad alanı adı üründe **sabittir** (`$LAKEHOUSE_NS` = `lakehouse`), bu yüzden
+   dosyadaki ad ile `-n` değeri her zaman aynıdır. Ayrıntı:
+   [30-kurulum.md §4.2](../30-kurulum.md#ad-alani-sabit).
 
 ---
 

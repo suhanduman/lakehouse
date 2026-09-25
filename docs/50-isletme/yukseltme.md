@@ -108,8 +108,9 @@ defteri etiketini değil, **kaynaktan derlenmiş kendi AGPL-3.0 aynamızı** gö
 `mc` sürümünü yükseltmek, yeni etiketi şablona yazmadan önce o etiketi derleyip itmeyi
 gerektirir: `MINIO_TAG=... MC_TAG=... scripts/build-minio-mirror.sh`. Betik fork'ları etiketten
 klonlar, commit'i doğrular ve iki mimarili manifest listesini iter; yükümlülüklerin ayrıntısı
-`docs/90-referans/surumler-ve-lisanslar.md` §5'tedir. **Ayna itilmeden şablonu güncellerseniz**
-dev kümesi ve CI e2e koşusu `ImagePullBackOff` ile durur.
+[90-referans/surumler-ve-lisanslar.md §5](../90-referans/surumler-ve-lisanslar.md#minio-aynasi)
+içindedir. **Ayna itilmeden şablonu güncellerseniz** dev kümesi ve CI e2e koşusu
+`ImagePullBackOff` ile durur.
 
 ---
 

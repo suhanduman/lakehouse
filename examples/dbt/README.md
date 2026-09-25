@@ -28,6 +28,10 @@ Bunu kalıcı bir üretim bileşeni yapacaksanız doğru yol, müşterinin kendi
 
 ## Kurulum adımları (bir kez)
 
+Komutlar kitapla aynı kalıptadır (`oc` + `$LAKEHOUSE_NS`, bkz.
+[docs/30-kurulum.md](../../docs/30-kurulum.md) §1); geliştirme kümesinde (kind) `oc` yerine
+`kubectl` yazmak birebir aynı işi yapar.
+
 ### 1. Trino servis hesabı `dbt`
 
 `password.db` bcrypt htpasswd dosyasıdır ve `trino-service-accounts` Secret'ından gelir
@@ -35,18 +39,18 @@ Bunu kalıcı bir üretim bileşeni yapacaksanız doğru yol, müşterinin kendi
 
 ```bash
 DBT_PW="$(openssl rand -hex 16)"
-kubectl -n lakehouse get secret trino-service-accounts -o jsonpath='{.data.password\.db}' | base64 -d > password.db
+oc -n "$LAKEHOUSE_NS" get secret trino-service-accounts -o jsonpath='{.data.password\.db}' | base64 -d > password.db
 htpasswd -nbBC 10 dbt "$DBT_PW" >> password.db
-kubectl -n lakehouse create secret generic trino-service-accounts \
+oc -n "$LAKEHOUSE_NS" create secret generic trino-service-accounts \
   --from-file=password.db \
-  --from-literal=superset="$(kubectl -n lakehouse get secret trino-service-accounts -o jsonpath='{.data.superset}' | base64 -d)" \
-  --from-literal=zeppelin="$(kubectl -n lakehouse get secret trino-service-accounts -o jsonpath='{.data.zeppelin}' | base64 -d)" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --from-literal=superset="$(oc -n "$LAKEHOUSE_NS" get secret trino-service-accounts -o jsonpath='{.data.superset}' | base64 -d)" \
+  --from-literal=zeppelin="$(oc -n "$LAKEHOUSE_NS" get secret trino-service-accounts -o jsonpath='{.data.zeppelin}' | base64 -d)" \
+  --dry-run=client -o yaml | oc apply -f -
 rm -f password.db
-kubectl -n lakehouse rollout restart deploy/trino-coordinator      # password.db mount'u yenilensin
+oc -n "$LAKEHOUSE_NS" rollout restart deploy/trino-coordinator      # password.db mount'u yenilensin
 
 # dbt'nin kendi Secret'ı (CronJob bunu okur)
-kubectl -n lakehouse create secret generic dbt-trino \
+oc -n "$LAKEHOUSE_NS" create secret generic dbt-trino \
   --from-literal=username=dbt --from-literal=password="$DBT_PW"
 ```
 Dev/kind'da `components.devSecrets=true` iken `trino-service-accounts` glue tarafından üretilir ve
@@ -103,7 +107,7 @@ ikisi de gerekir:
    polaris privileges list --catalog lakehouse --catalog-role lakehouse_sandbox    # doğrulama
    ```
    (`polaris` CLI'si `polaris-setup.sh`'in kullandığı port-forward'ı gerektirir:
-   `kubectl -n lakehouse port-forward svc/polaris 8181:8181` + `CLIENT_ID`/`CLIENT_SECRET`
+   `oc -n "$LAKEHOUSE_NS" port-forward svc/polaris 8181:8181` + `CLIENT_ID`/`CLIENT_SECRET`
    env'leri.)
 
    Ayrım isteniyorsa `lakehouse_sandbox` yerine ayrı bir katalog rolü (`lakehouse_gold`) + ayrı bir
@@ -113,12 +117,12 @@ ikisi de gerekir:
 ### 4. Proje ConfigMap'i ve CronJob
 
 ```bash
-kubectl -n lakehouse create configmap dbt-project \
+oc -n "$LAKEHOUSE_NS" create configmap dbt-project \
   --from-file=dbt_project.yml=examples/dbt/dbt_project.yml \
   --from-file=profiles.yml=examples/dbt/profiles.yml \
   --from-file=orders_daily.sql=examples/dbt/models/gold/orders_daily.sql \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f examples/dbt/cronjob.yaml
+  --dry-run=client -o yaml | oc apply -f -
+oc apply -f examples/dbt/cronjob.yaml
 ```
 ConfigMap anahtarları **düzdür** (alt dizin taşımaz); CronJob başlangıçta `models/gold/` düzenini
 `/tmp/project` altında kurar (`cronjob.yaml` `args`).
@@ -126,11 +130,11 @@ ConfigMap anahtarları **düzdür** (alt dizin taşımaz); CronJob başlangıçt
 ### 5. Elle bir koşu + doğrulama
 
 ```bash
-kubectl -n lakehouse create job dbt-gold-manual --from=cronjob/dbt-gold
-kubectl -n lakehouse logs job/dbt-gold-manual -f      # "Completed successfully" beklenir
+oc -n "$LAKEHOUSE_NS" create job dbt-gold-manual --from=cronjob/dbt-gold
+oc -n "$LAKEHOUSE_NS" logs job/dbt-gold-manual -f      # "Completed successfully" beklenir
 # Sonuç (Trino CLI resmi imajda mevcuttur; parola TRINO_PASSWORD env'inden okunur -> istem çıkmaz):
-DBT_PW=$(kubectl -n lakehouse get secret dbt-trino -o jsonpath='{.data.password}' | base64 -d)
-kubectl -n lakehouse exec deploy/trino-coordinator -- env TRINO_PASSWORD="$DBT_PW" \
+DBT_PW=$(oc -n "$LAKEHOUSE_NS" get secret dbt-trino -o jsonpath='{.data.password}' | base64 -d)
+oc -n "$LAKEHOUSE_NS" exec deploy/trino-coordinator -- env TRINO_PASSWORD="$DBT_PW" \
   trino --server https://localhost:8443 --insecure --user dbt --password \
         --execute "select * from lakehouse.gold.orders_daily order by gun"
 ```

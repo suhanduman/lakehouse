@@ -38,20 +38,24 @@ etkilediği için burada topluca verilir.
 | **Orta** | üretim, birkaç kaynak sistem; ~500 tabloya kadar, günde on milyonlarca olay; 25–50 eşzamanlı kullanıcı | Depodaki yorumlu "büyük tier" bloğu (`platform/values/glue.yaml` içinde kapalı duran `spark` bloğu) açılır, disk ve replika sayıları artırılır. |
 | **Büyük** | kurum geneli; binlerce tablo, sürekli yüksek hacim; 100+ kullanıcı | Orta kademenin çalıştırıcı sayısı ve bellek katları. **Bu sütun bir başlangıç noktasıdır, ölçüm değildir**: bir ay çalıştırıp gerçek kullanımı ölçmeden bu değerlere sabitlenmeyin. |
 
-> Küçük sütunu depodaki gerçek varsayılanlardır. Orta ve büyük sütunlar **başlangıç noktasıdır**; üretimde ilk ayın metriklerine (bkz. [50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md)) bakılarak düzeltilir.
+> Küçük sütunu depodaki gerçek varsayılanlardır. Orta ve büyük sütunlar **başlangıç
+> noktasıdır**; üretimde ilk ayın metriklerine
+> (bkz. [50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md)) bakılarak
+> düzeltilir.
 
 ### 2.2 Bileşen başına istek/limit
 
 "İstek" (request), pod'un düğümde yer ayırtmak için beyan ettiği asgari kaynaktır; kapasite planı
 bunun üzerinden yapılır.
 
-> **Değişiklik nereye yazılır.** Aşağıdaki "Küçük" sütunu `glue/values.yaml` ve `platform/values/*.yaml`
-> dosyalarındaki ürün varsayılanlarını gösterir; bu dosyalar **yükseltmede üzerine yazılır**, bu yüzden
-> orada değiştirilmez. Boyutlandırma ezmeleri müşteriye özel site dosyalarına yazılır — ArgoCD bu
-> dosyaları en SON yükler ve ürün varsayılanlarını ezerler: glue chart'ı için
-> `platform/values/site/glue.yaml`, Trino için `platform/values/site/trino.yaml`, JupyterHub için
-> `platform/values/site/jupyterhub.yaml`. Anahtar site dosyasında yoksa, tablodaki yolu aynen yazarak
-> eklersiniz.
+> **Değişiklik nereye yazılır.** Aşağıdaki "Küçük" sütunu `glue/values.yaml` ve
+> `platform/values/*.yaml` dosyalarındaki ürün varsayılanlarını gösterir; bu dosyalar
+> **yükseltmede üzerine yazılır**, bu yüzden orada değiştirilmez. Boyutlandırma ezmeleri
+> müşteriye özel site dosyalarına yazılır — ArgoCD bu dosyaları en SON yükler ve ürün
+> varsayılanlarını ezerler: glue chart'ı için `platform/values/site/glue.yaml`, Trino için
+> `platform/values/site/trino.yaml`, JupyterHub için
+> `platform/values/site/jupyterhub.yaml`. Anahtar site dosyasında yoksa, tablodaki yolu
+> aynen yazarak eklersiniz.
 
 | Bileşen | Küçük (bugünkü varsayılan) | Orta (başlangıç) | Büyük (başlangıç) | Nerede değiştirilir |
 |---|---|---|---|---|

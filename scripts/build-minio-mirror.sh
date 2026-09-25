@@ -29,8 +29,12 @@
 #   3. Upstream `RUN chmod -R 777 /usr/bin` yapar (OpenShift'in rastgele UID'si için). Bizim
 #      Dockerfile'ımız yalnız COPY içerir (emülasyonsuz çapraz derleme için), bu yüzden ikili
 #      dosyalara host'ta 0755 verilir — rastgele UID için okuma+çalıştırma yeterlidir.
-#   4. CA demeti `ubi-minimal`den KOPYALANIR (upstream `microdnf install` ile kurar); ilgili
-#      dosya `ubi-minimal:9.6` içinde zaten hazırdır, `RUN` gerekmez.
+#   4. CA demeti `ubi-minimal:9.6`dan KOPYALANIR. Upstream iki tarifte İKİ AYRI yol izler:
+#      `mc/Dockerfile.release` demeti imajın içinde `microdnf install ca-certificates` ile
+#      KURAR; `minio/Dockerfile.release` ise `golang:1.24-alpine` derleme katmanındaki
+#      (apk'nin koyduğu) `/etc/ssl/certs/ca-certificates.crt` dosyasını KOPYALAR. İkisinde de
+#      sonuç aynı demettir; bizde dosya `ubi-minimal:9.6` içinde zaten hazır olduğu için tek
+#      bir COPY yeter, `RUN` gerekmez.
 #   5. `minio` imajı upstream'de olduğu gibi `mc` ikilisini de taşır: docs/50-isletme/
 #      kaynak-veya-tablo-silme.md `oc exec deploy/minio -- sh -c 'mc ...'` çağırır.
 #   6. Upstream `MINIO_UPDATE_MINISIGN_PUBKEY` ortam değişkenini kurar; biz onun yerine

@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
-import re, sys, yaml
+import json, re, sys, yaml
 
 def dump(path):
     return yaml.safe_dump(yaml.safe_load(open(path)) or {}, width=10**9, allow_unicode=True)
@@ -44,7 +44,13 @@ if get(g, "connect.buildImage") and str(get(g, "connect.buildImage")).endswith("
 
 # 2) site/glue.yaml'dan türetilen değerler site/trino.yaml ve site/jupyterhub.yaml'da birebir geçmeli
 apps = get(g, "appsDomain") or ""
-ns = g.get("namespace") or "lakehouse"
+# Ad alanı adı üründe SABİTTİR (docs/30-kurulum.md §4.2): site/glue.yaml'a `namespace` YAZILMAZ.
+# Tek başına değiştirilirse kurulum iki ad alanına bölünür, bu yüzden varlığı HATAdır.
+if "namespace" in g:
+    errs.append("site/glue.yaml: `namespace` anahtarı bulunmamalı — ad alanı adı üründe sabittir "
+                "(lakehouse). Satırı silin: docs/90-referans/values-anahtarlari.md §1 ('Eklemeyin') "
+                "ve docs/30-kurulum.md §4.2.")
+ns = "lakehouse"
 kc = get(g, "keycloak.hostname") or (f"https://keycloak-{ns}.{apps}" if apps else "")
 hub = get(g, "jupyterhub.hostname") or (f"jupyterhub-{ns}.{apps}" if apps else "")
 realm = get(g, "keycloak.realm.name") or "lakehouse"
@@ -119,15 +125,32 @@ if not ca and ts in t:
 tr_site = yaml.safe_load(open("platform/values/site/trino.yaml")) or {}
 site_rules = get(tr_site, "accessControl.rules") or {}
 rules_json = site_rules.get("rules.json") if isinstance(site_rules, dict) else None
+# Denetim METİN üzerinde değil, AYRIŞTIRILMIŞ JSON üzerinde yapılır: JSON nesnesinde anahtar
+# sırası anlamsızdır ("privileges" önce, "user" sonra yazılabilir) ve metin eşleme böyle bir
+# dosyada kuralı var sayıp sessizce KAÇIRIRDI.
 if rules_json:
-    for pat, shown in [
-        (r'"user"\s*:\s*"superset\|zeppelin(\|e2e)?"\s*,\s*"catalog"\s*:\s*"lakehouse\|system"\s*,\s*"allow"\s*:\s*"read-only"',
-         '{"user": "superset|zeppelin|e2e", "catalog": "lakehouse|system", "allow": "read-only"}'),
-        (r'"user"\s*:\s*"superset\|zeppelin(\|e2e)?"\s*,\s*"privileges"\s*:\s*\[\s*"SELECT"\s*\]',
-         '{"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]}')]:
-        if not re.search(pat, rules_json):
-            errs.append(f'site/trino.yaml: ürün satırı eksik -> {shown} '
-                        f'(accessControl.rules."rules.json" içinde bulunmalı)')
+    try:
+        rules = json.loads(rules_json)
+    except ValueError as exc:
+        rules = None
+        errs.append(f'site/trino.yaml: accessControl.rules."rules.json" geçerli JSON değil: {exc}')
+    svc = ("superset|zeppelin", "superset|zeppelin|e2e")
+
+    def has_rule(section, fields):
+        for r in (rules or {}).get(section) or []:
+            if isinstance(r, dict) and r.get("user") in svc and all(r.get(k) == v for k, v in fields.items()):
+                return True
+        return False
+
+    if isinstance(rules, dict):
+        for section, fields, shown in [
+            ("catalogs", {"catalog": "lakehouse|system", "allow": "read-only"},
+             '{"user": "superset|zeppelin|e2e", "catalog": "lakehouse|system", "allow": "read-only"}'),
+            ("tables", {"privileges": ["SELECT"]},
+             '{"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]}')]:
+            if not has_rule(section, fields):
+                errs.append(f'site/trino.yaml: ürün satırı eksik -> {shown} '
+                            f'(accessControl.rules."rules.json" -> "{section}" listesinde bulunmalı)')
 
 # 4) Polaris sunucusunun kendi endpoint'i ayrı bir dosyada ve dev'de MinIO'yu gösterir (test/e2e) -> UYARI
 if s3 and s3 not in p:
@@ -135,8 +158,10 @@ if s3 and s3 not in p:
 
 # 5) Yedek bucket'ı veri bucket'ından AYRI olmalıdır: geri yükleme hedefi ile kaynağı aynı olamaz.
 # Veri bucket'ı site değerlerinde yoktur; platform/polaris/setup.yaml'daki default_base_location'tadır.
-m = re.search(r"^\s*default_base_location:\s*s3://([^/\s]+)", p, re.M)
-data_bucket = m.group(1) if m else None
+# Değer tırnaklı yazılabilir ('s3://...' / "s3://..."): tırnak desene dâhil edilmezse eşleşme
+# sessizce KAÇARDI ve yedek/veri bucket'ı aynı olsa bile kural hiç işlemezdi.
+m = re.search(r"""^\s*default_base_location:\s*(?P<q>['"]?)s3://(?P<b>[^/'"\s]+)""", p, re.M)
+data_bucket = m.group("b") if m else None
 backup_bucket = str(get(g, "backup.s3.bucket") or "").strip()
 if data_bucket and backup_bucket and data_bucket == backup_bucket:
     errs.append(f"site/glue.yaml: backup.s3.bucket '{backup_bucket}' veri bucket'ı ile AYNI "

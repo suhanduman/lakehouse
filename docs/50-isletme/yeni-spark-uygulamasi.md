@@ -397,9 +397,9 @@ CR, Python kodunu ConfigMap'ten bağlar; **ConfigMap kümede önce olmalıdır**
 `custom/` klasörü boş olduğundan ConfigMap'i de siz uygularsınız:
 
 **Ad alanı dosyadan gelir.** Örnek CR'lar `metadata.namespace: lakehouse` taşır ve
-`oc apply -f` komutundaki `-n` bayrağı bunu **ezmez**. `$LAKEHOUSE_NS` değeriniz `lakehouse`
-değilse son satırı çalıştırmadan **önce** dosyadaki `namespace:` alanını kendi ad alanınıza
-çevirin; bu yüzden aşağıdaki üçüncü komutta `-n` bilerek yoktur.
+`oc apply -f` komutundaki `-n` bayrağı bunu **ezmez**; bu yüzden aşağıdaki üçüncü komutta
+`-n` bilerek yoktur. Dosyada değiştirilecek bir şey yoktur: ad alanı adı üründe **sabittir**
+(`$LAKEHOUSE_NS` = `lakehouse`) — [30-kurulum.md §4.2](../30-kurulum.md#ad-alani-sabit).
 
 `[bastion]`
 
