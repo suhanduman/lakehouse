@@ -38,6 +38,11 @@ connect:
   resources:
     requests: {cpu: 500m, memory: 1536Mi}
     limits: {memory: 2Gi}
+  # JVM yığını (-Xms/-Xmx) — limits.memory'nin ~%60'ı. Verilmezse Strimzi sınırın %75'ini yığına verir ve Iceberg
+  # sink'in Parquet/doğrudan bellek kullanımına ~500 MiB kalır: iki kaynak + iki sink'le pod OOMKilled olup döngüye
+  # girer, commit'ler gecikir (ocpphy provası 2026-11-08: 2 GiB sınırda 1,72 GiB kullanım, 4 yeniden başlama).
+  # limits.memory büyütülürse bu da orantılı büyütülür.
+  heap: 1200m
 
 # Kaynak DB'ler → KafkaUser ACL'leri + KafkaConnector çifti (dbz-<name>, sink-<name>). Secret: <name>-db (username, password).
 # Bronze namespace <name>_raw (Polaris setup.yaml'da yaratılmış olmalı — docs/50-isletme/yeni-kaynak-ve-pipeline.md)
@@ -125,7 +130,7 @@ jupyterhub:
 zeppelin:
   enabled: true
   hostname: ""                     # boş -> zeppelin-<ns>.<appsDomain>
-  image: apache/zeppelin:0.12.1
+  image: docker.io/apache/zeppelin:0.12.1
   storageSize: 10Gi
   storageClass: ""                 # boş = kümenin varsayılan StorageClass'ı
   mem: "-Xmx1024m"                 # ZEPPELIN_MEM (sunucu JVM); dev: -Xmx768m
@@ -228,7 +233,7 @@ pipelines: []
 #    casts: {updated_at: timestamp}    # Bronze'da string gelen timestamptz kolonları (F0 S2d)
 
 spark:
-  image: apache/spark:4.1.0-java21-python3
+  image: docker.io/apache/spark:4.1.0-java21-python3
   version: "4.1.0"
   # spark.jars.packages şablonda versions.iceberg'den üretilir (iki yerde sürüm tutulmaz)
   serviceAccount: spark-operator-spark          # spark-operator chart'ının jobNamespaces'ta yarattığı SA

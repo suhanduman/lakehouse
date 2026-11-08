@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: fluent-bit
-        image: fluent/fluent-bit:5.1.2
+        image: docker.io/fluent/fluent-bit:5.1.2
         args: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
         env:
         - {name: KAFKA_BOOTSTRAP, value: lakehouse-kafka-bootstrap:9093}

@@ -17,7 +17,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: bootstrap
-        image: apache/polaris-admin-tool:{{ .Values.versions.polarisAdminTool }}
+        image: docker.io/apache/polaris-admin-tool:{{ .Values.versions.polarisAdminTool }}
         # Credential env'den geldiği için shell genişletmesi gerekir; imajın java başlatıcısı /opt/jboss/container/java/run/run-java.sh
         # (F0'da doğrudan args ile çalıştı). Yol farklıysa: podman run --rm --entrypoint sh apache/polaris-admin-tool:1.7.0 -c 'ls /opt/jboss/container/java/run'
         command: ["/bin/sh", "-c"]

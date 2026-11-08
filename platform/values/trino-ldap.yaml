@@ -39,7 +39,7 @@
 initContainers:
   coordinator: &s3ts
   - name: s3-truststore
-    image: trinodb/trino:483
+    image: docker.io/trinodb/trino:483
     command: [sh, -c, 'if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi']
     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
     volumeMounts:

@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# e2e F4 Zeppelin yolu: Shiro login (dev users) -> jdbc interpreter READY (trino-jdbc Maven'den iner) -> not + %jdbc paragrafı
+# e2e F4 Zeppelin yolu: Shiro login (kind: dev kullanıcıları, üretim: AD test hesapları — lib.sh ACC_*) -> jdbc interpreter READY (trino-jdbc Maven'den iner) -> not + %jdbc paragrafı
 # -> senkron çalıştır (Trino'ya TLS + servis hesabı ile) -> sonuç 3
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse
+# shellcheck source=/dev/null
+source "$ROOT/test/e2e/lib.sh"
 kubectl -n "$NS" rollout status deploy/zeppelin --timeout=900s
 kubectl -n "$NS" port-forward svc/zeppelin 18081:8080 >/dev/null 2>&1 & PF=$!; trap 'kill $PF 2>/dev/null' EXIT; sleep 3
 CJ=$(mktemp)
-curl -sS -c "$CJ" -d 'userName=analyst1' -d 'password=analyst1-dev' localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin shiro login analyst1"; exit 1; }
-echo "OK zeppelin shiro login analyst1"
-[[ "$(curl -sS -o /dev/null -w '%{http_code}' -d 'userName=user1' -d 'password=wrong' localhost:18081/api/login)" == "403" ]] || { echo "HATA zeppelin wrong password 403 beklendi"; exit 1; }
+curl -sS -c "$CJ" --data-urlencode "userName=$ACC_ANALYST_USER" --data-urlencode "password=$ACC_ANALYST_PASS" localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin shiro login $ACC_ANALYST_USER"; exit 1; }
+echo "OK zeppelin shiro login $ACC_ANALYST_USER"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' --data-urlencode "userName=$ACC_USER_USER" -d 'password=yanlis-parola' localhost:18081/api/login)" == "403" ]] || { echo "HATA zeppelin wrong password 403 beklendi"; exit 1; }
 echo "OK zeppelin wrong password 403"
 # Rol kapısı ([urls] son kuralı anyofroles[admin, analyst, user]): kimlik doğrulamak YETMEZ. Rolsüz dev
 # kullanıcısı nogroup1 giriş yapabilir ama hiçbir veri uç noktasına erişemez (aksi halde paylaşımlı `zeppelin`
 # Trino servis hesabıyla tüm kataloğu okurdu — final review C1).
 NJ=$(mktemp)
-curl -sS -c "$NJ" -d 'userName=nogroup1' -d 'password=nogroup1-dev' localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin nogroup1 girişi başarısız (dev kullanıcısı eksik?)"; exit 1; }
+curl -sS -c "$NJ" --data-urlencode "userName=$ACC_NOGROUP_USER" --data-urlencode "password=$ACC_NOGROUP_PASS" localhost:18081/api/login | jq -e '.status=="OK"' >/dev/null || { echo "HATA zeppelin $ACC_NOGROUP_USER (grupsuz hesap) girişi başarısız (hesap var mı, parola doğru mu?)"; exit 1; }
 NC=$(curl -sS -b "$NJ" -o /dev/null -w '%{http_code}' localhost:18081/api/notebook)
 [[ "$NC" == "401" ]] || { echo "HATA zeppelin rol kapısı: rolsüz kullanıcı /api/notebook için 401 beklendi, gelen $NC"; exit 1; }
 echo "OK zeppelin rol kapısı: rolsüz kullanıcı 401 (giriş yapsa bile veri göremez)"

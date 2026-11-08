@@ -3,6 +3,21 @@
 # -> pod içinde pyiceberg (Polaris notebooks principal) + trino (TLS) -> sunucuyu durdur, kullanıcıyı sil.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; TOK=e2e-dev-token-0123456789abcdef0123456789abcdef
+# shellcheck source=/dev/null
+source "$ROOT/test/e2e/lib.sh"
+
+nb_check() {  # nb_check <pod> -> not defteri pod'u içinde pyiceberg (Polaris notebooks principal) + trino (TLS, servis hesabı)
+  local pw; pw=$(kubectl -n "$NS" get secret trino-service-accounts -o jsonpath="{.data.$ACC_SA}" | base64 -d)
+  kubectl -n "$NS" exec "$1" -c notebook -- python -c "
+import os, trino
+from pyiceberg.catalog import load_catalog
+c = load_catalog('lakehouse', type='rest', uri=os.environ['POLARIS_URI'], warehouse='lakehouse', credential=os.environ['POLARIS_CREDENTIAL'], scope='PRINCIPAL_ROLE:ALL')
+assert ('shop',) in c.list_namespaces(), c.list_namespaces(); print('OK pyiceberg -> Polaris (notebooks principal)')
+n = len(c.load_table('shop.orders').scan().to_arrow()); print(f'OK pyiceberg shop.orders okundu ({n} satır; S3 TLS)')
+conn = trino.dbapi.connect(host=os.environ['TRINO_HOST'], port=8443, http_scheme='https', verify='/etc/lakehouse-ca/tls.crt', auth=trino.auth.BasicAuthentication('$ACC_SA', '$pw'), catalog='lakehouse')
+cur = conn.cursor(); cur.execute('select count(*) from shop.orders'); assert cur.fetchone()[0] == 3; print('OK trino client (TLS) shop.orders == 3')"
+}
+
 
 # --- YALNIZ ArgoCD modunda: proxy token'ının re-sync'te SABİT kaldığını doğrula ---
 # Kusur (CI 35451232616): z2jh 4.4.2 `hub.config.ConfigurableHTTPProxy.auth_token`'ı values'ta pinlenmemişse
@@ -14,18 +29,18 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse; TOK=e2e-dev-token-012
 # olmasaydı token değişirdi. İki tur koşulur ki tek turluk bir rastlantı "düzeldi" sanılmasın.
 # Helm modunda (bootstrap --mode helm) ArgoCD yoktur: orada chart'ın `lookup`u değeri zaten korur -> atlanır.
 JH_TOKEN_PATH='{.data.hub\.config\.ConfigurableHTTPProxy\.auth_token}'
-if kubectl -n argocd get application jupyterhub >/dev/null 2>&1; then
+if kubectl -n "$ARGOCD_NS" get application jupyterhub >/dev/null 2>&1; then
   TOK_BEFORE=$(kubectl -n "$NS" get secret hub -o jsonpath="$JH_TOKEN_PATH")
   [[ -n "$TOK_BEFORE" ]] || { echo "HATA: hub Secret'ında auth_token yok"; exit 1; }
   PODS_BEFORE=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=jupyterhub -o name | sort | tr '\n' ' ')
   for round in 1 2; do
-    kubectl -n argocd annotate application jupyterhub argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+    kubectl -n "$ARGOCD_NS" annotate application jupyterhub argocd.argoproj.io/refresh=hard --overwrite >/dev/null
     settled=0; sync=""; health=""
     for _ in $(seq 1 60); do      # 60 x 5s = 300s üst sınır
       # ArgoCD refresh'i bitirince annotation'ı KENDİSİ siler; sync/health ancak ondan sonra anlamlıdır.
-      ann=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/refresh}' 2>/dev/null || true)
-      sync=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
-      health=$(kubectl -n argocd get application jupyterhub -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+      ann=$(kubectl -n "$ARGOCD_NS" get application jupyterhub -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/refresh}' 2>/dev/null || true)
+      sync=$(kubectl -n "$ARGOCD_NS" get application jupyterhub -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+      health=$(kubectl -n "$ARGOCD_NS" get application jupyterhub -o jsonpath='{.status.health.status}' 2>/dev/null || true)
       [[ -z "$ann" && "$sync" == "Synced" && "$health" == "Healthy" ]] && { settled=1; break; }
       sleep 5
     done
@@ -41,6 +56,23 @@ if kubectl -n argocd get application jupyterhub >/dev/null 2>&1; then
   else echo "   pod'lar döndü ama token aynı kaldı -> ÖNCE: $PODS_BEFORE SONRA: $PODS_AFTER"; fi
 else
   echo "ArgoCD yok, atlandı: hub Secret auth_token re-sync denetimi (helm modu; chart'ın lookup'ı değeri korur)"
+fi
+
+if [[ "$ACC_FLOW" == "authcode" ]]; then
+  # ÜRETİM: hub API jetonu yoktur (yalnız kind'da tanımlı). Gerçek kullanıcı akışı: AD analist hesabıyla tarayıcı girişi
+  # -> sunucu kendiliğinden başlar -> kontroller kullanıcının kendi pod'unda. ACC_CA_FILE: router sertifikasının kökü.
+  kubectl -n "$NS" rollout status deploy/hub --timeout=600s; kubectl -n "$NS" rollout status deploy/proxy --timeout=600s
+  host=$(kubectl -n "$NS" get route jupyterhub -o jsonpath='{.spec.host}')
+  python3 "$ROOT/test/e2e/oidc-login.py" "https://$host/hub/oauth_login" "$ACC_ANALYST_USER" ACC_ANALYST_PASS "${ACC_CA_FILE:--}" /hub/
+  POD="jupyter-$ACC_ANALYST_USER"
+  for _ in $(seq 1 90); do kubectl -n "$NS" get pod "$POD" >/dev/null 2>&1 && break; sleep 10; done
+  kubectl -n "$NS" wait --for=condition=Ready "pod/$POD" --timeout=1200s || { kubectl -n "$NS" describe pod "$POD" | tail -30; exit 1; }
+  echo "OK $POD ready (imaj + postStart pip; kişisel PVC: $(kubectl -n "$NS" get pvc "claim-$ACC_ANALYST_USER" -o jsonpath='{.status.phase}'))"
+  for _ in $(seq 1 30); do kubectl -n "$NS" exec "$POD" -c notebook -- python -c "import pyiceberg, trino" 2>/dev/null && break; sleep 10; done
+  nb_check "$POD"
+  kubectl -n "$NS" delete pod "$POD" --wait=false >/dev/null   # sunucuyu kapat (hub durdu olarak işaretler; PVC kalır)
+  echo "E2E F4 JUPYTERHUB OK"
+  exit 0
 fi
 
 kubectl -n "$NS" rollout status deploy/hub --timeout=600s; kubectl -n "$NS" rollout status deploy/proxy --timeout=600s

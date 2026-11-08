@@ -9,7 +9,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: smoke
-        image: python:3.13-slim
+        image: docker.io/library/python:3.13-slim
         command: ["/bin/sh","-c"]
         args: ["set -e; pip install -q 'pyiceberg[s3fs,pyarrow]>=0.10,<0.11'; python /work/smoke.py \"$CLIENT_ID\" \"$CLIENT_SECRET\""]
         env:

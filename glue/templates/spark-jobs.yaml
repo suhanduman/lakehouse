@@ -130,6 +130,7 @@ spec:
       {{- end }}
       volumeMounts:
       - {name: job, mountPath: /opt/job}
+      - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID (bkz. volumes)
       {{- if $s.ivySettingsXml }}
       - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
       {{- end }}
@@ -159,6 +160,7 @@ spec:
       {{- end }}
       volumeMounts:
       - {name: job, mountPath: /opt/job}
+      - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID (bkz. volumes)
       {{- if $s.ivySettingsXml }}
       - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
       {{- end }}
@@ -169,6 +171,11 @@ spec:
       - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}
       {{- end }}
     volumes:
+    # OpenShift: pod rastgele UID ile koşar; apache/spark imajının çalışma dizini (/opt/spark/work-dir) spark kullanıcısına
+    # aittir. spark-submit Maven'den çözdüğü paketleri (spark.jars.packages) oraya kopyalar -> "AccessDeniedException:
+    # /opt/spark/work-dir/...iceberg-spark-runtime...jar" ve HİÇBİR Spark işi açılmaz (ocpphy provası 2026-11-08).
+    - name: work-dir
+      emptyDir: {}
     - name: job
       configMap: {name: lakehouse-jobs}
     {{- if $s.ivySettingsXml }}

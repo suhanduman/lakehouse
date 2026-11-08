@@ -2,6 +2,8 @@
 # e2e F4 Superset yolu: CR Running -> /health -> login sayfasında keycloak -> Trino bağlantısı (legacy-import + test-db + sorgu; TLS + servis hesabı)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; NS=lakehouse
+# shellcheck source=/dev/null
+source "$ROOT/test/e2e/lib.sh"
 echo "== Superset CR"
 for _ in $(seq 1 90); do [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}' 2>/dev/null)" == "Running" ]] && break; sleep 10; done
 [[ "$(kubectl -n "$NS" get superset superset -o jsonpath='{.status.phase}')" == "Running" ]] || { kubectl -n "$NS" describe superset superset | tail -30; exit 1; }
@@ -18,6 +20,13 @@ assert u.urlopen('http://localhost:8088/health').read() == b'OK'
 html = u.urlopen('http://localhost:8088/login/').read().decode()
 assert 'keycloak' in html.lower(), html[:500]
 print('OK superset health + keycloak login')"
+if [[ "$ACC_FLOW" == "authcode" ]]; then
+  # Üretim: gerçek tarayıcı girişi (Keycloak formu + AD hesabı) — giriş döngüsü / router sertifikası / AD eşlemesi
+  # hatalarını yakalar (OpenShift provası). ACC_CA_FILE: router sertifikasının kökü (yoksa sistem kökleri).
+  host=$(kubectl -n "$NS" get route superset -o jsonpath='{.spec.host}')
+  python3 "$ROOT/test/e2e/oidc-login.py" "https://$host/login/keycloak?next=/superset/welcome/" \
+    "$ACC_ANALYST_USER" ACC_ANALYST_PASS "${ACC_CA_FILE:--}" /superset/welcome
+fi
 echo "== Trino bağlantısı (deklaratif import + test-db + sorgu)"
 kubectl -n "$NS" exec "$POD" -- superset legacy-import-datasources -p /app/configs/trino.yaml
 # -c create_engine() kwargs'ı: TLS ayarları connect_args altında olmalı (düz http_scheme/verify TypeError verir)

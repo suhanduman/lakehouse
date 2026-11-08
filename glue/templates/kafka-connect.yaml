@@ -89,20 +89,23 @@ spec:
 {{- end }}
   resources:
 {{ toYaml .Values.connect.resources | indent 4 }}
-{{- with .Values.s3.caSecret }}
-  # Özel CA'lı S3: Iceberg sink'in S3FileIO'su (AWS SDK v2) JVM varsayılan güven deposunu kullanır. Strimzi
-  # Connect pod'una initContainer eklenemez -> hazır truststore.p12 (JDK kökleri + S3 CA) Secret'tan bağlanır.
-  # Yol /mnt altında OLMAK ZORUNDA: Strimzi ek volume'ları başka yere bağlamayı reddeder ("Forbidden path found
-  # in additional volumes. Should start with /mnt" — ocpphy provası 2026-11-08).
+  # JVM yığını açıkça sınırlanır (gerekçe: glue/values.yaml connect.heap).
   jvmOptions:
+    "-Xms": {{ .Values.connect.heap | quote }}
+    "-Xmx": {{ .Values.connect.heap | quote }}
+{{- if .Values.s3.caSecret }}
+    # Özel CA'lı S3: Iceberg sink'in S3FileIO'su (AWS SDK v2) JVM varsayılan güven deposunu kullanır. Strimzi
+    # Connect pod'una initContainer eklenemez -> hazır truststore.p12 (JDK kökleri + S3 CA) Secret'tan bağlanır.
     javaSystemProperties:
     - {name: javax.net.ssl.trustStore, value: /mnt/s3-ca/truststore.p12}
     - {name: javax.net.ssl.trustStorePassword, value: changeit}
     - {name: javax.net.ssl.trustStoreType, value: PKCS12}
+  # Yol /mnt altında OLMAK ZORUNDA: Strimzi ek volume'ları başka yere bağlamayı reddeder ("Forbidden path found
+  # in additional volumes. Should start with /mnt" — ocpphy provası 2026-11-08).
   template:
     pod:
       volumes:
-      - {name: s3-ca, secret: {secretName: {{ . | quote }}}}
+      - {name: s3-ca, secret: {secretName: {{ .Values.s3.caSecret | quote }}}}
     connectContainer:
       volumeMounts:
       - {name: s3-ca, mountPath: /mnt/s3-ca, readOnly: true}
