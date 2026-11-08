@@ -11,7 +11,7 @@
 # glue'da demo kaynakların açık olması (`sources`/`pipelines`/`nginx.enabled` — platform/values/glue-dev.yaml
 # kalıbı). Kaynaklar kapalıysa pg/mongo/nginx yolları bekledikleri connector'ları bulamaz.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NS=lakehouse
 MON_NS="${MON_NS:-monitoring}"
 VELERO_NS="${VELERO_NS:-velero}"
