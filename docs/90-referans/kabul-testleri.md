@@ -213,10 +213,29 @@ durumlar §5'tedir.
 
 ## 5. Kabul koşusuna özgü sık durumlar
 
-- **`pg-path.sh` "public.orders 3 satır bekleniyordu" ile düşüyor:** fixture kaynağı önceki
-  koşuda değişmiştir. `oc -n "$LAKEHOUSE_NS" delete cluster/demo-pg` ve
-  `oc -n "$LAKEHOUSE_NS" delete pvc -l cnpg.io/cluster=demo-pg` komutlarından sonra betiği
-  tekrar koşturun (fixture yeniden uygulanır).
+- **Kabulü kullanılmış bir kümede yeniden koşmak** (önceki koşu yarıda kaldı ya da yollar
+  daha önce elle denendi): yollar **taze** demo durumu bekler — kaynakta 3 satır, boş Bronze
+  ve Silver tabloları, offset'siz bağlayıcılar. Yalnız test veritabanını silmek **yetmez**:
+  bağlayıcılar eski konumlarını hatırlar (PostgreSQL bağlayıcısı yeni veritabanında
+  `The connector is trying to read change stream starting at …` ile düşer, MongoDB
+  bağlayıcısı snapshot almaz) ve Bronze'daki eski satırlar sayımları bozar. Sıfırlama, demo
+  kaynakları için [kaynak-veya-tablo-silme.md](../50-isletme/kaynak-veya-tablo-silme.md)
+  yordamıdır; OpenShift provasında şu sırayla uygulandı ve ardından kabul baştan geçti:
+  1. `shop` ve `crm` girdilerine `state: stopped` → commit → `STOPPED` → offset'leri sil
+     (§3).
+  2. §1.1 bloğunu geri al (`shop`, `crm`, iki `pipelines` satırı, `nginx`) → commit; ArgoCD
+     bağlayıcıları, `mongo-bronze` işini ve `nginx.access` konusunu kaldırır (§4).
+  3. Kalan konuları ve sink tüketici gruplarını sil (§5): `shop.*`, `crm.*`,
+     `__debezium-heartbeat.shop|crm`, `nginx.dlq`; `connect-sink-shop`, `connect-sink-nginx`
+     ve `-coord` eşleri.
+  4. Tabloları tek seferlik Spark işiyle `PURGE` ile düşür (§6.2): `shop_raw.orders`,
+     `shop.orders`, `crm_raw.customers`, `crm_raw.customers__quarantine`, `crm.customers`,
+     `nginx_raw.access_log`.
+  5. Test veritabanlarını sil ve yeniden uygula (§1.2'deki `oc delete -f …`, sonra
+     `oc apply -f test/e2e/pg-fixture.yaml -f test/e2e/mongo-fixture.yaml`).
+  6. §1.1 bloğunu **`state` satırı olmadan** geri ekle → commit; bağlayıcılar günlüğe
+     `No previous offset found` ve `Snapshot completed` yazar. Sonra
+     `scripts/acceptance.sh`.
 - **Kabul koşusundan sonra zamanlanmış işler duruyor:** koşu sırasında işler askıya alınır;
   `scripts/acceptance.sh` bitişte (başarılı ya da başarısız) hepsini kendisi geri açar ve
   son satırda `zamanlanmış Spark işleri geri açıldı: ...` basar. Bu satırı **görmediyseniz**

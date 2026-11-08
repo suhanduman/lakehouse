@@ -419,6 +419,7 @@ Alanların tamamı:
 | `topicPrefix` | hayır | Kafka konu ön eki; varsayılan `name` |
 | `bronzeNamespace` | hayır | Bronze ad alanı; varsayılan `name` + `_raw` |
 | `sinkTasks` | hayır | Iceberg sink görev sayısı (varsayılan 1); yüksek hacimli kaynakta artırılır |
+| `state` | hayır | Debezium bağlayıcısının durumu: `running` (varsayılan), `paused` ya da `stopped`. Kaynağı Git'ten durdurmanın tek kalıcı yolu budur — Kafka Connect'e elle `stop` gönderilirse Strimzi birkaç saniyede geri açar. Offset sıfırlama bunu ister ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §3) |
 | `trustServerCertificate` | hayır | yalnız `sqlserver`; `true` sertifika doğrulamasını **kapatır** (laboratuvar) |
 | `extraConfig` | hayır | Debezium bağlayıcısına eklenen ya da onu ezen anahtarlar |
 | `sinkExtraConfig` | hayır | Iceberg sink bağlayıcısına eklenen ya da onu ezen anahtarlar |

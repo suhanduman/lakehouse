@@ -39,7 +39,7 @@ verilmiştir.
 Sıra:
 
 ```text
-(offset sıfırlama: durdur + sil, resume YOK) -> values'tan çıkar -> commit -> ArgoCD prune
+(offset sıfırlama: Git'ten state: stopped + offset sil) -> values'tan çıkar -> commit -> ArgoCD prune
   -> Kafka konuları -> Iceberg tabloları (PURGE) -> S3 boş mu -> kaynak DB temizliği
   -> (kaynağın tamamı)
 ```
@@ -92,75 +92,82 @@ sonuna `__quarantine` eklenmiş ikinci bir tablosu bulunur
 ## 3. Aynı adla yeniden ekleyecekseniz: önce offset'leri sıfırlayın
 
 Bu adım **yalnız kaynağın tamamı kalkıyorsa ve** ileride aynı kaynak adı (aynı konu ön
-eki) yeniden kullanılacaksa gerekir. Tek tablo çıkarırken bağlayıcı yerinde kaldığı için
-offset'lere dokunulmaz; o tabloyu ileride geri eklerseniz geçmiş satırları **artımlı
-snapshot** getirir
+eki) yeniden kullanılacaksa gerekir — kabul testini kullanılmış bir kümede yeniden koşmak
+da bu duruma girer ([90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §5).
+Tek tablo çıkarırken bağlayıcı yerinde kaldığı için offset'lere dokunulmaz; o tabloyu
+ileride geri eklerseniz geçmiş satırları **artımlı snapshot** getirir
 ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) §6).
 
 Kafka Connect, bağlayıcının nerede kaldığını `connect-offsets` konusunda bağlayıcının
 **adıyla** saklar; aynı adla kurulan yeni bir bağlayıcı bu konumu bulur,
-baştan okumuş sayılır ve **snapshot almaz** — tablolarınız boş kalır.
+baştan okumuş sayılır ve **snapshot almaz** — tablolarınız boş kalır. Kaynak veritabanı
+da yenilendiyse durum daha kötüdür: PostgreSQL bağlayıcısı eski konumu yeni sunucuda
+arar ve görevi `The connector is trying to read change stream starting at …` hatasıyla
+düşer; MongoDB bağlayıcısı eski devam belirtecini bulamaz ve beklenmedik yerden okur.
 
 **Sıra önemlidir: bu adım Adım 4'ten önce yapılır.** Offset uçlarının çalışması için
-bağlayıcının kümede **hâlâ var olması** gerekir; bağlayıcı prune edildikten sonra aynı
-çağrı `404` döner.
+bağlayıcının kümede **hâlâ var olması** ve **durmuş** olması gerekir; bağlayıcı prune
+edildikten sonra aynı çağrı `404` döner.
 
-> **UYARI — offset'i sıfırlanan bağlayıcı bir daha ÇALIŞTIRILMAZ.**
-> Ürün bütün kaynak bağlayıcılarını `snapshot.mode: initial` ile yazar
-> (`glue/templates/connectors.yaml`: MongoDB dalında ve PostgreSQL/SQL Server dalında
-> ayrı ayrı). Bu kipte Debezium, konumunu bulamadığı her açılışta "ilk kez başlıyorum"
-> sayar ve kaynağın **tamamını** yeniden okur; üç kaynak türü için de geçerlidir.
->
-> Yani offset'i silinmiş bir bağlayıcı **yeniden çalıştırılırsa** bütün satırları Kafka'ya
-> ikinci kez basar. Bronze tablosu o sırada hâlâ duruyorsa çift kayıt alır — `mongo-bronze`
-> Spark işi **append** yapar, idempotent değildir; Iceberg sink de aynı olayları yeniden
-> yazar.
->
-> **Bu yordamda böyle bir şey olmaz, çünkü bağlayıcı `resume` EDİLMEZ.** Aşağıdaki üç
-> çağrı bağlayıcıyı `stop` durumunda bırakır; o hâlde kalır ve Adım 4'te ArgoCD tarafından
-> **prune edilerek kaldırılır**. Durdurulmuş bir bağlayıcı kaynaktan okumaz, dolayısıyla
-> silme sırasında yeniden snapshot da almaz.
->
-> **Kural:** silme sırasında offset sıfırladıktan sonra `PUT …/resume` **çağırmayın**.
-> Yanlışlıkla çağırırsanız bağlayıcı tam snapshot'a başlar; o durumda hemen tekrar `stop`
-> edin ve Adım 6'da tabloları zaten düşüreceğiniz için Bronze'a giren çift kayıtlar
-> temizlenir — ama Kafka konusuna basılan yinelenen olaylar Adım 5'e kadar orada kalır.
->
-> Tam snapshot **istenen** tek yer, kaynağı ileride **yeniden eklediğiniz** andır: o zaman
-> bağlayıcı sıfırdan yaratılır ve Bronze zaten boştur, yani snapshot doğru davranıştır
-> (bu sayfanın "Yapmak istemiyorsanız alternatif" notu ve
-> [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
->
-> **Kind provasından gerçek kanıt (geliştirme kümesi).** Bu bölümün geliştirme kümesindeki
-> provasından sonra `dbz-crm` bağlayıcısı, MongoDB'ye yeniden erişebildiği anda
-> günlüğüne `Connector started for the first time.` / `No previous offset has been found`
-> yazdı ve üç belgeyi yeniden bastı: `crm.crm.customers` konusunun uç offset'leri
-> `0:6, 1:0, 2:3` (6 → 9 kayıt) oldu. O bağlayıcı prova sonrası **durdurulmamıştı**
-> (çalışır hâlde bırakılmıştı) — yani tam olarak bu kuralın önlediği durumdu. Bronze
-> tablosu o sırada düşürülmüş ve `mongo-bronze` askıda olduğu için tabloya çift kayıt
-> **girmedi**; tablo yerinde olsaydı girerdi.
+> **Bağlayıcıyı Git'ten durdurun, elle değil.** Bağlayıcının durumu `KafkaConnector`
+> nesnesinde yazılıdır ve Strimzi onu sürekli o duruma getirir. Kafka Connect'e elle
+> `PUT …/stop` gönderirseniz Strimzi **birkaç saniye içinde** `resume` çağırır (OpenShift
+> provasında 5–7 saniye; Connect günlüğünde `PUT /connectors/dbz-shop/resume` satırı,
+> istemci `Java-http-client`). Bağlayıcı o anda kaynağın **tamamını** yeniden Kafka'ya
+> basar ve yeni bir offset yazar — sıfırlamanız boşa gider. Bu yüzden durdurma, kaynağın
+> `sources` girdisine **`state: stopped`** satırı eklenerek yapılır.
 
-Üç çağrı sırayla yapılır: **durdur**, offset'leri **sil**, sonucu **doğrula**. Dördüncü
-bir `resume` çağrısı **yoktur ve olmamalıdır** (yukarıdaki uyarı): bağlayıcı durdurulmuş
-hâlde bırakılır ve Adım 4'te prune edilir.
+**3.1 Kaynağı durdurun.** `platform/values/site/glue.yaml` içinde kaynağın girdisine tek
+satır ekleyin:
+
+```yaml
+sources:
+- name: shop
+  type: postgres
+  # ... diğer alanlar aynen kalır
+  state: stopped          # running (varsayılan) | paused | stopped
+```
+
+`[bastion]`
+
+```bash
+bash scripts/check-site.sh
+git add platform/values/site/glue.yaml
+git commit -m "site: shop kaynagi durduruldu (offset sifirlama)"
+git push origin main
+```
+
+Eşitleme bittikten sonra bağlayıcının durduğunu ve **durmuş kaldığını** doğrulayın:
 
 `[bastion]`
 
 ```bash
 POD=connect-connect-0
 API=http://localhost:8083/connectors/dbz-shop
-oc -n "$LAKEHOUSE_NS" exec "$POD" -- \
-  curl -s -o /dev/null -w 'stop: %{http_code}\n' -X PUT "$API/stop"
+oc -n "$LAKEHOUSE_NS" exec "$POD" -- curl -s "$API/status" | jq -r .connector.state
+```
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; bir dakika sonra tekrar
+sorulduğunda da aynıdır):
+
+```text
+STOPPED
+```
+
+**3.2 Offset'leri silin ve doğrulayın.**
+
+`[bastion]`
+
+```bash
 oc -n "$LAKEHOUSE_NS" exec "$POD" -- curl -s -X DELETE "$API/offsets"
 echo
 oc -n "$LAKEHOUSE_NS" exec "$POD" -- curl -s "$API/offsets"
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; komutlar aynı kümedeki
-`dbz-crm` bağlayıcısında koşturulmuştur, yanıtların biçimi bağlayıcı adından bağımsızdır):
+**Beklenen çıktı** (OpenShift provasında `dbz-shop` ve `dbz-crm` için alınmış gerçek
+çıktı; yanıtların biçimi bağlayıcı adından bağımsızdır):
 
 ```text
-stop: 204
 {"message":"The Connect framework-managed offsets for this connector have been reset successfully. However, if this connector manages offsets externally, they will need to be manually reset in the system that the connector uses."}
 {"offsets":[]}
 ```
@@ -169,6 +176,19 @@ Son satırdaki boş liste, bağlayıcının konumunun gerçekten silindiğini g�
 Kafka Connect 3.6 ve sonrasında vardır; kümedeki sürümü
 `oc -n "$LAKEHOUSE_NS" exec "$POD" -- curl -s http://localhost:8083/` çıktısındaki
 `version` alanından görebilirsiniz (ürün Kafka 4.3.1 ile gelir).
+
+> **UYARI — offset'i sıfırlanan bağlayıcıyı `state: stopped`'tan çıkarmayın.**
+> Ürün bütün kaynak bağlayıcılarını `snapshot.mode: initial` ile yazar. Bu kipte Debezium,
+> konumunu bulamadığı her açılışta kaynağın **tamamını** yeniden okur. `state` satırını
+> silerseniz ya da `running` yaparsanız bağlayıcı bütün satırları Kafka'ya ikinci kez
+> basar; Bronze tablosu o sırada duruyorsa çift kayıt alır (`mongo-bronze` **append**
+> yapar, idempotent değildir). Bağlayıcı Adım 4'te girdinin tamamıyla birlikte **durmuş
+> hâlde** prune edilir.
+>
+> Tam snapshot **istenen** tek yer, kaynağı ileride **yeniden eklediğiniz** andır: o zaman
+> Bronze zaten boştur ve konular silinmiştir (Adım 5, 6); `state` satırı olmadan eklenen
+> kaynak offset'siz başlar ve snapshot doğru davranıştır
+> ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
 
 **Yapmak istemiyorsanız alternatif:** kaynağı yeniden eklerken **başka bir ad** verin ya
 da `sources[].topicPrefix` alanına farklı bir değer yazın. Bağlayıcı adı ve konu ön eki
@@ -179,7 +199,9 @@ değişir.
 **Ters giderse:** `{"error_code":404,"message":"Unknown connector dbz-shop"}` → bağlayıcı
 kümede yoktur; Adım 4'ü zaten yapmışsınızdır. Bu durumda tek çıkış yolu yukarıdaki
 alternatiftir (farklı ad ya da farklı konu ön eki). `409` alıyorsanız bağlayıcı `STOPPED`
-durumuna geçmemiştir; birkaç saniye bekleyip silme çağrısını tekrarlayın.
+durumuna geçmemiştir: 3.1'deki eşitlemenin bittiğini ve durumun `STOPPED` olduğunu
+doğrulayıp silme çağrısını tekrarlayın. Durum birkaç saniye sonra yeniden `RUNNING`
+oluyorsa bağlayıcıyı Git yerine elle durdurmuşsunuzdur (yukarıdaki not).
 
 ---
 
@@ -276,24 +298,27 @@ NAME           CLUSTER     PARTITIONS   REPLICATION FACTOR   READY
 nginx.access   lakehouse   3            1                    True
 ```
 
-Konuyu gerçekten silmek için broker'ın kendi aracı kullanılır:
+Konuyu gerçekten silmek için Kafka'nın kendi aracı kullanılır. Ürünle gelen
+`scripts/kafka-cli.sh` aracı broker pod'unun içinde, ürünün yönetici Kafka kimliğiyle
+(`kafka-admin`) koşturur; bağlantı adresini ve kimliği kendisi verir, siz yalnız aracın
+kendi argümanlarını yazarsınız. (Üretimde kimliksiz `localhost:9092` dinleyicisi yoktur;
+broker pod'una doğrudan `--bootstrap-server localhost:9092` ile giden komutlar
+`Timed out waiting for a node assignment` ile düşer.)
 
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list | grep '^shop\.'
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --delete --topic shop.public.customers
+scripts/kafka-cli.sh kafka-topics.sh --list | grep -E '^shop\.|^__debezium-heartbeat\.shop$'
+scripts/kafka-cli.sh kafka-topics.sh --delete --topic shop.public.orders
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek liste; silme komutu başarılı olduğunda
-hiçbir şey basmaz):
+**Beklenen çıktı** (OpenShift provasında `shop` ve `crm` kaynaklarının tamamı kaldırılırken
+alınmış gerçek liste — burada yalnız `shop` satırları; silme komutu başarılı olduğunda hiçbir
+şey basmaz):
 
 ```text
+__debezium-heartbeat.shop
 shop.dlq
-shop.public.customers
-shop.public.debezium_signal
 shop.public.orders
 ```
 
@@ -302,6 +327,27 @@ da düşer: `schema-history.` + kaynak adı (yalnız SQL Server) ve `__debezium-
 kaynak adı. `nginx.access` konusu ise bir `KafkaTopic` olduğundan values'ta
 `nginx.enabled: false` yapıldığında **topic operatörü tarafından verisiyle birlikte**
 kaldırılır; elle silinmez.
+
+Kaynağın tamamı kalkıyorsa Iceberg sink'inin tüketici grupları da geride kalır
+(`connect-sink-` + kaynak adı ve `-coord` ekli eşi). Aynı adla yeniden ekleyecekseniz
+onları da silin; boşturlar, bağlayıcı kalktığı için kimse kullanmıyordur:
+
+`[bastion]`
+
+```bash
+scripts/kafka-cli.sh kafka-consumer-groups.sh --list | grep sink-shop
+scripts/kafka-cli.sh kafka-consumer-groups.sh --delete --group connect-sink-shop \
+  --group connect-sink-shop-coord
+```
+
+**Beklenen çıktı:** ilk komut iki grubu listeler (`connect-sink-shop`,
+`connect-sink-shop-coord`); ikincisi silinen grupları adıyla sayar.
+
+**Ters giderse:** `GroupIdNotFoundException: The group id does not exist` → o grup zaten
+kendiliğinden düşmüştür (OpenShift provasında `connect-sink-nginx` böyle oldu: bağlayıcı
+kalktıktan kısa süre sonra boş grup silinmişti); aynı çıktının sonundaki
+`These consumer groups were deleted successfully: …` satırı diğerlerinin silindiğini
+gösterir, sorun yoktur.
 
 **Acele etmeyin.** Konuları hemen silmek zorunda değilsiniz: saklama süresi dolduğunda
 veri kendiliğinden gider (Kafka'nın varsayılanı bir haftadır). Elle silmek yalnız yer

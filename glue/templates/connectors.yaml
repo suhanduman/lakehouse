@@ -35,6 +35,12 @@ metadata:
 spec:
   class: io.debezium.connector.mongodb.MongoDbConnector
   tasksMax: 1
+{{- if .state }}
+  {{- if not (has .state (list "running" "paused" "stopped")) }}{{ fail (printf "sources[%s].state: running | paused | stopped olmalı (verilen: %s)" .name .state) }}{{ end }}
+  # sources[].state: kaynağı Git'ten durdurma (offset sıfırlama için şart — Strimzi spec'teki durumu geri getirir;
+  # REST'ten elle `stop` birkaç saniyede `resume` edilir). docs/50-isletme/kaynak-veya-tablo-silme.md §3
+  state: {{ .state }}
+{{- end }}
   autoRestart: {enabled: true}
   config:
     {{- range $k, $v := $cfg }}
@@ -104,6 +110,12 @@ spec:
   class: io.debezium.connector.sqlserver.SqlServerConnector
   {{- end }}
   tasksMax: 1
+{{- if .state }}
+  {{- if not (has .state (list "running" "paused" "stopped")) }}{{ fail (printf "sources[%s].state: running | paused | stopped olmalı (verilen: %s)" .name .state) }}{{ end }}
+  # sources[].state: kaynağı Git'ten durdurma (offset sıfırlama için şart — Strimzi spec'teki durumu geri getirir;
+  # REST'ten elle `stop` birkaç saniyede `resume` edilir). docs/50-isletme/kaynak-veya-tablo-silme.md §3
+  state: {{ .state }}
+{{- end }}
   autoRestart: {enabled: true}     # Strimzi: FAILED task/connector'ı geri-çekilmeli yeniden başlatır (deklaratif; F5 alarmı kalır)
   config:
     {{- range $k, $v := $cfg }}
