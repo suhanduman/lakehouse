@@ -335,6 +335,7 @@ satırlar dosyalarda `# SİTE` ile işaretlidir ve **üretimde
 | `spark.sql.catalog.lakehouse.s3.path-style-access` | `s3.pathStyleAccess` (ürün varsayılanı `glue/values.yaml`; gerekirse site dosyasında ezilir) |
 | `spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation` | site `s3.vendedCredentials`: açıksa `vended-credentials`, kapalıysa `none` |
 | `image`, `sparkVersion`, `spark.jars.packages` içindeki Iceberg sürümü | ürün sürümleri: `glue/values.yaml` `spark.image`, `spark.version`, `versions.iceberg` |
+| `s3-ca` geçen **yorumlu** satırlar (iki `extraJavaOptions`, iki bağlama, bir volume) | site `s3.caSecret` doluysa (S3 sertifikası kurumun **özel** CA'sıyla imzalı — [30-kurulum](../30-kurulum.md) §5.14) beşi birden **açılır**; boşsa yorumlu kalır. Açılmazsa iş S3'e ilk istekte `PKIX path building failed` ile düşer |
 
 **Sürüm senkronu elle yapılır.** Ürün yükseltmesinde Spark ya da Iceberg sürümü
 değişirse `custom/` altındaki kendi CR'larınızdaki `image`, `sparkVersion` ve
