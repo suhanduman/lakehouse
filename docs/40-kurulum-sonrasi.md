@@ -404,7 +404,7 @@ edilmeden önce **kurulumcu** doğrular. Adresler `.env` değerlerinizden türet
 
 Tarayıcı akışlarının tamamı üretim kümesinde geçerlidir; geliştirme (kind) kümesinde
 Keycloak'ın issuer adresi küme içi olduğu için tarayıcıyla OIDC girişi yapılamaz. Bu yüzden
-aşağıdaki adımların ekran sonuçları **(OpenShift'te doğrulanır)** işaretlidir.
+aşağıdaki adımların ekran sonuçları OpenShift'te, AD kullanıcılarıyla doğrulanmıştır.
 
 ### 5.1 Adresleri yazdırın
 
@@ -461,7 +461,7 @@ Bu giriş **Adım 4.1'in ön koşuludur**: Superset yöneticisi ancak ilk giriş
 3. Sağ üstte **Settings** menüsünün göründüğünü doğrulayın (yalnız `Admin` rolünde çıkar).
 4. **SQL → SQL Lab** → veritabanı listesinde `lakehouse` seçilebiliyor olmalıdır.
 
-**Beklenen sonuç (OpenShift'te doğrulanır):** SQL Lab'da `select 1` sorgusu sonuç döndürür;
+**Beklenen sonuç** (OpenShift'te doğrulandı): SQL Lab'da `select 1` sorgusu sonuç döndürür;
 `Settings → List Users` listesinde kendi hesabınız `Admin` rolüyle görünür.
 
 **Ters giderse:** giriş sayfasında keycloak düğmesi yoksa `OIDC_CLIENT_SECRET` ya da realm
@@ -532,7 +532,7 @@ kolon kuralları kullanıcı bazında işlemez (Adım 5.6, 1. madde).
 
 `shop.orders` geliştirme demo tablosudur; üretimde kendi Silver tablonuzun adını yazın.
 
-**Beklenen sonuç (OpenShift'te doğrulanır):** üç arayüzde de kendi AD kullanıcı adınızla
+**Beklenen sonuç** (OpenShift'te doğrulandı): üç arayüzde de kendi AD kullanıcı adınızla
 oturum açılır; JupyterHub'da kişisel bir disk (PVC) yaratılır ve yukarıdaki iki hücre
 sonuç döndürür, Zeppelin'de `%jdbc` sorgusu satır basar.
 
@@ -626,10 +626,33 @@ olmasıdır. Kuralları **Observe → Alerting → Alerting rules** sayfasında 
 süzerek görürsünüz; taze bir kurulumda beşinin de **Inactive** olması beklenir (kurallar
 bilerek "veri yokken ateşlemez" biçiminde yazılmıştır).
 
-**Beklenen sonuç (OpenShift'te doğrulanır):** `Observe → Targets` listesinde
-`lakehouse/kafka-resources-metrics`, `lakehouse/spark-operator-podmonitor` ve
-`lakehouse/polaris` hedefleri **Up**; `Observe → Alerting` altında beş Lakehouse kuralı
-listeleniyor ve hiçbiri **Firing** değil.
+**Beklenen sonuç** (OpenShift 4.22'de doğrulandı): `Observe → Targets` listesinde
+`lakehouse/kafka-resources-metrics` (5 hedef: 3 Kafka broker'ı, Kafka Connect ve
+kafka-exporter), `lakehouse/spark-operator-podmonitor` (2 hedef) ve Polaris'in hedefi —
+konsolda iş adı `polaris-mgmt` olarak görünür — **Up**; `Observe → Alerting` altında beş
+Lakehouse kuralı listeleniyor ve hepsi **Inactive**.
+
+Aynı bilgiyi komut satırından da alabilirsiniz (konsoldaki oturumunuzun jetonuyla):
+
+`[bastion]`
+
+```bash
+H=$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')
+curl -sS --cacert ~/router-ca.crt -H "Authorization: Bearer $(oc whoami -t)" \
+  --data-urlencode "query=count by (job) (up{namespace=\"$LAKEHOUSE_NS\"} == 1)" \
+  "https://$H/api/v1/query" | jq -r '.data.result[] | "\(.metric.job) \(.value[1])"'
+```
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek değerler; sıra değişebilir):
+
+```text
+lakehouse/kafka-resources-metrics 5
+polaris-mgmt 1
+lakehouse/spark-operator-podmonitor 2
+```
+
+`~/router-ca.crt` dosyası [30-kurulum](30-kurulum.md) §7.3'te alınmıştır; router kurumsal bir
+sertifika kullanıyorsa onun yerine kurumun kök CA'sını verin.
 
 Aynı iddiaları komut satırından koşturan e2e yolu `test/e2e/monitoring-path.sh`'tir; CI
 koşusunda ürettiği gerçek satırlar (aşağıdaki `kube-state-metrics` satırı **yalnız

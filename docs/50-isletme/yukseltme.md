@@ -319,11 +319,12 @@ gider**. AD federasyonu varsa kullanıcılar yeniden akar; yine de önce bir kop
 
 ```bash
 oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- \
-  /opt/keycloak/bin/kcadm.sh get users -r lakehouse > users.json
+  /opt/keycloak/bin/kcadm.sh get users -r lakehouse --config /tmp/kcadm.config > users.json
 ```
 
 **Ters giderse:** komut oturum hatası verirse önce yönetici oturumu açılmalıdır
-([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
+([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek"; oradaki
+`config credentials` komutu da aynı `--config /tmp/kcadm.config` bayrağını kullanır).
 
 ---
 

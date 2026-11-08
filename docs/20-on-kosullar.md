@@ -28,6 +28,13 @@ Yönetim makinesinde kurulu olması gereken araçlar (kitabın tamamı için):
 | `git` | [30-kurulum](30-kurulum.md) §2–§4 |
 | `htpasswd` | [30-kurulum](30-kurulum.md) §5.7 (RHEL/Fedora: `httpd-tools`, Debian/Ubuntu: `apache2-utils`) |
 | `jq` | kabul koşusu ([90-referans/kabul-testleri.md](90-referans/kabul-testleri.md) §1) |
+| `keytool` | **yalnız S3 sertifikası kurumun kendi CA'sıyla imzalıysa:** [30-kurulum](30-kurulum.md) §5.14 (RHEL/Fedora: `sudo dnf install -y java-21-openjdk-headless`) |
+
+> **Yönetim makineniz macOS ise** üç küçük fark vardır: `getent` yoktur, yerine
+> `dscacheutil -q host -a name ADRES` kullanın; `shred` yoktur, yerine `rm -P DOSYA`
+> kullanın; macOS'la gelen `ldapsearch` özel CA ayarını (`LDAPTLS_CACERT`) **yok sayar** ve
+> `Can't contact LDAP server` der — `brew install openldap` ile gelen istemciyi kullanın
+> (`export PATH="$(brew --prefix openldap)/bin:$PATH"`). `oc` için `brew install openshift-cli`.
 
 ---
 
@@ -105,12 +112,40 @@ yes
 ```
 
 Sunucunun **Kubernetes sürümü 1.33 ya da üstü** olmalıdır (ürün bu tabanda geliştirilip
-sınanmıştır); OpenShift'te bu 4.20 ve üstü sürümlere karşılık gelir
-**(OpenShift'te doğrulanır)**. Son satır `yes` değilse hesabınız cluster-admin değildir.
+sınanmıştır); OpenShift'te bu 4.20 ve üstü sürümlere karşılık gelir (OpenShift 4.22 /
+Kubernetes 1.35'te doğrulandı). Son satır `yes` değilse hesabınız cluster-admin değildir.
 
 **Ters giderse:** `oc: command not found` → `oc` istemcisi kurulu değil, OpenShift web
 konsolunun sağ üstündeki "Command line tools" bağlantısından indirin. `You must be logged
-in` → `oc login` ile girin. Son satır `no` ise kuruluma başlamayın: cluster-admin olmadan
+in` → `oc login` ile girin.
+
+`oc login` **`x509: certificate signed by unknown authority`** derse kümenin API sertifikası
+kurulumun kendi ürettiği bir CA ile imzalıdır (yeni kurulmuş kümelerde olağandır). Güvenliği
+kapatmayın (`--insecure-skip-tls-verify` kullanmayın); CA'yı bir kez alıp sabitleyin.
+Aşağıdaki ilk iki komut CA'yı indirip parmak izini gösterir — **parmak izini platform
+ekibiyle karşılaştırın**, aynıysa son iki komutla girin. `read` komutu jetonu ekrana basmadan
+ister: web konsolunda sağ üstte kullanıcı adınız → **Copy login command** sayfasındaki
+`sha256~...` ile başlayan jetonu yapıştırıp Enter'a basın:
+
+`[bastion]`
+
+```bash
+API=$(echo "$APPS_DOMAIN" | sed 's/^apps\./api./'):6443
+echo | openssl s_client -connect "$API" -showcerts 2>/dev/null \
+  | awk '/BEGIN CERT/{n++} n==2' | sed '/END CERT/q' > ~/kume-api-ca.crt
+openssl x509 -in ~/kume-api-ca.crt -noout -subject -fingerprint -sha256
+read -rs -p "Jeton: " OC_TOKEN; echo
+oc login --token="$OC_TOKEN" --server="https://$API" \
+  --certificate-authority="$HOME/kume-api-ca.crt"
+```
+
+**Beklenen çıktı** (örnek):
+
+```text
+subject=OU=openshift, CN=kube-apiserver-lb-signer
+sha256 Fingerprint=28:73:2B:3C:...
+Logged into "https://api.ocp.example.net:6443" as "kube:admin" using the token provided.
+``` Son satır `no` ise kuruluma başlamayın: cluster-admin olmadan
 madde 2 ve madde 9 uygulanamaz, yarım kalmış kurulum geri almaktan daha pahalıdır.
 
 ---
@@ -174,7 +209,8 @@ NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
 openshift-gitops-server   1/1     1            1           2m
 ```
 
-`PHASE` **Succeeded** olmalıdır **(OpenShift'te doğrulanır)**.
+`PHASE` **Succeeded** olmalıdır (GitOps 1.22.3'te doğrulandı; CSV `openshift-gitops`
+ad alanında ilk dakikada `No resources found` diyebilir, bir dakika sonra tekrar bakın).
 
 **Ters giderse:** `no matches for kind "Subscription"` → küme OpenShift değildir (OLM
 yok); vanilla Kubernetes kurulumu bu belgenin kapsamı dışındadır. `PHASE` uzun süre
@@ -207,8 +243,11 @@ oc auth can-i create customresourcedefinitions \
 yes
 ```
 
-Çıktı `no` ise yetkiyi verin **(OpenShift'te doğrulanır — servis hesabı adı kurulu GitOps
-sürümüyle birlikte doğrulanmalıdır)**:
+Üstte `Warning: resource 'customresourcedefinitions' is not namespace scoped ...` satırı da
+görünebilir; zararsızdır, yalnız son satıra bakın. OpenShift GitOps 1.22'de bu yetki
+kendiliğinden **verilmez** ve çıktı `no` olur — o durumda aşağıdaki komut gerekir.
+
+Çıktı `no` ise yetkiyi verin (servis hesabı adı GitOps 1.22.3'te doğrulandı):
 
 `[bastion]`
 
@@ -261,6 +300,55 @@ bir sınıf varsa `$STORAGE_CLASS` boş bırakılabilir.
 Varsayılan sınıf yoksa `$STORAGE_CLASS` doldurulmak **zorundadır**; boş bırakılırsa
 PVC'ler sınıfsız kalır ve bağlanmaz.
 
+### 3.1 Depolama sürücüsü her düğümde var mı
+
+**Neden:** bir StorageClass'ın diski, yalnız o depolamanın sürücüsü (CSI) kurulu olan
+düğümlerde bağlanabilir. Bazı kümelerde bir düğüm (örneğin sanal makine olan bir düğüm)
+depolamaya bağlı değildir. Disk kullanan bir pod oraya düşerse sonsuza kadar
+`ContainerCreating`'de bekler.
+
+`[bastion]`
+
+```bash
+oc get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.provisioner}{"\n"}{end}'
+oc get csinode -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.drivers[*].name}{"\n"}{end}'
+```
+
+**Beklenen çıktı** (örnek): ilk komut sınıfların sürücüsünü, ikincisi her düğümdeki
+sürücüleri listeler. Kullanacağınız sınıfın sürücüsü (örnekte `pxd.portworx.com`) **her
+satırda** görünmelidir:
+
+```text
+px-fa-direct-access -> pxd.portworx.com
+worker-1.ocp.example.net: pxd.portworx.com
+worker-2.ocp.example.net: pxd.portworx.com
+```
+
+**Ters giderse:** sürücüsü olmayan bir düğüm varsa ve platform ekibi oraya sürücü
+kuramıyorsa, lakehouse pod'larını yalnız sürücülü düğümlere yerleştirin. Bu yöntem kümedeki
+başka hiçbir iş yükünü etkilemez: sürücülü düğümleri etiketler, yalnız `$LAKEHOUSE_NS` ad
+alanına "yalnız bu etiketli düğümler" kuralını koyar (sürücülü düğüm adlarını kendi
+çıktınızdan yazın):
+
+`[bastion]`
+
+```bash
+oc label node worker-1.ocp.example.net worker-2.ocp.example.net lakehouse.io/storage=csi
+oc create namespace "$LAKEHOUSE_NS" --dry-run=client -o yaml | oc apply -f -
+oc annotate namespace "$LAKEHOUSE_NS" openshift.io/node-selector=lakehouse.io/storage=csi --overwrite
+```
+
+**Beklenen çıktı:**
+
+```text
+node/worker-1.ocp.example.net labeled
+node/worker-2.ocp.example.net labeled
+namespace/lakehouse created
+namespace/lakehouse annotated
+```
+
+Bunu ürün **kurulmadan önce** yapın: kural yalnız sonradan yaratılan pod'lara uygulanır.
+
 ---
 
 ## 4. S3: iki bucket, iki anahtar çifti
@@ -270,6 +358,42 @@ PostgreSQL yedekleri **ayrı** bir bucket'a (`$S3_BUCKET_BACKUP`) ve **ayrı** b
 çiftiyle yazılır. Ayrılığın nedeni: veri anahtarları sızsa bile yedeklerin silinememesi
 ve geri yükleme hedefiyle kaynağın aynı olmaması.
 **Kimin işi:** depolama ekibi bucket'ları ve anahtarları yaratır; kurulumcu doğrular.
+
+Depolama ekibinden bucket ve anahtarların yanında **iki bilgi daha** isteyin:
+
+1. **S3 sertifikasının kök CA'sı** (`$S3_CA_FILE`). FlashBlade fabrikadan kendi ürettiği
+   (self-signed) bir sertifikayla gelir; kurumlar bunu çoğu zaman kendi CA'larından
+   aldıkları sertifikayla değiştirir. İki durumda da ürünün bu CA'ya güvenmesi gerekir.
+   Sertifika herkesçe bilinen bir CA'dan geliyorsa bu madde atlanır.
+2. **S3'ün veri IP adresleri** (`$S3_EGRESS_CIDRS`, ör. `10.20.30.40/32`). Not defterleri
+   S3'e doğrudan bağlanır ve güvenlik politikası iç ağ adreslerini varsayılan olarak kapatır;
+   bu adresler açıkça izin listesine yazılır.
+
+Hangisi olduğunu kendiniz de görebilirsiniz:
+
+`[bastion]`
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' "$S3_ENDPOINT"
+getent hosts "$(echo "$S3_ENDPOINT" | sed -E 's#^https?://##; s#[:/].*##')"
+```
+
+**Beklenen çıktı** (örnek): ilk satır bir HTTP kodudur (ör. `403`) ve CA gerekmez;
+`SSL certificate problem` yazıyorsa CA gereklidir. İkinci satır S3 adının IP adresidir.
+
+```text
+403
+10.20.30.40     s3.kurum.example.net
+```
+
+CA dosyası elinizdeyse bu bölümdeki bütün `aws` komutlarından **önce** tanıtın (CA yoksa bu
+satırı atlayın):
+
+`[bastion]`
+
+```bash
+export AWS_CA_BUNDLE="$S3_CA_FILE"
+```
 
 ### 4.1 Okuma doğrulaması
 
@@ -327,8 +451,10 @@ sürümünde STS'in açık olup olmadığı **depolama ekibinden sorulur**: ceva
 
 **Ters giderse:** `Could not connect to the endpoint URL` → `$S3_ENDPOINT` yanlış ya da
 güvenlik duvarı 443'ü kapatıyor. `SSL validation failed` → depolamanın sertifikası
-kurumsal CA ile imzalı; CA'yı bastion'a ekleyin (`AWS_CA_BUNDLE`) ve kümenin de aynı
-CA'ya güvendiğini platform ekibiyle doğrulayın. `AccessDenied` → anahtar çifti o bucket'a
+kurumun kendi CA'sıyla imzalı ya da self-signed; depolama ekibinden kök CA'yı isteyin,
+`$S3_CA_FILE` olarak kaydedin ve yukarıdaki `export AWS_CA_BUNDLE=...` satırını çalıştırın.
+Kümedeki bileşenlerin aynı CA'ya güvenmesi [30-kurulum](30-kurulum.md) §5.14'te sağlanır.
+`AccessDenied` → anahtar çifti o bucket'a
 yetkili değil; yedek anahtarını veri bucket'ında denemediğinizden emin olun.
 `NoSuchBucket` → bucket açılmamıştır.
 
@@ -376,12 +502,12 @@ jeton bitisi: 2027-09-19 08:41:12+00:00
 `--internal` bayrağı **şarttır**: bayraksız `oc registry info`, registry dışarı
 açılmışsa o Route'un genel adresini basar; Strimzi'nin ihtiyaç duyduğu
 küme içi adres yalnız `--internal` ile gelir. Çıktı `$INTERNAL_REGISTRY` değeriyle
-**birebir aynı** olmalıdır **(OpenShift'te doğrulanır)**.
+**birebir aynı** olmalıdır (OpenShift 4.22'de doğrulandı). Güncel `oc` sürümleri bu komutta
+`Command "info" is deprecated` uyarısı basar; zararsızdır.
 
-**ImageStream notu (OpenShift'te doğrulanır).** `system:image-builder` rolü itme yetkisi
-verir; ilk itişte hedef `ImageStream` nesnesinin kendiliğinden yaratılıp yaratılmadığı
-küme ayarına bağlıdır. Connect build'inden sonra kontrol edin — nesne yoksa elle
-yaratılır:
+**ImageStream notu.** `system:image-builder` rolü itme yetkisi verir; ilk itişte hedef
+`ImageStream` nesnesi kendiliğinden yaratılır (OpenShift 4.22'de doğrulandı). Yine de Connect
+build'inden sonra kontrol edin — nesne yoksa elle yaratılır:
 
 `[bastion]`
 
@@ -399,7 +525,8 @@ connect   image-registry.openshift-image-registry.svc:5000/lakehouse/connect   2
 
 **Jetonun ömrü ve yenilenmesi.** `oc create token ... --duration=8760h` bir yıllık
 **bağlı (bound) servis hesabı jetonu** ister; kümenin izin verdiği üst sınır daha kısaysa
-OpenShift jetonu kısaltır ve bunu uyarı olarak yazar **(OpenShift'te doğrulanır)** —
+OpenShift jetonu kısaltır ve bunu uyarı olarak yazar (OpenShift 4.22'de bir yıllık jeton
+kısaltılmadan verildi) —
 gerçek süre yukarıdaki `jeton bitisi:` satırından okunur, istenen süreden değil. Jeton
 dolduğunda Connect imajının **yeni** build'i `unauthorized` verir; çalışan Connect pod'u
 etkilenmez ama sürüm yükseltmesi durur. Bu yüzden jetonun bitiş tarihi kurumun takvimine
@@ -411,10 +538,58 @@ yükseltme bölümündedir:
 uyguluyordur; komutu `--duration=24h` ile tekrarlayıp yenileme sıklığını ona göre
 planlayın. `Error from server (AlreadyExists)` → kaynak zaten var; Secret'ı silip
 (`oc -n "$LAKEHOUSE_NS" delete secret connect-push`) komutu tekrarlayın.
-`oc registry info` boş dönerse iç registry kümede açık değildir: platform ekibinden
-`Image Registry` operatörünün `Managed` hâle getirilmesini isteyin. Ürün harici bir
-registry ile de çalışır; o durumda `$INTERNAL_REGISTRY` yerine kurumsal registry adresi
-ve oraya itme yetkili bir kullanıcı/parola ile aynı `connect-push` Secret'ı yaratılır.
+`oc registry info` **`error: the integrated registry has not been configured`** derse iç
+registry kapalıdır. Bare-metal ve "assisted installer" kurulumlarında bu varsayılandır.
+Durumu görmek için:
+
+`[bastion]`
+
+```bash
+oc get configs.imageregistry.operator.openshift.io cluster -o jsonpath='{.spec.managementState}{"\n"}'
+```
+
+`Removed` görürseniz platform ekibi registry'yi açar. Registry'nin diski için 100 GiB'lık bir
+PVC yeterlidir. Diskin türü **ReadWriteOnce** ise (blok depolama, madde 3'teki sınıf) registry
+tek kopya ve `Recreate` stratejisiyle çalışmak zorundadır; aşağıdaki komutlar bunu yapar:
+
+`[bastion]`
+
+```bash
+oc apply -f - <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: image-registry-storage, namespace: openshift-image-registry}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 100Gi}}
+  storageClassName: ${STORAGE_CLASS:-$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')}
+YAML
+oc patch configs.imageregistry.operator.openshift.io cluster --type merge -p \
+  '{"spec":{"managementState":"Managed","replicas":1,"rolloutStrategy":"Recreate","storage":{"pvc":{"claim":"image-registry-storage"}}}}'
+oc -n openshift-image-registry rollout status deploy/image-registry --timeout=300s
+oc registry info --internal
+```
+
+**Beklenen çıktı** (son satır):
+
+```text
+image-registry.openshift-image-registry.svc:5000
+```
+
+Registry pod'u `ContainerCreating`'de kalıyor ve olaylarında `does not contain driver` yazıyorsa
+pod depolama sürücüsü olmayan bir düğüme düşmüştür (madde 3.1). Madde 3.1'deki etiketi
+koyduktan sonra registry'yi o düğümlere yönlendirin:
+
+`[bastion]`
+
+```bash
+oc patch configs.imageregistry.operator.openshift.io cluster --type merge \
+  -p '{"spec":{"nodeSelector":{"lakehouse.io/storage":"csi"}}}'
+```
+
+Ürün harici bir registry ile de çalışır; o durumda
+`$INTERNAL_REGISTRY` yerine kurumsal registry adresi ve oraya itme yetkili bir
+kullanıcı/parola ile aynı `connect-push` Secret'ı yaratılır.
 
 ---
 
@@ -437,9 +612,15 @@ yüzden üç grup birebir bu adlarla açılmalıdır:
 ile kök CA PEM dosyasını verir); kurulumcu doğrular. Secret'ların kümede yaratılması bu
 bölümde **değildir**, [30-kurulum](30-kurulum.md) §5'tedir.
 
+Önce `ldapsearch`'e AD'nin kök CA'sını tanıtın. Kurumsal AD'lerde sertifika neredeyse her
+zaman kurumun kendi CA'sıyla imzalıdır; bu satır olmadan `ldapsearch` bağlanamaz ve
+`Can't contact LDAP server (-1)` der (bu bölümün sonundaki CA doğrulamasını önce yapmanız
+gerekmez, dosyanın yolu yeter):
+
 `[bastion]`
 
 ```bash
+export LDAPTLS_CACERT="$LDAP_CA_FILE"
 ldapsearch -H "$LDAP_URL" -D "$LDAP_BIND_DN" -w "$LDAP_BIND_PASSWORD" \
   -b "$LDAP_GROUPS_DN" "(cn=lakehouse-*)" cn
 ```
@@ -467,6 +648,27 @@ ldapsearch -H "$LDAP_URL" -D "$LDAP_BIND_DN" -w "$LDAP_BIND_PASSWORD" \
 ```
 
 **Beklenen çıktı:** en az bir `sAMAccountName:` satırı ve `result: 0 Success`.
+
+Servis hesabının **kısa adını** (`$LDAP_BIND_USER`) da doğrulayın. Zeppelin, AD'ye bu adın
+sonuna `$AD_UPN_SUFFIX` ekleyerek bağlanır; buraya yanlış değer yazılırsa Zeppelin'e kimse
+giremez:
+
+`[bastion]`
+
+```bash
+ldapsearch -LLL -H "$LDAP_URL" -D "$LDAP_BIND_DN" -w "$LDAP_BIND_PASSWORD" \
+  -b "$LDAP_BIND_DN" -s base sAMAccountName userPrincipalName
+echo "beklenen: $LDAP_BIND_USER$AD_UPN_SUFFIX"
+```
+
+**Beklenen çıktı** (örnek — `userPrincipalName` ile son satır **aynı** olmalıdır):
+
+```text
+dn: CN=svc lakehouse,OU=Service,DC=example,DC=com
+sAMAccountName: svc-lakehouse
+userPrincipalName: svc-lakehouse@example.com
+beklenen: svc-lakehouse@example.com
+```
 
 Son olarak AD sertifikasını imzalayan **kök CA'nın PEM dosyası** gerekir; bu dosyayı
 **AD ekibi verir** ve `$LDAP_CA_FILE` tam olarak onu göstermelidir. Sunucudan çekilen
@@ -530,8 +732,8 @@ coordinator ve Zeppelin'e **kendisi** bağlar; tüketicilerin tam listesi ve do�
 komutları [30-kurulum](30-kurulum.md) §5.13'tedir. Kurulumdan sonra bu üç bileşenden
 birinin günlüğünde `PKIX path building failed` (ya da `unable to find valid
 certification path to requested target`) görürseniz elinizdeki dosya yanlış köktür ya da
-Secret eksiktir — o tabloya dönün. Uçtan uca LDAPS el sıkışması yalnız gerçek AD ile
-kanıtlanabilir **(OpenShift'te doğrulanır)**.
+Secret eksiktir — o tabloya dönün. Uçtan uca LDAPS el sıkışması (Keycloak federasyonu,
+Zeppelin girişi, Trino grup sağlayıcısı) özel CA'lı bir AD ile OpenShift'te doğrulandı.
 
 ---
 
@@ -674,7 +876,7 @@ gövdesinin tamamını değiştirir ve kümenin diğer izleme ayarlarını siler
 `oc -n openshift-monitoring edit cm cluster-monitoring-config` ile yalnız
 `enableUserWorkload: true` satırını ekleyin. Pod'lar gelmiyorsa ad alanının açılması
 birkaç dakika sürebilir; hâlâ boşsa `data.config.yaml` gövdesinin geçerli YAML olduğunu
-kontrol edin **(OpenShift'te doğrulanır)**.
+kontrol edin (OpenShift 4.22'de doğrulandı; orada her bileşen iki kopya gelir).
 
 ### 9.2 OADP (yedekleme) — yedek alınacaksa
 
@@ -736,7 +938,7 @@ erişilebilir olmalıdır.
 | `docker.io` | `apache/spark`, `apache/zeppelin`, `apache/polaris`, `apache/superset`, `trinodb/trino` | kurulum ve imaj çekimi |
 | `apachesuperset.docker.scarf.sh` | Superset operatörünün varsayılan imaj adresi (yönlendirici) | kurulum — kurumsal ayna kullanılırsa gerekmez |
 | `registry.redhat.io` ve `redhat-operators` kataloğu | OpenShift GitOps operatörü, (isteğe bağlı) OADP | operatör kurulumu |
-| `cloudnative-pg.github.io`, `kubeflow.github.io`, `trinodb.github.io`, `hub.jupyter.org`, `downloads.apache.org` | ArgoCD (Helm chart depoları) | kurulum ve her yükseltme |
+| `cloudnative-pg.io` (eski adres `cloudnative-pg.github.io` buraya yönlendirir), `kubeflow.github.io`, `trinodb.github.io`, `hub.jupyter.org`, `downloads.apache.org` | ArgoCD (Helm chart depoları) | kurulum ve her yükseltme |
 | `registry.k8s.io` | JupyterHub prePuller'ının `pause` imajı (`platform/values/jupyterhub.yaml` → `prePuller`) | kurulum ve her düğüm eklendiğinde |
 | `github.com` (`keycloak/keycloak-k8s-resources`) | ArgoCD (Keycloak operatörünün kustomize kaynağı) | kurulum ve her sync |
 
@@ -795,13 +997,17 @@ eksiklik kurulumda değil, ilk Spark koşusunda ortaya çıkar.
 - [ ] **2.** OpenShift GitOps operatörü `Succeeded`, `openshift-gitops-server` hazır ve
       uygulama denetleyicisi CRD yaratabiliyor.
 - [ ] **3.** En az bir StorageClass var (`ALLOWVOLUMEEXPANSION: true`); varsayılan yoksa
-      `$STORAGE_CLASS` dolduruldu.
+      `$STORAGE_CLASS` dolduruldu. Sürücüsü her düğümde var; yoksa 3.1'deki düğüm kuralı
+      kondu.
 - [ ] **4.** İki bucket ve iki ayrı anahtar çifti; okuma **ve** yazma/silme testi hatasız.
-      STS durumu depolama ekibinden soruldu.
-- [ ] **5.** `connect-build` servis hesabı `system:image-builder` yetkisiyle var,
-      `connect-push` Secret'ı yaratıldı, jetonun bitiş tarihi takvime yazıldı.
+      STS durumu depolama ekibinden soruldu. S3 sertifikası özel CA'lıysa kök CA
+      `$S3_CA_FILE` yolunda; S3 veri IP'leri `$S3_EGRESS_CIDRS`'te.
+- [ ] **5.** İç registry açık (`oc registry info --internal` adres veriyor); `connect-build`
+      servis hesabı `system:image-builder` yetkisiyle var, `connect-push` Secret'ı yaratıldı,
+      jetonun bitiş tarihi takvime yazıldı.
 - [ ] **6.** Üç AD grubu `ldapsearch` ile görünüyor, `lakehouse-admins` en az bir üyeli,
-      bind hesabı çalışıyor, kök CA PEM dosyası `$LDAP_CA_FILE` yolunda.
+      bind hesabı çalışıyor, `$LDAP_BIND_USER` + `$AD_UPN_SUFFIX` servis hesabının
+      `userPrincipalName`'iyle aynı, kök CA PEM dosyası `$LDAP_CA_FILE` yolunda.
 - [ ] **7.** `$APPS_DOMAIN` kümeden alınan değerle aynı ve joker DNS kullanıcı ağından
       çözülüyor; kurumsal sertifika gerekiyorsa talebi açıldı.
 - [ ] **8.** nginx akışı kullanılacaksa ajan sunucularından 443 açık ve CA güveni var;
