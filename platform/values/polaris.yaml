@@ -23,7 +23,8 @@ extraInitContainers:
 - name: s3-truststore
   image: apache/polaris:1.7.0          # image.tag ile AYNI tutulmalı (değer dosyası şablonlanamaz)
   command: [sh, -c, 'if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi']
-  securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+  # runAsNonRoot YOK: imajın kullanıcısı addır (polaris), kind'da sayısal UID olmadan doğrulanamaz; OpenShift'te UID'i SCC atar
+  securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
   volumeMounts:
   - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
   - {name: s3-truststore, mountPath: /ts}

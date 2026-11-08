@@ -1,4 +1,7 @@
 # kind / lokal geliştirme: tek düğüm (coordinator=worker), MinIO, küme içi Keycloak issuer'ı, dosya tabanlı gruplar.
+# kind: OpenShift'e özgü UID kaldırması (trino.yaml securityContext null) burada geri alınır — imajın kullanıcısı ADDIR
+# (trino:trino), runAsNonRoot denetimi sayısal UID ister; kind'da UID'i atayan bir SCC yoktur (CI kırmızı, 2026-11-08).
+securityContext: {runAsUser: 1000, runAsGroup: 1000}
 server:
   workers: 0
   config: {query: {maxMemory: 1GB}}

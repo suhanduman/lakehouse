@@ -1,4 +1,9 @@
+# kind: OpenShift'e özgü UID kaldırmaları (jupyterhub.yaml null'ları) burada yalnız hub için geri alınır: hub imajının
+# kullanıcısı ADDIR (jovyan), runAsNonRoot ancak açık UID ile geçer (CI kırmızı, 2026-11-08). Diğerleri (chp 65534,
+# pause, notebook 1000) sayısal kullanıcılı imajlardır; user-scheduler (root imaj) kind'da zaten kapalıdır (aşağıda).
 hub:
+  podSecurityContext: {fsGroup: 1000}
+  containerSecurityContext: {runAsUser: 1000, runAsGroup: 1000}
   config:
     # DEV-ONLY: enable_auth_state (prod) spawn öncesi refresh_user() zorlar; admin API ile yaratılan e2e
     # kullanıcısının hiç auth_state'i olmadığından (gerçek OAuth login yok) 403 verir. auth_refresh_age: 0
