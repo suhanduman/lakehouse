@@ -1,4 +1,4 @@
-# e2e nginx yolu: örnek combined access.log (3 satır) + küme içi Fluent Bit 5.1.2 (aynı ajan config'i: agents/fluent-bit/*,
+# e2e nginx yolu: örnek access.log (3 combined + 1 nginx varsayılan "main" satırı) + küme içi Fluent Bit 5.1.2 (aynı ajan config'i: agents/fluent-bit/*,
 # ConfigMap fluent-bit-config'i nginx-path.sh o dosyalardan yaratır — kopya yok). Gerçekte ajan müşteri sunucusunda koşar.
 apiVersion: v1
 kind: ConfigMap
@@ -8,6 +8,7 @@ data:
     10.0.0.1 - - [11/Sep/2026:13:52:24 +0000] "GET /index.html HTTP/1.1" 200 512 "-" "curl/8.0"
     10.0.0.2 - - [11/Sep/2026:13:52:25 +0000] "POST /api/orders HTTP/1.1" 201 87 "-" "Mozilla/5.0"
     10.0.0.3 - - [11/Sep/2026:13:52:26 +0000] "GET /missing HTTP/1.1" 404 153 "-" "curl/8.0"
+    10.0.0.4 - - [11/Sep/2026:13:52:27 +0000] "GET /main-format HTTP/1.1" 200 64 "-" "curl/8.0" "-"
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -742,12 +742,17 @@ eklenir.
 
 ### 10.1 Küme tarafını açın
 
-`platform/values/site/glue.yaml` dosyasında iki anahtar açılır:
+`platform/values/site/glue.yaml` dosyasında iki anahtar açılır. `nginx:` satırı dosyada
+zaten vardır, `enabled` değerini `true` yapın. `kafka:` satırı şablonda **yoktur**; `nginx:`
+satırının hemen üstüne ekleyin:
 
 ```yaml
 kafka: {externalListener: true}
-nginx: {enabled: true}
+nginx: {enabled: true, partitions: 3}
 ```
+
+Dış dinleyiciyi açmak Kafka broker'larını sırayla yeniden başlatır (provada ~2,5 dakika);
+bu sırada boru hattı durmaz.
 
 Commit ve push sonrası ArgoCD şunları yaratır: `KafkaTopic/nginx.access`,
 `KafkaUser/fluentbit` (yalnız `nginx.` ön ekine yazma yetkisi),
@@ -762,11 +767,11 @@ Commit ve push sonrası ArgoCD şunları yaratır: `KafkaTopic/nginx.access`,
 oc -n "$LAKEHOUSE_NS" get kafkatopic nginx.access
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; üretimde çoğaltma sayısı 3'tür):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
 
 ```text
 NAME           CLUSTER     PARTITIONS   REPLICATION FACTOR   READY
-nginx.access   lakehouse   3            1                    True
+nginx.access   lakehouse   3            3                    True
 ```
 
 **Ters giderse:** konu görünmüyorsa `nginx.enabled` hâlâ `false`'tur ya da eşitleme
@@ -780,13 +785,14 @@ tamamlanmamıştır.
 oc -n "$LAKEHOUSE_NS" get kafka lakehouse \
   -o jsonpath='{.status.listeners[?(@.name=="external")].bootstrapServers}{"\n"}'
 oc -n "$LAKEHOUSE_NS" get secret lakehouse-cluster-ca-cert \
-  -o jsonpath='{.data.ca\.crt}' | base64 -d > lakehouse-ca.crt
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > kafka-ca.crt
 oc -n "$LAKEHOUSE_NS" get secret fluentbit -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**): blok üç komut
+**Beklenen çıktı** (OpenShift provasında doğrulandı; parola örnektir): blok üç komut
 içerir ama ekrana **iki** satır basar — ortadaki komut hiçbir şey yazdırmaz, CA'yı
-`lakehouse-ca.crt` dosyasına yazar (`ls -l lakehouse-ca.crt` ile doğrulayın). Birinci satır
+`kafka-ca.crt` dosyasına yazar (`ls -l kafka-ca.crt` ile doğrulayın). Bu, Kafka'nın kendi
+CA'sıdır; kurulumdaki `lakehouse-ca` (Trino) ile karıştırmayın. Birinci satır
 Route host'u ve 443, ikinci satır ajanın SCRAM parolasıdır:
 
 ```text
@@ -794,8 +800,9 @@ lakehouse-kafka-bootstrap-lakehouse.apps.ocp.example.net:443
 4f6b2c1d9e8a7350b1c4d2e6f0a9837c
 ```
 
-Üçü de ajan sunucusuna güvenli bir kanalla taşınır: bootstrap adresi, `lakehouse-ca.crt`
-dosyası ve parola.
+Üçü de ajan sunucusuna güvenli bir kanalla taşınır: bootstrap adresi, `kafka-ca.crt`
+dosyası ve parola. Ajan sunucusu `$APPS_DOMAIN` altındaki **dört** adı çözebilmelidir:
+bootstrap ve her broker için birer Route (`oc -n "$LAKEHOUSE_NS" get route | grep dual-role`).
 
 **Ters giderse:** bootstrap satırı boş dönerse dış dinleyici açılmamıştır (Adım 10.1).
 ArgoCD'siz vanilla kümelerde dinleyici tipi `nodeport`'tur; adres
@@ -812,11 +819,11 @@ Fluent Bit 5.1.2 paketi kurulur, ardından depodaki iki yapılandırma dosyası 
 
 ```bash
 install -m 0644 fluent-bit.conf parsers.conf /etc/fluent-bit/
-install -m 0644 lakehouse-ca.crt /etc/fluent-bit/lakehouse-ca.crt
+install -m 0644 kafka-ca.crt /etc/fluent-bit/kafka-ca.crt
 cat > /etc/default/fluent-bit <<EOF
 KAFKA_BOOTSTRAP=$KAFKA_BOOTSTRAP
 KAFKA_PASSWORD=$KAFKA_PASSWORD
-KAFKA_CA=/etc/fluent-bit/lakehouse-ca.crt
+KAFKA_CA=/etc/fluent-bit/kafka-ca.crt
 NGINX_ACCESS_LOG=/var/log/nginx/access.log
 READ_FROM_HEAD=off
 EOF
@@ -848,7 +855,7 @@ sertifika hatası → CA dosyası yanlış yolda ya da bozuktur; dosya bulunamad
 oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-nginx
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
 
 ```text
 NAME         CLUSTER   CONNECTOR CLASS                                   MAX TASKS   READY
@@ -860,18 +867,30 @@ not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
 
 - **Disk tamponu.** Ajan `storage.type filesystem` kullanır: Kafka kesilirse 1 GB'a kadar
   yerelde biriktirir, bağlantı dönünce gönderir.
-- **Günlük biçimi.** `parsers.conf` içindeki düzenli ifade nginx'in `combined` biçimini
-  bekler. Kurum kendi `log_format` tanımını kullanıyorsa ifade güncellenir.
+- **Günlük biçimi.** `parsers.conf` içindeki düzenli ifade nginx'in `combined` biçimini ve
+  nginx'in **varsayılan** `main` biçimini (sonunda `"$http_x_forwarded_for"` olan; resmi
+  imajda ve RHEL paketinde gelen) tanır. Sondaki ek tırnaklı alanlar yok sayılır. Kurum
+  bambaşka bir `log_format` kullanıyorsa ifade güncellenir; uymayan satır kaybolmaz, aşağıdaki
+  "ayrıştırılamayan satır" maddesine bakın.
 - **Proxy arkasında.** `remote` alanı proxy'nin IP'sidir. Gerçek istemci IP'si için
   nginx'te `real_ip` modülü ya da `X-Forwarded-For` taşıyan bir `log_format` gerekir; bu
   durumda `parsers.conf` de güncellenir.
 - **Zaman.** Ay adları ajanda `%b` ile çözülür; sunucunun yerel dili sorun çıkarmaz.
-- **`nginx.dlq` doluysa `ts` üretilememiştir.** `ts` alanını ajandaki Lua filtresi
-  (`agents/fluent-bit/fluent-bit.conf` → `[FILTER] name lua`, `call add_ts`) epoch
-  milisaniye olarak ekler; sink bunu `TimestampConverter` ile zaman tipine çevirir.
-  Satır ayrıştırılamazsa (`parsers.conf` düzenli ifadesi tutmazsa) `ts` oluşmaz,
-  dönüşüm başarısız olur ve kayıt `nginx.dlq` konusuna düşer. Çözüm ajan tarafındadır:
-  `parsers.conf` ifadesini kurumun `log_format` tanımına uydurun.
+- **Ayrıştırılamayan satır.** Biçime uymayan satır **kaybolmaz**: tabloya iş kolonları
+  (`remote`, `path`, `code` …) boş, satırın tamamı `log` kolonunda olarak yazılır; `ts`
+  ajanın okuma zamanıdır. `log` kolonu tabloda ancak ilk böyle satırda belirir. Varsa
+  şöyle bulunur (Adım 9.2'deki not defteri hücresiyle):
+
+  ```python
+  cur = conn.cursor()
+  cur.execute("select ts, log from nginx_raw.access_log where remote is null limit 5")
+  cur.fetchall()
+  ```
+
+  Satır görürseniz `parsers.conf` ifadesini o satıra uydurun; ajan yeniden başlatılınca
+  yeni satırlar doğru kolonlara düşer (eski satırlar olduğu gibi kalır).
+- **`nginx.dlq`.** Sink'in hiç okuyamadığı kayıtlar (JSON olmayan ileti gibi) bu konuya
+  düşer; ajan doğru kurulduğunda boş kalır.
 
 **Ters giderse:** `sink-nginx` `True` ama tablo boşsa ajan yazamıyordur;
 `journalctl -u fluent-bit` çıktısına ve `fluentbit` Secret'ındaki parolaya bakın.
