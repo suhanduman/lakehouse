@@ -742,7 +742,11 @@ OpenShift router'ı geçerli bir sertifika sunar.
 
 ```bash
 openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
-  -subj "/CN=lakehouse-ca" -keyout /tmp/ca.key -out /tmp/ca.crt
+  -subj "/CN=lakehouse-ca" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -keyout /tmp/ca.key -out /tmp/ca.crt
+openssl x509 -in /tmp/ca.crt -noout -ext keyUsage
 oc -n "$LAKEHOUSE_NS" create secret tls lakehouse-ca --cert=/tmp/ca.crt --key=/tmp/ca.key
 python3 - <<'PY'
 import json, pathlib
@@ -763,15 +767,24 @@ shred -u /tmp/ca.key
 doğrulanmış):
 
 ```text
+X509v3 Key Usage: critical
+    Certificate Sign, CRL Sign
 secret/lakehouse-ca created
 -----BEGIN CERTIFICATE-----
 ```
+
+İki `-addext` satırını **atlamayın**: `Key Usage` satırı olmayan bir kök CA'yı güncel
+Python (3.13 ve sonrası, not defteri imajı) reddeder ve not defterlerinden Trino'ya bağlantı
+`CA cert does not include key usage extension` hatasıyla düşer (OpenShift provası,
+2026-11-08). Superset ve Zeppelin bu hatayı vermez; bu yüzden fark edilmesi geç olur.
 
 `~/lakehouse-ca.crt` dosyasını **saklayın**: tarayıcıların ve JDBC istemcilerinin güven
 deposuna bu sertifika eklenir.
 
 **Kurumsal PKI'nız varsa** kendi ara CA'nızın sertifika ve anahtarını aynı Secret'a koyun
-(`oc create secret tls lakehouse-ca --cert=ara-ca.crt --key=ara-ca.key`); cert-manager
+(`oc create secret tls lakehouse-ca --cert=ara-ca.crt --key=ara-ca.key`). Ara CA'nın
+sertifikasında `Key Usage: Certificate Sign` bulunmalıdır (yukarıdaki `openssl x509` komutuyla
+bakın); cert-manager
 onunla imzalar ve `tls.caBundle` yine **doğrulayıcı zincir** olur.
 
 Değişikliği Git'e itin:
