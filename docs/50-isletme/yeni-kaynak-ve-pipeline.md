@@ -578,6 +578,11 @@ conn = trino.dbapi.connect(host=os.environ["TRINO_HOST"], port=8443, http_scheme
 cur = conn.cursor(); cur.execute("select count(*) from erp_raw.orders"); cur.fetchall()
 ```
 
+Hücre ilk çalıştığında bir giriş adresi basar ve bekler: adresi tarayıcıda açıp kendi AD
+hesabınızla Keycloak'a girin, hücre sonra kendiliğinden devam eder. Hücre
+`CA cert does not include key usage extension` hatası verirse iç kök CA eski komutla
+üretilmiştir: [sorun-giderme.md](sorun-giderme.md) §7.
+
 **Beklenen çıktı** (örnek — kaynak tablonuzdaki olay sayısı):
 
 ```text
@@ -647,14 +652,14 @@ dakikada bir). Zamanlamayı görmek için:
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; oradaki cron gecelik
-`0 3 * * *`'tır ve işler önceki kabul koşusundan **askıda** kalmıştır. Üretimde
-`SCHEDULE` sütunu `*/15 * * * *`, `SUSPEND` sütunu `false` olur ve `LAST RUN` dolar):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
 
 ```text
-NAME           SCHEDULE    TIMEZONE   SUSPEND   LAST RUN   LAST RUN NAME   AGE
-silver-merge   0 3 * * *              true                                 5d14h
+NAME           SCHEDULE       TIMEZONE   SUSPEND   LAST RUN   LAST RUN NAME                      AGE
+silver-merge   */15 * * * *              false     59s        silver-merge-1794154500000843588   115m
 ```
+
+`SUSPEND` sütunu `false` olmalıdır.
 
 Koşu bittikten sonra Silver'ı sorgulayın:
 
@@ -671,8 +676,10 @@ cur = conn.cursor(); cur.execute("select count(*) from erp.orders"); cur.fetchal
 ```
 
 **Ters giderse:** tablo bulunamadı hatası → henüz hiç `silver-merge` koşmamış ya da
-`pipelines` girdisi eksiktir. `SUSPEND` sütunu `true` ise iş askıdadır (kabul testi
-askıya alır ve kendiliğinden geri açmaz).
+`pipelines` girdisi eksiktir. `SUSPEND` sütunu `true` ise iş askıdadır: kabul testi
+koşarken işleri askıya alır ve bitince geri açar, ancak test yarıda kesilirse (bağlantı
+koptu, dizüstü kapandı) askıda kalırlar. ArgoCD bunu düzeltmez; geri açmak için
+[sorun-giderme.md](sorun-giderme.md) §6.1. Açıldıktan sonra kaçırılan koşu hemen yapılır.
 
 ### 9.4 Sık hatalar
 
