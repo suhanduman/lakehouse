@@ -7,7 +7,9 @@ source "$ROOT/test/e2e/lib.sh"
 MONGO() { kubectl -n "$NS" exec deploy/demo-mongo -- mongosh --quiet -u dbz -p dbz --authenticationDatabase admin --eval "$1"; }
 
 echo "== mongo fixture"
-kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
+# E2E_MONGO_IMAGE (yalnız CI): MongoDB 8.x çekirdek 6.19+ üzerinde açılmayı reddeder (SERVER-121912) ve GitHub
+# runner'ları bu çekirdekte; CI 7.0 ile koşar. Boşsa fixture olduğu gibi (8.0) uygulanır — OpenShift kabulü 8.0'ı sınar.
+sed -E "${E2E_MONGO_IMAGE:+s#image: .*mongo:8\.0#image: $E2E_MONGO_IMAGE#}" "$ROOT/test/e2e/mongo-fixture.yaml" | kubectl apply -f - >/dev/null
 kubectl -n "$NS" wait --for=condition=complete job/demo-mongo-init --timeout=600s || {
   # Zaman aşımında nedeni görünür kıl (CI 42492979613 yalnız "timed out" basıyordu): imaj çekimi (Docker Hub
   # sınırı), izin (OpenShift UID) ya da replica set başlatma?

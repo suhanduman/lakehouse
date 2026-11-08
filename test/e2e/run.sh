@@ -11,7 +11,9 @@ for _ in $(seq 1 60); do kubectl apply -f "$ROOT/test/e2e/pg-fixture.yaml" >/dev
 kubectl -n lakehouse get cluster/demo-pg >/dev/null
 # Mongo fixture'ı da connector'lardan önce (dbz-crm Secret crm-db'yi bekler — aksi glue Degraded, F2 notu 8); idempotent
 # namespace/CRD beklemesini üstteki pg döngüsünden miras alır
-kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
+# E2E_MONGO_IMAGE (yalnız CI): MongoDB 8.x çekirdek 6.19+ üzerinde açılmayı reddeder (SERVER-121912) ve GitHub
+# runner'ları bu çekirdekte; CI 7.0 ile koşar. Boşsa fixture olduğu gibi (8.0) uygulanır — OpenShift kabulü 8.0'ı sınar.
+sed -E "${E2E_MONGO_IMAGE:+s#image: .*mongo:8\.0#image: $E2E_MONGO_IMAGE#}" "$ROOT/test/e2e/mongo-fixture.yaml" | kubectl apply -f - >/dev/null
 # custom/ (müşteri CR'ları): argocd modunda `custom` Application dağıtır; helm modunda ArgoCD yok -> doğrudan
 # uygula. Örnek CR'lar (ConfigMap + ASKIDA zamanlı SSA) kendiliğinden koşmaz; tek seferlik örneği custom-path.sh
 # pg yolundan SONRA (Silver shop.orders hazırken) uygular.
