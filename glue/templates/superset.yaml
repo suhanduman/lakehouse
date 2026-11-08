@@ -1,5 +1,25 @@
 {{- if .Values.superset.enabled }}
 {{- $ns := include "glue.ns" . }}
+# Superset operatörü 0.2.0 yaptığı nesnelere (ServiceAccount, Deployment...) blockOwnerDeletion'lı ownerReference
+# yazar; OpenShift'in OwnerReferencesPermissionEnforcement denetimi bunun için sahip nesnenin `finalizers`
+# alt kaynağına UPDATE yetkisi ister. Chart'ın ClusterRole'ünde yalnız supersets + supersets/status var ->
+# "serviceaccounts "superset" is forbidden: cannot set blockOwnerDeletion if an ownerReference refers to a resource
+# you can't set finalizers on" ve Superset HİÇ kurulmaz (ocpphy provası 2026-11-08; kind'da bu denetim yok).
+# Eksik kural ad alanında tamamlanır (sahip Superset nesnesi bu ad alanında olduğu için Role yeter).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: superset-operator-finalizers, namespace: {{ $ns }}}
+rules:
+- apiGroups: [superset.apache.org]
+  resources: [supersets/finalizers]
+  verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: superset-operator-finalizers, namespace: {{ $ns }}}
+subjects: [{kind: ServiceAccount, name: superset-operator, namespace: {{ $ns }}}]
+roleRef: {kind: Role, name: superset-operator-finalizers, apiGroup: rbac.authorization.k8s.io}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: superset-datasources, namespace: {{ $ns }}}
@@ -68,7 +88,10 @@ spec:
     AUTH_USER_REGISTRATION_ROLE = "Public"
     AUTH_ROLES_SYNC_AT_LOGIN = True
     AUTH_ROLES_MAPPING = {{ toJson .Values.superset.roleMapping }}
-    _KC = os.environ["KEYCLOAK_URL"] + "/realms/" + os.environ["KEYCLOAK_REALM"]
+    # Sunucu tarafı OIDC çağrıları küme İÇİ Keycloak'a (Keycloak hostname.backchannelDynamic: token/jwks/userinfo
+    # iç adresle döner; tarayıcının gittiği authorization_endpoint ve issuer dış adreste kalır). Dış Route'a
+    # gidilseydi Superset router sertifikasına güvenmek zorunda kalırdı (ocpphy: CERTIFICATE_VERIFY_FAILED döngüsü).
+    _KC = os.environ["KEYCLOAK_INTERNAL_URL"] + "/realms/" + os.environ["KEYCLOAK_REALM"]
     OAUTH_PROVIDERS = [{
         "name": "keycloak", "icon": "fa-key", "token_key": "access_token",
         "remote_app": {
@@ -87,6 +110,7 @@ spec:
     container:
       env:
       - {name: KEYCLOAK_URL, value: {{ include "glue.keycloakUrl" . | quote }}}
+      - {name: KEYCLOAK_INTERNAL_URL, value: {{ printf "http://keycloak-service.%s.svc:8080" (include "glue.ns" .) | quote }}}
       - {name: KEYCLOAK_REALM, value: {{ .Values.keycloak.realm.name | quote }}}
       - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.keycloak.clientsSecret }}, key: superset}}}
       - {name: TRINO_PASSWORD, valueFrom: {secretKeyRef: {name: trino-service-accounts, key: superset}}}

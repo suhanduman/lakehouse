@@ -103,6 +103,12 @@ spec:
       spark.default.parallelism: {{ $s.shufflePartitions | quote }}
       spark.driver.memoryOverhead: {{ $s.driver.memoryOverhead }}
       spark.executor.memoryOverhead: {{ $s.executor.memoryOverhead }}
+      {{- if $.Values.s3.caSecret }}
+      {{- /* Özel CA'lı S3: S3FileIO JVM güven deposunu kullanır; truststore.p12 = JDK kökleri + S3 CA olduğu için
+             Maven Central'dan paket çözümü (spark.jars.packages) da çalışmaya devam eder */}}
+      spark.driver.extraJavaOptions: "-Djavax.net.ssl.trustStore=/etc/s3-ca/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+      spark.executor.extraJavaOptions: "-Djavax.net.ssl.trustStore=/etc/s3-ca/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+      {{- end }}
     driver:
       cores: {{ $s.driver.cores }}
       {{- with $s.driver.coreRequest }}
@@ -130,6 +136,9 @@ spec:
       {{- if $job.kafka }}
       - {name: kafka-ca, mountPath: /etc/kafka-ca, readOnly: true}
       {{- end }}
+      {{- if $.Values.s3.caSecret }}
+      - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}
+      {{- end }}
     executor:
       cores: {{ $s.executor.cores }}
       {{- with $s.executor.coreRequest }}
@@ -156,6 +165,9 @@ spec:
       {{- if $job.kafka }}
       - {name: kafka-ca, mountPath: /etc/kafka-ca, readOnly: true}
       {{- end }}
+      {{- if $.Values.s3.caSecret }}
+      - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}
+      {{- end }}
     volumes:
     - name: job
       configMap: {name: lakehouse-jobs}
@@ -166,6 +178,10 @@ spec:
     {{- if $job.kafka }}
     - name: kafka-ca
       secret: {secretName: lakehouse-cluster-ca-cert, items: [{key: ca.crt, path: ca.crt}]}
+    {{- end }}
+    {{- with $.Values.s3.caSecret }}
+    - name: s3-ca
+      secret: {secretName: {{ . | quote }}}
     {{- end }}
 {{- end }}
 {{- end }}

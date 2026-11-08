@@ -3,9 +3,14 @@ templates: [superset.yaml]
 # appsDomain: hostname'ler boş varsayılandan türetilir (glue.hostFor) — <bileşen>-<ns>.<appsDomain>
 set: {appsDomain: apps.ocp.example.net}
 tests:
-  - it: tam olarak datasource + assets ConfigMap'larını ve Superset CR'ını render eder
+  - it: tam olarak finalizer Role/RoleBinding + datasource + assets ConfigMap'larını ve Superset CR'ını render eder
     asserts:
-      - hasDocuments: {count: 3}
+      - hasDocuments: {count: 5}
+  - it: operatöre supersets/finalizers update yetkisi verir (OpenShift OwnerReferencesPermissionEnforcement)
+    documentSelector: {path: kind, value: Role}
+    asserts:
+      - equal: {path: 'rules[0].resources', value: [supersets/finalizers]}
+      - equal: {path: 'rules[0].verbs', value: [update]}
   - it: renders Superset CR in Production mode with secret refs
     documentSelector: {path: kind, value: Superset}
     asserts:

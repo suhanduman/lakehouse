@@ -57,6 +57,8 @@ realm = get(g, "keycloak.realm.name") or "lakehouse"
 issuer = f"{kc}/realms/{realm}"
 if kc and issuer not in t:
     errs.append(f"site/trino.yaml: oauth2 issuer '{issuer}' bulunamadı")
+if kc and f"http-server.authentication.oauth2.auth-url={issuer}/protocol/openid-connect/auth" not in t:
+    errs.append(f"site/trino.yaml: oauth2.auth-url={issuer}/protocol/openid-connect/auth bulunamadı")
 for key, path in [("ldap.url", "keycloak.ldap.connectionUrl"),
                   ("ldap.admin-user", "keycloak.ldap.bindDn"),
                   ("ldap.user-base-dn", "keycloak.ldap.usersDn")]:
@@ -88,6 +90,11 @@ for line in ["http-server.authentication.oauth2.client-id=trino",
              "http-server.authentication.oauth2.principal-field=preferred_username",
              "http-server.authentication.oauth2.scopes=openid",
              "web-ui.authentication.type=oauth2",
+             # sunucu tarafı OIDC küme içi Keycloak'a (router sertifikası gerekmez; Keycloak backchannelDynamic)
+             "http-server.authentication.oauth2.oidc.discovery=false",
+             f"http-server.authentication.oauth2.token-url=http://keycloak-service.{ns}.svc:8080/realms/{realm}/protocol/openid-connect/token",
+             f"http-server.authentication.oauth2.jwks-url=http://keycloak-service.{ns}.svc:8080/realms/{realm}/protocol/openid-connect/certs",
+             f"http-server.authentication.oauth2.userinfo-url=http://keycloak-service.{ns}.svc:8080/realms/{realm}/protocol/openid-connect/userinfo",
              "group-provider.name=ldap",
              "ldap.admin-password=${ENV:LDAP_BIND_PASSWORD}",
              "ldap.user-search-filter=(sAMAccountName={0})",

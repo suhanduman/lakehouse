@@ -61,39 +61,56 @@ spec:
           importEnabled: ["true"]
           syncRegistrations: ["false"]
 
-      "org.keycloak.storage.ldap.mappers.LDAPStorageMapper":
-      - name: "email-mapper"
-        providerId: "user-attribute-ldap-mapper"
-        config:
-          user.model.attribute: ["email"]
-          ldap.attribute: ["mail"]
-          read.only: ["true"]
-          is.mandatory.in.ldap: ["false"]
-      - name: "last-name-mapper"
-        providerId: "user-attribute-ldap-mapper"
-        config:
-          user.model.attribute: ["lastName"]
-          ldap.attribute: ["sn"]
-          read.only: ["true"]
-          is.mandatory.in.ldap: ["true"]
-      - name: "first-name-mapper"
-        providerId: "user-attribute-ldap-mapper"
-        config:
-          user.model.attribute: ["firstName"]
-          ldap.attribute: ["givenName"]
-          read.only: ["true"]
-          is.mandatory.in.ldap: ["true"]
-      - name: "group-mapper"
-        providerId: "group-ldap-mapper"
-        config:
-          groups.dn: [{{ .Values.keycloak.ldap.groupsDn | quote }}]
-          group.name.ldap.attribute: ["cn"]
-          group.object.classes: ["group"]
-          preserve.group.inheritance: ["false"]
-          membership.ldap.attribute: ["member"]
-          membership.attribute.type: ["DN"]
-          membership.user.ldap.attribute: ["sAMAccountName"]
-          mode: ["READ_ONLY"]
+        # Eşlemeler sağlayıcının subComponents'ı OLMAK ZORUNDA: components düzeyinde (sağlayıcıyla kardeş) verilirse
+        # Keycloak onları realm'e bağlar (parentId=realm), sağlayıcı HİÇBİRİNİ kullanmaz -> AD'den yalnız pwdLastSet
+        # okunur ve her giriş "null username" ile düşer (ocpphy provası 2026-11-08).
+        subComponents:
+          "org.keycloak.storage.ldap.mappers.LDAPStorageMapper":
+          # KULLANICI ADI EŞLEMESİ ZORUNLU: Keycloak bu mapper'ı yalnız sağlayıcı yönetim arayüzünden yaratılınca
+          # kendiliğinden ekler; realm İÇE AKTARIMINDA eşleme listesi açıkça verildiğinde EKLEMEZ. Yoksa her AD girişi
+          # "User returned from LDAP has null username! ... Mapped username LDAP attribute: sAMAccountName" ile düşer
+          # (ocpphy provası 2026-11-08, Samba AD; kind'da AD olmadığı için görünmedi). ldap.attribute ->
+          # usernameLDAPAttribute ile AYNI olmalı.
+          - name: "username"
+            providerId: "user-attribute-ldap-mapper"
+            config:
+              user.model.attribute: ["username"]
+              ldap.attribute: ["sAMAccountName"]
+              read.only: ["true"]
+              always.read.value.from.ldap: ["false"]
+              is.mandatory.in.ldap: ["true"]
+          - name: "email-mapper"
+            providerId: "user-attribute-ldap-mapper"
+            config:
+              user.model.attribute: ["email"]
+              ldap.attribute: ["mail"]
+              read.only: ["true"]
+              is.mandatory.in.ldap: ["false"]
+          - name: "last-name-mapper"
+            providerId: "user-attribute-ldap-mapper"
+            config:
+              user.model.attribute: ["lastName"]
+              ldap.attribute: ["sn"]
+              read.only: ["true"]
+              is.mandatory.in.ldap: ["true"]
+          - name: "first-name-mapper"
+            providerId: "user-attribute-ldap-mapper"
+            config:
+              user.model.attribute: ["firstName"]
+              ldap.attribute: ["givenName"]
+              read.only: ["true"]
+              is.mandatory.in.ldap: ["true"]
+          - name: "group-mapper"
+            providerId: "group-ldap-mapper"
+            config:
+              groups.dn: [{{ .Values.keycloak.ldap.groupsDn | quote }}]
+              group.name.ldap.attribute: ["cn"]
+              group.object.classes: ["group"]
+              preserve.group.inheritance: ["false"]
+              membership.ldap.attribute: ["member"]
+              membership.attribute.type: ["DN"]
+              membership.user.ldap.attribute: ["sAMAccountName"]
+              mode: ["READ_ONLY"]
     {{- end }}
 
     # --- OIDC Clients (F1 platform scope) --- redirectUris türetilir: ilgili

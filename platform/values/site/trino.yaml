@@ -9,6 +9,10 @@
 #
 # Doldurulacak satırlar:
 #   coordinatorExtraConfig · oauth2.issuer   = https://keycloak-<LAKEHOUSE_NS>.<APPS_DOMAIN>/realms/lakehouse
+#   coordinatorExtraConfig · oauth2.auth-url = <issuer>/protocol/openid-connect/auth (tarayıcının gittiği dış adres)
+#     token-url / jwks-url / userinfo-url ÜRÜN satırlarıdır, DEĞİŞTİRİLMEZ: Trino'nun sunucu tarafı çağrıları küme
+#     içi Keycloak'a gider (oidc.discovery=false). Discovery açık kalsaydı Trino dış Route'a gidip router
+#     sertifikasına güvenmek zorunda kalırdı (ocpphy provası 2026-11-08).
 #   group-provider.properties · ldap.url         = $LDAP_URL       (site/glue.yaml keycloak.ldap.connectionUrl ile AYNI)
 #   group-provider.properties · ldap.admin-user  = $LDAP_BIND_DN   (site/glue.yaml keycloak.ldap.bindDn ile AYNI)
 #   group-provider.properties · ldap.user-base-dn= $LDAP_USERS_DN  (site/glue.yaml keycloak.ldap.usersDn ile AYNI)
@@ -20,6 +24,11 @@
 server:
   coordinatorExtraConfig: |
     http-server.authentication.oauth2.issuer=https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse
+    http-server.authentication.oauth2.auth-url=https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/auth
+    http-server.authentication.oauth2.oidc.discovery=false
+    http-server.authentication.oauth2.token-url=http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token
+    http-server.authentication.oauth2.jwks-url=http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/certs
+    http-server.authentication.oauth2.userinfo-url=http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/userinfo
     http-server.authentication.oauth2.client-id=trino
     http-server.authentication.oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}
     http-server.authentication.oauth2.principal-field=preferred_username

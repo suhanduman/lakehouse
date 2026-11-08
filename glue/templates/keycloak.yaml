@@ -16,9 +16,21 @@ spec:
   hostname:
     hostname: {{ include "glue.keycloakUrl" . }}
     strict: {{ eq (include "glue.isOpenShift" .) "true" }}
+    # Sunucudan sunucuya OIDC çağrıları (metadata/token/jwks/userinfo: Superset, JupyterHub hub, Trino) küme içi
+    # http://keycloak-service.<ns>.svc:8080'e gider; o istekler için backchannel uç noktaları İÇ adresle döner.
+    # issuer ve authorization_endpoint (tarayıcı) dış adreste kalır. Neden: pod'lar dış Route'a giderse router
+    # sertifikasına (kurumsal/self-signed CA) güvenmeleri gerekir -> Superset "CERTIFICATE_VERIFY_FAILED" ile giriş
+    # döngüsü (ocpphy provası 2026-11-08); ayrıca küme içi trafik router'dan dolaşmaz.
+    backchannelDynamic: true
   http:
     httpEnabled: true            # TLS kenarda (Route edge / Ingress); kind'da düz HTTP
   proxy: {headers: xforwarded}
+{{- if eq (include "glue.isOpenShift" .) "true" }}
+  # OpenShift'te dış erişim glue'nun Route'udur (templates/route.yaml). Operatörün varsayılan Ingress'i açık
+  # kalırsa OpenShift onu AYNI host için ikinci bir Route'a çevirir -> `keycloak-ingress-xxxxx  HostAlreadyClaimed`
+  # (ocpphy provası 2026-11-08). kind'da bu Ingress dış erişimin kendisidir, orada açık kalır.
+  ingress: {enabled: false}
+{{- end }}
   bootstrapAdmin:
     user: {secret: {{ .Values.keycloak.adminSecret }}}   # keys: username, password
 {{- with .Values.keycloak.ldap.caSecret }}

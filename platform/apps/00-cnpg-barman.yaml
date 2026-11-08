@@ -11,9 +11,13 @@ spec:
     chart: plugin-barman-cloud
     targetRevision: 0.8.0
     helm:
-      valuesObject:
+      # Tamamı METİN `values`: valuesObject'teki null'ları API sunucusu siler ve ArgoCD valuesObject varken
+      # `values`'ı hiç okumaz (ValuesYAML) -> ikisi karıştırılamaz (gerekçe: 00-cnpg.yaml).
+      values: |
         # dar düğüm (CI 4 vCPU): eklenti tek replika, isteği düşük tut
         resources: {requests: {cpu: 10m, memory: 64Mi}}
+        # OpenShift restricted-v2 SCC: chart'ın sabit 10001'i kaldırılır (ocpphy provası 2026-11-08)
+        containerSecurityContext: {runAsUser: null, runAsGroup: null}
   destination: {server: https://kubernetes.default.svc, namespace: cnpg-system}
   syncPolicy:
     automated: {prune: true, selfHeal: true}

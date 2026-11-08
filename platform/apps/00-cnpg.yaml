@@ -7,6 +7,14 @@ spec:
     repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
     targetRevision: 0.29.0
+    helm:
+      # OpenShift restricted-v2 SCC: chart sabit runAsUser/runAsGroup 10001 yazar -> pod "unable to validate
+      # against any security context constraint" ile hiç yaratılmaz (ocpphy provası 2026-11-08). `null` chart
+      # varsayılanını siler; UID'i OpenShift aralıktan atar, runAsNonRoot/readOnlyRootFilesystem/drop ALL kalır.
+      # `values` (METİN) şart: `valuesObject` içindeki null'ları API sunucusu siler ve canlı nesnede
+      # `containerSecurityContext: {}` kalır (provada görüldü) -> chart varsayılanı 10001 geri gelir.
+      values: |
+        containerSecurityContext: {runAsUser: null, runAsGroup: null}
   destination: {server: https://kubernetes.default.svc, namespace: cnpg-system}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
