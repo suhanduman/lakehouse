@@ -655,9 +655,9 @@ lakehouse/spark-operator-podmonitor 2
 sertifika kullanıyorsa onun yerine kurumun kök CA'sını verin.
 
 Aynı iddiaları komut satırından koşturan e2e yolu `test/e2e/monitoring-path.sh`'tir; CI
-koşusunda ürettiği gerçek satırlar (aşağıdaki `kube-state-metrics` satırı **yalnız
-geliştirme yığınında** çıkar — OpenShift'te kube-state-metrics bu kurulumla gelmez, o
-satırı görmezsiniz):
+koşusunda ürettiği gerçek satırlar (`kube-state-metrics` satırı OpenShift'te de çıkar:
+orada platform izlemesinin kendi kube-state-metrics'idir, iki Spark alarmı onun pod
+serilerini kullanır):
 
 ```text
 OK up .*kafka-resources-metrics.* (3)

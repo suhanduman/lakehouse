@@ -303,6 +303,9 @@ suspend=true sonKosu=null sonraki=2026-09-19T03:00:00Z
 - Son koşu `FAILED` ise → [§4.4](#spark).
 - Kural boş veride **ateşlenmez**: hiç `silver-merge-*` koşusu yoksa alarm gelmez. "Hiç
   koşmuyor" durumu ayrı bakılır (`sonraki` alanı boşsa cron hesaplanmamıştır).
+- Kural, son başarılı koşunun sürücü pod'unun yaşına bakar. Koşular 24 saat sonra
+  kendiliğinden silinir; iş bir günden uzun durursa alarm bu yüzden **söner** — sorun
+  geçmiş sayılmaz, yukarıdaki komutla bakın.
 
 **Ters giderse:** cron değiştirildiği hâlde `sonraki` alanı eski kalıyorsa zamanlayıcı
 yeniden hesaplamamıştır ([§6.1](#ssa-suspend) sonundaki not).
@@ -337,8 +340,9 @@ oc -n "$LAKEHOUSE_NS" logs "$APP-driver" --tail=200
 | Sürücü 20+ dakika `Pending` | Düğümde CPU/bellek isteği karşılanmıyor | `spark.driver.coreRequest` / `spark.executor.coreRequest`; düğüm kapasitesi |
 | `403 The Access Key Id you provided does not exist` | Geçici S3 kimliğinin süresi/önbelleği | [§5.1 Polaris / S3 403](#polaris-403) |
 
-**FAILED kayıtlar kendiliğinden kaybolmaz** — kural, nesne silinene kadar ateşlenmeye devam
-eder. Kök neden giderildikten sonra nesneyi silin:
+**Alarm, başarısız koşu silinene kadar açık kalır.** Ürün koşuları 24 saat sonra kendiliğinden
+siler; daha erken susturmak için, kök neden giderildikten sonra nesneyi silin (sürücü pod'u
+ve günlüğü de silinir — günlüğü önce alın):
 
 `[bastion]`
 

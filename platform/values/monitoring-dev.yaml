@@ -1,4 +1,6 @@
-# DEV/vanilla izleme: yalnız operator + küçük Prometheus + kube-state-metrics (customResourceState) + küçük Grafana.
+# DEV/vanilla izleme: yalnız operator + küçük Prometheus + kube-state-metrics + küçük Grafana.
+# Spark alarmları standart kube_pod_* serilerine dayanır (glue monitoring.yaml); CustomResourceState GEREKMEZ
+# (eskiden vardı, yalnız dev'de olduğu için OpenShift'te alarmlar ölüydü — kaldırıldı).
 # OpenShift'te KURULMAZ: user-workload monitoring lakehouse ns'indeki PodMonitor/ServiceMonitor/PrometheusRule'ları alır.
 alertmanager: {enabled: false}
 prometheus-node-exporter: {enabled: false}
@@ -13,44 +15,6 @@ kubeProxy: {enabled: false}
 kubeStateMetrics: {enabled: true}
 kube-state-metrics:
   resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
-  rbac:
-    extraRules:
-    - {apiGroups: [sparkoperator.k8s.io], resources: [sparkapplications, scheduledsparkapplications], verbs: [list, watch]}
-  # CustomResourceStateMetrics tanımının TEK KAYNAĞI burasıdır (alan yolları kind'da canlı doğrulandı;
-  # eskiden glue/files/ altında kullanılmayan bir kopyası vardı, silindi).
-  # KSM chart 8.5.0 yerel anahtarı -> ConfigMap + --custom-resource-state-config-file chart tarafından üretilir.
-  customResourceState:
-    enabled: true
-    config:
-      kind: CustomResourceStateMetrics
-      spec:
-        resources:
-        - groupVersionKind: {group: sparkoperator.k8s.io, version: v1beta2, kind: SparkApplication}
-          metricNamePrefix: kube_customresource_sparkapp
-          labelsFromPath: {name: [metadata, name], namespace: [metadata, namespace]}
-          metrics:
-          - name: state
-            help: SparkApplication applicationState.state
-            each:
-              type: StateSet
-              stateSet:
-                labelName: state
-                path: [status, applicationState, state]
-                list: [SUBMITTED, RUNNING, COMPLETED, FAILED, SUBMISSION_FAILED, PENDING_RERUN, INVALIDATING, SUCCEEDING, FAILING, UNKNOWN]
-          - name: termination_time
-            help: SparkApplication terminationTime (epoch s)
-            each:
-              type: Gauge
-              gauge: {path: [status, terminationTime]}
-        - groupVersionKind: {group: sparkoperator.k8s.io, version: v1beta2, kind: ScheduledSparkApplication}
-          metricNamePrefix: kube_customresource_ssa
-          labelsFromPath: {name: [metadata, name], namespace: [metadata, namespace]}
-          metrics:
-          - name: last_run
-            help: ScheduledSparkApplication lastRun (epoch s)
-            each:
-              type: Gauge
-              gauge: {path: [status, lastRun]}
 prometheusOperator:
   resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 192Mi}}
 prometheus:

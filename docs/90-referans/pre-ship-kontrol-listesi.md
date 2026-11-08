@@ -352,8 +352,9 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   Polaris'in ServiceMonitor'ü ve **tek** `PrometheusRule/lakehouse` listeleniyor; sorgu **en
   az** şu işleri döndürüyor: `kafka-resources-metrics` (3 hedef),
   `spark-operator-podmonitor`, `polaris-mgmt`. Trino, Superset, JupyterHub ve Zeppelin
-  hedefleri **bilerek yoktur**; `kube-state-metrics` de yalnız geliştirme yığınında bulunur,
-  burada görünmemesi normaldir.
+  hedefleri **bilerek yoktur**. `kube-state-metrics` bu listede görünmez: OpenShift'te
+  platform izlemesinin parçasıdır (`openshift-monitoring`); iki Spark alarmı onun pod
+  serilerini kullanır.
   *Kaynak: [50-isletme/izleme-ve-alarmlar.md](../50-isletme/izleme-ve-alarmlar.md) §2;
   [40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §6.2.*
 
