@@ -65,7 +65,7 @@ geçerlidir.
 | Alarm: `LakehouseSilverMergeStale` | [§4.3 silver-merge eskidi](#silver-merge) |
 | Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlanmış Spark koşusu FAILED](#spark) |
 | Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark koşuları yavaşladı](#spark-duration) |
-| Zamanlanmış işler sessizce durdu, alarm gecikmeli geldi | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
+| Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
 | Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
 | Spark işi `UnresolvedAddressException` ya da Ivy hatası veriyor | [§6.2 İç Maven aynası](#maven) |
 | Bronze tablo boş kalıyor, satır gelmiyor | [§6 Boru hattı](#boru-hatti) |
@@ -505,35 +505,66 @@ Belirti: Spark ya da Connect günlüğünde
 <a id="ssa-suspend"></a>
 ### 6.1 Askıda kalan zamanlı Spark işi
 
-Kabul koşusu (`scripts/acceptance.sh`) ve e2e yolları, işi bir kez elle koşturmak için ilgili
-zamanlı Spark nesnesini **askıya alır ve geri açmaz**. Bir kabul koşusundan sonra
-zamanlanmış işler sessizce durur; gecikmiş `LakehouseSilverMergeStale` alarmının en sık
-nedeni budur.
+**Ne demek?** Silver güncellemesi (`silver-merge`), MongoDB aktarımı (`mongo-bronze`) ve üç
+bakım işi (`maint-...`) kümede **zamanlı Spark işi** olarak tanımlıdır; her biri kendi
+saatinde kendiliğinden koşar. Her işin bir **askı** anahtarı vardır (`spec.suspend`).
+Anahtar `true` olursa iş **hiç koşmaz**: hata vermez, pod açmaz, alarm da hemen gelmez.
+Veri sessizce eskir.
+
+**Neden askıya alınır?** Kabul testi (`scripts/acceptance.sh`) bir işi o anda elle bir kez
+koşturmak için önce zamanlı hâlini askıya alır; çakışma olmasın diye. Betik bitince
+(başarılı ya da başarısız) hepsini **kendisi geri açar**. Ama betik yarıda **öldürülürse**
+(bilgisayar kapandı, bağlantı koptu, terminal kapatıldı) geri açma adımı çalışmaz ve işler
+askıda kalır. ArgoCD bunu **düzeltmez**: askı anahtarı Git'teki tanımda yer almadığı için
+ArgoCD bu farkı görmez.
+
+**Kontrol:**
 
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
-for s in silver-merge mongo-bronze maint-position-deletes maint-compact maint-expire-orphan-ttl; do
-  oc -n "$LAKEHOUSE_NS" patch scheduledsparkapplication "$s" \
-    --type=merge -p '{"spec":{"suspend":false}}' || true
+```
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; sütunlar: ad, askı, son
+koşu). İkinci sütun **boş ya da `false`** olmalıdır; `true` gören satır askıdadır.
+`null` son koşu, işin henüz saatinin gelmediğini gösterir (örneğin günde bir koşan iş):
+
+```text
+maint-compact	false	null
+maint-expire-orphan-ttl	false	null
+maint-position-deletes	false	2026-11-08T16:05:05Z
+mongo-bronze		2026-11-08T16:35:00Z
+silver-merge	false	2026-11-08T16:30:00Z
+```
+
+**Geri açma:** aşağıdaki komut kümedeki **bütün** zamanlı işlerin askısını kaldırır (kendi
+eklediğiniz işler dahil; kabul testinin geçici `e2e-` işleri hariç):
+
+`[bastion]`
+
+```bash
+for s in $(oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication -o name); do
+  case "$s" in */e2e-*) continue ;; esac
+  oc -n "$LAKEHOUSE_NS" patch "$s" --type=merge -p '{"spec":{"suspend":false}}'
 done
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — ilk komut, kabul koşusundan
-sonraki hâl; sütunlar sırasıyla ad, askıya alınma ve son koşudur. `ornek-rapor-zamanli`
-[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının örnek işidir ve ürünün
-geri açma döngüsünde yer almaz):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; her iş için bir satır.
+Zaten açık olan iş `(no change)` basar, bu da doğrudur):
 
 ```text
-maint-compact	true	null
-maint-expire-orphan-ttl	true	null
-maint-position-deletes	true	null
-mongo-bronze	true	null
-ornek-rapor-zamanli	true	
-silver-merge	true	null
+scheduledsparkapplication.sparkoperator.k8s.io/maint-compact patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/maint-expire-orphan-ttl patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/maint-position-deletes patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/mongo-bronze patched
+scheduledsparkapplication.sparkoperator.k8s.io/silver-merge patched (no change)
 ```
+
+Askıdan çıkan iş, kaçırdığı koşuyu **hemen** yapar (provada geri açmadan birkaç saniye
+sonra `silver-merge` koştu); bir sonraki saati beklemek gerekmez. Ardından kontrol
+komutunu tekrar çalıştırıp ikinci sütunun `false` olduğunu doğrulayın.
 
 **Ters giderse:** cron değerini değiştirmek bir sonraki koşu zamanını yeniden hesaplatmaz;
 cron'u değiştirdikten sonra işin hemen koşması bekleniyorsa nesneyi silip yeniden yaratın

@@ -44,6 +44,82 @@ tablosudur.
   kümede aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
   (`.github/workflows/e2e.yaml`).
 
+### 1.1 Üretim (OpenShift) kurulumunda kabul — hazırlık
+
+Üretimde üç şey geliştirme kümesinden farklıdır ve kabulden **önce** hazırlanır.
+
+**1) AD'de üç test hesabı.** Testler gerçek kullanıcı gibi giriş yapar; üretimde Keycloak'ta
+geliştirme kullanıcıları yoktur. AD ekibinden şunları isteyin (adlar örnektir):
+
+| Hesap | AD grubu | Testte ne yapar |
+|---|---|---|
+| `kabul-analist` | `lakehouse-analysts` | tablolar filtresiz, `sandbox`'a yazar |
+| `kabul-kullanici` | `lakehouse-users` | satır filtresi ve kolon maskesi uygulanır, yazamaz |
+| `kabul-grupsuz` | hiçbir `lakehouse-*` grubu | Zeppelin'e girer ama veri göremez |
+
+Kabulden sonra hesaplar silinebilir.
+
+**2) Demo kaynaklar.** Kabul, küçük test veritabanlarıyla (PostgreSQL `shop`, MongoDB `crm`)
+ve bir nginx günlüğüyle çalışır. Bunları açmak için `platform/values/site/glue.yaml` içindeki
+iki satırı (`sources: []` ve `pipelines: []`) aşağıdaki blokla **değiştirin**, sonra commit edip
+itin. Bu, müşteri kaynağı eklerken izlenen yordamın aynısıdır
+([50-isletme/yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md)).
+
+```yaml
+# KABUL TESTİ demo kaynakları — kabulden sonra bu blok geri alınır (§1.2)
+sources:
+- name: shop
+  type: postgres
+  host: demo-pg-rw.lakehouse.svc
+  port: 5432
+  database: shop
+  tables: [public.orders]
+  signalTable: public.debezium_signal
+- name: crm
+  type: mongodb
+  connectionString: "mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0"
+  collections: [crm.customers]
+pipelines:
+- {bronze: shop_raw.orders, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}
+- {bronze: crm_raw.customers, keys: [_id], bucket_count: 4}
+nginx: {enabled: true, partitions: 3}
+```
+
+`[bastion]`
+
+```bash
+scripts/check-site.sh
+git add platform/values/site/glue.yaml
+git commit -m "kabul: demo kaynaklar"
+git push origin main
+```
+
+ArgoCD'nin bağlayıcıları yaratması birkaç dakika sürer. Hazır olduğunu görmek için:
+`oc -n "$LAKEHOUSE_NS" get kafkaconnector` — `dbz-shop`, `sink-shop`, `dbz-crm` ve
+`sink-nginx` listelenmelidir. `scripts/acceptance.sh` bunlar yoksa başlamaz ve bu bölümü
+gösterir.
+
+**3) Router sertifikasının kökü.** Testlerin bir kısmı (Superset, JupyterHub ve Trino
+girişleri) yönetim makinesinden arayüzlere tarayıcı gibi bağlanır. Router herkesçe bilinen bir
+CA kullanmıyorsa kökünü alın ([30-kurulum](../30-kurulum.md) §7.3'teki `~/router-ca.crt`).
+
+### 1.2 Kabulden sonra
+
+`scripts/acceptance.sh` bittiğinde zamanlanmış Spark işlerini **kendisi** geri açar (özetten
+önce `zamanlanmış Spark işleri geri açıldı` satırı). Demo kaynakları kaldırmak için §1.1'deki
+bloğu `sources: []` / `pipelines: []` olarak geri alıp itin, ardından test veritabanlarını
+silin:
+
+`[bastion]`
+
+```bash
+oc delete -f test/e2e/pg-fixture.yaml -f test/e2e/mongo-fixture.yaml \
+  -f test/e2e/nginx-fixture.yaml --ignore-not-found
+```
+
+Demo tabloları (`shop`, `crm`, `nginx_raw` ve `_raw` ad alanları) katalogda kalır; silinmesi
+[50-isletme/kaynak-veya-tablo-silme.md](../50-isletme/kaynak-veya-tablo-silme.md)'dedir.
+
 ---
 
 ## 2. Madde ↔ kanıt tablosu
@@ -141,10 +217,12 @@ durumlar §5'tedir.
   koşuda değişmiştir. `oc -n "$LAKEHOUSE_NS" delete cluster/demo-pg` ve
   `oc -n "$LAKEHOUSE_NS" delete pvc -l cnpg.io/cluster=demo-pg` komutlarından sonra betiği
   tekrar koşturun (fixture yeniden uygulanır).
-- **Kabul koşusundan sonra zamanlanmış işler duruyor:** `run_spark_once` yardımcı işlevi
-  `ScheduledSparkApplication`'ları askıya alır ve geri açmaz. **Gerçek kurulumda kabul
-  koşusundan sonra hepsini MUTLAKA geri açın** (her iş için `spec.suspend` alanı `false`
-  yapılır); beş işin adı §2'deki **D(f)** satırındadır.
+- **Kabul koşusundan sonra zamanlanmış işler duruyor:** koşu sırasında işler askıya alınır;
+  `scripts/acceptance.sh` bitişte (başarılı ya da başarısız) hepsini kendisi geri açar ve
+  son satırda `zamanlanmış Spark işleri geri açıldı: ...` basar. Bu satırı **görmediyseniz**
+  (koşu yarıda öldü: bilgisayar kapandı, bağlantı koptu) işler askıda kalmıştır;
+  [sorun-giderme.md §6.1](../50-isletme/sorun-giderme.md#ssa-suspend) ile kontrol edip geri
+  açın.
 - **`monitoring-path.sh` "ateşlenen Lakehouse alarmı" ile düşüyor:** kümede eski `FAILED`
   `SparkApplication` CR'ları vardır; kök nedeni giderip CR'ları silin. Belgelenmiş
   `E2E_EXPECT_NO_FIRING=0` kaçışı vardır ama **kabul koşusunda kullanılmaz**
