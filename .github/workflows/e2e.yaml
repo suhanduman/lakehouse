@@ -98,7 +98,11 @@ jobs:
     # hem 'true' (kod dosyası değişti) hem boş/undefined (changes işi düştü, çıktı yok)
     # durumunda çalıştırır — yalnız tam olarak 'false' (tüm dosyalar belge) atlanır.
     if: ${{ !cancelled() && needs.changes.outputs.non_docs != 'false' }}
-    runs-on: ubuntu-latest
+    # ubuntu-latest = 26.04 (çekirdek 6.19): MongoDB 8.x bu çekirdekte açılmayı REDDEDER
+    # ("Linux kernel versions 6.19 and newer has a known incompatibility", SERVER-121912; MongoDB
+    # tarafında düzeltme yok, çekirdek 7.0.14+ düzeltir). mongo-path fixture'ı (mongo:8.0) bu yüzden
+    # CrashLoopBackOff'ta kalıyordu (CI 42498201325). 24.04'ün çekirdeği 6.8: sabit tutulur.
+    runs-on: ubuntu-24.04
     # F4 yolları eklendi (Trino, Superset, JupyterHub, Zeppelin): pyspark-notebook imajı tek başına ~4,5 dk çekiyor
     timeout-minutes: 90
     # Aynı ref'e ardışık push: öncekinin e2e'si hâlâ koşuyorsa iptal edilir, yalnız sonuncu
