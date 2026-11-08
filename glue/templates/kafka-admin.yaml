@@ -1,0 +1,15 @@
+# Yönetici Kafka kimliği: konuları listeleme/silme, tüketici grubu gecikmesi, offset bakışı (işletme belgeleri).
+# Üretimde kimliksiz `plain` dinleyici yoktur (kafka.plainListener: false) -> broker pod'unun içinden bile
+# `localhost:9092` cevap vermez; araçlar TLS 9093 + SCRAM ile, bu kimlikle koşar (scripts/kafka-cli.sh).
+# Kafka CR'ında superUsers listesindedir (glue/templates/kafka.yaml) -> ACL tutulmaz. Parolası Strimzi'nin
+# ürettiği aynı adlı Secret'tadır; o Secret'ı okuyabilen herkes Kafka'da her şeyi yapabilir (ns yöneticisi zaten
+# broker pod'una exec edebilir — yeni bir yetki yolu açılmıyor).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kafka-admin
+  namespace: {{ include "glue.ns" . }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  authentication: {type: scram-sha-512}

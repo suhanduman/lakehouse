@@ -185,9 +185,7 @@ eşiği aştı; 15 dakika, **warning**. Eşik: `monitoring.sinkLagThreshold` (va
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop   # kafka-admin kimliğiyle, TLS 9093
 oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{.status.connectorStatus.tasks[0]}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i 'commit\|iceberg\|s3'
@@ -242,9 +240,7 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{range .status.connectorStatus.tasks[*]}{.state}{"\n"}{.trace}{"\n"}{end}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
   | grep -iE "NoSuchTable|Forbidden|403|AccessDenied|schema|Exception"
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop-coord
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop-coord   # kafka-admin kimliğiyle, TLS 9093
 ```
 
 **Beklenen çıktı:** birinci komut `RUNNING` ve **boş** bir `trace` verir (görev ayakta;

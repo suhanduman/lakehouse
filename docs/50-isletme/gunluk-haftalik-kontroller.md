@@ -87,9 +87,7 @@ demektir ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §2).
 oc -n "$LAKEHOUSE_NS" get kafkaconnector
 oc -n "$LAKEHOUSE_NS" get kafkaconnector \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.connectorStatus.connector.state}{"\t"}{range .status.connectorStatus.tasks[*]}{.state}{" "}{end}{"\n"}{end}'
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop   # kafka-admin kimliğiyle, TLS 9093
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; sizde kaynak sayısına göre satır
