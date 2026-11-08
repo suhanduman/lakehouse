@@ -27,6 +27,15 @@ acc_env() {  # kimlik değerlerini küme içi kontrol Job'larının okuyacağı 
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
+sink_wait() {  # Iceberg sink'in Bronze'a yazması için bekleme (sn): commit aralığından türer, sabit değil.
+  # İlk veri en kötü İKİ commit turunda görünür: ilk turda işçi START_COMMIT'i geç alırsa koordinatör 0 tablo
+  # commit'ler (ocpphy kabulü: 20:14:50 turu 0 tablo, veri 20:20:20 turunda). Üretimde aralık 300 s (upstream
+  # varsayılan) -> 900 s; kind/CI'da 30 s -> taban 600 s (CI davranışı değişmez).
+  local ms w
+  ms=$(kubectl -n "$NS" get kafkaconnector "${1:-sink-shop}" -o jsonpath='{.spec.config.iceberg\.control\.commit\.interval-ms}' 2>/dev/null || true)
+  w=$(( ${ms:-300000} * 2 / 1000 + 300 )); (( w < 600 )) && w=600; echo "$w"
+}
+
 s3_endpoint() {  # istemcilerin kullandığı S3 adresi — kümeden okunur (kind: MinIO, üretim: müşteri S3'ü); tek kaynak glue s3.endpoint
   kubectl -n "$NS" get scheduledsparkapplication silver-merge \
     -o jsonpath='{.spec.template.sparkConf.spark\.sql\.catalog\.lakehouse\.s3\.endpoint}'
@@ -41,7 +50,14 @@ run_check_job() {  # run_check_job <dizin> <ad> <pyfile> [argümanlar…] -> diz
   # koşullar repo-içi sabitlerdir; ' ya da # içeren koşul desteklenmez
   for a in "$@"; do q+="'$a' "; done
   sed -e "s#JOBNAME#$name#" -e "s#CHECK_ARGS#$q#" -e "s#S3_ENDPOINT_VALUE#$s3#" "$dir/job.yaml" | kubectl apply -f - >/dev/null
-  kubectl -n "$NS" wait --for=condition=complete "job/$name" --timeout=900s >/dev/null || { kubectl -n "$NS" logs "job/$name" --tail=60; return 1; }
+  # Bitişi (Complete YA DA Failed) bekle: yalnız complete beklemek başarısız Job'da tüm süreyi boşa harcıyordu.
+  # Üst sınır 1500 s: --wait üretimde 900 s'ye çıkabilir (sink_wait) + pod açılışı.
+  local st="" i
+  for ((i = 0; i < 300; i++)); do
+    st=$(kubectl -n "$NS" get "job/$name" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type} {end}' 2>/dev/null || true)
+    [[ "$st" == *Complete* || "$st" == *Failed* ]] && break; sleep 5
+  done
+  [[ "$st" == *Complete* ]] || { kubectl -n "$NS" logs "job/$name" --tail=60; return 1; }
   kubectl -n "$NS" logs "job/$name" | grep "^OK"
 }
 
