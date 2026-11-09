@@ -153,20 +153,45 @@ Kurulu bir kümede, geliştirme/vanilla adlandırmasıyla:
 PATH="$PWD/.venv/bin:$PATH" scripts/acceptance.sh --ns "$LAKEHOUSE_NS"
 ```
 
-OpenShift'te üç ortam değişkeni ve iki bayrak eklenir — UWM'nin Prometheus nesneleri farklı
-adlandırılır, Grafana yoktur ve ad alanı yedeği OADP ad alanındadır:
+OpenShift'te betik **gerçek kullanıcı gibi** giriş yapar ve izleme kanıtını kümenin
+Thanos Querier'ından alır; bu yüzden birkaç ortam değişkeni verilir. AD test hesaplarının
+parolaları komut satırına **yazılmaz** (kabuk geçmişine düşer); bir kez sorulur:
 
 `[bastion]`
 
 ```bash
-PATH="$PWD/.venv/bin:$PATH" PROM_STS=prometheus-user-workload \
-  PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
-  scripts/acceptance.sh --ns "$LAKEHOUSE_NS" \
+read -rsp "kabul-analist parolası: " ACC_ANALYST_PASS; echo
+read -rsp "kabul-kullanici parolası: " ACC_USER_PASS; echo
+read -rsp "kabul-grupsuz parolası: " ACC_NOGROUP_PASS; echo
+export ACC_ANALYST_PASS ACC_USER_PASS ACC_NOGROUP_PASS
+export ACC_FLOW=authcode ACC_SA=zeppelin \
+  ACC_ANALYST_USER=kabul-analist ACC_USER_USER=kabul-kullanici ACC_NOGROUP_USER=kabul-grupsuz \
+  ACC_CA_FILE=~/router-ca.crt GRAFANA_SKIP=1 \
+  PROM_URL="https://$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')" \
+  PROM_TOKEN="$(oc whoami -t)"
+PATH="$PWD/.venv/bin:$PATH" scripts/acceptance.sh --argocd-ns "$ARGOCD_NS" \
   --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
 ```
 
-**Beklenen çıktı** (`E2E … OK` satırlarının her biri CI koşusundan alınmış gerçektir; özet
-satırlarının biçimi `scripts/acceptance.sh`'ten gelir):
+Ne işe yararlar:
+
+| Değişken | Anlamı |
+|---|---|
+| `ACC_FLOW=authcode` | Testler Keycloak'a tarayıcı gibi girer (üretimde parola akışı bilerek kapalıdır) |
+| `ACC_*_USER` / `ACC_*_PASS` | §1.1'deki üç AD test hesabı (adlar örnektir, kendi hesaplarınızı yazın) |
+| `ACC_SA=zeppelin` | Trino servis hesabı; üretimde `e2e` hesabı yoktur, aynı yetkideki `zeppelin` kullanılır |
+| `ACC_CA_FILE` | Router sertifikasının kökü ([30-kurulum](../30-kurulum.md) §7.3); Superset/JupyterHub girişleri ve Thanos için |
+| `PROM_URL`, `PROM_TOKEN` | İzleme yolu sorguları Thanos Querier'a oturum jetonuyla gider; `oc` oturumunuzun `cluster-monitoring-view` yetkisi olmalıdır |
+| `GRAFANA_SKIP=1` | Ürün OpenShift'te Grafana kurmaz; yalnız dashboard iddiaları atlanır |
+
+OADP kurulu değilse (felaket kurtarma bu kurulumda yoksa) sona `--skip dr` ekleyin;
+özet atlanan yolu `ATLANAN:` satırında yazar.
+
+**Beklenen çıktı** (`E2E F5 DR OK` dışındaki `E2E … OK` satırları OpenShift provasında
+alınmış gerçek satırlardır; prova OADP'siz, `--skip dr` ile koşuldu ve yollar ürün
+hatalarının düzeltilmesi sırasında üç koşuya bölündü. `E2E F5 DR OK` satırı ve `9/9` özeti
+OADP kurulu bir kümede beklenen biçimdir, OpenShift'te henüz alınmadı; özet satırlarının
+biçimi `scripts/acceptance.sh`'ten gelir):
 
 ```text
 == ön kontrol
@@ -188,6 +213,10 @@ E2E F5 MONITORING OK
 E2E F5 DR OK
 KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp)
 ```
+
+Koşu sırasında Bronze beklemeleri sink'in commit aralığına göre uzar: üretimde aralık 300
+saniyedir, ilk veri en geç iki turda görünür; betik bu yüzden 15 dakikaya kadar bekler
+(geliştirme kümesinde 10 dakika). Kurulu bir kümede bütün koşu **40–50 dakika** sürer.
 
 **Ters giderse:** bir yol düşerse betik orada durur, çıkış kodu **1** olur ve özet
 `KABUL BAŞARISIZ` satırıyla biter (düşen yolun adını yazar). Tamamlanan yol sayısı
@@ -255,25 +284,40 @@ durumlar §5'tedir.
 
 ---
 
-## 6. İzleme yolunun nesne adları (OpenShift UWM)
+## 6. İzleme yolunun OpenShift ayarları
 
-`test/e2e/monitoring-path.sh` varsayılan olarak kube-prometheus-stack (dev/CI) nesne
-adlarını kullanır. Adlar dört ortam değişkeniyle ezilir; varsayılanlar değişmediği için CI
-davranışı aynı kalır. Değişkenler `scripts/acceptance.sh` üzerinden çocuk süreçlere
-**kalıtımla** geçer, ayrıca aktarmak gerekmez.
+`test/e2e/monitoring-path.sh` varsayılan olarak geliştirme kümesinin Prometheus'una
+port-forward ile bağlanır. OpenShift'te kullanıcı iş yükü izlemesinin Prometheus'u
+yetkilendirme ister ve pod dışına açık değildir; bu yüzden `PROM_URL` verilince sorgular
+kümenin Thanos Querier'ına gider (§3). Thanos, platform izlemesinin `kube-state-metrics`
+serilerini de gösterir; iki Spark alarmı (`LakehouseSilverMergeStale`,
+`LakehouseSparkScheduledRunFailed`) bu serilere dayanır.
 
-| Değişken | Varsayılan (dev/CI) | OpenShift UWM karşılığı |
+| Değişken | Geliştirme (varsayılan) | OpenShift |
 |---|---|---|
-| `PROM_STS` | `prometheus-monitoring-kube-prometheus-prometheus` | `prometheus-user-workload` |
-| `PROM_SVC` | `monitoring-kube-prometheus-prometheus` | `prometheus-user-workload` |
-| `GRAFANA_SVC` | `monitoring-grafana` | yok (Grafana kurulmaz) |
-| `GRAFANA_SECRET` | `monitoring-grafana` | yok (Grafana kurulmaz) |
+| `PROM_URL` | boş (port-forward) | `https://<thanos-querier Route'u>` |
+| `PROM_TOKEN` | boş | `oc whoami -t` |
+| `ACC_CA_FILE` | boş | router kökü (`~/router-ca.crt`) |
 | `GRAFANA_SKIP` | boş | `1` |
+| `PROM_STS`, `PROM_SVC`, `GRAFANA_SVC`, `GRAFANA_SECRET` | kube-prometheus-stack adları | kullanılmaz (`PROM_URL` verilince) |
 
 `GRAFANA_SKIP=1` **yalnız** dashboard iddialarını atlar; hedef, metrik, kural ve alarm
-iddiaları yüksek sesle koşmaya devam eder. UWM'nin Prometheus servisi yetkilendirme ister;
-erişilemiyorsa izleme kanıtı `thanos-querier` üzerinden elle alınır — kural ve hedef adları
-aynıdır.
+iddiaları yüksek sesle koşmaya devam eder.
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktıdan kısaltılmış):
+
+```text
+OK up .*kafka-resources-metrics.* (5)
+OK up .*spark-operator.* (2)
+OK up .*kube-state-metrics.* (2)
+OK up .*polaris.* (1)
+OK 5 kural yüklü
+OK LakehouseSilverMergeStale health ok
+OK LakehouseSparkScheduledRunFailed health ok
+OK ateşlenen alarm yok
+UYARI GRAFANA_SKIP=1 -> Grafana dashboard iddiaları ATLANDI (UWM'de Grafana platform tarafındadır)
+E2E F5 MONITORING OK
+```
 
 ---
 
@@ -289,7 +333,7 @@ yukarıdaki tablodur.
 
 - [ ] Ön koşullar (§1) sağlandı: kurulum tamam, `polaris-setup` koştu, demo kaynaklar açık,
       `polaris` CLI'si kurulu.
-- [ ] OpenShift'te üç ortam değişkeni ve iki bayrak verildi (§3).
+- [ ] OpenShift'te §3'teki ortam değişkenleri ve bayraklar verildi (AD test hesapları, Thanos).
 - [ ] `KABUL: 9/9 yol geçti` satırı alındı.
 - [ ] Kabul koşusundan sonra beş `ScheduledSparkApplication` geri açıldı.
 - [ ] Sürüm tablosu kümedeki fiilî sürümlerle karşılaştırıldı
