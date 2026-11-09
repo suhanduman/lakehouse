@@ -29,6 +29,7 @@ spec:
         - {name: KAFKA_CA, value: /etc/kafka-ca/ca.crt}
         - {name: NGINX_ACCESS_LOG, value: /var/log/nginx/access.log}
         - {name: READ_FROM_HEAD, value: "on"}
+        - {name: NGINX_SERVER_NAME, value: e2e-nginx-1}
         volumeMounts:
         - {name: config, mountPath: /fluent-bit/etc/}
         - {name: sample-log, mountPath: /var/log/nginx/}
