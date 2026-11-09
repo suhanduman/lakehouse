@@ -76,7 +76,7 @@ ns=lakehouse argocd=openshift-gitops
 | Values'ta değişen | `sources[].tables` (ya da `collections`) listesinden bir satır + varsa `pipelines` girdisi | tüm `sources[]` girdisi + o kaynağın bütün `pipelines` girdileri |
 | Kalkan bağlayıcı | yok (bağlayıcı yalnız yeniden başlar) | `dbz-` ve `sink-` bağlayıcıları |
 | Silinecek Iceberg tablosu | Bronze + Silver (+ varsa karantina) | kaynağın bütün tabloları |
-| Kaynak DB temizliği | tablo düzeyi (SQL Server'da CDC kapatma; PostgreSQL'de bir şey gerekmez) | çoğaltma yuvası + publication (PostgreSQL), veritabanı düzeyi CDC (SQL Server) |
+| Kaynak DB temizliği | tablo düzeyi (PostgreSQL'de tabloyu publication'dan çıkarma; SQL Server'da CDC kapatma) | çoğaltma yuvası + publication (PostgreSQL), veritabanı düzeyi CDC (SQL Server) |
 | Ek temizlik | yok | Secret, Polaris ad alanı, pano referansları (Adım 9) |
 | İzlenecek adımlar | 1, 2, 4, 5, 6, 7, 8 (Adım 3 gerekmez) | hepsi |
 
@@ -252,9 +252,8 @@ modda okunmaz.
 Synced Healthy
 ```
 
-Eşitleme sırasında Debezium bağlayıcısı **yeniden başlar**; PostgreSQL'de publication da
-kendiliğinden daralır. Kaynağın tamamı kalktıysa `dbz-` ve `sink-` bağlayıcıları prune
-edilir.
+Eşitleme sırasında Debezium bağlayıcısı **yeniden başlar**. Kaynağın tamamı kalktıysa
+`dbz-` ve `sink-` bağlayıcıları prune edilir.
 
 ### 4.1 ArgoCD'nin kaldırdıkları ve kaldırmadıkları
 
@@ -595,8 +594,24 @@ yuvası WAL dosyalarının silinmesini engeller ve disk dolar.
 
 ### 8.1 PostgreSQL
 
-Yuva ve publication yalnız **kaynağın tamamı** kalktığında düşürülür; tek tablo
-çıkarıldığında publication zaten kendiliğinden daralmıştır.
+**Tek tablo çıkarıldıysa** tabloyu publication'dan çıkarın ve CDC rolünün okuma iznini
+geri alın; yuva ve publication yerinde kalır:
+
+`[kaynak DB]`
+
+```sql
+ALTER PUBLICATION dbz_shop_pub DROP TABLE public.customers;
+REVOKE SELECT ON public.customers FROM dbz;
+```
+
+**Beklenen çıktı:**
+
+```text
+ALTER PUBLICATION
+REVOKE
+```
+
+**Kaynağın tamamı kalktıysa** yuva ve publication düşürülür.
 
 Önce ne olduğuna bakın:
 

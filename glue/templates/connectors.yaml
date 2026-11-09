@@ -74,8 +74,11 @@ spec:
 {{- $_ := set $cfg "plugin.name" "pgoutput" }}
 {{- $_ := set $cfg "slot.name" (printf "debezium_%s" .name) }}
 {{- $_ := set $cfg "publication.name" (printf "dbz_%s_pub" .name) }}
-{{- $_ := set $cfg "publication.autocreate.mode" "filtered" }}
-{{- /* publication.autocreate.mode=filtered: superuser gerekmez; tablo sahibi dbz rolü (docs/50-isletme/yeni-kaynak-ve-pipeline.md) */ -}}
+{{- $_ := set $cfg "publication.autocreate.mode" "disabled" }}
+{{- /* publication.autocreate.mode=disabled: publication'ı (dbz_<ad>_pub) kaynak DB yöneticisi yaratır ve tablo
+   eklerken ALTER PUBLICATION ... ADD TABLE der. Debezium'un kendisi yaratsaydı (filtered/all_tables) tablolara
+   sahip olması gerekirdi (PostgreSQL kuralı) — üretimde tablo sahipliği devredilmez. CDC rolüne yalnız
+   REPLICATION + SELECT (+ sinyal tablosuna yazma) verilir. Gerekirse extraConfig ile ezilir. */ -}}
 {{- else }}
 {{- $_ := set $cfg "database.names" .database }}
 {{- $_ := set $cfg "database.encrypt" "true" }}

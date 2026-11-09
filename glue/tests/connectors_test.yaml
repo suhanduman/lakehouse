@@ -42,7 +42,7 @@ tests:
       - documentIndex: 0
         equal: {path: 'spec.config["database.password"]', value: "${secrets:lakehouse/shop-db:password}"}
       - documentIndex: 0
-        equal: {path: 'spec.config["publication.autocreate.mode"]', value: filtered}
+        equal: {path: 'spec.config["publication.autocreate.mode"]', value: disabled}
       - documentIndex: 0
         equal: {path: 'spec.config["signal.data.collection"]', value: public.debezium_signal}
       - documentIndex: 0
