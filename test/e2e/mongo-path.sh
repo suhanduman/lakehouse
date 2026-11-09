@@ -7,8 +7,15 @@ source "$ROOT/test/e2e/lib.sh"
 MONGO() { kubectl -n "$NS" exec deploy/demo-mongo -- mongosh --quiet -u dbz -p dbz --authenticationDatabase admin --eval "$1"; }
 
 echo "== mongo fixture"
-kubectl apply -f "$ROOT/test/e2e/mongo-fixture.yaml" >/dev/null
-kubectl -n "$NS" wait --for=condition=complete job/demo-mongo-init --timeout=600s
+# E2E_MONGO_IMAGE (yalnız CI): MongoDB 8.x çekirdek 6.19+ üzerinde açılmayı reddeder (SERVER-121912) ve GitHub
+# runner'ları bu çekirdekte; CI 7.0 ile koşar. Boşsa fixture olduğu gibi (8.0) uygulanır — OpenShift kabulü 8.0'ı sınar.
+sed -E "${E2E_MONGO_IMAGE:+s#image: .*mongo:8\.0#image: $E2E_MONGO_IMAGE#}" "$ROOT/test/e2e/mongo-fixture.yaml" | kubectl apply -f - >/dev/null
+kubectl -n "$NS" wait --for=condition=complete job/demo-mongo-init --timeout=600s || {
+  # Zaman aşımında nedeni görünür kıl (CI 42492979613 yalnız "timed out" basıyordu): imaj çekimi (Docker Hub
+  # sınırı), izin (OpenShift UID) ya da replica set başlatma?
+  kubectl -n "$NS" get pods -l app=demo-mongo -o wide; kubectl -n "$NS" describe pod -l app=demo-mongo | tail -25
+  kubectl -n "$NS" logs deploy/demo-mongo --tail=30 2>&1 || true; kubectl -n "$NS" logs job/demo-mongo-init --tail=30 2>&1 || true
+  exit 1; }
 echo "== dbz-crm"
 kubectl -n "$NS" wait kafkaconnector/dbz-crm --for=condition=Ready --timeout=600s
 for _ in $(seq 1 60); do kubectl -n "$NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | grep -qx "crm.crm.customers" && break; sleep 5; done

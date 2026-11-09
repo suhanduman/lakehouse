@@ -1,5 +1,8 @@
 # Trino 483 (chart 1.42.2) — kimlik doğrulama TLS ister: HTTPS 8443 + OAUTH2 (Keycloak) + PASSWORD (servis hesapları).
 image: {tag: "483"}
+# OpenShift restricted-v2 SCC: chart pod'a sabit runAsUser/runAsGroup 1000 yazar -> coordinator/worker hiç
+# yaratılmaz (ocpphy provası 2026-11-08). `null` chart varsayılanını siler; UID'i OpenShift aralıktan atar.
+securityContext: {runAsUser: null, runAsGroup: null}
 server:
   workers: 2
   config:
@@ -11,6 +14,11 @@ server:
   # prod platform/values/site/trino.yaml, dev platform/values/trino-dev.yaml. scripts/check-site.sh doğrular.
 additionalConfigProperties:
 - internal-communication.shared-secret=${ENV:TRINO_SHARED_SECRET}
+# OpenShift router'ı (Route reencrypt) isteğe X-Forwarded-Host/Proto ekler; Trino varsayılan olarak bu başlıkları
+# REDDEDER -> web arayüzü ve OAuth2 girişi "Error 406 Server configuration does not allow processing of the
+# X-Forwarded-Host header" verir (ocpphy provası 2026-11-08). true: dış adres ve https şeması bu başlıklardan
+# okunur, OAuth2 geri dönüş adresi doğru kurulur.
+- http-server.process-forwarded=true
 env:
 - {name: TRINO_SHARED_SECRET, valueFrom: {secretKeyRef: {name: trino-shared-secret, key: secret}}}
 - {name: OIDC_CLIENT_SECRET, valueFrom: {secretKeyRef: {name: keycloak-clients, key: trino}}}

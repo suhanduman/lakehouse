@@ -112,7 +112,15 @@ jobs:
         with: {version: v4.2.4}
       - uses: helm/kind-action@v1
         with: {version: v0.33.0, cluster_name: lakehouse, install_only: true}
+      - name: inotify sınırları (kind)
+        # kind'da tüm pod'lar runner çekirdeğini paylaşır; runner varsayılanı düşük -> Fluent Bit tail girdisi
+        # "in_tail ... errno=24 Too many open files" ile açılamıyor (CI 42506311339). kind'ın belgelenmiş çözümü.
+        run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
       - name: e2e (ArgoCD, bu commit)
+        # MongoDB 8.x runner çekirdeğinde (6.19+; ubuntu-24.04 imajında da) açılmıyor: "Linux kernel versions 6.19
+        # and newer has a known incompatibility" (SERVER-121912, MongoDB'de düzeltme yok). CI fixture'ı 7.0 ile
+        # koşar (Debezium 7.0'ı destekler); 8.0 OpenShift kabulünde sınanır (CI 42498201325, 42502244398).
+        env: {E2E_MONGO_IMAGE: docker.io/library/mongo:7.0}
         run: KIND_CLUSTER=lakehouse test/e2e/run.sh --mode argocd --repo "https://github.com/${{ github.repository }}.git" --revision "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: teşhis (başarısızlıkta)
         if: failure()

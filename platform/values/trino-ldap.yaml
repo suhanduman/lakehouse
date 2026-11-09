@@ -28,8 +28,45 @@
 #   2) site/trino.yaml  -> group-provider bloğundan ldap.ssl.truststore.path satırını SİL
 # (aksi halde Trino olmayan bir dosyayı okumaya çalışır). scripts/check-site.sh kuralı: caSecret ile
 # ldap.ssl.truststore.path satırı BİRLİKTE açılır/kapanır; bu mount optional olduğu için denetime girmez.
+#
+# S3 KÖK CA'SI (FlashBlade özel CA ile imzalıysa) — yine BURADA, çünkü coordinator.additionalVolumes listesinin
+# sahibi bu dosyadır (Helm listeleri birleştirmez; trino.yaml'a eklenseydi bu dosya onu ezerdi). Trino'nun native
+# S3 dosya sistemi (AWS SDK v2) JVM varsayılan güven deposunu kullanır ve PEM kabul etmez -> Secret `s3-ca`
+# (docs/30-kurulum.md §5.14) içindeki `truststore.p12` (JDK kökleri + S3 CA) initContainer'la emptyDir'e kopyalanır.
+# Secret YOKSA (S3 herkesçe bilinen CA) aynı initContainer imajın kendi JDK cacerts'ini kopyalar -> davranış
+# değişmez; site değeri gerekmez. Polaris (platform/values/polaris.yaml) ve not defterleri (jupyterhub.yaml) aynı
+# yöntemi kullanır. İmaj etiketi trino.yaml'daki image.tag ile AYNI tutulmalı (değer dosyası şablonlanamaz).
+initContainers:
+  coordinator: &s3ts
+  - name: s3-truststore
+    image: trinodb/trino:483
+    command: [sh, -c, 'if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi']
+    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+    volumeMounts:
+    - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
+    - {name: s3-truststore, mountPath: /ts}
+  worker: *s3ts
 coordinator:
   additionalVolumes:
   - {name: ad-ca, secret: {secretName: ad-ca, optional: true}}
+  - {name: s3-ca, secret: {secretName: s3-ca, optional: true}}
+  - {name: s3-truststore, emptyDir: {}}
+  - {name: trino-data, emptyDir: {}}
   additionalVolumeMounts:
   - {name: ad-ca, mountPath: /etc/trino/ad-ca, readOnly: true}
+  - {name: s3-truststore, mountPath: /etc/trino/s3-truststore, readOnly: true}
+  # OpenShift: pod rastgele UID ile koşar (restricted-v2; runAsUser null, trino.yaml). İmajın /data/trino dizini
+  # UID 1000'e aittir -> "pid file is not writeable: ... mkdir /data/trino/var: permission denied" ve CrashLoop
+  # (ocpphy provası 2026-11-08). node.data-dir (server.node.dataDir, /data/trino) yazılabilir emptyDir olur;
+  # içeriği (pid, launcher günlüğü) geçicidir.
+  - {name: trino-data, mountPath: /data/trino}
+  additionalJVMConfig: [-Djavax.net.ssl.trustStore=/etc/trino/s3-truststore/truststore.p12, -Djavax.net.ssl.trustStorePassword=changeit]
+worker:
+  additionalVolumes:
+  - {name: s3-ca, secret: {secretName: s3-ca, optional: true}}
+  - {name: s3-truststore, emptyDir: {}}
+  - {name: trino-data, emptyDir: {}}
+  additionalVolumeMounts:
+  - {name: s3-truststore, mountPath: /etc/trino/s3-truststore, readOnly: true}
+  - {name: trino-data, mountPath: /data/trino}           # OpenShift rastgele UID (bkz. coordinator)
+  additionalJVMConfig: [-Djavax.net.ssl.trustStore=/etc/trino/s3-truststore/truststore.p12, -Djavax.net.ssl.trustStorePassword=changeit]

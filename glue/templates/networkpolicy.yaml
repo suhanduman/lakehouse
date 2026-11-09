@@ -36,6 +36,11 @@ spec:
 {{- end }}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ ternary "openshift-ingress" "ingress-nginx" (eq (include "glue.isOpenShift" .) "true") }}}}
 {{- if eq (include "glue.isOpenShift" .) "true" }}
+    # Router HostNetwork modundaysa (bare-metal/assisted kurulumların varsayılanı) Route trafiği openshift-ingress
+    # pod'larından DEĞİL düğüm ağından gelir ve yukarıdaki ad alanı seçicisine uymaz -> Route'lar zaman aşımı verir
+    # (ocpphy provası 2026-11-08: zeppelin 000, pod içinden 200). OVN-Kubernetes bu trafiği bu etiketle eşler;
+    # etiket her iki yayınlama modunu da (HostNetwork, LoadBalancerService) kapsar.
+    - namespaceSelector: {matchLabels: {policy-group.network.openshift.io/ingress: ""}}
     # OpenShift'te platform izleme (openshift-monitoring) ve kullanıcı iş yükü izleme (openshift-user-workload-monitoring) ayrı ns'lerde
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}
@@ -44,4 +49,23 @@ spec:
     # scrape sessizce bloklanırdı — netpol eski ns'i geçirmeye devam ederdi).
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.monitoring.namespace }}}}
 {{- end }}
+{{- end }}
+{{- with .Values.s3.egressCidrs }}
+{{- $port := 443 }}
+{{- with (regexFind ":[0-9]+$" (trimSuffix "/" $.Values.s3.endpoint)) }}{{ $port = (trimPrefix ":" .) | int }}{{ end }}
+---
+# Not defterleri -> iç ağdaki S3 (gerekçe: glue/values.yaml s3.egressCidrs). z2jh'nin singleuser politikasına
+# EKLENİR (NetworkPolicy'ler toplanır); yalnız bu adresler ve S3 portu açılır, özel ağın geri kalanı kapalı kalır.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: notebook-s3-egress, namespace: {{ include "glue.ns" $ }}}
+spec:
+  podSelector: {matchLabels: {app: jupyterhub, component: singleuser-server}}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    {{- range . }}
+    - ipBlock: {cidr: {{ . | quote }}}
+    {{- end }}
+    ports: [{port: {{ $port }}, protocol: TCP}]
 {{- end }}

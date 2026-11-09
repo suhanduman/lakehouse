@@ -9,6 +9,15 @@ tests:
       - equal: {path: spec.db.vendor, value: postgres}
       - equal: {path: spec.db.usernameSecret.name, value: keycloak-db-app}
       - equal: {path: spec.hostname.hostname, value: https://keycloak-lakehouse.apps.ocp.example.net}
+  - it: OpenShift'te operatörün Ingress'i kapalı (glue Route'u ile HostAlreadyClaimed çakışması)
+    template: keycloak.yaml
+    set: {platform: openshift}
+    asserts:
+      - equal: {path: spec.ingress.enabled, value: false}
+  - it: kind/vanilla'da operatörün Ingress'i dokunulmaz (dış erişim odur)
+    template: keycloak.yaml
+    asserts:
+      - isNull: {path: spec.ingress}
   - it: realm import carries the four platform clients
     template: keycloak-realm.yaml
     asserts:
@@ -26,6 +35,15 @@ tests:
     asserts:
       - isNotNull: {path: spec.realm.components}
       - equal: {path: 'spec.realm.components["org.keycloak.storage.UserStorageProvider"][0].config.bindCredential[0]', value: "${LDAP_BIND_CREDENTIAL}"}
+  - it: LDAP eşlemeleri sağlayıcının subComponents'ı (realm düzeyinde değil) ve username eşlemesi var
+    template: keycloak-realm.yaml
+    set: {keycloak.ldap.enabled: true}
+    asserts:
+      - isNull: {path: 'spec.realm.components["org.keycloak.storage.ldap.mappers.LDAPStorageMapper"]'}
+      - contains:
+          path: 'spec.realm.components["org.keycloak.storage.UserStorageProvider"][0].subComponents["org.keycloak.storage.ldap.mappers.LDAPStorageMapper"]'
+          content: {name: username, providerId: user-attribute-ldap-mapper, config: {user.model.attribute: [username], ldap.attribute: [sAMAccountName], read.only: ["true"], always.read.value.from.ldap: ["false"], is.mandatory.in.ldap: ["true"]}}
+      - lengthEqual: {path: 'spec.realm.components["org.keycloak.storage.UserStorageProvider"][0].subComponents["org.keycloak.storage.ldap.mappers.LDAPStorageMapper"]', count: 5}
   - it: realm import carries placeholders and trino audience mapper
     template: keycloak-realm.yaml
     asserts:

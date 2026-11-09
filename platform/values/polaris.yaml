@@ -1,4 +1,8 @@
 image: {tag: "1.7.0"}
+# OpenShift restricted-v2 SCC: chart sabit fsGroup 10001 + runAsUser 10000 yazar -> pod hiç yaratılmaz (ocpphy
+# provası 2026-11-08). `null` chart varsayılanını siler; değerleri OpenShift aralıktan atar, runAsNonRoot kalır.
+podSecurityContext: {fsGroup: null}
+containerSecurityContext: {runAsUser: null}
 persistence:
   type: relational-jdbc
   relationalJdbc:
@@ -10,6 +14,25 @@ extraEnv:
 # dev'de components.minio=true iken glue'nun MinIO şablonu (glue/templates/minio.yaml) üretir; prod'da kurulumdan önce elle yaratılır.
 - {name: AWS_ACCESS_KEY_ID, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_ACCESS_KEY_ID}}}
 - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
+# S3 kök CA'sı (FlashBlade özel CA ile imzalıysa; Secret `s3-ca`, docs/30-kurulum.md §5.14): Polaris S3'e
+# (STS AssumeRole + metadata dosyaları) AWS SDK v2 ile gider, JVM varsayılan güven deposunu kullanır. Yöntem ve
+# gerekçe platform/values/trino-ldap.yaml'daki S3 bloğuyla AYNI: initContainer Secret'taki truststore.p12'yi, Secret
+# yoksa imajın JDK cacerts'ini emptyDir'e kopyalar -> site değeri gerekmez, Secret yoksa davranış değişmez.
+- {name: JAVA_TOOL_OPTIONS, value: "-Djavax.net.ssl.trustStore=/etc/polaris/s3-truststore/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit"}
+extraInitContainers:
+- name: s3-truststore
+  image: apache/polaris:1.7.0          # image.tag ile AYNI tutulmalı (değer dosyası şablonlanamaz)
+  command: [sh, -c, 'if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi']
+  # runAsNonRoot YOK: imajın kullanıcısı addır (polaris), kind'da sayısal UID olmadan doğrulanamaz; OpenShift'te UID'i SCC atar
+  securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+  volumeMounts:
+  - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
+  - {name: s3-truststore, mountPath: /ts}
+extraVolumes:
+- {name: s3-ca, secret: {secretName: s3-ca, optional: true}}
+- {name: s3-truststore, emptyDir: {}}
+extraVolumeMounts:
+- {name: s3-truststore, mountPath: /etc/polaris/s3-truststore, readOnly: true}
 storage:
   secret: {name: s3-creds, awsAccessKeyId: AWS_ACCESS_KEY_ID, awsSecretAccessKey: AWS_SECRET_ACCESS_KEY}
 # İzleme (spec §8): Quarkus yönetim arayüzü 8182'dedir (`managementService`, headless) ve metrikler

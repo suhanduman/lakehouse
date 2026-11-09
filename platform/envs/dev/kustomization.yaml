@@ -18,6 +18,11 @@ patches:
 # REPLACE (add DEĞİL): prod listesi site/jupyterhub.yaml'ı da taşır; `add` ile dev/e2e o dosyayı da
 # yüklerdi ve yalnız sahaya özgü anahtarlar (Keycloak URL'leri, S3_ENDPOINT) dev render'ına sızardı.
 # glue ve trino yamaları da aynı nedenle replace. Liste = prod listesi EKSİ site + jupyterhub-dev.yaml.
+- target: {kind: Application, name: polaris}
+  patch: |-
+    - op: replace
+      path: /spec/sources/0/helm/valueFiles
+      value: [$values/platform/values/polaris.yaml, $values/platform/values/polaris-dev.yaml]
 - target: {kind: Application, name: jupyterhub}
   patch: |-
     - op: replace

@@ -9,7 +9,13 @@ spec:
     chart: spark-operator
     targetRevision: 2.5.2
     helm:
-      valuesObject:
+      # OpenShift restricted-v2 SCC: chart sabit fsGroup 185 yazar -> controller/webhook pod'u hiç yaratılmaz
+      # (ocpphy provası 2026-11-08). `null` chart varsayılanını siler; fsGroup'u OpenShift aralıktan atar.
+      # Tamamı METİN `values`: valuesObject'teki null'ları API sunucusu siler ve ArgoCD valuesObject varken
+      # `values`'ı hiç okumaz -> ikisi karıştırılamaz (gerekçe: 00-cnpg.yaml).
+      values: |
+        controller: {podSecurityContext: {fsGroup: null}}
+        webhook: {podSecurityContext: {fsGroup: null}}
         spark:
           jobNamespaces: [lakehouse]
         # Operator metrikleri (spark_application_*): PodMonitor CRD'si kurulumdan ÖNCE var olmalı —

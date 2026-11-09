@@ -212,14 +212,21 @@ Dosya zaten varsa üzerine yazmaz — `cp -i` uyarısını dikkate alın.
 | `S3_REGION` | depolama ekibi | verilmezse `us-east-1` | ☐ |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | depolama ekibi | veri bucket'ı için anahtar çifti | ☐ |
 | `S3_BACKUP_ACCESS_KEY` / `S3_BACKUP_SECRET_KEY` | depolama ekibi | yedek bucket'ı için **ayrı** anahtar çifti | ☐ |
+| `S3_CA_FILE` | depolama ekibi | S3 sertifikası kurumun kendi CA'sıyla imzalıysa ya da self-signed ise o **kök CA'nın** PEM dosyası; herkesçe bilinen bir CA ise boş | ☐ |
+| `S3_EGRESS_CIDRS` | depolama ekibi | S3'ün veri IP'leri, CIDR olarak (ör. `10.20.30.40/32`); not defterlerinin S3'e erişimi için | ☐ |
 | `LDAP_URL` | AD ekibi | `ldaps://` ve 636; şifresiz LDAP kabul edilmez | ☐ |
-| `LDAP_BIND_DN` | AD ekibi | yalnız okuma yetkili servis hesabının tam DN'i | ☐ |
+| `LDAP_BIND_DN` | AD ekibi | yalnız okuma yetkili servis hesabının tam DN'i; boşluk varsa **çift tırnak** içinde | ☐ |
+| `LDAP_BIND_USER` | AD ekibi | **aynı** servis hesabının kısa adı (sAMAccountName, ör. `svc-lakehouse`); Zeppelin kullanır | ☐ |
 | `LDAP_BIND_PASSWORD` | AD ekibi | kasadan; values dosyalarına yazılmaz | ☐ |
 | `LDAP_USERS_DN` | AD ekibi | kullanıcıların arandığı alt ağaç | ☐ |
 | `LDAP_GROUPS_DN` | AD ekibi | üç lakehouse grubunun bulunduğu alt ağaç | ☐ |
 | `LDAP_CA_FILE` | AD ekibi | AD sertifikasını imzalayan CA'nın PEM dosyası | ☐ |
 | `AD_UPN_SUFFIX` | AD ekibi | kullanıcı adlarının UPN son eki (`@` dâhil); Zeppelin AD girişinde kullanılır | ☐ |
 | `KEYCLOAK_ADMIN_PASSWORD` | lakehouse kurulumcusu | isteğe bağlı; boş bırakılırsa kurulum `openssl rand -hex 24` ile üretir | ☐ |
+
+**Dosyaya yazarken:** içinde boşluk olan her değeri çift tırnak içine alın
+(`LDAP_BIND_DN="CN=svc lakehouse,OU=Service,DC=example,DC=com"`). Tırnaksız boşluklu bir değer
+dosya yüklenirken hata verir ve o değişken sessizce boş kalır; AD adlarında boşluk sık görülür.
 
 Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakehouse-analysts`,
 `lakehouse-users` gruplarının açılması ve ilk yöneticinin `lakehouse-admins` grubuna eklenmesi.

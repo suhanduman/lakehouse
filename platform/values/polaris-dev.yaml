@@ -1,0 +1,5 @@
+# kind / lokal geliştirme: OpenShift'e özgü UID kaldırması (polaris.yaml podSecurityContext/containerSecurityContext
+# null) burada geri alınır. Polaris imajının kullanıcısı ADDIR (polaris); runAsNonRoot denetimi sayısal UID ister ve
+# kind'da UID'i atayan bir SCC yoktur -> chart varsayılanları (CI kırmızı, 2026-11-08).
+podSecurityContext: {fsGroup: 10001}
+containerSecurityContext: {runAsUser: 10000}

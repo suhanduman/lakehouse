@@ -32,6 +32,8 @@ müşteriye özel değerleri. **22 anahtar.**
 | `s3.endpoint` | Iceberg verisinin yazıldığı S3 uç noktası; istemciler (Iceberg sink, Spark) bunu kullanır. `https://` ile başlamak **zorundadır** | `$S3_ENDPOINT` | `https://s3.example.com` | **Evet** |
 | `s3.region` | S3 bölge adı; S3 uyumlu depolamalarda çoğu zaman anlamsızdır ama istemciler zorunlu tutar | `$S3_REGION` | `us-east-1` | Hayır (varsayılan `us-east-1`) |
 | `s3.vendedCredentials` | Polaris'in istemcilere geçici S3 kimliği dağıtması. Depolamada STS yoksa `false` yapın; o zaman istemciler `s3-creds` Secret'ını kullanır | — (depolama ekibine sorulur) | `true` | Hayır (varsayılan `true`) |
+| `s3.caSecret` | S3 sertifikası kurumun kendi CA'sıyla imzalıysa ya da self-signed ise o CA'yı taşıyan Secret'ın adı. Yedekleme, Kafka Connect ve Spark bu CA'ya güvenir; Polaris, Trino ve not defterleri aynı Secret'ı kendiliğinden bulur | `"s3-ca"` ([30-kurulum](../30-kurulum.md) §5.14) ya da boş | `"s3-ca"` | Hayır (S3 sertifikası herkesçe bilinen bir CA'dansa boş) |
+| `s3.egressCidrs` | Not defterlerinin S3'e bağlanabileceği adresler (S3'ün veri IP'leri). Boşsa not defterleri iç ağdaki S3'e **ulaşamaz** | `$S3_EGRESS_CIDRS` (liste: `["10.20.30.40/32"]`) | `["10.20.30.40/32"]` | Pratikte evet (S3 iç ağdaysa) |
 | `connect.buildImage` | Kafka Connect imajının kümede üretilip itileceği tam adres. `:latest` **kullanılamaz** (`scripts/check-site.sh` reddeder) | `$INTERNAL_REGISTRY` + `$LAKEHOUSE_NS` | `image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0` | **Evet** |
 | `connect.buildPushSecret` | İtme yetkisi olan `docker-registry` tipli Secret'ın adı | — (sabit) | `connect-push` | **Evet** |
 | `keycloak.ldap.enabled` | Keycloak'ın Active Directory federasyonu. Gün-1'den **açık** olmalıdır | — (sabit) | `true` | **Evet** (`true`) |
@@ -106,15 +108,19 @@ anahtarlarıdır (`helm show values trino/trino --version 1.42.2`).
 > büyütürken düğümde o kadar boş bellek bulunduğunu doğrulayın
 > ([10-planlama](../10-planlama.md) §2.2 "Dikkat edilecek üç nokta").
 
-### `server.coordinatorExtraConfig` içindeki doldurulan satır
+### `server.coordinatorExtraConfig` içindeki doldurulan satırlar
 
 | Satır | Anlam | `.env` karşılığı | Örnek |
 |---|---|---|---|
 | `http-server.authentication.oauth2.issuer` | Keycloak realm'inin tam adresi; jetondaki `iss` ile **birebir** aynı olmalıdır | `$APPS_DOMAIN` + `$LAKEHOUSE_NS` | `https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse` |
+| `http-server.authentication.oauth2.auth-url` | Tarayıcının giriş için yönlendirildiği adres: issuer + `/protocol/openid-connect/auth` | `$APPS_DOMAIN` + `$LAKEHOUSE_NS` | `https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/auth` |
 
 Aynı bloktaki `oauth2.client-id=trino`, `oauth2.client-secret=${ENV:OIDC_CLIENT_SECRET}`,
-`oauth2.principal-field=preferred_username`, `oauth2.scopes=openid` ve
-`web-ui.authentication.type=oauth2` satırları **ürün satırlarıdır**; silmeyin.
+`oauth2.principal-field=preferred_username`, `oauth2.scopes=openid`,
+`web-ui.authentication.type=oauth2`, `oauth2.oidc.discovery=false` ve küme içi Keycloak'ı
+gösteren `oauth2.token-url`, `oauth2.jwks-url`, `oauth2.userinfo-url` satırları **ürün
+satırlarıdır**; silmeyin, değiştirmeyin. Trino'nun sunucu tarafı çağrıları bu sayede router'dan
+geçmez ve router sertifikasına güvenmek gerekmez.
 
 ### `group-provider.properties` içindeki doldurulan satırlar
 
@@ -164,16 +170,16 @@ Diğer satırlar (`connector.name=iceberg`, `iceberg.catalog.type=rest`,
 
 ## 3. `platform/values/site/jupyterhub.yaml`
 
-JupyterHub da ayrı bir Application'dır; aşağıdaki beş değer glue dosyasındaki
+JupyterHub da ayrı bir Application'dır; aşağıdaki üç değer glue dosyasındaki
 değerlerden **türetilmiş kopyalardır**. `scripts/check-site.sh` eşitliği denetler.
-**5 anahtar.**
+**3 anahtar.** Jeton ve kullanıcı bilgisi adresleri (`token_url`, `userdata_url`) burada
+**değildir**: hub onları sunucu tarafında çağırır ve küme içi Keycloak'a gider, ürün dosyasında
+sabittir (`platform/values/jupyterhub.yaml`).
 
 | Anahtar | Anlam | Nereden türetilir | Örnek | Zorunlu mu |
 |---|---|---|---|---|
 | `hub.config.GenericOAuthenticator.oauth_callback_url` | Keycloak'ın kullanıcıyı geri göndereceği adres | `jupyterhub-` + `$LAKEHOUSE_NS` + `.` + `$APPS_DOMAIN` | `https://jupyterhub-lakehouse.apps.ocp.example.net/hub/oauth_callback` | **Evet** |
 | `hub.config.GenericOAuthenticator.authorize_url` | Keycloak yetkilendirme uç noktası | Keycloak URL'i + `/realms/lakehouse/protocol/openid-connect/auth` | `https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/auth` | **Evet** |
-| `hub.config.GenericOAuthenticator.token_url` | Jeton uç noktası | aynı kök + `/token` | `https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/token` | **Evet** |
-| `hub.config.GenericOAuthenticator.userdata_url` | Kullanıcı bilgisi uç noktası | aynı kök + `/userinfo` | `https://keycloak-lakehouse.apps.ocp.example.net/realms/lakehouse/protocol/openid-connect/userinfo` | **Evet** |
 | `singleuser.extraEnv.S3_ENDPOINT` | Not defterlerinin göreceği S3 adresi (glue `s3.endpoint` ile **aynı**) | `$S3_ENDPOINT` | `https://s3.example.com` | **Evet** |
 
 ---
@@ -210,7 +216,7 @@ değiştirirken **hepsini** değiştirin.
 
 | Tek doğru kaynak | Kopyası nerede | Denetleyen |
 |---|---|---|
-| `platform/values/site/glue.yaml` → `appsDomain` | `platform/values/site/trino.yaml` oauth2 issuer; `platform/values/site/jupyterhub.yaml` dört URL | `scripts/check-site.sh` |
+| `platform/values/site/glue.yaml` → `appsDomain` | `platform/values/site/trino.yaml` oauth2 issuer ve auth-url; `platform/values/site/jupyterhub.yaml` iki URL | `scripts/check-site.sh` |
 | `platform/values/site/glue.yaml` → `s3.endpoint` | `platform/values/site/trino.yaml` `s3.endpoint`; `platform/values/site/jupyterhub.yaml` `S3_ENDPOINT`; `platform/polaris/setup.yaml` `endpoint` | `scripts/check-site.sh` (Polaris için uyarı) |
 | `platform/values/site/glue.yaml` → `s3.region` | `platform/values/site/trino.yaml` `s3.region`; `platform/polaris/setup.yaml` `region` | `scripts/check-site.sh` |
 | `platform/values/site/glue.yaml` → `s3.vendedCredentials` | `platform/values/site/trino.yaml` `iceberg.rest-catalog.vended-credentials-enabled` | `scripts/check-site.sh` |

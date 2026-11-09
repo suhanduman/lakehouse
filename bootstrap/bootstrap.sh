@@ -47,7 +47,8 @@ if [[ "$MODE" == "helm" ]]; then
   kubectl -n lakehouse wait --for=condition=Ready cluster/polaris-db --timeout=600s
   kubectl -n lakehouse wait --for=condition=complete job/polaris-bootstrap --timeout=900s
   helm repo add polaris https://downloads.apache.org/polaris/helm-chart >/dev/null 2>&1 || true; helm repo update polaris >/dev/null
-  helm upgrade --install polaris polaris/polaris --version 1.7.0 -n lakehouse -f "$ROOT/platform/values/polaris.yaml" --wait --timeout 10m
+  PO_VALUES=(-f "$ROOT/platform/values/polaris.yaml"); [[ "$ENV" == "dev" ]] && PO_VALUES+=(-f "$ROOT/platform/values/polaris-dev.yaml")
+  helm upgrade --install polaris polaris/polaris --version 1.7.0 -n lakehouse "${PO_VALUES[@]}" --wait --timeout 10m
   helm repo add trino https://trinodb.github.io/charts >/dev/null 2>&1 || true; helm repo update trino >/dev/null
   # dev: trino-dev.yaml (dosya tabanlı gruplar); prod: trino-ldap.yaml (AD group provider) — ikisi birbirini dışlar
   TRINO_VALUES=(-f "$ROOT/platform/values/trino.yaml")

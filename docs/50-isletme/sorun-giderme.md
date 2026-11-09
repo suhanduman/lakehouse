@@ -75,6 +75,7 @@ geçerlidir.
 | `glue` uygulaması `OutOfSync` ya da `Degraded` kalıyor | [§5 Kurulum ve eşitleme](#kurulum) |
 | Connect `Build` uzun sürüyor ya da `unauthorized` veriyor | [§5 Kurulum ve eşitleme](#kurulum) |
 | Trino `401` ya da `Authentication failed` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
+| Not defterinden Trino'ya `CA cert does not include key usage extension` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | Trino `Access Denied` | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5 |
 | Superset `phase: Initializing`, şema geçiş görevi düşüyor | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | JupyterHub not defteri açılmıyor (spawn zaman aşımı) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
@@ -440,6 +441,21 @@ koşmuyor" durumu [§4.3](#silver-merge) ile bakılır.
 - **Polaris.** Sağlık ucu `:8182/q/health`, API `:8181`; kurulum günlüğü
   `oc -n "$LAKEHOUSE_NS" logs job/polaris-bootstrap`.
 
+- **Pod hiç oluşmuyor: `unable to validate against any security context constraint`.**
+  OpenShift, sabit bir kullanıcı numarası (UID) isteyen pod'ları reddeder. Ürünün değer
+  dosyaları bütün bileşenlerde bunu kapatır; bu hatayı görüyorsanız ya ürün dosyaları
+  (`platform/values/*.yaml`, `platform/apps/*.yaml`) değiştirilmiştir ya da sonradan
+  eklenen bir chart sabit UID istiyordur. Hangi değerin reddedildiğini olaylarda görürsünüz:
+
+  `[bastion]`
+
+  ```bash
+  oc get events -A --field-selector reason=FailedCreate | grep -i "security context"
+  ```
+
+  `runAsUser: Invalid value: 1000: must be in the ranges` gibi bir satır, o chart'ın
+  `runAsUser`/`runAsGroup`/`fsGroup` değerinin `null` yapılması gerektiğini gösterir.
+
 <a id="polaris-403"></a>
 ### 5.1 Polaris / S3 403 (geçici kimlikler)
 
@@ -607,6 +623,81 @@ doğrulayın.
 - **Zeppelin girişi başarılı ama not defteri listesi 401:** rol kapısı devrededir — kullanıcı
   üç `lakehouse-*` grubunun hiçbirinde değildir
   ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §3).
+- **Giriş döngüsü ("Sign in with Keycloak" aynı sayfaya döner):** uygulama, Keycloak'la
+  sunucu tarafında konuşamıyordur. Günlükte nedenine bakın:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" logs deploy/superset-web-server --tail=200 | grep -i "oauth"
+  ```
+
+  `CERTIFICATE_VERIFY_FAILED` ve `keycloak-...apps...` adresi görüyorsanız uygulama Keycloak'a
+  **dış** adresten gidiyordur; üründe sunucu tarafı çağrılar küme içi adrese
+  (`keycloak-service.lakehouse.svc:8080`) gider. Keycloak CR'ında
+  `spec.hostname.backchannelDynamic: true` olduğunu ve site dosyalarının değiştirilmediğini
+  doğrulayın (`scripts/check-site.sh`).
+- **Keycloak girişi `Invalid username or password`, Keycloak günlüğünde `User returned from
+  LDAP has null username`:** realm'in AD kullanıcı adı eşlemesi yoktur ya da eşlemeler AD
+  sağlayıcısına bağlı değildir. Ürünün realm tanımı bunu içerir; eski bir sürümle kurulduysa
+  realm'i yenileyin ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
+- **Zeppelin'e hiç kimse giremiyor, günlükte `LDAP: error code 49 ... data 52e`:** Zeppelin
+  servis hesabıyla AD'ye bağlanamıyordur. En sık neden: `zeppelin-shiro` Secret'ında
+  `systemUsername` satırına **DN** yazılmıştır; kısa ad (sAMAccountName) olmalıdır
+  ([30-kurulum](../30-kurulum.md) §5.9). Satırı görmek için:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" get secret zeppelin-shiro -o jsonpath='{.data.shiro\.ini}' \
+    | base64 -d | grep systemUsername
+  ```
+
+  Düzeltmek için §5.9'u `LDAP_BIND_USER` doluyken yeniden çalıştırın (önce
+  `oc -n "$LAKEHOUSE_NS" delete secret zeppelin-shiro`), sonra
+  `oc -n "$LAKEHOUSE_NS" rollout restart deploy/zeppelin`.
+- **Not defterinden S3'e bağlanırken zaman aşımı (`TimeoutError`):** S3 iç ağdadır ve not
+  defterlerinin güvenlik politikası iç ağ adreslerini kapatır. `platform/values/site/glue.yaml`
+  içindeki `s3.egressCidrs` S3'ün veri IP'lerini içermelidir
+  ([30-kurulum](../30-kurulum.md) §4.1); politikanın kümede olduğunu doğrulayın:
+  `oc -n "$LAKEHOUSE_NS" get networkpolicy notebook-s3-egress -o yaml`.
+- **Not defterinden Trino'ya bağlanırken `CA cert does not include key usage extension`:**
+  `lakehouse-ca` kök sertifikası `Key Usage` uzantısı olmadan üretilmiştir (kılavuzun eski
+  sürümündeki komut). Güncel Python bu CA'yı kabul etmez. Bakmak için:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" get secret lakehouse-ca -o jsonpath='{.data.tls\.crt}' \
+    | base64 -d | openssl x509 -noout -ext keyUsage
+  ```
+
+  Çıktı boşsa CA'yı yenileyin. Aşağıdaki adımlar bastion'da depo kökünde çalıştırılır;
+  kullanıcı oturumları birkaç dakika kesilir:
+
+  1. Yeni CA'yı [30-kurulum](../30-kurulum.md) §5.11'deki `openssl req` komutuyla üretin ve
+     Secret'ı değiştirin:
+
+     ```bash
+     oc -n "$LAKEHOUSE_NS" create secret tls lakehouse-ca \
+       --cert=/tmp/ca.crt --key=/tmp/ca.key --dry-run=client -o yaml | oc apply -f -
+     ```
+
+  2. Trino sunucu sertifikasını yeni CA ile yeniden imzalatın:
+     `oc -n "$LAKEHOUSE_NS" delete secret trino-tls`. Yaklaşık 20 saniye içinde
+     `oc -n "$LAKEHOUSE_NS" get certificate trino-tls` `True` göstermelidir.
+  3. `platform/values/site/glue.yaml` içindeki `tls.caBundle` değerini yeni PEM'le
+     değiştirin (aynı dosyada `caBundle: "..."` satırının tamamı), commit edip itin.
+     ArgoCD Trino Route'unu günceller.
+  4. Sertifikayı bellekte tutan bileşenleri yeniden başlatın:
+
+     ```bash
+     oc -n "$LAKEHOUSE_NS" rollout restart \
+       deploy/trino-coordinator deploy/superset-web-server deploy/zeppelin
+     ```
+
+     Not defterleri dosyayı her bağlantıda yeniden okur; yeniden başlatmak gerekmez.
+  5. Eski `~/lakehouse-ca.crt` dosyasını yenisiyle değiştirin, `shred -u /tmp/ca.key`.
 
 ---
 
@@ -641,10 +732,32 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" get objectstore lakehouse-backups -o yaml | head -30
   ```
 
-  Sık kökler: hedef bucket yok, `backup-s3-creds` yanlış ya da eksik, uç nokta yanlış, Barman
-  eklentisinin dağıtımı ayakta değil. Bucket yaratıldıktan sonra `ScheduledBackup` nesnelerini
+  Sık kökler: hedef bucket yok, `backup-s3-creds` yanlış ya da eksik, uç nokta yanlış, S3'ün
+  kök CA'sı verilmemiş (günlükte `SSL validation failed`), Barman eklentisinin dağıtımı
+  ayakta değil. Bucket yaratıldıktan sonra `ScheduledBackup` nesnelerini
   silip yeniden yaratmak ilk yedeği hemen tetikler
   ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §3).
+
+- **S3'e bağlanırken `CERTIFICATE_VERIFY_FAILED` ya da `PKIX path building failed`.** S3
+  sertifikası kurumun kendi CA'sıyla imzalıdır ya da self-signed'dır ve ürüne bu CA
+  verilmemiştir: `s3-ca` Secret'ını yaratın ve site değerine `s3.caSecret: "s3-ca"` yazın
+  ([30-kurulum](../30-kurulum.md) §4.1 ve §5.14). **Kurulumdan sonra** yaptıysanız bileşenler
+  CA'yı ancak yeniden başlayınca alır:
+
+  `[bastion]`
+
+  ```bash
+  T=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  for c in polaris-db keycloak-db superset-db; do
+    oc -n "$LAKEHOUSE_NS" annotate cluster.postgresql.cnpg.io "$c" \
+      kubectl.kubernetes.io/restartedAt="$T" --overwrite
+  done
+  oc -n "$LAKEHOUSE_NS" rollout restart deploy/polaris deploy/trino-coordinator deploy/trino-worker
+  ```
+
+  Kafka Connect, `s3.caSecret` değiştiğinde Strimzi tarafından kendiliğinden yeniden
+  başlatılır; Spark işleri her koşuda yeni pod açtığı için ek iş gerekmez. Açık not defterleri
+  kullanıcı oturumu kapatıp yeniden açınca yeni ayarı alır.
 
 - **Velero yedeği `PartiallyFailed`.**
 

@@ -36,11 +36,29 @@ tests:
     set: {platform: openshift, argocdNamespace: openshift-gitops, velero.enabled: true, velero.namespace: openshift-adp}
     documentSelector: {path: metadata.name, value: allow-platform-namespaces}
     asserts:
-      - lengthEqual: {path: 'spec.ingress[0].from', count: 6}
+      - lengthEqual: {path: 'spec.ingress[0].from', count: 7}
       - equal: {path: 'spec.ingress[0].from[2]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-adp}}}}
       - equal: {path: 'spec.ingress[0].from[3]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-ingress}}}}
-      - equal: {path: 'spec.ingress[0].from[4]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}}}
-      - equal: {path: 'spec.ingress[0].from[5]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}}}
+      # HostNetwork router trafiği (ocpphy provası): ad alanı adı yerine OVN policy-group etiketi
+      - equal: {path: 'spec.ingress[0].from[4]', value: {namespaceSelector: {matchLabels: {policy-group.network.openshift.io/ingress: ""}}}}
+      - equal: {path: 'spec.ingress[0].from[5]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-monitoring}}}}
+      - equal: {path: 'spec.ingress[0].from[6]', value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-user-workload-monitoring}}}}
+  - it: not defteri S3 çıkış politikası yalnız egressCidrs doluyken (varsayılan port 443)
+    set: {s3.endpoint: "https://s3.kurum.example.net", s3.egressCidrs: ["10.20.30.40/32"]}
+    documentSelector: {path: metadata.name, value: notebook-s3-egress}
+    asserts:
+      - equal: {path: spec.podSelector.matchLabels, value: {app: jupyterhub, component: singleuser-server}}
+      - equal: {path: spec.policyTypes, value: [Egress]}
+      - equal: {path: 'spec.egress[0].to[0].ipBlock.cidr', value: "10.20.30.40/32"}
+      - equal: {path: 'spec.egress[0].ports[0].port', value: 443}
+  - it: not defteri S3 çıkış portu uç noktadan türetilir
+    set: {s3.endpoint: "https://s3.kurum.example.net:9443", s3.egressCidrs: ["10.20.30.40/32"]}
+    documentSelector: {path: metadata.name, value: notebook-s3-egress}
+    asserts:
+      - equal: {path: 'spec.egress[0].ports[0].port', value: 9443}
+  - it: egressCidrs boşken not defteri S3 politikası yok (yalnız üç sabit politika)
+    asserts:
+      - hasDocuments: {count: 3}
   - it: nothing renders when networkPolicy is disabled
     set: {networkPolicy.enabled: false}
     asserts:

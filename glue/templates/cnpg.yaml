@@ -86,6 +86,10 @@ spec:
   configuration:
     destinationPath: s3://{{ .Values.backup.s3.bucket }}/cnpg
     endpointURL: {{ .Values.backup.s3.endpoint | quote }}
+    {{- with .Values.s3.caSecret }}
+    # Özel CA'lı S3: barman-cloud bu PEM ile doğrular (yoksa "SSL validation failed" -> WAL arşivi sessizce durur)
+    endpointCA: {name: {{ . | quote }}, key: ca.crt}
+    {{- end }}
     s3Credentials:
       accessKeyId:     {name: {{ .Values.backup.s3.secret }}, key: AWS_ACCESS_KEY_ID}
       secretAccessKey: {name: {{ .Values.backup.s3.secret }}, key: AWS_SECRET_ACCESS_KEY}

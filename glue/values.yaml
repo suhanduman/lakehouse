@@ -204,6 +204,19 @@ s3:                                   # istemciler (sink, Spark) için; Polaris 
   region: us-east-1
   pathStyleAccess: true
   vendedCredentials: true             # STS'siz S3'te false → istemciler s3-creds Secret'ını kullanır, delegation header none (F0 S1c)
+  # S3 sertifikası ÖZEL (kurumsal) bir CA ile imzalıysa o CA'yı taşıyan Secret'ın adı (kurulumda `s3-ca`,
+  # docs/30-kurulum.md §5.14). Anahtarlar: `ca.crt` (PEM kök CA) + `truststore.p12` (JDK kökleri + bu CA,
+  # keytool, parola changeit). Boş = S3 herkesçe bilinen bir CA kullanır, hiçbir şey bağlanmaz (render aynı kalır).
+  # Bağlananlar: CNPG yedeği (ObjectStore endpointCA), Kafka Connect sink ve Spark işleri (JVM güven deposu).
+  # Polaris/Trino/not defterleri ayrı chart'lardır: aynı Secret'ı initContainer ile İSTEĞE BAĞLI okurlar
+  # (platform/values/{polaris,trino,jupyterhub}.yaml), bu anahtara bakmazlar.
+  caSecret: ""
+  # Not defterlerinin (JupyterHub) S3'e doğrudan erişimi için S3 veri adres(ler)i, CIDR olarak (FlashBlade veri
+  # VIP'leri; depolama ekibinden). z2jh'nin singleuser NetworkPolicy'si dış çıkışa izin verir ama ÖZEL IP
+  # aralıklarını (10/8, 172.16/12, 192.168/16) hariç tutar -> iç ağdaki S3'e pyiceberg istekleri zaman aşımı verir
+  # (ocpphy provası 2026-11-08). Doluysa glue yalnız not defteri pod'larına, yalnız bu adreslere ve S3 portuna
+  # (s3.endpoint'ten; yoksa 443) EK bir çıkış politikası yazar (NetworkPolicy'ler toplanır). Boş = politika yok.
+  egressCidrs: []
 
 # Silver pipeline'ları (yalnız entity/upsert tabloları; append-only tablolar listelenmez). ConfigMap lakehouse-jobs/pipelines.json
 pipelines: []

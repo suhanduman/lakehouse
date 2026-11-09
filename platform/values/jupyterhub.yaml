@@ -24,7 +24,12 @@ hub:
     JupyterHub: {authenticator_class: generic-oauth}
     Authenticator: {enable_auth_state: true}
     GenericOAuthenticator:
-      # oauth_callback_url / authorize_url / token_url / userdata_url: site/jupyterhub.yaml
+      # oauth_callback_url / authorize_url (TARAYICI, dış adres): site/jupyterhub.yaml.
+      # token_url / userdata_url hub'ın SUNUCU tarafı çağrılarıdır -> küme içi Keycloak (ad alanı sabit; Keycloak
+      # hostname.backchannelDynamic). Dış Route'a gidilseydi hub router sertifikasına güvenmek zorunda kalırdı
+      # (ocpphy provası 2026-11-08: Superset aynı nedenle CERTIFICATE_VERIFY_FAILED döngüsüne girdi).
+      token_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/token
+      userdata_url: http://keycloak-service.lakehouse.svc:8080/realms/lakehouse/protocol/openid-connect/userinfo
       login_service: Keycloak
       username_claim: preferred_username
       scope: [openid, profile, email]
@@ -36,10 +41,32 @@ hub:
     OAUTH_CLIENT_ID: {value: jupyterhub}
     OAUTH_CLIENT_SECRET: {valueFrom: {secretKeyRef: {name: keycloak-clients, key: jupyterhub}}}
   resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 1Gi}}
+  # OpenShift restricted-v2 SCC — bu dosyadaki tüm `runAsUser/runAsGroup/fsGroup/uid/fsGid: null` satırlarının
+  # gerekçesi: z2jh 4.4.2 her pod'a SABİT UID/GID yazar (hub 1000 + fsGroup 1000; chp, secretSync, user-scheduler,
+  # placeholder, image-puller 65534; notebook uid 1000 + fsGid 100). restricted-v2 yalnız ad alanının UID aralığına
+  # izin verir -> pod'lar "unable to validate against any security context constraint" ile HİÇ yaratılmaz
+  # (ocpphy provası 2026-11-08: hook-image-puller DaemonSet FailedCreate, jupyterhub sync'i hook'ta takıldı; kind'da
+  # görünmez: kind'da SCC yok ve dev overlay prePuller'ı kapatır). Helm'de `null` anahtarı chart varsayılanından
+  # SİLER: UID/fsGroup'u OpenShift aralıktan atar; runAsNonRoot / drop ALL / seccomp chart'tan aynen kalır.
+  podSecurityContext: {fsGroup: null}
+  containerSecurityContext: {runAsUser: null, runAsGroup: null}
 proxy:
   service: {type: ClusterIP}          # dış erişim glue Route/Ingress (proxy-public:80)
-  chp: {resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}}
+  chp:
+    resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 512Mi}}
+    containerSecurityContext: {runAsUser: null, runAsGroup: null}    # OpenShift SCC (bkz. hub)
+  secretSync: {containerSecurityContext: {runAsUser: null, runAsGroup: null}}
 singleuser:
+  # OpenShift SCC (bkz. hub): notebook keyfi UID'le çalışır (jupyter docker-stacks bunu destekler); ev dizini
+  # PVC'si OpenShift'in atadığı fsGroup ile yazılabilir olur.
+  uid: null
+  fsGid: null
+  # z2jh varsayılanı: bulut metadata adresini (169.254.169.254) iptables ile kapatan initContainer — root,
+  # privileged, NET_ADMIN. OpenShift restricted-v2 bunu reddeder -> not defteri pod'u HİÇ yaratılmaz ("pods
+  # jupyter-<kullanıcı> is forbidden ... initContainers[1].privileged", ocpphy provası 2026-11-08). Aynı adrese
+  # çıkışı singleuser NetworkPolicy'si zaten kapatır (egressAllowRules.cloudMetadataServer: false, chart varsayılanı);
+  # on-prem kümede metadata servisi de yoktur.
+  cloudMetadata: {blockWithIptables: false}
   image: {name: quay.io/jupyter/pyspark-notebook, tag: spark-4.1.2}
   lifecycleHooks:
     postStart:
@@ -50,14 +77,39 @@ singleuser:
   storage:
     type: dynamic
     capacity: 10Gi
-    extraVolumes: [{name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}]
-    extraVolumeMounts: [{name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}]
+    extraVolumes:
+    - {name: lakehouse-ca, secret: {secretName: lakehouse-ca, items: [{key: tls.crt, path: tls.crt}]}}
+    - {name: s3-ca, secret: {secretName: s3-ca, optional: true}}      # S3 özel CA'sı (bkz. initContainers)
+    - {name: s3-trust, emptyDir: {}}
+    extraVolumeMounts:
+    - {name: lakehouse-ca, mountPath: /etc/lakehouse-ca, readOnly: true}
+    - {name: s3-trust, mountPath: /etc/s3-trust, readOnly: true}
+  # S3 kök CA'sı (FlashBlade özel CA ile imzalıysa; Secret `s3-ca`, docs/30-kurulum.md §5.14). Yöntem
+  # platform/values/trino-ldap.yaml'daki S3 bloğuyla aynı; not defterinde İKİ istemci var:
+  #  - Python (pyiceberg/boto/pyarrow): ca-bundle.pem = imajın sistem paketi + (varsa) S3 CA -> AWS_CA_BUNDLE.
+  #    EKLEME yapılır, yerine koyma değil: PyPI vb. dış adresler bozulmaz (REQUESTS_CA_BUNDLE'ın sorunu burada yok).
+  #  - pyspark (JVM): truststore.p12 = Secret'taki birleşik depo ya da imajın JDK cacerts'i -> JAVA_TOOL_OPTIONS.
+  # Secret yoksa ikisi de imajın varsayılanının kopyasıdır -> davranış değişmez, site değeri gerekmez.
+  initContainers:
+  - name: s3-trust
+    image: quay.io/jupyter/pyspark-notebook:spark-4.1.2     # singleuser.image ile AYNI (zaten çekili)
+    command: [sh, -c, 'set -e; cat /etc/ssl/certs/ca-certificates.crt > /ts/ca-bundle.pem; if [ -f /s3-ca/ca.crt ]; then cat /s3-ca/ca.crt >> /ts/ca-bundle.pem; fi; if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "varsayilan"; fi']
+    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+    volumeMounts:
+    - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
+    - {name: s3-trust, mountPath: /ts}
   memory: {guarantee: 1G, limit: 4G}
   cpu: {guarantee: 0.5, limit: 2}
   extraEnv:
     POLARIS_URI: http://polaris.lakehouse.svc:8181/api/catalog
     POLARIS_CREDENTIAL: {valueFrom: {secretKeyRef: {name: polaris-notebooks, key: credential}}}   # paylaşımlı notebooks principal (spec §14)
     TRINO_HOST: trino.lakehouse.svc   # S3_ENDPOINT: site/jupyterhub.yaml
+    AWS_CA_BUNDLE: /etc/s3-trust/ca-bundle.pem          # S3 özel CA'sı (bkz. initContainers) — boto/s3fs okur
+    # pyiceberg'in varsayılan FileIO'su pyarrow'dur (C++ AWS SDK) ve AWS_CA_BUNDLE'ı OKUMAZ ("curlCode: 60");
+    # OpenSSL'in SSL_CERT_FILE'ını okur (ocpphy provası 2026-11-08, pyarrow 24). Paket sistem kökleri + S3 CA olduğu
+    # için güvenlidir; pip/requests certifi kullandığından etkilenmez.
+    SSL_CERT_FILE: /etc/s3-trust/ca-bundle.pem
+    JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/etc/s3-trust/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit"
     # REQUESTS_CA_BUNDLE YOK (Superset'teki kararla aynı gerekçe, glue/templates/superset.yaml): bu env TEK kök
     # dayatır ve not defterindeki HER `requests`/`urllib3` çağrısını (PyPI, müşteri API'leri, S3 HTTPS) yalnız
     # lakehouse-ca ile doğrulatır -> hepsi SSLCertVerificationError. CA yine /etc/lakehouse-ca/tls.crt'te mount'lu;
@@ -73,6 +125,12 @@ singleuser:
       ports: [{port: 8443}]
     - to: [{podSelector: {matchLabels: {app.kubernetes.io/name: polaris, app.kubernetes.io/instance: polaris}}}]
       ports: [{port: 8181}]
-scheduling: {userScheduler: {enabled: true}}
-prePuller: {hook: {enabled: true}, continuous: {enabled: true}}
+scheduling:   # OpenShift SCC (bkz. hub)
+  userScheduler: {enabled: true, containerSecurityContext: {runAsUser: null, runAsGroup: null}}
+  userPlaceholder: {containerSecurityContext: {runAsUser: null, runAsGroup: null}}
+prePuller:    # OpenShift SCC (bkz. hub)
+  hook: {enabled: true, containerSecurityContext: {runAsUser: null, runAsGroup: null}}
+  continuous: {enabled: true}
+  containerSecurityContext: {runAsUser: null, runAsGroup: null}
+  pause: {containerSecurityContext: {runAsUser: null, runAsGroup: null}}
 ingress: {enabled: false}

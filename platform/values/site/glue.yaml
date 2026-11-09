@@ -13,6 +13,8 @@ s3:
   endpoint: https://s3.example.com        # $S3_ENDPOINT (FlashBlade; platform/polaris/setup.yaml ile aynı olmalı)
   region: us-east-1                       # $S3_REGION
   vendedCredentials: true                 # STS yoksa false
+  caSecret: ""                            # S3 sertifikası ÖZEL CA ile imzalıysa "s3-ca" (docs/30-kurulum.md §5.14)
+  egressCidrs: []                         # $S3_EGRESS_CIDRS — S3 veri IP'leri (ör. ["10.20.30.40/32"]); not defterleri için
 connect:
   buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.0.0   # $INTERNAL_REGISTRY/$LAKEHOUSE_NS/connect:<sürüm>
   buildPushSecret: connect-push
