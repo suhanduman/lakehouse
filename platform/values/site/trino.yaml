@@ -16,9 +16,10 @@
 #   group-provider.properties · ldap.url         = $LDAP_URL       (site/glue.yaml keycloak.ldap.connectionUrl ile AYNI)
 #   group-provider.properties · ldap.admin-user  = $LDAP_BIND_DN   (site/glue.yaml keycloak.ldap.bindDn ile AYNI)
 #   group-provider.properties · ldap.user-base-dn= $LDAP_USERS_DN  (site/glue.yaml keycloak.ldap.usersDn ile AYNI)
-#   group-provider.properties · ldap.ssl.truststore.path — AD kök CA'sı (Secret ad-ca) coordinator'a
-#     /etc/trino/ad-ca altında bağlanır (../trino-ldap.yaml). site/glue.yaml keycloak.ldap.caSecret BOŞSA
-#     bu satırı SİLİN; doluysa DURMALIDIR (scripts/check-site.sh ikisini birlikte denetler).
+#   group-provider.properties · ldap.ssl.truststore.path satırı YOKTUR, EKLEMEYİN: Trino 483'te bu satırın açtığı
+#     SSL yolu aralıklı olarak "SSLContext was not set" ile düşer ve kullanıcının grupları boş gelir (ocpphy provası
+#     2026-11-09). AD kök CA'sı (Secret ad-ca) coordinator'ın JVM güven deposuna eklenir (../trino-ldap.yaml
+#     initContainer'ı); ldaps bağlantısı onu kendiliğinden kullanır. scripts/check-site.sh satırı görürse durur.
 #   catalogs.lakehouse · s3.endpoint / s3.region = $S3_ENDPOINT / $S3_REGION (site/glue.yaml s3.* ile AYNI)
 # LDAP bağlama PAROLASI values'ta DEĞİL: Secret keycloak-clients anahtarı ldap-bind (${ENV:LDAP_BIND_PASSWORD}).
 server:
@@ -45,7 +46,6 @@ coordinator:
       ldap.user-search-filter=(sAMAccountName={0})
       ldap.user-member-of-attribute=memberOf
       ldap.group-name-attribute=cn
-      ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt
 catalogs:
   lakehouse: |
     connector.name=iceberg

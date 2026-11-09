@@ -112,17 +112,13 @@ for line in ["http-server.authentication.oauth2.client-id=trino",
     if line not in t:
         errs.append(f"site/trino.yaml: ürün satırı eksik -> {line}")
 
-# 3b) AD kök CA'sı (ad-ca) üç tüketiciye TEK anahtardan açılır: glue'da keycloak.ldap.caSecret,
-# Trino'da mount (../trino-ldap.yaml) + ldap.ssl.truststore.path (site/trino.yaml group-provider bloğu).
-# KURAL: denetlenen çift `caSecret` <-> `ldap.ssl.truststore.path` SATIRIDIR; trino-ldap.yaml'daki mount
-# DENETLENMEZ çünkü optional: true'dur (Secret yoksa Trino yine açılır, mount sessizce boş kalır).
-# Biri açık, öteki kapalı bırakılırsa Trino ya PKIX hatası verir ya da olmayan bir dosyayı gösterir.
-ca = get(g, "keycloak.ldap.caSecret")
-ts = "ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt"
-if ca and ts not in t:
-    errs.append(f"site/trino.yaml: keycloak.ldap.caSecret='{ca}' iken group-provider bloğunda '{ts}' bulunmalı")
-if not ca and ts in t:
-    errs.append(f"site/trino.yaml: keycloak.ldap.caSecret boşken '{ts}' satırı kalmamalı (ad-ca bağlanmıyor)")
+# 3b) AD kök CA'sı (ad-ca): Trino'da coordinator'ın JVM güven deposuna initContainer'la eklenir (../trino-ldap.yaml,
+# Secret yoksa atlanır). group-provider bloğunda ldap.ssl.truststore.path satırı OLMAMALI: Trino 483'te o satırın
+# açtığı SSL yolu aralıklı "SSLContext was not set" ile düşer, kullanıcının grupları boş gelir ve analistler
+# "Access Denied: Cannot access catalog" alır (ocpphy provası 2026-11-09). Eski bir site dosyası taşınırsa yakala.
+if "ldap.ssl.truststore.path=" in t:
+    errs.append("site/trino.yaml: group-provider bloğundaki ldap.ssl.truststore.path satırını SİLİN (Trino 483 hatası; "
+                "AD CA'sı JVM güven deposundan gelir — docs/30-kurulum.md §5.13)")
 
 # 3c) site/trino.yaml accessControl.rules."rules.json" AÇIKÇA verildiyse (kullanici-ve-yetki.md §5.2),
 # Helm bloğu bütünüyle ezdiği için ürünün servis hesabı satırları da orada olmak ZORUNDADIR. Düşerse

@@ -11,23 +11,9 @@
 # Bağlama parolası: Secret keycloak-clients anahtarı ldap-bind -> LDAP_BIND_PASSWORD (platform/values/trino.yaml env).
 #
 # AD KÖK CA'SI (LDAPS güveni) — BURADA. Secret `ad-ca` (anahtar ca.crt, PEM; docs/30-kurulum.md §5.13)
-# coordinator'a bağlanır; Trino'nun LDAP group provider'ı PEM truststore KABUL EDER
-# (Trino 483 belgesi, security/group-mapping.html: "ldap.ssl.truststore.path — Path to the PEM or JKS
-# trust store") -> JKS'e çevirmek ya da imaja sertifika gömmek GEREKMEZ.
-# Yolu kullanan satır (ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt) BURADA DEĞİL: çok satırlı
-# group-provider.properties bloğu bütünüyle site/trino.yaml'dan gelir (yukarıdaki gerekçe).
-# additionalVolumes/additionalVolumeMounts SEÇİLDİ, coordinator.secretMounts DEĞİL: secretMounts
-# platform/values/trino.yaml'da trino-tls için kullanılıyor ve Helm LİSTELERİ birleştirmez — buradan
-# yeniden verilseydi trino-tls mount'u sessizce düşer, HTTPS 8443 açılmazdı.
-# Dev bu dosyayı YÜKLEMEZ (envs/dev değer listesini değiştirir) -> kind'da Trino'ya ad-ca bağlanmaz.
-# optional: true ZORUNLU: ad-ca koşullu bir Secret'tır (docs/30-kurulum.md §5.13). Optional olmasaydı,
-# herkesçe bilinen bir CA'dan sertifika alan müşteride Secret hiç yaratılmaz ve trino-coordinator
-# `secret "ad-ca" not found` ile ContainerCreating'de sonsuza kadar beklerdi. Optional ile mount sessizce
-# boş kalır; Trino açılır. Kapatmanın TEK adımı bu blok DEĞİL, aşağıdaki iki satırdır:
-#   1) site/glue.yaml   -> keycloak.ldap.caSecret: ""
-#   2) site/trino.yaml  -> group-provider bloğundan ldap.ssl.truststore.path satırını SİL
-# (aksi halde Trino olmayan bir dosyayı okumaya çalışır). scripts/check-site.sh kuralı: caSecret ile
-# ldap.ssl.truststore.path satırı BİRLİKTE açılır/kapanır; bu mount optional olduğu için denetime girmez.
+# coordinator'ın initContainer'ına bağlanır ve JVM güven deposuna eklenir (aşağıdaki not). optional: true ZORUNLU:
+# ad-ca koşullu bir Secret'tır; AD herkesçe bilinen bir CA kullanıyorsa Secret hiç yaratılmaz, içe aktarma atlanır
+# ve Trino yine açılır. site/trino.yaml'da ldap.ssl.truststore.path satırı YOKTUR (Trino 483 hatası, aşağıda).
 #
 # S3 KÖK CA'SI (FlashBlade özel CA ile imzalıysa) — yine BURADA, çünkü coordinator.additionalVolumes listesinin
 # sahibi bu dosyadır (Helm listeleri birleştirmez; trino.yaml'a eklenseydi bu dosya onu ezerdi). Trino'nun native
@@ -36,8 +22,26 @@
 # Secret YOKSA (S3 herkesçe bilinen CA) aynı initContainer imajın kendi JDK cacerts'ini kopyalar -> davranış
 # değişmez; site değeri gerekmez. Polaris (platform/values/polaris.yaml) ve not defterleri (jupyterhub.yaml) aynı
 # yöntemi kullanır. İmaj etiketi trino.yaml'daki image.tag ile AYNI tutulmalı (değer dosyası şablonlanamaz).
+#
+# AD KÖK CA'SI — JVM güven deposuna (ocpphy provası 2026-11-09). Trino 483 + JDK 25'te LDAP group provider'ın
+# KENDİ SSL fabrikası (ldap.ssl.truststore.path verilince devreye girer) aralıklı olarak
+# "CommunicationException … SSLContext was not set" ile düşer: fabrika SSL bağlamını ScopedValue ile taşır, JNDI
+# sınıfı adıyla başka bir sınıf yükleyiciden yükleyince bağlam görünmez. Sonuç: kullanıcının grubu boş gelir,
+# analist/son kullanıcı "Access Denied: Cannot access catalog lakehouse" alır (kabul trino-path'i bu yüzden düştü).
+# Çözüm: ldap.ssl.truststore.path HİÇ verilmez (site/trino.yaml); AD CA'sı coordinator'ın JVM güven deposuna
+# (aşağıdaki initContainer, keytool) eklenir ve JNDI standart SSL'i kullanır — hatalı yol hiç çağrılmaz.
+# ad-ca Secret'ı YOKSA (AD herkesçe bilinen bir CA kullanıyor) içe aktarma adımı atlanır; site değeri gerekmez.
 initContainers:
-  coordinator: &s3ts
+  coordinator:
+  - name: s3-truststore
+    image: docker.io/trinodb/trino:483
+    command: [sh, -c, 'set -e; if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi; chmod u+w /ts/truststore.p12; if [ -f /ad-ca/ca.crt ]; then keytool -importcert -noprompt -alias ad-ca -file /ad-ca/ca.crt -keystore /ts/truststore.p12 -storepass changeit; echo "AD CA eklendi"; fi']
+    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+    volumeMounts:
+    - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
+    - {name: ad-ca, mountPath: /ad-ca, readOnly: true}
+    - {name: s3-truststore, mountPath: /ts}
+  worker:
   - name: s3-truststore
     image: docker.io/trinodb/trino:483
     command: [sh, -c, 'if [ -f /s3-ca/truststore.p12 ]; then cp /s3-ca/truststore.p12 /ts/truststore.p12; echo "S3 CA truststore"; else cp "$(dirname "$(readlink -f "$(command -v java)")")/../lib/security/cacerts" /ts/truststore.p12; echo "JDK varsayilan"; fi']
@@ -45,7 +49,6 @@ initContainers:
     volumeMounts:
     - {name: s3-ca, mountPath: /s3-ca, readOnly: true}
     - {name: s3-truststore, mountPath: /ts}
-  worker: *s3ts
 coordinator:
   additionalVolumes:
   - {name: ad-ca, secret: {secretName: ad-ca, optional: true}}
@@ -53,7 +56,6 @@ coordinator:
   - {name: s3-truststore, emptyDir: {}}
   - {name: trino-data, emptyDir: {}}
   additionalVolumeMounts:
-  - {name: ad-ca, mountPath: /etc/trino/ad-ca, readOnly: true}
   - {name: s3-truststore, mountPath: /etc/trino/s3-truststore, readOnly: true}
   # OpenShift: pod rastgele UID ile koşar (restricted-v2; runAsUser null, trino.yaml). İmajın /data/trino dizini
   # UID 1000'e aittir -> "pid file is not writeable: ... mkdir /data/trino/var: permission denied" ve CrashLoop

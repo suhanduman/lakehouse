@@ -872,23 +872,22 @@ konteyner imajı üretmeniz ya da çalışan bir konteynerin `cacerts` dosyasın
 | Bileşen | Nasıl bağlanır | Konteynerdeki yol | Hangi dosya yapar |
 |---|---|---|---|
 | **Keycloak** — AD kullanıcı federasyonu (LDAPS) | Keycloak CR `spec.truststores`; operatör Secret'taki PEM'leri bu dizine bağlar, Keycloak onları **sistem güven deposuyla birleştirir** | `/opt/keycloak/conf/truststores/` | `glue/templates/keycloak.yaml` |
-| **Trino coordinator** — LDAP grup sağlayıcısı (AD grupları) | Secret volume + `ldap.ssl.truststore.path` (Trino PEM güven deposu kabul eder) | `/etc/trino/ad-ca/ca.crt` | `platform/values/trino-ldap.yaml` (mount) + `platform/values/site/trino.yaml` (satır) |
+| **Trino coordinator** — LDAP grup sağlayıcısı (AD grupları) | `s3-truststore` initContainer'ı JVM güven deposunu hazırlar ve AD kökünü `keytool` ile **ekler**; ldaps bağlantısı JVM deposunu kullanır | `/etc/trino/s3-truststore/truststore.p12` | `platform/values/trino-ldap.yaml` |
 | **Zeppelin** — Shiro `ActiveDirectoryGroupRealm` | `ad-truststore` initContainer'ı imajın **kendi** `cacerts` dosyasını kopyalar, kökü `keytool` ile ekler; sunucu ve yorumlayıcı JVM'leri `-Djavax.net.ssl.trustStore` ile bu kopyayı kullanır | `/truststore/ad-truststore.p12` | `glue/templates/zeppelin.yaml` |
 
 Üçünü birden açıp kapatan **tek** ayar `platform/values/site/glue.yaml` içindeki
 `keycloak.ldap.caSecret`'tir (şablonda `ad-ca` yazılıdır).
 
 **Bu Secret'a ihtiyacınız yoksa** (AD sertifikanız herkesçe bilinen bir CA'dan geliyorsa)
-tam olarak iki satır değiştirin:
+tek satır değiştirin: `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret: ""`.
+Trino tarafında yapılacak bir şey yoktur: `platform/values/trino-ldap.yaml`'daki bağlama
+`optional: true`'dur, Secret yoksa initContainer içe aktarmayı atlar ve Trino yine açılır.
 
-1. `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret: ""`
-2. `platform/values/site/trino.yaml` → `group-provider.properties` bloğundan
-   `ldap.ssl.truststore.path` satırını **silin**
-
-`platform/values/trino-ldap.yaml` dosyasına **dokunmayın**: oradaki Secret bağlaması
-`optional: true`'dur, yani `ad-ca` yoksa Trino yine sorunsuz açılır (bağlama sessizce boş
-kalır). `scripts/check-site.sh` yukarıdaki iki adımın **birlikte** yapıldığını denetler:
-`caSecret` doluyken `ldap.ssl.truststore.path` satırı bulunmalı, boşken bulunmamalıdır.
+> **Trino'ya `ldap.ssl.truststore.path` satırı EKLEMEYİN.** Trino 483'te bu satırın açtığı
+> SSL yolu aralıklı olarak `CommunicationException … SSLContext was not set` ile düşer;
+> kullanıcının AD grupları boş gelir ve analistler `Access Denied: Cannot access catalog
+> lakehouse` alır (OpenShift provasında kabul testi bu yüzden düştü). AD kökü bu yüzden
+> JVM güven deposundan verilir. `scripts/check-site.sh` satırı görürse durur.
 
 Zeppelin'de kopya alınmasının nedeni: yalnız AD kökünü içeren bir güven deposu JVM'in
 varsayılanını **ezer** ve Maven Central'dan inen Trino JDBC sürücüsü ile Keycloak/Trino
@@ -901,18 +900,20 @@ sertifika taşır.
 
 ```bash
 oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- ls /opt/keycloak/conf/truststores
-oc -n "$LAKEHOUSE_NS" get deploy/trino-coordinator \
-  -o jsonpath='{.spec.template.spec.containers[0].volumeMounts[?(@.name=="ad-ca")].mountPath}{"\n"}'
+oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore
 oc -n "$LAKEHOUSE_NS" logs deploy/zeppelin -c ad-truststore --tail=1
 ```
 
-**Beklenen çıktı** (birinci ve üçüncü satır kind kümesinden alınmış gerçek çıktıdır;
-ikinci satır üretim değer dosyalarıyla üretilmiştir — geliştirme kümesi LDAP grup
-sağlayıcısını kullanmadığı için orada **boş** döner):
+**Beklenen çıktı** (ilk ve son satır kind kümesinden, ortadaki üç satır OpenShift
+provasından alınmış gerçek çıktıdır; S3 özel CA kullanmıyorsanız ikinci satır
+`JDK varsayilan` olur. Geliştirme kümesi `platform/values/trino-ldap.yaml`'ı yüklemez,
+Trino'da bu initContainer yoktur; ikinci komut orada hata verir, bu beklenen durumdur):
 
 ```text
 secret-ad-ca
-/etc/trino/ad-ca
+S3 CA truststore
+Certificate was added to keystore
+AD CA eklendi
 147
 ```
 

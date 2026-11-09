@@ -263,8 +263,7 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   ```bash
   oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- ls /opt/keycloak/conf/truststores
   oc -n "$LAKEHOUSE_NS" logs keycloak-0 | grep TruststoreBuilder | tail -1
-  oc -n "$LAKEHOUSE_NS" exec deploy/trino-coordinator -- \
-    grep ldap.ssl.truststore.path /etc/trino/group-provider.properties
+  oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore | grep "AD CA"
   oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -c zeppelin -- \
     keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 \
     -storepass changeit | grep ad-ca

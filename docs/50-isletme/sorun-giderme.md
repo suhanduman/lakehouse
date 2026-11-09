@@ -76,6 +76,7 @@ geçerlidir.
 | Connect `Build` uzun sürüyor ya da `unauthorized` veriyor | [§5 Kurulum ve eşitleme](#kurulum) |
 | Trino `401` ya da `Authentication failed` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | Not defterinden Trino'ya `CA cert does not include key usage extension` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
+| Analist/kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse` (servis hesapları çalışıyor) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | Trino `Access Denied` | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5 |
 | Superset `phase: Initializing`, şema geçiş görevi düşüyor | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | JupyterHub not defteri açılmıyor (spawn zaman aşımı) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
@@ -692,6 +693,28 @@ doğrulayın.
   içindeki `s3.egressCidrs` S3'ün veri IP'lerini içermelidir
   ([30-kurulum](../30-kurulum.md) §4.1); politikanın kümede olduğunu doğrulayın:
   `oc -n "$LAKEHOUSE_NS" get networkpolicy notebook-s3-egress -o yaml`.
+- **Analist ya da son kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse`
+  alıyor, Superset ve Zeppelin (servis hesapları) çalışıyor:** Trino kullanıcının AD
+  gruplarını okuyamıyordur; yetki kuralları gruplara bağlı olduğu için grupsuz kullanıcı
+  hiçbir şey göremez. Coordinator günlüğüne bakın:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c trino-coordinator --since=1h \
+    | grep -c "SSLContext was not set"
+  grep -n "ldap.ssl.truststore.path" platform/values/site/trino.yaml
+  ```
+
+  Sayı `0`'dan büyükse ve ikinci komut bir satır gösteriyorsa site dosyanız eski bir
+  sürümden kalmıştır: Trino 483'te `ldap.ssl.truststore.path` satırının açtığı SSL yolu
+  aralıklı olarak düşer (OpenShift provasında görüldü). Satırı silin, commit edip itin;
+  AD kök CA'sı ürünün kendi değer dosyasıyla JVM güven deposuna eklenir
+  ([30-kurulum](../30-kurulum.md) §5.13). Coordinator yeniden açıldıktan sonra
+  `oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore` çıktısında
+  `AD CA eklendi` satırı görünmelidir. Günlükte başka bir LDAP hatası varsa (`PKIX`,
+  `Invalid credentials`) sorun AD kökü ya da bağlama hesabıdır.
+
 - **Not defterinden Trino'ya bağlanırken `CA cert does not include key usage extension`:**
   `lakehouse-ca` kök sertifikası `Key Usage` uzantısı olmadan üretilmiştir (kılavuzun eski
   sürümündeki komut). Güncel Python bu CA'yı kabul etmez. Bakmak için:

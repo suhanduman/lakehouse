@@ -41,7 +41,7 @@ müşteriye özel değerleri. **22 anahtar.**
 | `keycloak.ldap.usersDn` | Kullanıcı nesnelerinin arandığı alt ağaç | `$LDAP_USERS_DN` | `OU=Users,DC=example,DC=com` | **Evet** |
 | `keycloak.ldap.groupsDn` | Üç lakehouse grubunun bulunduğu alt ağaç | `$LDAP_GROUPS_DN` | `OU=Groups,DC=example,DC=com` | **Evet** |
 | `keycloak.ldap.bindDn` | Yalnız okuma yetkili AD servis hesabının tam DN'i. **Parola burada değildir:** `keycloak-clients` Secret'ının `ldap-bind` anahtarındadır | `$LDAP_BIND_DN` | `CN=svc-lakehouse,OU=Service,DC=example,DC=com` | **Evet** |
-| `keycloak.ldap.caSecret` | AD kök CA'sını taşıyan Secret'ın **adı** (anahtar `ca.crt`, PEM). Bu tek anahtar üç tüketiciyi birden açar: Keycloak CR `spec.truststores`, Zeppelin `ad-truststore` initContainer'ı ve (site/trino.yaml ile birlikte) Trino coordinator. AD sertifikası konteynerlerin zaten güvendiği bir kökten geliyorsa `""` yapın — o zaman `platform/values/site/trino.yaml` içindeki `ldap.ssl.truststore.path` satırını da silin | — (Secret adı sabit) | `ad-ca` | Hayır (özel CA'lı AD'de **evet**) |
+| `keycloak.ldap.caSecret` | AD kök CA'sını taşıyan Secret'ın **adı** (anahtar `ca.crt`, PEM). Bu tek anahtar üç tüketiciyi birden açar: Keycloak CR `spec.truststores`, Zeppelin `ad-truststore` initContainer'ı ve Trino coordinator'ın JVM güven deposu (`platform/values/trino-ldap.yaml` initContainer'ı). AD sertifikası konteynerlerin zaten güvendiği bir kökten geliyorsa `""` yapın; Trino tarafında başka bir şey değişmez | — (Secret adı sabit) | `ad-ca` | Hayır (özel CA'lı AD'de **evet**) |
 | `cnpg.polarisDb.storageClass` | Polaris veritabanının diski. Boş bırakılırsa kümenin varsayılan StorageClass'ı kullanılır | `$STORAGE_CLASS` | `ocs-storagecluster-ceph-rbd` | Hayır |
 | `cnpg.keycloakDb.storageClass` | Keycloak veritabanının diski | `$STORAGE_CLASS` | `ocs-storagecluster-ceph-rbd` | Hayır |
 | `cnpg.supersetDb.storageClass` | Superset veritabanının diski | `$STORAGE_CLASS` | `ocs-storagecluster-ceph-rbd` | Hayır |
@@ -129,7 +129,7 @@ geçmez ve router sertifikasına güvenmek gerekmez.
 | `ldap.url` | AD LDAPS adresi (glue dosyasındaki `keycloak.ldap.connectionUrl` ile **aynı**) | `$LDAP_URL` | `ldaps://ad.example.com:636` |
 | `ldap.admin-user` | Bağlanma DN'i (glue `keycloak.ldap.bindDn` ile **aynı**) | `$LDAP_BIND_DN` | `CN=svc-lakehouse,OU=Service,DC=example,DC=com` |
 | `ldap.user-base-dn` | Kullanıcı ağacı (glue `keycloak.ldap.usersDn` ile **aynı**) | `$LDAP_USERS_DN` | `OU=Users,DC=example,DC=com` |
-| `ldap.ssl.truststore.path` | AD kök CA'sının coordinator içindeki yolu. Doldurulmaz, **sabittir**: `ad-ca` Secret'ı `platform/values/trino-ldap.yaml` ile buraya bağlanır. Trino PEM truststore kabul eder. glue dosyasındaki `keycloak.ldap.caSecret` boşsa bu satır **silinir** | — (sabit) | `/etc/trino/ad-ca/ca.crt` |
+| `ldap.ssl.truststore.path` | **Bu satır yoktur ve eklenmez.** Trino 483'te bu satırın açtığı SSL yolu aralıklı `SSLContext was not set` hatası verir ve kullanıcının grupları boş gelir (OpenShift provası). AD kök CA'sı coordinator'ın JVM güven deposuna `platform/values/trino-ldap.yaml` initContainer'ıyla eklenir; `scripts/check-site.sh` satırı görürse durur | — | — |
 
 Bağlanma **parolası** değer dosyasında değildir: `keycloak-clients` Secret'ının
 `ldap-bind` anahtarı `LDAP_BIND_PASSWORD` ortam değişkeni olarak gelir
@@ -158,13 +158,13 @@ Diğer satırlar (`connector.name=iceberg`, `iceberg.catalog.type=rest`,
 > `group-provider.properties` bloğu **burada değildir** (çok satırlı string'ler birleşmez,
 > blok bütünüyle `platform/values/site/trino.yaml`'dan gelir); bu dosyada
 > `coordinator.additionalVolumes`
-> ve `additionalVolumeMounts` ile `ad-ca` Secret'ı `/etc/trino/ad-ca` altına bağlanır —
-> `optional: true` olduğu için Secret yoksa Trino yine açılır. Dosya ayrıca ArgoCD'nin
+> ile `ad-ca` Secret'ı coordinator'ın `s3-truststore` initContainer'ına bağlanır ve
+> `keytool` ile JVM güven deposuna eklenir — `optional: true` olduğu için Secret yoksa adım
+> atlanır, Trino yine açılır. Dosya ayrıca ArgoCD'nin
 > değer dosyası listesinde **prod işaretidir** (geliştirme kümesi bu listeyi başka bir
 > dosyayla değiştirir). **Silmeyin**; AD sertifikanız herkesçe bilinen bir CA'dan
 > geliyorsa dokunmanız gereken yer burası değil, `platform/values/site/glue.yaml` →
-> `keycloak.ldap.caSecret` ve `platform/values/site/trino.yaml` → `ldap.ssl.truststore.path`
-> satırıdır.
+> `keycloak.ldap.caSecret` satırıdır.
 
 ---
 
@@ -221,7 +221,7 @@ değiştirirken **hepsini** değiştirin.
 | `platform/values/site/glue.yaml` → `s3.region` | `platform/values/site/trino.yaml` `s3.region`; `platform/polaris/setup.yaml` `region` | `scripts/check-site.sh` |
 | `platform/values/site/glue.yaml` → `s3.vendedCredentials` | `platform/values/site/trino.yaml` `iceberg.rest-catalog.vended-credentials-enabled` | `scripts/check-site.sh` |
 | `platform/values/site/glue.yaml` → `keycloak.ldap.connectionUrl` / `bindDn` / `usersDn` | `platform/values/site/trino.yaml` `ldap.url` / `ldap.admin-user` / `ldap.user-base-dn`; `zeppelin-shiro` Secret'ındaki Shiro dosyası | `scripts/check-site.sh` (Shiro hariç) |
-| `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret` | `platform/values/site/trino.yaml` `ldap.ssl.truststore.path` satırı (mount: `platform/values/trino-ldap.yaml`) | `scripts/check-site.sh` (ikisi birlikte açılır/kapanır) |
+| `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret` | Trino tarafında karşılığı yoktur: `platform/values/trino-ldap.yaml` Secret'ı varsa kendiliğinden JVM güven deposuna ekler | `scripts/check-site.sh` (`ldap.ssl.truststore.path` satırı **bulunmamalı**) |
 | `$LAKEHOUSE_NS` | `platform/values/site/trino.yaml` Polaris adresi; türetilen bütün host adları | `scripts/check-site.sh` |
 
 Trino, Superset ve JupyterHub'ın Keycloak'taki yönlendirme adresleri host adlarından
