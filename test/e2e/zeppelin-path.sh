@@ -22,15 +22,21 @@ NC=$(curl -sS -b "$NJ" -o /dev/null -w '%{http_code}' localhost:18081/api/notebo
 echo "OK zeppelin rol kapısı: rolsüz kullanıcı 401 (giriş yapsa bile veri göremez)"
 # Bağımlılık indirmesi SUNUCU AÇILIŞINDA başlar ve asenkrondur; status READY olmadan paragraf
 # "Interpreter Setting 'jdbc' is not ready, its status is DOWNLOADING_DEPENDENCIES" ile düşer.
+# Üretimde /api/interpreter/** yalnız admin rolüne açıktır (examples/zeppelin/shiro-ad.ini; analist 401 alır —
+# ocpphy kabulü 2026-11-09). O durumda durum sorgulanamaz; hazır olma, aşağıda paragrafın yeniden denenmesiyle
+# beklenir. Geliştirme Shiro dosyası bu uçları analist rolüne açar (dev'de admin kullanıcısı yok) -> eski yol.
+ISC=$(curl -sS -b "$CJ" -o /dev/null -w '%{http_code}' localhost:18081/api/interpreter/setting)
 ST=""
+[[ "$ISC" == "200" ]] || { ST=SKIP; echo "OK zeppelin yorumlayıcı ayarları $ACC_ANALYST_USER için kapalı ($ISC; üretimde yalnız admin)"; }
 for _ in $(seq 1 90); do
+  [[ "$ST" == "SKIP" ]] && break
   ST=$(curl -sS -b "$CJ" localhost:18081/api/interpreter/setting | jq -r '.body[] | select(.name=="jdbc") | .status')
   [[ "$ST" == "READY" ]] && break
   [[ "$ST" == "DOWNLOADING_DEPENDENCIES" ]] || { echo "HATA jdbc interpreter durumu: $ST"; curl -sS -b "$CJ" localhost:18081/api/interpreter/setting | jq -r '.body[] | select(.name=="jdbc") | .errorReason'; exit 1; }
   sleep 10
 done
-[[ "$ST" == "READY" ]] || { echo "HATA jdbc bağımlılıkları 15 dk içinde inmedi (Maven Central erişimi?)"; exit 1; }
-echo "OK zeppelin jdbc interpreter READY (io.trino:trino-jdbc Maven'den indi)"
+[[ "$ST" == "READY" || "$ST" == "SKIP" ]] || { echo "HATA jdbc bağımlılıkları 15 dk içinde inmedi (Maven Central erişimi?)"; exit 1; }
+[[ "$ST" == "READY" ]] && echo "OK zeppelin jdbc interpreter READY (io.trino:trino-jdbc Maven'den indi)"
 # Zeppelin 0.12.1 POST /api/notebook'ta "name" alanını YOK SAYAR: not her zaman "/Untitled Note" olur.
 # Önceki (yarıda kalmış) koşudan artan not ikinci koşuda "Note '/Untitled Note' existed" ile çakışır -> önce temizle.
 for ID in $(curl -sS -b "$CJ" localhost:18081/api/notebook | jq -r '.body[] | select(.path=="/Untitled Note") | .id'); do
@@ -40,7 +46,12 @@ NOTE=$(curl -sS -b "$CJ" -H 'Content-Type: application/json' -d '{"paragraphs":[
 [[ -n "$NOTE" && "$NOTE" != "null" ]] || { echo "HATA zeppelin not yaratılamadı"; exit 1; }
 PARA=$(curl -sS -b "$CJ" "localhost:18081/api/notebook/$NOTE" | jq -r '.body.paragraphs[0].id')
 # senkron run (ilk sorgu interpreter JVM'ini başlatır)
-OUT=$(curl -sS -b "$CJ" --max-time 900 -X POST "localhost:18081/api/notebook/run/$NOTE/$PARA")
+# Bağımlılıklar henüz inmediyse ("… is not ready, its status is DOWNLOADING_DEPENDENCIES") bekleyip yeniden dene
+for _ in $(seq 1 90); do
+  OUT=$(curl -sS -b "$CJ" --max-time 900 -X POST "localhost:18081/api/notebook/run/$NOTE/$PARA")
+  grep -q "DOWNLOADING_DEPENDENCIES" <<<"$OUT" || break
+  sleep 10
+done
 echo "$OUT" | jq -e '.body.code=="SUCCESS"' >/dev/null || { echo "HATA zeppelin %jdbc paragrafı"; echo "$OUT" | head -c 2000; kubectl -n "$NS" logs deploy/zeppelin --tail=60; exit 1; }
 echo "$OUT" | jq -e '.body.msg[0].type=="TABLE"' >/dev/null || { echo "HATA zeppelin sonucu TABLE değil"; echo "$OUT" | head -c 2000; exit 1; }
 # TABLE verisi "c\n3\n": başlık satırı c, ikinci satır sayım
