@@ -1,3 +1,10 @@
+{{- /* Sinyal tablosunun Debezium'daki tam adı. SQL Server'da Debezium bütün adlara veritabanını ekler
+   (<veritabanı>.<şema>.<tablo>; konu adı da <önek>.<veritabanı>.<şema>.<tablo>) — signal.data.collection ve
+   sink'in konu dışlaması bunu bekler; PostgreSQL'de <şema>.<tablo>. */ -}}
+{{- define "glue.signalCollection" -}}
+{{- $t := required (printf "sources[%s].signalTable zorunlu (incremental snapshot)" .name) .signalTable -}}
+{{- if eq .type "sqlserver" }}{{ printf "%s.%s" .database $t }}{{ else }}{{ $t }}{{ end -}}
+{{- end -}}
 {{- /* Kaynak-DB başına 1 Debezium + 1 Iceberg sink (spec §5.2). Ayarlar spec §12 korunan bilgi + F0 S2/S2d/S3. Runtime mutasyon yok. */ -}}
 {{- $ns := include "glue.ns" . }}
 {{- $rf := index .Values.kafka.config "default.replication.factor" }}
@@ -57,7 +64,7 @@ spec:
   "topic.prefix" $prefix
   "table.include.list" (join "," (append .tables .signalTable))
   "snapshot.mode" "initial"
-  "signal.data.collection" (required (printf "sources[%s].signalTable zorunlu (incremental snapshot)" .name) .signalTable)
+  "signal.data.collection" (include "glue.signalCollection" .)
   "signal.enabled.channels" "source"
   "time.precision.mode" "connect"
   "decimal.handling.mode" "precise"
@@ -88,13 +95,20 @@ spec:
 {{- $_ := set $cfg "schema.history.internal.kafka.topic" (printf "schema-history.%s" .name) }}
 {{- $_ := set $cfg "schema.history.internal.kafka.bootstrap.servers" "lakehouse-kafka-bootstrap:9093" }}
 {{- $_ := set $cfg "schema.history.internal.store.only.captured.tables.ddl" "false" }}
+{{- /* Şema değişikliği olaylarını kaynak adlı konuya (ör. `erp`) YAZMA: ürün bu konuyu kullanmaz; bağlayıcı DDL'i
+   kendi schema-history.<ad> konusunda tutar. Açık kalsaydı connect kullanıcısının `<ad>.` ön ek ACL'i bu nokta-
+   suz konuyu kapsamaz ve görev "Not authorized to describe topic(s) '<ad>'" ile düşerdi. */ -}}
+{{- $_ := set $cfg "include.schema.changes" "false" }}
 {{- range $c := list "producer" "consumer" }}
-{{- /* Debezium'un kendi Kafka istemcileri worker ayarlarını devralmaz: Connect KafkaUser Secret'ı + Strimzi CA (PEM). Canlı doğrulama: pre-ship (kind'da SQL Server yok) */ -}}
+{{- /* Debezium'un kendi Kafka istemcileri worker ayarlarını devralmaz: Connect KafkaUser Secret'ı + Strimzi CA (PEM).
+   CA dosya olarak DEĞİL, satır içi PEM olarak verilir (ssl.truststore.certificates): Strimzi 1.x Connect pod'una
+   CA'yı bağlamaz, worker'ın kendisi de aynı yolu kullanır (strimzisecrets sağlayıcısı). Burada ürünün `secrets`
+   sağlayıcısı lakehouse-cluster-ca-cert Secret'ından okur (kafka-connect.yaml Role resourceNames). */ -}}
 {{- $_ := set $cfg (printf "schema.history.internal.%s.security.protocol" $c) "SASL_SSL" }}
 {{- $_ := set $cfg (printf "schema.history.internal.%s.sasl.mechanism" $c) "SCRAM-SHA-512" }}
 {{- $_ := set $cfg (printf "schema.history.internal.%s.sasl.jaas.config" $c) (printf "${secrets:%s/connect:sasl.jaas.config}" $ns) }}
 {{- $_ := set $cfg (printf "schema.history.internal.%s.ssl.truststore.type" $c) "PEM" }}
-{{- $_ := set $cfg (printf "schema.history.internal.%s.ssl.truststore.location" $c) "/opt/kafka/connect-certs/lakehouse-cluster-ca-cert/ca.crt" }}
+{{- $_ := set $cfg (printf "schema.history.internal.%s.ssl.truststore.certificates" $c) (printf "${secrets:%s/lakehouse-cluster-ca-cert:ca.crt}" $ns) }}
 {{- end }}
 {{- end }}
 {{- $_ := mergeOverwrite $cfg (.extraConfig | default (dict)) }}
@@ -139,7 +153,7 @@ spec:
   {{- /* Snapshot saklama TEK sahipli: bakım işi expire_snapshots(--snapshot-days, vars. 7 gün). Auto-create'te
      1 günlük history.expire.max-snapshot-age-ms bununla çelişiyordu -> kaldırıldı (iceberg_maintenance sahibi). */ -}}
   {{- $sinkCfg := dict
-    "topics.regex" (printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." .signalTable))
+    "topics.regex" (printf "%s\\.(?!dlq$)(?!%s$).*" $prefix (replace "." "\\." (include "glue.signalCollection" .)))
     "key.converter" "org.apache.kafka.connect.json.JsonConverter"
     "value.converter" "org.apache.kafka.connect.json.JsonConverter"
     "key.converter.schemas.enable" "true"

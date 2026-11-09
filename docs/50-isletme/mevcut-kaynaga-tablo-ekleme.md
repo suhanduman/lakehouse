@@ -221,12 +221,13 @@ VALUES ('adhoc-1', 'execute-snapshot',
         '{"data-collections": ["public.customers"], "type": "incremental"}');
 ```
 
-`[kaynak DB]` — SQL Server (aynı içerik, `dbo` şemasındaki sinyal tablosuna)
+`[kaynak DB]` — SQL Server (`dbo` şemasındaki sinyal tablosuna; tablo adının başında
+**veritabanı adı** vardır — burada `erp`)
 
 ```sql
 INSERT INTO dbo.debezium_signal (id, type, data)
 VALUES (CONVERT(varchar(42), NEWID()), 'execute-snapshot',
-        '{"data-collections": ["dbo.customers"], "type": "incremental"}');
+        '{"data-collections": ["erp.dbo.customers"], "type": "incremental"}');
 ```
 
 `[kaynak DB]` — MongoDB (kaynakta `signalCollection` tanımlı olmalıdır)

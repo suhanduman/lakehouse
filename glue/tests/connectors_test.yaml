@@ -104,7 +104,21 @@ tests:
       - documentIndex: 0
         equal: {path: 'spec.config["schema.history.internal.store.only.captured.tables.ddl"]', value: "false"}
       - documentIndex: 0
+        equal: {path: 'spec.config["include.schema.changes"]', value: "false"}
+      # SQL Server'da Debezium adları veritabanıyla yazar: sinyal koleksiyonu ve sink'in konu dışlaması <db>.<şema>.<tablo>
+      - documentIndex: 0
+        equal: {path: 'spec.config["signal.data.collection"]', value: ERP.dbo.debezium_signal}
+      - documentIndex: 1
+        equal: {path: 'spec.config["topics.regex"]', value: 'erp\.(?!dlq$)(?!ERP\.dbo\.debezium_signal$).*'}
+      - documentIndex: 0
         equal: {path: 'spec.config["schema.history.internal.producer.sasl.jaas.config"]', value: "${secrets:lakehouse/connect:sasl.jaas.config}"}
+      # Kafka küme CA'sı satır içi PEM (Strimzi 1.x Connect pod'una CA dosyası bağlamaz; dosya yolu NoSuchFile verirdi)
+      - documentIndex: 0
+        equal: {path: 'spec.config["schema.history.internal.producer.ssl.truststore.certificates"]', value: "${secrets:lakehouse/lakehouse-cluster-ca-cert:ca.crt}"}
+      - documentIndex: 0
+        equal: {path: 'spec.config["schema.history.internal.consumer.ssl.truststore.certificates"]', value: "${secrets:lakehouse/lakehouse-cluster-ca-cert:ca.crt}"}
+      - documentIndex: 0
+        notExists: {path: 'spec.config["schema.history.internal.producer.ssl.truststore.location"]'}
       # TLS varsayılan açık; sertifika doğrulaması varsayılan KAPALI DEĞİL (trustServerCertificate=false)
       - documentIndex: 0
         equal: {path: 'spec.config["database.encrypt"]', value: "true"}

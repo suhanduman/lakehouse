@@ -147,10 +147,18 @@ Yeniden başlatmadan sonra `SHOW wal_level;` ile doğrulayın.
 da `postgresql.conf` içindeki değer `ALTER SYSTEM`'i eziyordur. `wal_level` düzelmeden
 bağlayıcı çoğaltma yuvasını açamaz.
 
-**3.1.2 — Rol, yetkiler ve sinyal tablosu.** Ürün publication'ı **kendisi** yaratır
-(`publication.autocreate.mode=filtered`); bunun için superuser gerekmez ama **yakalanacak
-tabloların sahibi CDC rolü olmalıdır**. Aşağıdaki blok `erp` veritabanına bağlanır ve
-parolayı Adım 2'deki değişkenden alır.
+**3.1.2 — CDC rolü, sinyal tablosu ve publication.** Bu adımı kaynak veritabanının
+yöneticisi yapar. Tabloların sahipliği **değişmez**; CDC rolü (`debezium`) yalnız okur:
+
+- `debezium` rolü: oturum açma ve çoğaltma (`REPLICATION`) yetkisi.
+- Yakalanacak tablolarda yalnız `SELECT`.
+- Sinyal tablosunda okuma ve yazma (ürün artımlı snapshot sırasında buraya işaret satırı yazar).
+- **Publication**: hangi tabloların değişikliklerinin dışarı verileceğini söyleyen liste.
+  Adı `dbz_` + kaynak adı + `_pub` olmalıdır (bu örnekte `dbz_erp_pub`); ürün bu adla arar.
+
+Aşağıdaki blok `erp` veritabanına bağlanır ve parolayı Adım 2'deki değişkenden alır.
+Yakalanacak tabloları `GRANT SELECT` ve `CREATE PUBLICATION` satırlarında virgülle
+sıralayın; sinyal tablosu publication'da **bulunmalıdır**.
 
 `[kaynak DB]`
 
@@ -158,20 +166,14 @@ parolayı Adım 2'deki değişkenden alır.
 psql -h erp-db.kurum.example.net -U postgres -d erp -v parola="$ERP_DB_PASSWORD" <<'SQL'
 CREATE ROLE debezium WITH REPLICATION LOGIN PASSWORD :'parola';
 GRANT CONNECT ON DATABASE erp TO debezium;
-GRANT CREATE ON DATABASE erp TO debezium;
-GRANT USAGE, CREATE ON SCHEMA public TO debezium;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO debezium;
+GRANT USAGE ON SCHEMA public TO debezium;
+GRANT SELECT ON public.orders TO debezium;
 CREATE TABLE public.debezium_signal (id varchar(42) PRIMARY KEY, type varchar(32) NOT NULL,
                                      data varchar(2048));
-ALTER TABLE public.debezium_signal OWNER TO debezium;
-ALTER TABLE public.orders OWNER TO debezium;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.debezium_signal TO debezium;
+CREATE PUBLICATION dbz_erp_pub FOR TABLE public.orders, public.debezium_signal;
 SQL
 ```
-
-`ALTER TABLE ... OWNER TO debezium` satırı **yakalanacak her tablo için** tekrarlanır.
-Sahipliği devretmek istemiyorsanız tek seçenek publication'ı elle yaratıp yönetmektir;
-o durumda `sources` girdisine `extraConfig: {publication.autocreate.mode: disabled}`
-eklenir ve publication'a tablo eklemek kaynak yöneticisinin işi olur.
 
 **Beklenen çıktı** (`psql` her ifade için bir satır basar):
 
@@ -180,23 +182,33 @@ CREATE ROLE
 GRANT
 GRANT
 GRANT
-GRANT
 CREATE TABLE
-ALTER TABLE
-ALTER TABLE
+GRANT
+CREATE PUBLICATION
 ```
+
+Sonradan bu kaynağa tablo eklemek de yöneticinin iki satırıdır
+([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) Adım 2).
 
 **Ters giderse:** `permission denied to create role` → bağlandığınız hesap yeterli yetkiye
 sahip değildir. `role "debezium" already exists` → rol vardır; parolayı yenilemek için
 `ALTER ROLE debezium WITH PASSWORD :'parola';` kullanın. Sinyal tablosu zaten varsa
-`CREATE TABLE` satırını çıkarın; şeması **aynı** olmalıdır.
+`CREATE TABLE` satırını çıkarın; şeması **aynı** olmalıdır. `publication "dbz_erp_pub"
+already exists` → publication vardır; içeriğini
+`SELECT tablename FROM pg_publication_tables WHERE pubname = 'dbz_erp_pub';` ile görün ve
+eksik tabloları `ALTER PUBLICATION dbz_erp_pub ADD TABLE …;` ile ekleyin.
 
 ### 3.2 SQL Server
 
 SQL Server'da CDC hem veritabanı hem tablo düzeyinde açılır ve **SQL Server Agent
-servisinin çalışıyor olması şarttır** — yakalama işleri Agent üzerinde koşar.
+servisinin çalışıyor olması şarttır** — yakalama işleri Agent üzerinde koşar. Bu adımı
+kaynak veritabanının yöneticisi yapar; tabloların sahipliği değişmez.
 
-`[kaynak DB]`
+Aşağıdaki iki dosyayı `erp` veritabanında, `sqlcmd` ile sırayla çalıştırın. `$(parola)`
+`sqlcmd`'in değişkenidir; parola Adım 2'deki kabuk değişkeninden gelir.
+
+**`cdc-ac.sql`** — CDC'yi açar, sinyal tablosunu yaratır. Sinyal tablosunda da CDC
+**açılır**: SQL Server'da ürün sinyalleri bu tablonun değişikliklerinden okur.
 
 ```sql
 -- veritabanı düzeyi (bir kez)
@@ -206,44 +218,67 @@ EXEC sys.sp_cdc_enable_db;
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'orders',
                              @role_name = NULL;
 
--- artımlı snapshot sinyal tablosu
+-- artımlı snapshot sinyal tablosu (CDC'si de açılır)
 CREATE TABLE dbo.debezium_signal (id varchar(42) PRIMARY KEY, type varchar(32) NOT NULL,
                                   data varchar(2048));
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'debezium_signal',
+                             @role_name = NULL;
+GO
 ```
 
-**Beklenen çıktı** (örnek — `sp_cdc_enable_table` yakalama işlerini başlatır):
-
-```text
-Job 'cdc.erp_capture' started successfully.
-Job 'cdc.erp_cleanup' started successfully.
-```
-
-CDC kullanıcısı ayrıca yaratılır; en az yetki, yakalanan tablolara ve `cdc` şemasına
-`SELECT`'tir. `$(parola)`, `sqlcmd`'in değişkenidir: dosya
-`sqlcmd -S erp-db.kurum.example.net -U sa -d erp -v parola="$ERP_DB_PASSWORD" -i hazirlik.sql`
-biçiminde çalıştırılır.
-
-`[kaynak DB]`
+**`cdc-kullanici.sql`** — CDC kullanıcısı: yakalanan tablolarda ve `cdc` şemasında
+yalnız okuma, sinyal tablosunda yazma (ürün artımlı snapshot sırasında buraya işaret
+satırı yazar).
 
 ```sql
 CREATE LOGIN debezium WITH PASSWORD = '$(parola)';
 CREATE USER debezium FOR LOGIN debezium;
 GRANT SELECT ON SCHEMA::dbo TO debezium;
 GRANT SELECT ON SCHEMA::cdc TO debezium;
+GRANT INSERT, UPDATE, DELETE ON dbo.debezium_signal TO debezium;
+GO
 ```
 
-**TLS zorunludur.** Bağlayıcı `database.encrypt=true` ile açılır
-(`glue/templates/connectors.yaml`). Sunucunun sertifikası kurumsal bir CA'dan geliyorsa ve
-Connect imajı o CA'ya güvenmiyorsa iki seçenek vardır:
+`[kaynak DB]`
+
+```bash
+sqlcmd -S erp-db.kurum.example.net -U sa -d erp -i cdc-ac.sql
+sqlcmd -S erp-db.kurum.example.net -U sa -d erp -v parola="$ERP_DB_PASSWORD" -i cdc-kullanici.sql
+```
+
+**Beklenen çıktı** (SQL Server 2022 üzerinde alınmış gerçek çıktı; ikinci komut bir şey
+basmaz). İlk satır yalnız bilgi notudur, CLR kapalıyken her zaman görünür:
+
+```text
+Update mask evaluation will be disabled in net_changes_function because the CLR configuration option is disabled.
+Job 'cdc.erp_capture' started successfully.
+Job 'cdc.erp_cleanup' started successfully.
+Update mask evaluation will be disabled in net_changes_function because the CLR configuration option is disabled.
+```
+
+**SQL Server'da adlar veritabanıyla yazılır.** Kafka konusu `erp.erp.dbo.orders`
+biçimindedir (önek, veritabanı, şema, tablo); artımlı snapshot sinyalinde de tablo
+`erp.dbo.orders` diye verilir ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md)
+Adım 6). Ürün bunu kendisi ayarlar; `sources` girdisinde tablolar yine `dbo.orders`
+biçiminde yazılır.
+
+**TLS zorunludur.** Bağlayıcı `database.encrypt=true` ile açılır. Sunucunun sertifikası
+kurumsal bir CA'dan geliyorsa ve Connect o CA'ya güvenmiyorsa iki seçenek vardır:
 
 - **Üretim:** truststore'u `sources[].extraConfig` ile verin (`database.trustStore` ve
   `database.trustStorePassword` anahtarları).
-- **Yalnız laboratuvar:** `sources[].trustServerCertificate: true`. Bu ayar sertifika
+- **Yalnız deneme ortamı:** `sources[].trustServerCertificate: true`. Bu ayar sertifika
   **doğrulamasını kapatır**; üretimde kullanılmaz.
+
+**Günlükte görülebilecek iki uyarı zararsızdır:** `Cannot query the status of the SQL
+Server Agent` ve `Exception caught while querying sys.dm_cdc_log_scan_sessions`. Bağlayıcı
+bunları yalnız izleme için sorar; CDC kullanıcısı sunucu düzeyinde yetkiye sahip olmadığı
+için yanıt alamaz, akış etkilenmez.
 
 **Ters giderse:** `SQLServerAgent is not currently running` → Agent kapalıdır, CDC
 tabloları dolmaz. `The driver could not establish a secure connection ... certificate`
-→ yukarıdaki truststore maddesi.
+→ yukarıdaki truststore maddesi. Artımlı snapshot sinyali yazıldığı hâlde günlükte
+`Requested 'INCREMENTAL' snapshot` satırı yoksa sinyal tablosunda CDC açılmamıştır.
 
 ### 3.3 MongoDB
 
@@ -737,6 +772,12 @@ tablosuna aktarır. `sources` listesine bir şey eklenmez.
 access.log -> Fluent Bit -> Kafka dış dinleyici (TLS + SCRAM) -> sink -> nginx_raw.access_log
 ```
 
+**Birden fazla nginx sunucusu** varsa hepsi aynı konuya ve aynı tabloya yazar; satırın
+hangi sunucudan geldiği `server` kolonundadır. Sunucu başına ayrı tablo açılmaz: sorgular
+`where server = '…'` ile süzülür, yeni sunucu eklemek küme tarafında hiçbir değişiklik
+gerektirmez (Adım 10.5). Günlükler yalnız eklenir, hiç güncellenmez; bu yüzden Silver
+katmanı yoktur, özetler doğrudan bu tablodan üretilir.
+
 Tablo `day(ts)` ile bölümlenir; `ts` log satırının kendi zamanı (milisaniye), `_fb_ts`
 ajanın alım zamanıdır. **Ham IP saklanır**; maskeleme istenirse sink tarafında bir SMT ile
 eklenir.
@@ -826,6 +867,7 @@ KAFKA_BOOTSTRAP=$KAFKA_BOOTSTRAP
 KAFKA_PASSWORD=$KAFKA_PASSWORD
 KAFKA_CA=/etc/fluent-bit/kafka-ca.crt
 NGINX_ACCESS_LOG=/var/log/nginx/access.log
+NGINX_SERVER_NAME=$(hostname -s)
 READ_FROM_HEAD=off
 EOF
 chmod 600 /etc/default/fluent-bit
@@ -833,7 +875,9 @@ systemctl enable --now fluent-bit
 ```
 
 `KAFKA_BOOTSTRAP` ve `KAFKA_PASSWORD` kabuk değişkenlerine Adım 10.2'de alınan iki değer
-yazılır. Dosya parola içerdiği için yalnız `root` tarafından okunabilir olmalıdır.
+yazılır. `NGINX_SERVER_NAME` bu sunucunun tablodaki adıdır (`server` kolonu); komut
+sunucunun kısa adını yazar, isterseniz `web01` gibi kendi adınızı verin. Her sunucuda
+**farklı** olmalıdır. Dosya parola içerdiği için yalnız `root` tarafından okunabilir olmalıdır.
 `READ_FROM_HEAD=off` ajanın yalnız **yeni** satırları göndermesini sağlar; var olan
 dosyanın tamamını geri yüklemek isterseniz ilk açılışta `on` yapın.
 
@@ -898,6 +942,33 @@ not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
 `oc -n "$LAKEHOUSE_NS" get kafkatopic nginx.dlq` bir konu gösteriyorsa yukarıdaki
 madde geçerlidir.
 
+### 10.5 Yeni bir nginx sunucusu eklemek
+
+Küme tarafında bir şey değişmez: yeni sunucuya Adım 10.3 aynen uygulanır, yalnız
+`NGINX_SERVER_NAME` o sunucunun adı olur. Bootstrap adresi, `kafka-ca.crt` ve parola
+bütün sunucularda aynıdır (Adım 10.2'deki değerler).
+
+Birkaç dakika sonra yeni sunucunun satırları aynı tabloda görünür (Adım 9.2'deki not
+defteri hücresiyle):
+
+```python
+cur = conn.cursor()
+cur.execute("select server, count(*) from nginx_raw.access_log group by server order by 1")
+cur.fetchall()
+```
+
+**Beklenen çıktı** (iki sunucuyla — `web01` ve `web02` — alınmış gerçek çıktı; her
+sunucu bir satır, yanında o sunucudan gelen istek sayısı):
+
+```text
+[['web01', 3], ['web02', 2]]
+```
+
+**Ters giderse:** yeni sunucu listede yoksa o sunucuda `journalctl -u fluent-bit`
+çıktısına bakın (Adım 10.3'ün "Ters giderse" maddeleri). İki sunucu aynı adla görünüyorsa
+`NGINX_SERVER_NAME` değerleri aynıdır; birini değiştirip ajanı yeniden başlatın.
+
+
 ---
 
 ## Kontrol listesi
@@ -910,7 +981,8 @@ madde geçerlidir.
 - [ ] Commit itildi; `glue` uygulaması `Synced Healthy`.
 - [ ] `dbz-` ve `sink-` bağlayıcılarının ikisi de `READY True`.
 - [ ] Bronze tabloda satır var; bir `silver-merge` koşusundan sonra Silver tablo var.
-- [ ] (nginx kullanılacaksa) dış dinleyici açık, ajan koşuyor, `sink-nginx` `READY True`.
+- [ ] (nginx kullanılacaksa) dış dinleyici açık, ajan her sunucuda kendi `NGINX_SERVER_NAME`
+      değeriyle koşuyor, `sink-nginx` `READY True`.
 
 ## Sonraki bölüm
 
