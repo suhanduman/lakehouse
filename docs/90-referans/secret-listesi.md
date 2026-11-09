@@ -40,7 +40,7 @@ alanındadır.
 | 11 | `zeppelin-interpreter` | `interpreter.json` | Zeppelin initContainer'ı (PVC `/data/conf` tohumu) — Trino JDBC bağlantısı | `glue/files/zeppelin/interpreter.json` şablonu; parola §5.7'deki `zeppelin` parolası | [30-kurulum](../30-kurulum.md) §5.10 |
 | 12 | `lakehouse-ca` | `tls.crt`, `tls.key` | cert-manager `Issuer/lakehouse-ca` (Trino sunucu sertifikasını imzalar); Superset ve Zeppelin pod'larında güven kökü | kurulumda üretilir (`openssl req -x509`) ya da kurumsal ara CA | [30-kurulum](../30-kurulum.md) §5.11 |
 | 13 | `jupyterhub-secrets` | `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret` — oturum çerezi imzası ve `auth_state` şifrelemesi | üretilir (her biri `openssl rand -hex 32`) | [30-kurulum](../30-kurulum.md) §5.12 |
-| 14 | `ad-ca` | `ca.crt` | **Keycloak** (CR `spec.truststores` → `/opt/keycloak/conf/truststores`), **Trino coordinator** (`ldap.ssl.truststore.path=/etc/trino/ad-ca/ca.crt`), **Zeppelin** (`ad-truststore` initContainer'ı cacerts kopyasına ekler) — üçü de AD'ye LDAPS ile bağlanır | `$LDAP_CA_FILE` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.13 (koşullu: AD sertifikası özel bir kökten geliyorsa **zorunlu**) |
+| 14 | `ad-ca` | `ca.crt` | **Keycloak** (CR `spec.truststores` → `/opt/keycloak/conf/truststores`), **Trino coordinator** (initContainer JVM güven deposuna ekler; `ldap.ssl.truststore.path` kullanılmaz — Trino 483 hatası), **Zeppelin** (`ad-truststore` initContainer'ı cacerts kopyasına ekler) — üçü de AD'ye LDAPS ile bağlanır | `$LDAP_CA_FILE` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.13 (koşullu: AD sertifikası özel bir kökten geliyorsa **zorunlu**) |
 | 15 | `s3-ca` | `ca.crt`, `truststore.p12` | **CNPG yedekleri** (ObjectStore `endpointCA` → `ca.crt`), **Kafka Connect** sink ve **Spark** işleri (JVM `javax.net.ssl.trustStore` → `truststore.p12`; glue `s3.caSecret` ile bağlanır); **Polaris**, **Trino**, **not defterleri** (initContainer Secret'ı varsa kendiliğinden kullanır) — hepsi S3'e TLS ile bağlanır | `ca.crt` = `$S3_CA_FILE` (depolama ekibi); `truststore.p12` = JDK kökleri + bu CA (`keytool`, parola `changeit`) | [30-kurulum](../30-kurulum.md) §5.14 (koşullu: S3 sertifikası özel bir CA'dan ya da self-signed ise **zorunlu**) |
 
 **`jupyterhub-secrets` tam olarak iki anahtar içerir.** Hub ile proxy arasındaki
@@ -77,7 +77,7 @@ yaratılırsa çakışır; kurulumun başında eksik görünmeleri bir hata değ
 |---|---|---|
 | `polaris-connect`, `polaris-spark`, `polaris-trino`, `polaris-notebooks` | `scripts/polaris-setup.sh` | Polaris kataloğu kurulurken ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
 | `polaris-db-app`, `keycloak-db-app`, `superset-db-app` ve bunların `-ca` / `-server` / `-replication` eşleri | CloudNativePG | PostgreSQL kümeleri açılırken |
-| `lakehouse-cluster-ca-cert`, `lakehouse-clients-ca-cert`, `connect`, `fluentbit` | Strimzi (Kafka CA'ları ve KafkaUser'lar) | Kafka ve Connect ayağa kalkarken |
+| `lakehouse-cluster-ca-cert`, `lakehouse-clients-ca-cert`, `connect`, `fluentbit`, `kafka-admin` | Strimzi (Kafka CA'ları ve KafkaUser'lar). `kafka-admin` Kafka'nın **yönetici** kimliğidir (superUsers): `scripts/kafka-cli.sh` onu okur; Secret'ı okuyabilen Kafka'da her şeyi yapabilir | Kafka ve Connect ayağa kalkarken |
 | `trino-tls` | cert-manager (`Issuer/lakehouse-ca` imzalar) | glue sync'inden sonra ~1 dakika |
 | `hub` | JupyterHub (z2jh) chart'ı | ilk JupyterHub sync'inde |
 | `keycloak-lakehouse-realm` | Keycloak operatörü | realm içe aktarımı tamamlanınca |

@@ -20,7 +20,7 @@ kubectl -n "$NS" wait kafkaconnector/dbz-shop --for=condition=Ready --timeout=60
 kubectl -n "$NS" wait kafkaconnector/sink-shop --for=condition=Ready --timeout=600s
 
 echo "== Bronze (ilk snapshot: 3 satır op=I)"
-verify shop_raw.orders 3 --wait 600 'id=1:status=new' 'id=2:status=paid'
+verify shop_raw.orders 3 --wait "$(sink_wait sink-shop)" 'id=1:status=new' 'id=2:status=paid'
 
 echo "== MERGE #1"
 run_spark_once silver-merge
@@ -28,7 +28,7 @@ verify shop.orders 3 --exact --wait 60 'id=1:status=new' 'id=2:status=paid' 'id=
 
 echo "== kaynakta UPDATE/DELETE"
 PSQL "update public.orders set status='shipped' where id=1; delete from public.orders where id=2;" >/dev/null
-verify shop_raw.orders 5 --wait 600 'id=1:status=shipped'
+verify shop_raw.orders 5 --wait "$(sink_wait sink-shop)" 'id=1:status=shipped'
 
 echo "== MERGE #2 (artımlı)"
 run_spark_once silver-merge
@@ -46,7 +46,7 @@ verify shop.orders 2 --exact 'id=1:status=shipped' '!id=2'
 # birinci gün gerçekleşir) — artımlı okuma bunu ya doğru geçmeli ya da sınırlı yedek okumaya düşmeli.
 echo "== bakım sonrası INSERT + MERGE #3"
 PSQL "insert into public.orders (status, amount) values ('new', 1.00);" >/dev/null
-verify shop_raw.orders 6 --wait 600 'id=4:status=new'
+verify shop_raw.orders 6 --wait "$(sink_wait sink-shop)" 'id=4:status=new'
 run_spark_once silver-merge
 verify shop.orders 3 --exact --wait 60 'id=4:status=new' '!id=2'
 echo "E2E F2 OK"

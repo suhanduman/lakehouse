@@ -107,8 +107,12 @@ alanı önekiyle gelir):
      1 polaris-mgmt
 ```
 
-Geliştirme yığınında bu listeye bir de `kube-state-metrics` satırı eklenir; o bileşen
-**yalnız geliştirme kümesinde** kurulur, OpenShift'te görünmemesi normaldir.
+Geliştirme yığınında bu listeye bir de `kube-state-metrics` satırı eklenir. OpenShift'te
+o bileşen platform izlemesinin parçasıdır (`openshift-monitoring` ad alanı), bu listede
+görünmez. `LakehouseSilverMergeStale` ve `LakehouseSparkScheduledRunFailed` onun Spark
+sürücü pod'ları için ürettiği standart serileri (`kube_pod_status_phase`,
+`kube_pod_start_time`) kullanır; OpenShift'in kendi izlemesi bunları zaten topladığı için
+ek bir kurulum gerekmez.
 
 **Geliştirme (kind) kümesinde:** yukarıdaki komut **koşmaz** — `thanos-querier` Route'u ve
 `openshift-monitoring` ad alanı yoktur (`the server doesn't have a resource type "route"`).
@@ -139,7 +143,7 @@ tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'
 | `LakehouseConnectTaskFailed` | Bir bağlayıcı görevi düştü; o kaynaktan **veri akmıyor** | critical | [sorun-giderme.md §4.1](sorun-giderme.md#connect) |
 | `LakehouseSinkStalled` | Iceberg'e yazma gecikmesi eşiği aştı; veri geliyor ama **tabloya işlenmiyor** | warning | [sorun-giderme.md §4.2](sorun-giderme.md#sink) |
 | `LakehouseSilverMergeStale` | En son **başarılı** Silver birleştirmesinin üzerinden çok zaman geçti; Silver tablolar **eskiyor** | warning | [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge) |
-| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
+| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız) | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
 | `LakehouseSparkRunTooLong` | Son 6 saatte tamamlanan Spark koşularının **ortalama** süresi eşiği aştı | warning | [sorun-giderme.md §4.5](sorun-giderme.md#spark-duration) |
 
 Alarm bildiriminin içinde bir `runbook` açıklaması vardır; değeri doğrudan yukarıdaki

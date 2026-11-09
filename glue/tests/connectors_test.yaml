@@ -1,6 +1,28 @@
 suite: connectors
 templates: [connectors.yaml]
 tests:
+  # Kaynağı Git'ten durdurma (offset sıfırlama; docs/50-isletme/kaynak-veya-tablo-silme.md §3). Varsayılan: alan yok (= running).
+  - it: sources[].state stops the debezium connector, sink is untouched, default renders no state
+    set:
+      sources:
+        - {name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.s, state: stopped}
+        - {name: crm, type: mongodb, connectionString: "mongodb://x", collections: [crm.c], state: stopped}
+        - {name: erp, type: postgres, host: h, port: 5432, database: erp, tables: [public.o], signalTable: public.s}
+    asserts:
+      - documentIndex: 0
+        equal: {path: spec.state, value: stopped}
+      - documentIndex: 1
+        notExists: {path: spec.state}
+      - documentIndex: 2
+        equal: {path: spec.state, value: stopped}
+      - documentIndex: 3
+        notExists: {path: spec.state}
+  - it: sources[].state rejects unknown values
+    set:
+      sources:
+        - {name: shop, type: postgres, host: h, port: 5432, database: shop, tables: [public.orders], signalTable: public.s, state: durdur}
+    asserts:
+      - failedTemplate: {errorPattern: "sources\\[shop\\].state: running \\| paused \\| stopped"}
   - it: no sources renders nothing
     asserts:
       - hasDocuments: {count: 0}

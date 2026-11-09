@@ -87,9 +87,7 @@ demektir ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §2).
 oc -n "$LAKEHOUSE_NS" get kafkaconnector
 oc -n "$LAKEHOUSE_NS" get kafkaconnector \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.connectorStatus.connector.state}{"\t"}{range .status.connectorStatus.tasks[*]}{.state}{" "}{end}{"\n"}{end}'
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop   # kafka-admin kimliğiyle, TLS 9093
 ```
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; sizde kaynak sayısına göre satır
@@ -150,24 +148,22 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
 ```
 
-**Beklenen çıktı:** alanlar sırasıyla ad, askıya alınma ve son koşudur. İkinci alan her
-satırda **boş ya da `false`** olmalıdır — ürün bu alanı hiç yazmaz, bu yüzden taze kurulumda
-**boş** basar; `false` değeri ancak bir askıya almadan sonra elle geri açıldığında görünür.
-`silver-merge` satırının üçüncü alanı son cron aralığı içinde olmalıdır. Aşağıdaki çıktı kind
-kümesinde alınmış **gerçek** çıktıdır ve tam da **istenmeyen** hâli gösterir — bir kabul
-koşusundan sonra bütün işler askıda kalmıştır (`ornek-rapor-zamanli`
-[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının örnek işidir):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı): alanlar sırasıyla ad,
+askı ve son koşudur. İkinci alan her satırda **boş ya da `false`** olmalıdır (taze
+kurulumda boş, bir kez geri açılmış işte `false`). `silver-merge` satırının üçüncü alanı son
+15 dakika içinde olmalıdır. `null`, günde bir ya da altı saatte bir koşan işin saatinin
+henüz gelmediği anlamına gelir:
 
 ```text
-maint-compact	true	null
-maint-expire-orphan-ttl	true	null
-maint-position-deletes	true	null
-mongo-bronze	true	null
-ornek-rapor-zamanli	true	
-silver-merge	true	null
+maint-compact	false	null
+maint-expire-orphan-ttl	false	null
+maint-position-deletes	false	2026-11-08T16:05:05Z
+mongo-bronze		2026-11-08T16:35:00Z
+silver-merge	false	2026-11-08T16:30:00Z
 ```
 
-**Ters giderse:** ikinci alan **`true`** ise işleri geri açın —
+**Ters giderse:** ikinci alan **`true`** ise iş askıdadır ve **hiç koşmaz** (hata da
+vermez); geri açın —
 [sorun-giderme.md §6.1](sorun-giderme.md#ssa-suspend). Son koşu eskiyse
 [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge).
 

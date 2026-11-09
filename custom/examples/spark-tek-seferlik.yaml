@@ -21,6 +21,7 @@
 #   spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation: vended-credentials | none  <- s3.vendedCredentials
 #   spark.sql.catalog.lakehouse.uri / .warehouse <- glue/values.yaml iceberg.catalogUri / iceberg.warehouse
 #   image / sparkVersion / iceberg-spark-runtime sürümü <- glue/values.yaml spark.image, spark.version, versions.iceberg
+#   `s3-ca` ile işaretli yorumlu satırlar        <- s3.caSecret doluysa (özel S3 CA) açılır
 # Aşağıdaki değerler `helm template glue -f platform/values/glue-dev.yaml` çıktısındaki ScheduledSparkApplication
 # bloğundan BİREBİR alınmıştır (dev/kind değerleri).
 apiVersion: sparkoperator.k8s.io/v1beta2
@@ -32,7 +33,7 @@ spec:
   type: Python
   pythonVersion: "3"
   mode: cluster
-  image: apache/spark:4.1.0-java21-python3
+  image: docker.io/apache/spark:4.1.0-java21-python3
   imagePullPolicy: IfNotPresent
   mainApplicationFile: local:///opt/job/ornek_rapor.py
   sparkVersion: "4.1.0"
@@ -59,6 +60,10 @@ spec:
     spark.default.parallelism: "8"
     spark.driver.memoryOverhead: 512m
     spark.executor.memoryOverhead: 512m
+    # SİTE — S3 sertifikası ÖZEL bir CA ile imzalıysa (site glue.yaml `s3.caSecret: s3-ca`) bu iki satırı ve
+    # aşağıdaki iki `s3-ca` bağlamasını + `s3-ca` volume'ünü AÇIN; yoksa S3'e her istek PKIX/SSL hatası verir.
+    # spark.driver.extraJavaOptions: "-Djavax.net.ssl.trustStore=/etc/s3-ca/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+    # spark.executor.extraJavaOptions: "-Djavax.net.ssl.trustStore=/etc/s3-ca/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
   driver:
     cores: 1
     coreRequest: "500m"
@@ -72,6 +77,8 @@ spec:
     # - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
     volumeMounts:
     - {name: job, mountPath: /opt/job}
+    - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID imajın work-dir'ine yazamaz
+    # - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}   # SİTE — özel S3 CA (yukarıdaki not)
   executor:
     instances: 1
     cores: 1
@@ -83,6 +90,12 @@ spec:
     # - {name: AWS_SECRET_ACCESS_KEY, valueFrom: {secretKeyRef: {name: s3-creds, key: AWS_SECRET_ACCESS_KEY}}}
     volumeMounts:
     - {name: job, mountPath: /opt/job}
+    - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID imajın work-dir'ine yazamaz
+    # - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}   # SİTE — özel S3 CA (yukarıdaki not)
   volumes:
   - name: job
     configMap: {name: ornek-rapor}      # kustomization.yaml configMapGenerator (disableNameSuffixHash: true)
+  - name: work-dir
+    emptyDir: {}
+  # - name: s3-ca                        # SİTE — özel S3 CA (yukarıdaki not)
+  #   secret: {secretName: s3-ca}

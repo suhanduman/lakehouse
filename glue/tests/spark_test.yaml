@@ -96,5 +96,5 @@ tests:
       - equal: {path: 'spec.template.sparkConf["spark.sql.shuffle.partitions"]', value: "8"}
       - equal: {path: 'spec.template.sparkConf["spark.sql.session.timeZone"]', value: UTC}
       - equal: {path: 'spec.template.sparkConf["spark.redaction.regex"]', value: "(?i)secret|password|token|credential"}
-      - equal: {path: spec.template.image, value: apache/spark:4.1.0-java21-python3}
+      - equal: {path: spec.template.image, value: docker.io/apache/spark:4.1.0-java21-python3}
       - equal: {path: spec.template.driver.serviceAccount, value: spark-operator-spark}

@@ -16,10 +16,14 @@ spec:
     spec:
       containers:
       - name: mongo
-        image: mongo:8.0
+        image: docker.io/library/mongo:8.0
         args: ["--replSet", "rs0", "--bind_ip_all"]
         ports: [{containerPort: 27017}]
         readinessProbe: {exec: {command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]}, initialDelaySeconds: 5, periodSeconds: 5}
+        # OpenShift: pod rastgele UID ile koşar; imajın /data/db'si mongodb kullanıcısına ait -> "Error creating journal
+        # directory ... Permission denied" (ocpphy provası 2026-11-08). Test verisi geçicidir: yazılabilir emptyDir.
+        volumeMounts: [{name: db, mountPath: /data/db}, {name: configdb, mountPath: /data/configdb}]
+      volumes: [{name: db, emptyDir: {}}, {name: configdb, emptyDir: {}}]
 ---
 apiVersion: v1
 kind: Service
@@ -36,7 +40,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: init
-        image: mongo:8.0
+        image: docker.io/library/mongo:8.0
         command: ["/bin/sh", "-c"]
         args:
         - |

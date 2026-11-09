@@ -44,6 +44,82 @@ tablosudur.
   kümede aynı yolları `test/e2e/run.sh` koşturur; CI kapısı budur
   (`.github/workflows/e2e.yaml`).
 
+### 1.1 Üretim (OpenShift) kurulumunda kabul — hazırlık
+
+Üretimde üç şey geliştirme kümesinden farklıdır ve kabulden **önce** hazırlanır.
+
+**1) AD'de üç test hesabı.** Testler gerçek kullanıcı gibi giriş yapar; üretimde Keycloak'ta
+geliştirme kullanıcıları yoktur. AD ekibinden şunları isteyin (adlar örnektir):
+
+| Hesap | AD grubu | Testte ne yapar |
+|---|---|---|
+| `kabul-analist` | `lakehouse-analysts` | tablolar filtresiz, `sandbox`'a yazar |
+| `kabul-kullanici` | `lakehouse-users` | satır filtresi ve kolon maskesi uygulanır, yazamaz |
+| `kabul-grupsuz` | hiçbir `lakehouse-*` grubu | Zeppelin'e girer ama veri göremez |
+
+Kabulden sonra hesaplar silinebilir.
+
+**2) Demo kaynaklar.** Kabul, küçük test veritabanlarıyla (PostgreSQL `shop`, MongoDB `crm`)
+ve bir nginx günlüğüyle çalışır. Bunları açmak için `platform/values/site/glue.yaml` içindeki
+iki satırı (`sources: []` ve `pipelines: []`) aşağıdaki blokla **değiştirin**, sonra commit edip
+itin. Bu, müşteri kaynağı eklerken izlenen yordamın aynısıdır
+([50-isletme/yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md)).
+
+```yaml
+# KABUL TESTİ demo kaynakları — kabulden sonra bu blok geri alınır (§1.2)
+sources:
+- name: shop
+  type: postgres
+  host: demo-pg-rw.lakehouse.svc
+  port: 5432
+  database: shop
+  tables: [public.orders]
+  signalTable: public.debezium_signal
+- name: crm
+  type: mongodb
+  connectionString: "mongodb://demo-mongo.lakehouse.svc:27017/?replicaSet=rs0"
+  collections: [crm.customers]
+pipelines:
+- {bronze: shop_raw.orders, keys: [id], bucket_count: 4, casts: {updated_at: timestamp}}
+- {bronze: crm_raw.customers, keys: [_id], bucket_count: 4}
+nginx: {enabled: true, partitions: 3}
+```
+
+`[bastion]`
+
+```bash
+scripts/check-site.sh
+git add platform/values/site/glue.yaml
+git commit -m "kabul: demo kaynaklar"
+git push origin main
+```
+
+ArgoCD'nin bağlayıcıları yaratması birkaç dakika sürer. Hazır olduğunu görmek için:
+`oc -n "$LAKEHOUSE_NS" get kafkaconnector` — `dbz-shop`, `sink-shop`, `dbz-crm` ve
+`sink-nginx` listelenmelidir. `scripts/acceptance.sh` bunlar yoksa başlamaz ve bu bölümü
+gösterir.
+
+**3) Router sertifikasının kökü.** Testlerin bir kısmı (Superset, JupyterHub ve Trino
+girişleri) yönetim makinesinden arayüzlere tarayıcı gibi bağlanır. Router herkesçe bilinen bir
+CA kullanmıyorsa kökünü alın ([30-kurulum](../30-kurulum.md) §7.3'teki `~/router-ca.crt`).
+
+### 1.2 Kabulden sonra
+
+`scripts/acceptance.sh` bittiğinde zamanlanmış Spark işlerini **kendisi** geri açar (özetten
+önce `zamanlanmış Spark işleri geri açıldı` satırı). Demo kaynakları kaldırmak için §1.1'deki
+bloğu `sources: []` / `pipelines: []` olarak geri alıp itin, ardından test veritabanlarını
+silin:
+
+`[bastion]`
+
+```bash
+oc delete -f test/e2e/pg-fixture.yaml -f test/e2e/mongo-fixture.yaml \
+  -f test/e2e/nginx-fixture.yaml --ignore-not-found
+```
+
+Demo tabloları (`shop`, `crm`, `nginx_raw` ve `_raw` ad alanları) katalogda kalır; silinmesi
+[50-isletme/kaynak-veya-tablo-silme.md](../50-isletme/kaynak-veya-tablo-silme.md)'dedir.
+
 ---
 
 ## 2. Madde ↔ kanıt tablosu
@@ -77,20 +153,45 @@ Kurulu bir kümede, geliştirme/vanilla adlandırmasıyla:
 PATH="$PWD/.venv/bin:$PATH" scripts/acceptance.sh --ns "$LAKEHOUSE_NS"
 ```
 
-OpenShift'te üç ortam değişkeni ve iki bayrak eklenir — UWM'nin Prometheus nesneleri farklı
-adlandırılır, Grafana yoktur ve ad alanı yedeği OADP ad alanındadır:
+OpenShift'te betik **gerçek kullanıcı gibi** giriş yapar ve izleme kanıtını kümenin
+Thanos Querier'ından alır; bu yüzden birkaç ortam değişkeni verilir. AD test hesaplarının
+parolaları komut satırına **yazılmaz** (kabuk geçmişine düşer); bir kez sorulur:
 
 `[bastion]`
 
 ```bash
-PATH="$PWD/.venv/bin:$PATH" PROM_STS=prometheus-user-workload \
-  PROM_SVC=prometheus-user-workload GRAFANA_SKIP=1 \
-  scripts/acceptance.sh --ns "$LAKEHOUSE_NS" \
+read -rsp "kabul-analist parolası: " ACC_ANALYST_PASS; echo
+read -rsp "kabul-kullanici parolası: " ACC_USER_PASS; echo
+read -rsp "kabul-grupsuz parolası: " ACC_NOGROUP_PASS; echo
+export ACC_ANALYST_PASS ACC_USER_PASS ACC_NOGROUP_PASS
+export ACC_FLOW=authcode ACC_SA=zeppelin \
+  ACC_ANALYST_USER=kabul-analist ACC_USER_USER=kabul-kullanici ACC_NOGROUP_USER=kabul-grupsuz \
+  ACC_CA_FILE=~/router-ca.crt GRAFANA_SKIP=1 \
+  PROM_URL="https://$(oc -n openshift-monitoring get route thanos-querier -o jsonpath='{.spec.host}')" \
+  PROM_TOKEN="$(oc whoami -t)"
+PATH="$PWD/.venv/bin:$PATH" scripts/acceptance.sh --argocd-ns "$ARGOCD_NS" \
   --mon-ns openshift-user-workload-monitoring --velero-ns openshift-adp
 ```
 
-**Beklenen çıktı** (`E2E … OK` satırlarının her biri CI koşusundan alınmış gerçektir; özet
-satırlarının biçimi `scripts/acceptance.sh`'ten gelir):
+Ne işe yararlar:
+
+| Değişken | Anlamı |
+|---|---|
+| `ACC_FLOW=authcode` | Testler Keycloak'a tarayıcı gibi girer (üretimde parola akışı bilerek kapalıdır) |
+| `ACC_*_USER` / `ACC_*_PASS` | §1.1'deki üç AD test hesabı (adlar örnektir, kendi hesaplarınızı yazın) |
+| `ACC_SA=zeppelin` | Trino servis hesabı; üretimde `e2e` hesabı yoktur, aynı yetkideki `zeppelin` kullanılır |
+| `ACC_CA_FILE` | Router sertifikasının kökü ([30-kurulum](../30-kurulum.md) §7.3); Superset/JupyterHub girişleri ve Thanos için |
+| `PROM_URL`, `PROM_TOKEN` | İzleme yolu sorguları Thanos Querier'a oturum jetonuyla gider; `oc` oturumunuzun `cluster-monitoring-view` yetkisi olmalıdır |
+| `GRAFANA_SKIP=1` | Ürün OpenShift'te Grafana kurmaz; yalnız dashboard iddiaları atlanır |
+
+OADP kurulu değilse (felaket kurtarma bu kurulumda yoksa) sona `--skip dr` ekleyin;
+özet atlanan yolu `ATLANAN:` satırında yazar.
+
+**Beklenen çıktı** (`E2E F5 DR OK` dışındaki `E2E … OK` satırları OpenShift provasında
+alınmış gerçek satırlardır; prova OADP'siz, `--skip dr` ile koşuldu ve yollar ürün
+hatalarının düzeltilmesi sırasında üç koşuya bölündü. `E2E F5 DR OK` satırı ve `9/9` özeti
+OADP kurulu bir kümede beklenen biçimdir, OpenShift'te henüz alınmadı; özet satırlarının
+biçimi `scripts/acceptance.sh`'ten gelir):
 
 ```text
 == ön kontrol
@@ -112,6 +213,10 @@ E2E F5 MONITORING OK
 E2E F5 DR OK
 KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp)
 ```
+
+Koşu sırasında Bronze beklemeleri sink'in commit aralığına göre uzar: üretimde aralık 300
+saniyedir, ilk veri en geç iki turda görünür; betik bu yüzden 15 dakikaya kadar bekler
+(geliştirme kümesinde 10 dakika). Kurulu bir kümede bütün koşu **40–50 dakika** sürer.
 
 **Ters giderse:** bir yol düşerse betik orada durur, çıkış kodu **1** olur ve özet
 `KABUL BAŞARISIZ` satırıyla biter (düşen yolun adını yazar). Tamamlanan yol sayısı
@@ -137,14 +242,35 @@ durumlar §5'tedir.
 
 ## 5. Kabul koşusuna özgü sık durumlar
 
-- **`pg-path.sh` "public.orders 3 satır bekleniyordu" ile düşüyor:** fixture kaynağı önceki
-  koşuda değişmiştir. `oc -n "$LAKEHOUSE_NS" delete cluster/demo-pg` ve
-  `oc -n "$LAKEHOUSE_NS" delete pvc -l cnpg.io/cluster=demo-pg` komutlarından sonra betiği
-  tekrar koşturun (fixture yeniden uygulanır).
-- **Kabul koşusundan sonra zamanlanmış işler duruyor:** `run_spark_once` yardımcı işlevi
-  `ScheduledSparkApplication`'ları askıya alır ve geri açmaz. **Gerçek kurulumda kabul
-  koşusundan sonra hepsini MUTLAKA geri açın** (her iş için `spec.suspend` alanı `false`
-  yapılır); beş işin adı §2'deki **D(f)** satırındadır.
+- **Kabulü kullanılmış bir kümede yeniden koşmak** (önceki koşu yarıda kaldı ya da yollar
+  daha önce elle denendi): yollar **taze** demo durumu bekler — kaynakta 3 satır, boş Bronze
+  ve Silver tabloları, offset'siz bağlayıcılar. Yalnız test veritabanını silmek **yetmez**:
+  bağlayıcılar eski konumlarını hatırlar (PostgreSQL bağlayıcısı yeni veritabanında
+  `The connector is trying to read change stream starting at …` ile düşer, MongoDB
+  bağlayıcısı snapshot almaz) ve Bronze'daki eski satırlar sayımları bozar. Sıfırlama, demo
+  kaynakları için [kaynak-veya-tablo-silme.md](../50-isletme/kaynak-veya-tablo-silme.md)
+  yordamıdır; OpenShift provasında şu sırayla uygulandı ve ardından kabul baştan geçti:
+  1. `shop` ve `crm` girdilerine `state: stopped` → commit → `STOPPED` → offset'leri sil
+     (§3).
+  2. §1.1 bloğunu geri al (`shop`, `crm`, iki `pipelines` satırı, `nginx`) → commit; ArgoCD
+     bağlayıcıları, `mongo-bronze` işini ve `nginx.access` konusunu kaldırır (§4).
+  3. Kalan konuları ve sink tüketici gruplarını sil (§5): `shop.*`, `crm.*`,
+     `__debezium-heartbeat.shop|crm`, `nginx.dlq`; `connect-sink-shop`, `connect-sink-nginx`
+     ve `-coord` eşleri.
+  4. Tabloları tek seferlik Spark işiyle `PURGE` ile düşür (§6.2): `shop_raw.orders`,
+     `shop.orders`, `crm_raw.customers`, `crm_raw.customers__quarantine`, `crm.customers`,
+     `nginx_raw.access_log`.
+  5. Test veritabanlarını sil ve yeniden uygula (§1.2'deki `oc delete -f …`, sonra
+     `oc apply -f test/e2e/pg-fixture.yaml -f test/e2e/mongo-fixture.yaml`).
+  6. §1.1 bloğunu **`state` satırı olmadan** geri ekle → commit; bağlayıcılar günlüğe
+     `No previous offset found` ve `Snapshot completed` yazar. Sonra
+     `scripts/acceptance.sh`.
+- **Kabul koşusundan sonra zamanlanmış işler duruyor:** koşu sırasında işler askıya alınır;
+  `scripts/acceptance.sh` bitişte (başarılı ya da başarısız) hepsini kendisi geri açar ve
+  son satırda `zamanlanmış Spark işleri geri açıldı: ...` basar. Bu satırı **görmediyseniz**
+  (koşu yarıda öldü: bilgisayar kapandı, bağlantı koptu) işler askıda kalmıştır;
+  [sorun-giderme.md §6.1](../50-isletme/sorun-giderme.md#ssa-suspend) ile kontrol edip geri
+  açın.
 - **`monitoring-path.sh` "ateşlenen Lakehouse alarmı" ile düşüyor:** kümede eski `FAILED`
   `SparkApplication` CR'ları vardır; kök nedeni giderip CR'ları silin. Belgelenmiş
   `E2E_EXPECT_NO_FIRING=0` kaçışı vardır ama **kabul koşusunda kullanılmaz**
@@ -158,25 +284,40 @@ durumlar §5'tedir.
 
 ---
 
-## 6. İzleme yolunun nesne adları (OpenShift UWM)
+## 6. İzleme yolunun OpenShift ayarları
 
-`test/e2e/monitoring-path.sh` varsayılan olarak kube-prometheus-stack (dev/CI) nesne
-adlarını kullanır. Adlar dört ortam değişkeniyle ezilir; varsayılanlar değişmediği için CI
-davranışı aynı kalır. Değişkenler `scripts/acceptance.sh` üzerinden çocuk süreçlere
-**kalıtımla** geçer, ayrıca aktarmak gerekmez.
+`test/e2e/monitoring-path.sh` varsayılan olarak geliştirme kümesinin Prometheus'una
+port-forward ile bağlanır. OpenShift'te kullanıcı iş yükü izlemesinin Prometheus'u
+yetkilendirme ister ve pod dışına açık değildir; bu yüzden `PROM_URL` verilince sorgular
+kümenin Thanos Querier'ına gider (§3). Thanos, platform izlemesinin `kube-state-metrics`
+serilerini de gösterir; iki Spark alarmı (`LakehouseSilverMergeStale`,
+`LakehouseSparkScheduledRunFailed`) bu serilere dayanır.
 
-| Değişken | Varsayılan (dev/CI) | OpenShift UWM karşılığı |
+| Değişken | Geliştirme (varsayılan) | OpenShift |
 |---|---|---|
-| `PROM_STS` | `prometheus-monitoring-kube-prometheus-prometheus` | `prometheus-user-workload` |
-| `PROM_SVC` | `monitoring-kube-prometheus-prometheus` | `prometheus-user-workload` |
-| `GRAFANA_SVC` | `monitoring-grafana` | yok (Grafana kurulmaz) |
-| `GRAFANA_SECRET` | `monitoring-grafana` | yok (Grafana kurulmaz) |
+| `PROM_URL` | boş (port-forward) | `https://<thanos-querier Route'u>` |
+| `PROM_TOKEN` | boş | `oc whoami -t` |
+| `ACC_CA_FILE` | boş | router kökü (`~/router-ca.crt`) |
 | `GRAFANA_SKIP` | boş | `1` |
+| `PROM_STS`, `PROM_SVC`, `GRAFANA_SVC`, `GRAFANA_SECRET` | kube-prometheus-stack adları | kullanılmaz (`PROM_URL` verilince) |
 
 `GRAFANA_SKIP=1` **yalnız** dashboard iddialarını atlar; hedef, metrik, kural ve alarm
-iddiaları yüksek sesle koşmaya devam eder. UWM'nin Prometheus servisi yetkilendirme ister;
-erişilemiyorsa izleme kanıtı `thanos-querier` üzerinden elle alınır — kural ve hedef adları
-aynıdır.
+iddiaları yüksek sesle koşmaya devam eder.
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktıdan kısaltılmış):
+
+```text
+OK up .*kafka-resources-metrics.* (5)
+OK up .*spark-operator.* (2)
+OK up .*kube-state-metrics.* (2)
+OK up .*polaris.* (1)
+OK 5 kural yüklü
+OK LakehouseSilverMergeStale health ok
+OK LakehouseSparkScheduledRunFailed health ok
+OK ateşlenen alarm yok
+UYARI GRAFANA_SKIP=1 -> Grafana dashboard iddiaları ATLANDI (UWM'de Grafana platform tarafındadır)
+E2E F5 MONITORING OK
+```
 
 ---
 
@@ -192,7 +333,7 @@ yukarıdaki tablodur.
 
 - [ ] Ön koşullar (§1) sağlandı: kurulum tamam, `polaris-setup` koştu, demo kaynaklar açık,
       `polaris` CLI'si kurulu.
-- [ ] OpenShift'te üç ortam değişkeni ve iki bayrak verildi (§3).
+- [ ] OpenShift'te §3'teki ortam değişkenleri ve bayraklar verildi (AD test hesapları, Thanos).
 - [ ] `KABUL: 9/9 yol geçti` satırı alındı.
 - [ ] Kabul koşusundan sonra beş `ScheduledSparkApplication` geri açıldı.
 - [ ] Sürüm tablosu kümedeki fiilî sürümlerle karşılaştırıldı

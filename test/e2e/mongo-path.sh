@@ -17,8 +17,9 @@ kubectl -n "$NS" wait --for=condition=complete job/demo-mongo-init --timeout=600
   kubectl -n "$NS" logs deploy/demo-mongo --tail=30 2>&1 || true; kubectl -n "$NS" logs job/demo-mongo-init --tail=30 2>&1 || true
   exit 1; }
 echo "== dbz-crm"
+# Kafka araçları scripts/kafka-cli.sh ile (kafka-admin, TLS 9093): üretimde localhost:9092 (plain) dinleyicisi yoktur
 kubectl -n "$NS" wait kafkaconnector/dbz-crm --for=condition=Ready --timeout=600s
-for _ in $(seq 1 60); do kubectl -n "$NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | grep -qx "crm.crm.customers" && break; sleep 5; done
+for _ in $(seq 1 60); do "$ROOT/scripts/kafka-cli.sh" kafka-topics.sh --list 2>/dev/null | grep -qx "crm.crm.customers" && break; sleep 5; done
 echo "== mongo-bronze #1"
 run_spark_once mongo-bronze
 verify crm_raw.customers 3 --exact --wait 60 '_id=000000000000000000000001' '~_doc=Ada'
@@ -31,7 +32,7 @@ MONGO 'const c = db.getSiblingDB("crm").customers; c.updateOne({_id: ObjectId("0
 # sabit sleep yerine bariyer: 3 mutasyon (U/D/I) topic'e düşene kadar end-offset toplamını yokla (F3-K)
 sum=0
 for _ in $(seq 1 60); do
-  sum=$(kubectl -n "$NS" exec lakehouse-dual-role-0 -c kafka -- bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic crm.crm.customers 2>/dev/null | awk -F: '{s+=$3} END {print s+0}')
+  sum=$("$ROOT/scripts/kafka-cli.sh" kafka-get-offsets.sh --topic crm.crm.customers 2>/dev/null | awk -F: '{s+=$3} END {print s+0}')
   [[ "$sum" -ge 6 ]] && break
   sleep 2
 done

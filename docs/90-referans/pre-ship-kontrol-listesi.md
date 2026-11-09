@@ -263,8 +263,7 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   ```bash
   oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- ls /opt/keycloak/conf/truststores
   oc -n "$LAKEHOUSE_NS" logs keycloak-0 | grep TruststoreBuilder | tail -1
-  oc -n "$LAKEHOUSE_NS" exec deploy/trino-coordinator -- \
-    grep ldap.ssl.truststore.path /etc/trino/group-provider.properties
+  oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore | grep "AD CA"
   oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -c zeppelin -- \
     keytool -list -keystore /truststore/ad-truststore.p12 -storetype PKCS12 \
     -storepass changeit | grep ad-ca
@@ -352,8 +351,9 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   Polaris'in ServiceMonitor'ü ve **tek** `PrometheusRule/lakehouse` listeleniyor; sorgu **en
   az** şu işleri döndürüyor: `kafka-resources-metrics` (3 hedef),
   `spark-operator-podmonitor`, `polaris-mgmt`. Trino, Superset, JupyterHub ve Zeppelin
-  hedefleri **bilerek yoktur**; `kube-state-metrics` de yalnız geliştirme yığınında bulunur,
-  burada görünmemesi normaldir.
+  hedefleri **bilerek yoktur**. `kube-state-metrics` bu listede görünmez: OpenShift'te
+  platform izlemesinin parçasıdır (`openshift-monitoring`); iki Spark alarmı onun pod
+  serilerini kullanır.
   *Kaynak: [50-isletme/izleme-ve-alarmlar.md](../50-isletme/izleme-ve-alarmlar.md) §2;
   [40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §6.2.*
 

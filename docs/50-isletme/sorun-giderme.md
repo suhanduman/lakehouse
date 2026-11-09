@@ -65,7 +65,7 @@ geçerlidir.
 | Alarm: `LakehouseSilverMergeStale` | [§4.3 silver-merge eskidi](#silver-merge) |
 | Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlanmış Spark koşusu FAILED](#spark) |
 | Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark koşuları yavaşladı](#spark-duration) |
-| Zamanlanmış işler sessizce durdu, alarm gecikmeli geldi | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
+| Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
 | Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
 | Spark işi `UnresolvedAddressException` ya da Ivy hatası veriyor | [§6.2 İç Maven aynası](#maven) |
 | Bronze tablo boş kalıyor, satır gelmiyor | [§6 Boru hattı](#boru-hatti) |
@@ -76,6 +76,7 @@ geçerlidir.
 | Connect `Build` uzun sürüyor ya da `unauthorized` veriyor | [§5 Kurulum ve eşitleme](#kurulum) |
 | Trino `401` ya da `Authentication failed` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | Not defterinden Trino'ya `CA cert does not include key usage extension` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
+| Analist/kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse` (servis hesapları çalışıyor) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | Trino `Access Denied` | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5 |
 | Superset `phase: Initializing`, şema geçiş görevi düşüyor | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
 | JupyterHub not defteri açılmıyor (spawn zaman aşımı) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
@@ -185,9 +186,7 @@ eşiği aştı; 15 dakika, **warning**. Eşik: `monitoring.sinkLagThreshold` (va
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop   # kafka-admin kimliğiyle, TLS 9093
 oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{.status.connectorStatus.tasks[0]}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i 'commit\|iceberg\|s3'
@@ -242,9 +241,7 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{range .status.connectorStatus.tasks[*]}{.state}{"\n"}{.trace}{"\n"}{end}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
   | grep -iE "NoSuchTable|Forbidden|403|AccessDenied|schema|Exception"
-oc -n "$LAKEHOUSE_NS" exec lakehouse-dual-role-0 -c kafka -- \
-  bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group connect-sink-shop-coord
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop-coord   # kafka-admin kimliğiyle, TLS 9093
 ```
 
 **Beklenen çıktı:** birinci komut `RUNNING` ve **boş** bir `trace` verir (görev ayakta;
@@ -303,6 +300,9 @@ suspend=true sonKosu=null sonraki=2026-09-19T03:00:00Z
 - Son koşu `FAILED` ise → [§4.4](#spark).
 - Kural boş veride **ateşlenmez**: hiç `silver-merge-*` koşusu yoksa alarm gelmez. "Hiç
   koşmuyor" durumu ayrı bakılır (`sonraki` alanı boşsa cron hesaplanmamıştır).
+- Kural, son başarılı koşunun sürücü pod'unun yaşına bakar. Koşular 24 saat sonra
+  kendiliğinden silinir; iş bir günden uzun durursa alarm bu yüzden **söner** — sorun
+  geçmiş sayılmaz, yukarıdaki komutla bakın.
 
 **Ters giderse:** cron değiştirildiği hâlde `sonraki` alanı eski kalıyorsa zamanlayıcı
 yeniden hesaplamamıştır ([§6.1](#ssa-suspend) sonundaki not).
@@ -337,8 +337,9 @@ oc -n "$LAKEHOUSE_NS" logs "$APP-driver" --tail=200
 | Sürücü 20+ dakika `Pending` | Düğümde CPU/bellek isteği karşılanmıyor | `spark.driver.coreRequest` / `spark.executor.coreRequest`; düğüm kapasitesi |
 | `403 The Access Key Id you provided does not exist` | Geçici S3 kimliğinin süresi/önbelleği | [§5.1 Polaris / S3 403](#polaris-403) |
 
-**FAILED kayıtlar kendiliğinden kaybolmaz** — kural, nesne silinene kadar ateşlenmeye devam
-eder. Kök neden giderildikten sonra nesneyi silin:
+**Alarm, başarısız koşu silinene kadar açık kalır.** Ürün koşuları 24 saat sonra kendiliğinden
+siler; daha erken susturmak için, kök neden giderildikten sonra nesneyi silin (sürücü pod'u
+ve günlüğü de silinir — günlüğü önce alın):
 
 `[bastion]`
 
@@ -505,35 +506,66 @@ Belirti: Spark ya da Connect günlüğünde
 <a id="ssa-suspend"></a>
 ### 6.1 Askıda kalan zamanlı Spark işi
 
-Kabul koşusu (`scripts/acceptance.sh`) ve e2e yolları, işi bir kez elle koşturmak için ilgili
-zamanlı Spark nesnesini **askıya alır ve geri açmaz**. Bir kabul koşusundan sonra
-zamanlanmış işler sessizce durur; gecikmiş `LakehouseSilverMergeStale` alarmının en sık
-nedeni budur.
+**Ne demek?** Silver güncellemesi (`silver-merge`), MongoDB aktarımı (`mongo-bronze`) ve üç
+bakım işi (`maint-...`) kümede **zamanlı Spark işi** olarak tanımlıdır; her biri kendi
+saatinde kendiliğinden koşar. Her işin bir **askı** anahtarı vardır (`spec.suspend`).
+Anahtar `true` olursa iş **hiç koşmaz**: hata vermez, pod açmaz, alarm da hemen gelmez.
+Veri sessizce eskir.
+
+**Neden askıya alınır?** Kabul testi (`scripts/acceptance.sh`) bir işi o anda elle bir kez
+koşturmak için önce zamanlı hâlini askıya alır; çakışma olmasın diye. Betik bitince
+(başarılı ya da başarısız) hepsini **kendisi geri açar**. Ama betik yarıda **öldürülürse**
+(bilgisayar kapandı, bağlantı koptu, terminal kapatıldı) geri açma adımı çalışmaz ve işler
+askıda kalır. ArgoCD bunu **düzeltmez**: askı anahtarı Git'teki tanımda yer almadığı için
+ArgoCD bu farkı görmez.
+
+**Kontrol:**
 
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
-for s in silver-merge mongo-bronze maint-position-deletes maint-compact maint-expire-orphan-ttl; do
-  oc -n "$LAKEHOUSE_NS" patch scheduledsparkapplication "$s" \
-    --type=merge -p '{"spec":{"suspend":false}}' || true
+```
+
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; sütunlar: ad, askı, son
+koşu). İkinci sütun **boş ya da `false`** olmalıdır; `true` gören satır askıdadır.
+`null` son koşu, işin henüz saatinin gelmediğini gösterir (örneğin günde bir koşan iş):
+
+```text
+maint-compact	false	null
+maint-expire-orphan-ttl	false	null
+maint-position-deletes	false	2026-11-08T16:05:05Z
+mongo-bronze		2026-11-08T16:35:00Z
+silver-merge	false	2026-11-08T16:30:00Z
+```
+
+**Geri açma:** aşağıdaki komut kümedeki **bütün** zamanlı işlerin askısını kaldırır (kendi
+eklediğiniz işler dahil; kabul testinin geçici `e2e-` işleri hariç):
+
+`[bastion]`
+
+```bash
+for s in $(oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication -o name); do
+  case "$s" in */e2e-*) continue ;; esac
+  oc -n "$LAKEHOUSE_NS" patch "$s" --type=merge -p '{"spec":{"suspend":false}}'
 done
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — ilk komut, kabul koşusundan
-sonraki hâl; sütunlar sırasıyla ad, askıya alınma ve son koşudur. `ornek-rapor-zamanli`
-[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasının örnek işidir ve ürünün
-geri açma döngüsünde yer almaz):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; her iş için bir satır.
+Zaten açık olan iş `(no change)` basar, bu da doğrudur):
 
 ```text
-maint-compact	true	null
-maint-expire-orphan-ttl	true	null
-maint-position-deletes	true	null
-mongo-bronze	true	null
-ornek-rapor-zamanli	true	
-silver-merge	true	null
+scheduledsparkapplication.sparkoperator.k8s.io/maint-compact patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/maint-expire-orphan-ttl patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/maint-position-deletes patched (no change)
+scheduledsparkapplication.sparkoperator.k8s.io/mongo-bronze patched
+scheduledsparkapplication.sparkoperator.k8s.io/silver-merge patched (no change)
 ```
+
+Askıdan çıkan iş, kaçırdığı koşuyu **hemen** yapar (provada geri açmadan birkaç saniye
+sonra `silver-merge` koştu); bir sonraki saati beklemek gerekmez. Ardından kontrol
+komutunu tekrar çalıştırıp ikinci sütunun `false` olduğunu doğrulayın.
 
 **Ters giderse:** cron değerini değiştirmek bir sonraki koşu zamanını yeniden hesaplatmaz;
 cron'u değiştirdikten sonra işin hemen koşması bekleniyorsa nesneyi silip yeniden yaratın
@@ -661,6 +693,28 @@ doğrulayın.
   içindeki `s3.egressCidrs` S3'ün veri IP'lerini içermelidir
   ([30-kurulum](../30-kurulum.md) §4.1); politikanın kümede olduğunu doğrulayın:
   `oc -n "$LAKEHOUSE_NS" get networkpolicy notebook-s3-egress -o yaml`.
+- **Analist ya da son kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse`
+  alıyor, Superset ve Zeppelin (servis hesapları) çalışıyor:** Trino kullanıcının AD
+  gruplarını okuyamıyordur; yetki kuralları gruplara bağlı olduğu için grupsuz kullanıcı
+  hiçbir şey göremez. Coordinator günlüğüne bakın:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c trino-coordinator --since=1h \
+    | grep -c "SSLContext was not set"
+  grep -n "ldap.ssl.truststore.path" platform/values/site/trino.yaml
+  ```
+
+  Sayı `0`'dan büyükse ve ikinci komut bir satır gösteriyorsa site dosyanız eski bir
+  sürümden kalmıştır: Trino 483'te `ldap.ssl.truststore.path` satırının açtığı SSL yolu
+  aralıklı olarak düşer (OpenShift provasında görüldü). Satırı silin, commit edip itin;
+  AD kök CA'sı ürünün kendi değer dosyasıyla JVM güven deposuna eklenir
+  ([30-kurulum](../30-kurulum.md) §5.13). Coordinator yeniden açıldıktan sonra
+  `oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore` çıktısında
+  `AD CA eklendi` satırı görünmelidir. Günlükte başka bir LDAP hatası varsa (`PKIX`,
+  `Invalid credentials`) sorun AD kökü ya da bağlama hesabıdır.
+
 - **Not defterinden Trino'ya bağlanırken `CA cert does not include key usage extension`:**
   `lakehouse-ca` kök sertifikası `Key Usage` uzantısı olmadan üretilmiştir (kılavuzun eski
   sürümündeki komut). Güncel Python bu CA'yı kabul etmez. Bakmak için:

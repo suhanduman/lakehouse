@@ -4,7 +4,7 @@
 initContainers:
 # Uyumluluk matrisi (velero-plugin-for-aws README): plugin v1.14.x <-> Velero v1.18.x. chart 12.1.0 = appVersion 1.18.1.
 - name: velero-plugin-for-aws
-  image: velero/velero-plugin-for-aws:v1.14.2
+  image: docker.io/velero/velero-plugin-for-aws:v1.14.2
   imagePullPolicy: IfNotPresent
   volumeMounts: [{mountPath: /target, name: plugins}]
 configuration:

@@ -69,27 +69,36 @@ spec:
       for: 15m
       labels: {severity: warning}
       annotations: {summary: "Iceberg sink lag eşiği aştı: {{ "{{ $labels.consumergroup }}" }}/{{ "{{ $labels.topic }}" }}", runbook: docs/50-isletme/sorun-giderme.md#sink}
+    # Aşağıdaki iki kural Spark DRIVER POD'larının standart kube-state-metrics serilerine dayanır
+    # (kube_pod_status_phase, kube_pod_start_time): OpenShift'in kendi izlemesi de, dev yığını da bunları
+    # varsayılan toplar. Eskiden SparkApplication CR'ı için KSM CustomResourceState metrikleri kullanılıyordu;
+    # onlar yalnız dev yığınında vardı -> iki alarm OpenShift'te hiç ateşlenemiyordu (ocpphy provası
+    # 2026-11-08). OpenShift'te user-workload kuralları Thanos Ruler'da değerlendirilir ve aynı ns'in platform
+    # metriklerini (kube_pod_*) görür. Zamanlanmış koşunun driver pod'u <ad>-<zaman>-driver adını taşır ve
+    # koşu bitince silinmez (successful/failedRunHistoryLimit 3, timeToLiveSeconds 86400).
     - alert: LakehouseSilverMergeStale
-      # en son COMPLETED silver-merge koşusundan bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
-      # BİLİNÇLİ absence-safe tasarım: kube_customresource_sparkapp_* yalnız CR VARKEN üretilir;
-      # taze kümede (e2e run_spark_once SparkApplication'ları siler) seri hiç yoktur. `max(...)` boş vektör
-      # üzerinde SONUÇSUZ döner (0 değil) -> `time() - max(...)` de sonuçsuz kalır -> kural INACTIVE olur,
-      # YANLIŞ ateşlemez. `or absent()` bilerek eklenmedi: absent() dev'de CR hiç yokken sürekli true döner ve
-      # sahte "stale" alarmı üretirdi (glue-dev eşiği 172800 s olsa bile).
-      expr: time() - max(kube_customresource_sparkapp_termination_time{name=~"silver-merge-.*"} and on (name) kube_customresource_sparkapp_state{state="COMPLETED"} == 1) > {{ .Values.monitoring.silverMergeStaleSeconds }}
+      # en son BAŞARILI silver-merge koşusunun başlangıcından bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
+      # Askıya alınmış iş (spec.suspend) de böyle yakalanır: yeni koşu olmaz, eski başarılı pod'ların yaşı büyür.
+      # BİLİNÇLİ absence-safe tasarım: taze kümede (e2e run_spark_once SparkApplication'ları -> driver
+      # pod'larını siler) seri hiç yoktur; `max(...)` boş vektörde SONUÇSUZ döner -> kural INACTIVE, YANLIŞ
+      # ateşlemez. `or absent()` bilerek eklenmedi (dev'de iş hiç koşmamışken sürekli sahte alarm üretirdi).
+      # Bilinen sınır: iş 24 saatten uzun durursa TTL eski pod'ları da siler, seri kaybolur, alarm söner —
+      # o zamana dek ~23 saat ateşte kalmış olur.
+      expr: time() - max(kube_pod_start_time{pod=~"silver-merge-[0-9]+-driver"} and on (namespace, pod) kube_pod_status_phase{phase="Succeeded"} == 1) > {{ .Values.monitoring.silverMergeStaleSeconds }}
       for: 10m
       labels: {severity: warning}
       annotations: {summary: "silver-merge son başarı yaşı eşiği aştı", runbook: docs/50-isletme/sorun-giderme.md#silver-merge}
     - alert: LakehouseSparkScheduledRunFailed
-      expr: kube_customresource_sparkapp_state{state="FAILED", name=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+"} == 1
+      # Başarısız koşunun driver pod'u Failed evresinde kalır (TTL'e, en çok 24 saate dek) -> alarm o süre açık.
+      expr: kube_pod_status_phase{phase="Failed", pod=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+-driver"} == 1
       for: 1m
       labels: {severity: warning}
       annotations: {summary: "Zamanlanmış Spark koşusu FAILED: {{ "{{ $labels.name }}" }}", runbook: docs/50-isletme/sorun-giderme.md#spark}
     - alert: LakehouseSparkRunTooLong
       # spark_application_success_execution_time_seconds bir SUMMARY'dir (canlı /api/v1/metadata doğrulandı) VE
       # spark-operator 2.5.2'nin exporter'ı per-app etiket YAYMAZ (tüm seriler app_type="Unknown", canlı
-      # doğrulandı — kube_customresource_sparkapp_* KSM metrikleri de tek başlarına per-run süre vermiyor: yalnız
-      # termination_time var, başlangıç zamanı yok). Bu kural SON 6 SAATTEKİ başarılı koşuların ortalama
+      # doğrulandı — driver pod'larının kube_pod_* serileri de per-run süre vermiyor: OpenShift'in KSM'i pod bitiş
+      # zamanını toplamıyor, yalnız başlangıç var). Bu kural SON 6 SAATTEKİ başarılı koşuların ortalama
       # süresidir (rate(_sum[6h]) / rate(_count[6h])) — operator per-app etiket vermediği için KÜME GENELİ.
       # Düzeltme (review bulgusu, fix round 1/5): _sum/_count'un HAM (windowsuz) oranı operator pod'u
       # başladığından beri TÜM ZAMANLARIN ortalamasıdır — yüzlerce koşudan sonra tek bir 5000 sn'lik koşu

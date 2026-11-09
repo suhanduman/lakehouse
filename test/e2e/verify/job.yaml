@@ -9,15 +9,18 @@ spec:
       restartPolicy: Never
       containers:
       - name: verify
-        image: python:3.13-slim
+        image: docker.io/library/python:3.13-slim
         command: ["/bin/sh","-c"]
-        args: ["set -e; pip install -q 'pyiceberg[s3fs,pyarrow]>=0.10,<0.11'; python /work/verify.py CHECK_ARGS"]
+        # OpenShift: pod rastgele UID ile koşar, / ve site-packages yazılamaz -> HOME=/tmp + pip --user.
+        # Özel S3 CA: s3-ca Secret'ı varsa sistem köklerine EKLENİR; pyarrow (pyiceberg) SSL_CERT_FILE'ı okur.
+        args: ["set -e; export HOME=/tmp; B=/tmp/ca.pem; cat /etc/ssl/certs/ca-certificates.crt > $B; if [ -f /s3-ca/ca.crt ]; then cat /s3-ca/ca.crt >> $B; fi; export SSL_CERT_FILE=$B AWS_CA_BUNDLE=$B; pip install -q --user --no-warn-script-location 'pyiceberg[s3fs,pyarrow]>=0.10,<0.11'; python /work/verify.py CHECK_ARGS"]
         env:
         - {name: POLARIS_URI, value: http://polaris.lakehouse.svc:8181/api/catalog}
-        - {name: S3_ENDPOINT, value: http://minio.lakehouse.svc:9000}
+        - {name: S3_ENDPOINT, value: "S3_ENDPOINT_VALUE"}   # lib.sh run_check_job kümeden doldurur (glue s3.endpoint)
         - {name: CLIENT_ID, valueFrom: {secretKeyRef: {name: polaris-smoke-cred, key: CLIENT_ID}}}
         - {name: CLIENT_SECRET, valueFrom: {secretKeyRef: {name: polaris-smoke-cred, key: CLIENT_SECRET}}}
-        volumeMounts: [{name: work, mountPath: /work}]
+        volumeMounts: [{name: work, mountPath: /work}, {name: s3-ca, mountPath: /s3-ca, readOnly: true}]
       volumes:
       - name: work
         configMap: {name: lakehouse-verify}
+      - {name: s3-ca, secret: {secretName: s3-ca, optional: true}}

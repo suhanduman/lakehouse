@@ -1,5 +1,5 @@
 suite: kafka + connect
-templates: [kafka.yaml, kafka-connect.yaml, kafka-users.yaml]
+templates: [kafka.yaml, kafka-connect.yaml, kafka-users.yaml, kafka-admin.yaml]
 tests:
   - it: renders Kafka v1 with KRaft node pool
     template: kafka.yaml
@@ -16,6 +16,19 @@ tests:
     asserts:
       - documentIndex: 1
         contains: {path: spec.kafka.listeners, content: {name: plain, port: 9092, type: internal, tls: false}}
+      - documentIndex: 1
+        equal: {path: spec.kafka.authorization.superUsers, value: [kafka-admin, ANONYMOUS]}
+  # Üretimde plain dinleyici yok -> yönetim araçları kafka-admin kimliğiyle TLS 9093'ten (scripts/kafka-cli.sh)
+  - it: prod has only kafka-admin as super user and renders its KafkaUser
+    set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}
+    asserts:
+      - template: kafka.yaml
+        documentIndex: 1
+        equal: {path: spec.kafka.authorization.superUsers, value: [kafka-admin]}
+      - template: kafka-admin.yaml
+        equal: {path: metadata.name, value: kafka-admin}
+      - template: kafka-admin.yaml
+        equal: {path: spec.authentication.type, value: scram-sha-512}
   - it: KafkaConnect has v1 top-level storage topics, secrets provider and the F0 plugin list
     template: kafka-connect.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}

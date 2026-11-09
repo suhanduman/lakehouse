@@ -51,9 +51,9 @@ spec:
 {{- end }}
     authorization:
       type: simple
-{{- if .Values.kafka.plainListener }}
-      superUsers: [ANONYMOUS]      # yalnız dev: plain listener kimliksiz erişir
-{{- end }}
+      # kafka-admin: yönetim araçlarının kimliği (glue/templates/kafka-admin.yaml, scripts/kafka-cli.sh)
+      # ANONYMOUS yalnız dev: plain listener kimliksiz erişir
+      superUsers: [kafka-admin{{ if .Values.kafka.plainListener }}, ANONYMOUS{{ end }}]
     config:
 {{ toYaml .Values.kafka.config | indent 6 }}
 {{- if .Values.monitoring.enabled }}
