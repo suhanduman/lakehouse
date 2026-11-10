@@ -92,7 +92,7 @@ expect(q(svc, "select count(*) from crm.customers")[0][0] == crm_rows, f"{SA} cr
 expect(q(svc, "select count(*) from nginx_raw.access_log")[0][0] >= 3, f"{SA} nginx_raw.access_log >= 3")
 expect_denied(svc, "create table sandbox.e2e_svc as select 1 x", f"{SA} servis hesabı sandbox yazma reddi")
 # Tablo düzeyi veri metrikleri (spec §8, docs/50-isletme/veri-metrikleri.md): Iceberg metadata tabloları Trino'dan
-# okunabilir olmalı — dashboard'un (glue/files/superset/iceberg-metadata) TEK veri kaynağı budur.
+# okunabilir olmalı — bakım işinin ops.table_health ölçümü (Tablo sağlığı panosu) bunlardan okur.
 # MERGE #1/#2 sonrası shop.orders en az 2 snapshot taşır.
 snaps = q(svc, 'select count(*) from shop."orders$snapshots"')[0][0]
 expect(snaps >= 2, f"snapshots shop.orders {snaps} >= 2 (MERGE sonrası; metadata tablosu okunabilir)")

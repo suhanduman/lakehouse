@@ -2,11 +2,10 @@
 
 **Bu bölümde:** tablo düzeyinde ölçümlerin (satır sayısı, dosya sayısı, tablo boyutu, son
 yazma zamanı, anlık görüntü sayısı) nereden okunduğu; hazır SQL'ler; ürünle gelen Superset
-panosunun sanal veri seti SQL'i; panoya yeni tablo ekleme ve sınırlar.
-**Süre:** SQL'leri koşturmak dakikalar; panoya tablo eklemek 15–20 dakika (düzenleme +
-eşitleme + yeniden içe aktarma).
-**Gereken yetki:** Trino'da ilgili tablolarda `SELECT`; panoyu değiştirmek için Git
-deposunda `main` dalına yazma ve Superset'te `Admin` rolü.
+panosunun ("Tablo sağlığı") verisini nereden aldığı ve nasıl okunacağı; sınırlar.
+**Süre:** SQL'leri koşturmak dakikalar; panoyu okumak için ek iş yoktur.
+**Gereken yetki:** Trino'da ilgili tablolarda `SELECT`; panoyu açmak için Superset'te
+`lakehouse-*` gruplarından birine üyelik.
 **Nerede çalıştırılır:** SQL'ler `[pod]` — Superset SQL Lab, Zeppelin ya da bir not defteri;
 dosya düzenleme ve içe aktarma `[bastion]`.
 
@@ -23,10 +22,10 @@ Iceberg'in ya da katalog sunucusunun tablo metrikleri için bir Prometheus expor
 exporter yazmak bu üründe kapsam dışıdır, dolayısıyla teslim iki parçadır:
 
 1. Trino'nun Iceberg **meta veri tabloları** — §3'teki SQL'ler;
-2. bunları tek bir tabloda toplayan **hazır Superset panosu**
-   (`glue/files/superset/iceberg-metadata/`), kümede bir ConfigMap olarak gelir ve Superset
-   pod'una bağlanır. İçe aktarma adımı **kurulum sonrası** bölümündedir
-   ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §4); burada tekrarlanmaz.
+2. bütün tabloların durumunu saatte bir tek bir tabloya (`ops.table_health`) yazan bakım
+   adımı ve bu tabloyu okuyan **hazır Superset panosu** ("Tablo sağlığı",
+   `glue/files/superset/tablo-sagligi/`). Pano kümede bir ConfigMap olarak gelir; içe aktarma
+   adımı **kurulum sonrası** bölümündedir ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §4).
 
 Depolamanın kendi kapasite ve kova metrikleri platformun kendi exporter'ındadır, bu üründe
 değildir.
@@ -102,112 +101,92 @@ kullanılmamıştır. `Access Denied` alıyorsanız kullanıcının o tabloda `S
 
 ---
 
-## 4. Panonun sanal veri seti SQL'i
+## 4. "Tablo sağlığı" panosu ve `ops.table_health`
 
-Pano tek bir sanal veri setine dayanır; dosyası
-`glue/files/superset/iceberg-metadata/datasets/lakehouse/iceberg_table_health.yaml`
-içindeki `sql:` alanıdır. Ürünle gelen hâli birebir şudur:
+Bakım işi (`maint-position-deletes`, saatte bir) işini bitirince katalogdaki **bütün**
+tabloları dolaşır ve her tablo için `ops.table_health` tablosuna bir satır ekler. Pano
+yalnız bu tabloyu okur; bu yüzden hangi kaynaklar ve tablolar olursa olsun kurulumdan sonra
+kendiliğinden çalışır. Yeni bir kaynak ya da tablo eklediğinizde bir sonraki saatlik
+ölçümde panoda görünür; panoda ya da depoda değiştirilecek bir şey yoktur.
+
+| Kolon | Anlamı |
+|---|---|
+| `olcum_zamani` | ölçümün alındığı an (UTC) |
+| `tablo` | `ad_alanı.tablo` |
+| `katman` | `bronze` (`_raw` ad alanları), `silver` (pipeline'ların Silver ad alanları), `sandbox`, `diger` |
+| `son_degisiklik` | tabloya en son yazılan an |
+| `kayit` | satır sayısı |
+| `veri_dosyasi` | veri dosyası sayısı |
+| `delete_dosyasi` | silinen satırları işaretleyen dosya sayısı (güncellenen tablolarda olur) |
+| `boyut_mib` | tablonun dosyalarının toplam boyutu (MiB) |
+| `ort_dosya_mib` | ortalama dosya boyutu (MiB) — **küçük dosya göstergesi** |
+| `snapshot_sayisi` | tablonun sakladığı sürüm sayısı |
+
+Ölçümler 90 gün saklanır, daha eskileri bakım işinin kendisi siler. Tablodan doğrudan da
+sorgulanabilir:
+
+`[pod]` (Superset SQL Lab ya da not defteri)
 
 ```sql
-WITH t AS (
-  SELECT 'shop.orders' AS tbl, * FROM lakehouse.shop."orders$snapshots"
-  UNION ALL SELECT 'crm.customers', * FROM lakehouse.crm."customers$snapshots"
-  UNION ALL SELECT 'nginx_raw.access_log', * FROM lakehouse.nginx_raw."access_log$snapshots"
-)
-SELECT tbl,
-       max(committed_at)                                                        AS son_commit,
-       count(*)                                                                 AS snapshot_sayisi,
-       max_by(CAST(summary['total-records'] AS bigint), committed_at)           AS kayit,
-       max_by(CAST(summary['total-data-files'] AS bigint), committed_at)        AS veri_dosyasi,
-       max_by(CAST(summary['total-delete-files'] AS bigint), committed_at)      AS silme_dosyasi,
-       max_by(CAST(summary['total-files-size'] AS bigint), committed_at)/1048576.0 AS boyut_mib
-FROM t GROUP BY tbl ORDER BY tbl
+SELECT tablo, katman, kayit, veri_dosyasi, ort_dosya_mib, son_degisiklik
+FROM lakehouse.ops.table_health
+WHERE olcum_zamani = (SELECT max(olcum_zamani) FROM lakehouse.ops.table_health)
+ORDER BY katman, tablo;
 ```
 
-Okuma anahtarı: `max_by(x, committed_at)` **en güncel yazmanın** sayacıdır; `count(*)` anlık
-görüntü sayısıdır (eskileri temizleyen bakım işinden sonra düşer). `summary` bir metin
-eşlemesi olduğu için her sayaç `CAST(... AS bigint)` ister.
+**Beklenen çıktı** (OpenShift provasından seçilmiş gerçek satırlar):
 
-> **Üretimde bu SQL olduğu gibi çalışmaz.** Üç tablo adı geliştirme demosuna sabittir
-> (`shop.orders`, `crm.customers`, `nginx_raw.access_log`); üretim kurulumunda bu tablolar
-> yoktur ve pano boş kalır. **İçe aktarmadan önce** SQL'i kendi tablolarınıza uyarlayın —
-> uyarının tamamı ve içe aktarma adımı [40-kurulum-sonrasi](../40-kurulum-sonrasi.md)
-> §4'tedir.
+```text
+tablo              katman   kayit   veri_dosyasi  ort_dosya_mib  son_degisiklik
+erp_raw.orders     bronze   201     2             0.004          2026-11-10 03:31:05
+ogr_raw.students   bronze   300000  1             3.705          2026-11-10 12:00:49
+erp.orders         silver   201     17            0.002          2026-11-10 03:45:39
+ogr.students       silver   300000  12            0.229          2026-11-10 12:00:40
+```
 
----
+Panoda dört grafik vardır:
 
-## 5. Panoya yeni tablo ekleme
+| Grafik | Neye bakılır |
+|---|---|
+| Tablo sağlığı — son durum | her tablonun son ölçümü (yukarıdaki sorgunun aynısı) |
+| Ortalama dosya boyutu (MiB) | küçük değer = çok sayıda küçük dosya; büyük ve sık okunan bir tabloda değer sürekli küçükse sıkıştırma işinin (`maint-compact`) koştuğunu doğrulayın |
+| Kayıt sayısı — zaman içinde | tabloların büyüme eğrisi; düz kalan bir eğri akışın durduğunu gösterebilir |
+| Veri dosyası sayısı — zaman içinde | sıkıştırmadan sonra düşmeli; sürekli artıyorsa bakım işlerine bakın |
 
-Panonun tablo listesi SQL'in içinde sabittir: meta veri tabloları katalogdan kendiliğinden
-keşfedilemez, her tablo ayrı bir `$snapshots` ilişkisidir.
+**Okuma ipuçları:**
 
-1. `glue/files/superset/iceberg-metadata/datasets/lakehouse/iceberg_table_health.yaml`
-   dosyasındaki `sql:` alanına bir satır ekleyin:
-
-   ```sql
-     UNION ALL SELECT 'erp.invoices', * FROM lakehouse.erp."invoices$snapshots"
-   ```
-
-   Sıra önemsizdir; `SELECT ..., *` biçimindeki kolon sırası bütün `$snapshots` tablolarında
-   aynıdır.
-
-2. Değişikliği itin:
-
-   `[bastion]`
-
-   ```bash
-   git add glue/files/superset/iceberg-metadata/datasets/lakehouse/iceberg_table_health.yaml
-   git commit -m "veri metrikleri: erp.invoices panoya eklendi"
-   git push origin main
-   ```
-
-   **Beklenen çıktı** (örnek — kurumun Git sunucusunun adresi ve nesne sayıları farklıdır):
-
-   ```text
-   To ssh://git.kurum.example.net/lakehouse.git
-      4ff2cc4..9a13b7c  main -> main
-   ```
-
-   Eşitleme ConfigMap'i günceller ve dosya pod'da kendiliğinden tazelenir (~1 dakika).
-
-3. İçe aktarmayı **yeniden** koşun ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §4.2). Ek
-   bir bayrak gerekmez: içe aktarma nesneleri kimliklerine göre **her zaman** üzerine yazar.
-
-**Ters giderse:** pano güncellenmediyse ya ConfigMap henüz yansımamıştır (bir dakika
-bekleyin) ya da içe aktarma tekrarlanmamıştır. Panoyu arayüzden düzenlemek de mümkündür ama
-**kalıcı değildir**: bir sonraki içe aktarma onu ezer, bu yüzden kalıcı değişiklik depoda
-yapılır.
+- `son_degisiklik` beklenenden eskiyse o tabloya veri gelmiyordur — Bronze için bağlayıcıya,
+  Silver için `silver-merge` işine bakın ([sorun-giderme.md](sorun-giderme.md)).
+- `delete_dosyasi` yüksek kalan bir Silver tablo okumada yavaşlar; saatlik
+  `maint-position-deletes` işi bunu düzenli olarak katlar.
+- Pano **boşsa**: kurulumda henüz hiçbir pipeline yoktur (bakım işleri ilk pipeline ile
+  açılır) ya da ilk saatlik ölçüm henüz alınmamıştır.
 
 ---
 
-## 6. Sınırlar
+## 5. Sınırlar
 
-- **Pano dosyaları depoda birer şablondur.** İçlerinde küme ve ad alanına göre doldurulan
-  ifadeler vardır; pano canlı bir Superset'ten yeniden üretilirse bu ifadeler elle geri
-  konmalıdır, aksi hâlde geliştirme kümesinin değerleri depoya sabitlenir.
-- **Tablo adları kuruluma bağlıdır.** Farklı bir kurulumda SQL'deki demo tabloları yerine
-  kendi tablolarınız yazılır (§5).
+- **Ölçüm saatliktir.** Pano anlık değil, son saatlik ölçümü gösterir; anlık değer için §3'teki
+  SQL'ler kullanılır.
 - **Prometheus serisi üretilmez, alarm kurulamaz.** Tablo tazeliği alarmı Spark tarafından
   gelir (`LakehouseSilverMergeStale`, [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §3).
-- **`$files` maliyetlidir** (bütün güncel dosyaları tarar); pano yalnız `$snapshots`
-  özetlerini kullanır.
-- **Gösterilen boyut mantıksaldır.** `total-files-size` tablonun dosya boyutlarının
-  toplamıdır; depolamanın fiziksel ya da çoğaltılmış tüketimi değildir. O rakam platformun
-  depolama exporter'ındadır.
-- **Bu pano kimlik taşımaz.** Superset Trino'ya paylaşımlı servis hesabıyla bağlanır; satır
+- **Gösterilen boyut mantıksaldır.** Tablonun dosya boyutlarının toplamıdır; depolamanın
+  fiziksel ya da çoğaltılmış tüketimi değildir. O rakam depolama sisteminin kendi
+  izlemesindedir.
+- **Pano kimlik taşımaz.** Superset Trino'ya paylaşımlı servis hesabıyla bağlanır; satır
   filtresi ve kolon maskesi burada **uygulanmaz**
-  ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §7). Meta veri sayaçları veri içermediği
-  için bu pratikte sorun değildir, ama panoya veri sorgusu eklerken akılda tutulmalıdır.
+  ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §7). Ölçümler veri içermediği için bu bir
+  sorun değildir, ama panoya veri sorgusu eklerken akılda tutulmalıdır.
+- **Panoyu arayüzden değiştirmek kalıcı değildir.** Bir sonraki içe aktarma ürünün hâlini
+  geri yazar; kendi panolarınızı ayrı adla kaydedin.
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Sanal veri setinin SQL'i müşterinin gerçek tablolarına uyarlandı (demo tabloları
-      kalmadı).
 - [ ] Pano içe aktarıldı ve açılıyor ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §4.3).
-- [ ] Yeni bir tablo eklendiğinde SQL güncellendi, commit edildi ve içe aktarma tekrarlandı.
-- [ ] Bakım işlerinin etkisi (dosya ve anlık görüntü sayısında düşüş) en az bir kez ölçüldü.
+- [ ] Panoda kurumun tabloları görünüyor (ilk pipeline'dan en geç bir saat sonra).
+- [ ] Bakım işlerinin etkisi (dosya sayısında düşüş) en az bir kez grafikte görüldü.
 - [ ] Bu metriklerden **alarm üretilemeyeceği** ekipçe biliniyor.
 
 ## Sonraki bölüm

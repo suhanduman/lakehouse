@@ -622,8 +622,8 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
     2>/dev/null | tail -1
   ```
 
-  Beklenen: listede `('Iceberg metadata', 'iceberg-metadata')` var ve pano açıldığında hücreler
-  **müşterinin gerçek tablolarını** gösteriyor (demo tabloları kalmamış).
+  Beklenen: listede `('Tablo sağlığı', 'tablo-sagligi')` var ve pano açıldığında "son durum"
+  grafiği **müşterinin tablolarını** gösteriyor (ilk pipeline'dan en geç bir saat sonra).
   *Kaynak: [40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §4;
   [50-isletme/veri-metrikleri.md](../50-isletme/veri-metrikleri.md) §4.*
 

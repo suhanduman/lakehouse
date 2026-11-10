@@ -1,0 +1,36 @@
+slice_name: "Tablo sa\u011Fl\u0131\u011F\u0131 \u2014 son durum"
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  datasource: 2__table
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - tablo
+  - katman
+  - kayit
+  - veri_dosyasi
+  - delete_dosyasi
+  - boyut_mib
+  - ort_dosya_mib
+  - snapshot_sayisi
+  - son_degisiklik
+  order_by_cols:
+  - '["katman", true]'
+  - '["tablo", true]'
+  row_limit: 1000
+  include_search: true
+query_context: '{"datasource": {"id": 2, "type": "table"}, "force": false, "queries":
+  [{"columns": ["tablo", "katman", "kayit", "veri_dosyasi", "delete_dosyasi", "boyut_mib",
+  "ort_dosya_mib", "snapshot_sayisi", "son_degisiklik"], "orderby": [["katman", true],
+  ["tablo", true]], "row_limit": 1000}], "form_data": {"datasource": "2__table", "viz_type":
+  "table", "query_mode": "raw", "all_columns": ["tablo", "katman", "kayit", "veri_dosyasi",
+  "delete_dosyasi", "boyut_mib", "ort_dosya_mib", "snapshot_sayisi", "son_degisiklik"],
+  "order_by_cols": ["[\"katman\", true]", "[\"tablo\", true]"], "row_limit": 1000,
+  "include_search": true}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: 624e7f46-1b06-481d-a00a-735c280bda65
+version: 1.0.0
+dataset_uuid: 77718f6d-3330-4912-9215-23f3d0065c7a

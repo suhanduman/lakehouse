@@ -4,7 +4,10 @@
   --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük; maintain_namespaces: bakım var, TTL yok — saklama kararı F5
 Silver tabloları pipelines.json'dan (bronze'dan türetilir). Bronze tabloları KATALOGDAN: pipelines.json'daki
 bronze_namespaces için SHOW TABLES (+ pipelines'ın bronze adları) — Silver pipeline'ı olmayan (append-only) Bronze
-tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir)."""
+tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir).
+
+Saatlik position-deletes koşusu sonunda katalogdaki HER tablonun durumunu ops.table_health'e ekler (health_lib):
+Superset "Tablo sağlığı" panosunun tek veri kaynağı; pano bu sayede her kurulumda tablo listesi yazmadan çalışır."""
 import argparse
 import json
 import os
@@ -12,6 +15,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import health_lib as hl  # noqa: E402
 import merge_lib as ml  # noqa: E402
 from merge_cdc import CATALOG, PIPELINES, session, table_exists  # noqa: E402
 from pyspark.sql.utils import AnalysisException  # noqa: E402
@@ -40,6 +44,42 @@ def call(spark, proc: str, table: str, extra: str = "") -> None:
     print(sql)
     for r in spark.sql(sql).collect():
         print("  ", r.asDict())
+
+
+def collect_health(spark, silver_namespaces: set[str]) -> None:
+    """Katalogdaki bütün tabloların son snapshot özetini ops.table_health'e ekler; 90 günden eski ölçümleri siler."""
+    measured = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+    target = f"{CATALOG}.{hl.HEALTH_NAMESPACE}.{hl.HEALTH_TABLE}"
+    rows = []
+    for ns_row in spark.sql(f"SHOW NAMESPACES IN {CATALOG}").collect():
+        ns = ns_row[0]
+        try:
+            tables = [r["tableName"] for r in spark.sql(f"SHOW TABLES IN {CATALOG}.{ns}").collect()]
+        except AnalysisException as e:
+            print(f"[sağlık] {ns} okunamadı — atlandı ({type(e).__name__})")
+            continue
+        for t in tables:
+            if ns == hl.HEALTH_NAMESPACE and t == hl.HEALTH_TABLE:
+                continue
+            try:
+                snaps = [(r["committed_at"], dict(r["summary"] or {})) for r in
+                         spark.sql(f"SELECT committed_at, summary FROM {CATALOG}.{ns}.{t}.snapshots").collect()]
+            except AnalysisException as e:
+                print(f"[sağlık] {ns}.{t} okunamadı — atlandı ({type(e).__name__})")
+                continue
+            row = hl.summarize(f"{ns}.{t}", hl.layer_of(ns, silver_namespaces), snaps, measured)
+            if row:
+                rows.append(row)
+    spark.sql(f"CREATE TABLE IF NOT EXISTS {target} ({hl.HEALTH_DDL_COLUMNS}) USING iceberg "
+              f"PARTITIONED BY (days(olcum_zamani))")
+    if rows:
+        cols = [c.split()[0] for c in hl.HEALTH_DDL_COLUMNS.split(", ")]
+        spark.createDataFrame([tuple(r[c] for c in cols) for r in rows],
+                              spark.table(target).schema).writeTo(target).append()
+    # saklama: ölçüm satırları 90 günden eskiyse düşer (tablo yalnız bu işin yazdığı ölçümleri tutar)
+    spark.sql(f"DELETE FROM {target} WHERE olcum_zamani < "
+              f"current_timestamp() - INTERVAL {hl.HEALTH_RETENTION_DAYS} DAYS")
+    print(f"HEALTH_OK {len(rows)} tablo")
 
 
 def main() -> None:
@@ -87,6 +127,12 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             failed.append(t)
             print(f"[{t}] HATA {type(e).__name__}: {e}", file=sys.stderr)
+    if a.mode == "position-deletes":
+        try:
+            collect_health(spark, {t.split(".")[0] for t in silver})
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{hl.HEALTH_NAMESPACE}.{hl.HEALTH_TABLE}")
+            print(f"[sağlık] HATA {type(e).__name__}: {e}", file=sys.stderr)
     spark.stop()
     if failed:
         print(f"BAŞARISIZ: {failed}", file=sys.stderr)

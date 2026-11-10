@@ -44,3 +44,4 @@ catalogs:
       - name: crm_raw
       - name: crm
       - name: sandbox          # analist/kullanıcı çalışma alanı (Trino sandbox_writers)
+      - name: ops              # ürünün işletme tabloları (ops.table_health — bakım işi yazar, Superset okur)
