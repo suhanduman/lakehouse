@@ -50,30 +50,32 @@ ns=lakehouse argocd=openshift-gitops
 
 ## 2. Kaynakta tabloyu yakalamaya hazırlayın
 
-Yeni tablo, kaynağın CDC kullanıcısının erişebildiği ve — PostgreSQL'de — **sahibi
-olduğu** bir tablo olmalıdır. Publication `filtered` modda yönetildiği için Debezium
-tabloyu publication'a kendisi ekler, ama bunu ancak tablo sahibiyse yapabilir.
+Bu adımı kaynak veritabanının yöneticisi yapar. PostgreSQL'de iki satırdır: CDC rolüne
+tabloyu okuma izni verilir ve tablo publication'a eklenir. Tablonun sahibi **değişmez**.
 
 `[kaynak DB]` — PostgreSQL
 
 ```sql
-ALTER TABLE public.customers OWNER TO dbz;
+GRANT SELECT ON public.customers TO dbz;
+ALTER PUBLICATION dbz_shop_pub ADD TABLE public.customers;
 ```
 
-Buradaki `dbz`, **kaynağın CDC kullanıcısının adıdır**; kendi kurulumunuzda kaynağın
-Secret'ındaki `username` değeri ne ise onu yazın
-(`oc -n "$LAKEHOUSE_NS" get secret src-shop -o jsonpath='{.data.username}' | base64 -d`).
-Geliştirme kümesinin demo `shop` kaynağında bu ad `dbz`'dir.
+Buradaki `dbz` kaynağın CDC kullanıcısının adıdır (kaynağın Secret'ındaki `username`
+değeri: `oc -n "$LAKEHOUSE_NS" get secret shop-db -o jsonpath='{.data.username}' | base64 -d`),
+`dbz_shop_pub` de kaynağın publication'ıdır (`dbz_` + kaynak adı + `_pub`). Kendi
+kaynağınızın adlarını yazın.
 
-> **Prova yapıyorsanız:** geliştirme kümesinin demo `shop` veritabanında `public.customers`
-> **yoktur**; bu sayfayı kind'da birebir izlemek için tabloyu önce kendiniz yaratın
-> (bağlanma: [30-kurulum.md](../30-kurulum.md#kind-kaynak-db)).
->
-> ```sql
-> CREATE TABLE public.customers (id int primary key, name text, updated_at timestamptz default now());
-> INSERT INTO public.customers (id, name) VALUES (1, 'Ada'), (2, 'Kerem');
-> ALTER TABLE public.customers OWNER TO dbz;
-> ```
+**Beklenen çıktı** (PostgreSQL):
+
+```text
+GRANT
+ALTER PUBLICATION
+```
+
+**Ters giderse:** `must be owner of publication` → publication'ı yaratan yönetici hesabıyla
+bağlanın. `relation "customers" is already member of publication "dbz_shop_pub"` → tablo zaten
+eklidir, bir şey yapmanız gerekmez. Publication'ın güncel içeriği:
+`SELECT tablename FROM pg_publication_tables WHERE pubname = 'dbz_shop_pub';`
 
 `[kaynak DB]` — SQL Server (tablo düzeyinde CDC ayrıca açılır)
 
@@ -84,17 +86,6 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'customers
 
 MongoDB'de bu adım yoktur: koleksiyon yalnız `collections` listesine eklenir; okuma
 yetkisi veritabanı düzeyinde zaten verilmiştir.
-
-**Beklenen çıktı** (PostgreSQL):
-
-```text
-ALTER TABLE
-```
-
-**Ters giderse:** `must be owner of table` → bağlandığınız hesap tablonun sahibi
-değildir. Sahipliği devretmek istemiyorsanız publication'ı elle yönetmeniz
-(`ALTER PUBLICATION ... ADD TABLE`) ve kaynağa
-`extraConfig: {publication.autocreate.mode: disabled}` eklemeniz gerekir.
 
 ---
 
@@ -161,8 +152,7 @@ git push origin main
 modda okunmaz.
 
 Eşitleme sırasında Debezium bağlayıcısı **yeniden başlar** (yapılandırması değişmiştir);
-akış birkaç saniye duraklar ve kaldığı yerden sürer. PostgreSQL'de publication da
-kendiliğinden güncellenir.
+akış birkaç saniye duraklar ve kaldığı yerden sürer.
 
 **Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde):
 
@@ -191,22 +181,28 @@ kendisi ekler):
 public.orders,public.customers,public.debezium_signal
 ```
 
-PostgreSQL'de publication'ın güncellendiği Connect günlüğünde de görülür:
+PostgreSQL'de tablonun publication'da olduğunu kaynak veritabanında görün:
 
-`[bastion]`
+`[kaynak DB]`
 
-```bash
-oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=500 | grep -i "Publication"
+```sql
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'dbz_shop_pub' ORDER BY 1;
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek satır):
+**Beklenen çıktı:**
 
 ```text
-2026-09-24 09:16:50 INFO  [debezium-postgresconnector-shop-change-event-source-coordinator] PostgresReplicationConnection:521 - Updating Publication with statement 'ALTER PUBLICATION dbz_shop_pub SET TABLE "public"."customers", "public"."debezium_signal", "public"."orders";'
+    tablename    
+-----------------
+ customers
+ debezium_signal
+ orders
+(3 rows)
 ```
 
-**Ters giderse:** liste eski hâlindeyse eşitleme tamamlanmamıştır. Publication satırının
-ardından bir yetki hatası geliyorsa Adım 2 yapılmamıştır.
+**Ters giderse:** bağlayıcının listesi eski hâlindeyse eşitleme tamamlanmamıştır. Tablo
+publication'da yoksa Adım 2'nin ikinci satırı yapılmamıştır: bağlayıcı hata vermez ama
+tablonun değişiklikleri **hiç gelmez**.
 
 ---
 
@@ -225,12 +221,13 @@ VALUES ('adhoc-1', 'execute-snapshot',
         '{"data-collections": ["public.customers"], "type": "incremental"}');
 ```
 
-`[kaynak DB]` — SQL Server (aynı içerik, `dbo` şemasındaki sinyal tablosuna)
+`[kaynak DB]` — SQL Server (`dbo` şemasındaki sinyal tablosuna; tablo adının başında
+**veritabanı adı** vardır — burada `erp`)
 
 ```sql
 INSERT INTO dbo.debezium_signal (id, type, data)
 VALUES (CONVERT(varchar(42), NEWID()), 'execute-snapshot',
-        '{"data-collections": ["dbo.customers"], "type": "incremental"}');
+        '{"data-collections": ["erp.dbo.customers"], "type": "incremental"}');
 ```
 
 `[kaynak DB]` — MongoDB (kaynakta `signalCollection` tanımlı olmalıdır)
@@ -347,7 +344,8 @@ kaynağın **güncel** hâline eşittir. Bastion'dan aynı sayım:
 | Belirti | Neden | Çözüm |
 |---|---|---|
 | `table.include.list` eski hâlinde | eşitleme tamamlanmadı | ArgoCD durumu; hard refresh |
-| Günlükte publication yetki hatası | tablo sahibi CDC rolü değil | Adım 2 |
+| Yeni tablonun değişiklikleri Bronze'a hiç gelmiyor, hata da yok | tablo publication'a eklenmedi | Adım 2 (`ALTER PUBLICATION … ADD TABLE`) |
+| Snapshot ya da akış `permission denied for table` ile düşüyor | CDC rolüne `SELECT` verilmedi | Adım 2 (`GRANT SELECT`) |
 | Bronze tablosu yaratılmıyor | denetim tüketicisi henüz katılmadı ya da commit aralığı dolmadı | 5 dakika bekleyin |
 | Bronze'da yalnız yeni değişiklikler var, geçmiş yok | artımlı snapshot sinyali yazılmadı | Adım 6 |
 | Snapshot satırları gelmiyor, tabloda birincil anahtar yok | sinyal anahtar sütununu bulamıyor | sinyale `surrogate-key` ekleyin |

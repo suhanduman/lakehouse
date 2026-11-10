@@ -249,7 +249,36 @@ application.argoproj.io/glue annotated
 erişemiyordur; `lakehouse-repo` Secret'ındaki anahtar ya da adres bozulmuş olabilir
 ([30-kurulum](../30-kurulum.md) §3).
 
-### 5.2 ArgoCD'siz (helm modu) kurulumlar
+### 5.2 JupyterHub ayarı değiştiyse hub'ı yeniden başlatın
+
+JupyterHub'ın ayarları (`platform/values/site/jupyterhub.yaml`: disk boyutu, kaynak
+sınırları, not defteri imajı; ürün yükseltmesinde `platform/values/jupyterhub.yaml`)
+eşitlemeyle kümeye yazılır, ama hub **kendiliğinden yeniden başlamaz** — böylece başka bir
+değişiklik (kaynak ya da pipeline eklemek) açık not defteri oturumlarını kesmez. Bu iki
+dosyadan birini değiştirdiyseniz eşitleme bittikten sonra hub'ı bir kez yeniden başlatın:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" rollout restart deploy/hub
+oc -n "$LAKEHOUSE_NS" rollout status deploy/hub --timeout=300s
+```
+
+**Beklenen çıktı:**
+
+```text
+deployment.apps/hub restarted
+Waiting for deployment "hub" rollout to finish: 0 of 1 updated replicas are available...
+deployment "hub" successfully rolled out
+```
+
+Arada birkaç `Waiting for deployment …` satırı görünmesi normaldir.
+
+Hub yeniden başlarken (yaklaşık yarım dakika) yeni giriş yapılamaz; açık not defterleri
+çalışmaya devam eder. Yeni ayar, kullanıcının **bir sonraki** not defteri sunucusunda
+geçerli olur (Jupyter'de *File → Hub Control Panel → Stop My Server*, sonra *Start*).
+
+### 5.3 ArgoCD'siz (helm modu) kurulumlar
 
 Geliştirme ve deneme kümeleri ArgoCD'siz "helm modunda" kurulmuş olabilir. **Bu modun
 tam tarifi tek bir yerdedir:** [30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2).

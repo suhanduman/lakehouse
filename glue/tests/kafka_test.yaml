@@ -1,6 +1,25 @@
 suite: kafka + connect
 templates: [kafka.yaml, kafka-connect.yaml, kafka-users.yaml, kafka-admin.yaml]
 tests:
+  # Connect yalnız sqlserver kaynağı varken Kafka küme CA Secret'ını okuyabilir (schema-history istemcileri)
+  - it: connect secret reader includes cluster CA only with a sqlserver source
+    template: kafka-connect.yaml
+    documentSelector: {path: kind, value: Role}
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources:
+        - {name: fin, type: sqlserver, host: h, port: 1433, database: fin, tables: [dbo.i], signalTable: dbo.s}
+    asserts:
+      - contains: {path: 'rules[0].resourceNames', content: lakehouse-cluster-ca-cert}
+  - it: connect secret reader excludes cluster CA without sqlserver
+    template: kafka-connect.yaml
+    documentSelector: {path: kind, value: Role}
+    set:
+      connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"
+      sources:
+        - {name: erp, type: postgres, host: h, port: 5432, database: erp, tables: [public.o], signalTable: public.s}
+    asserts:
+      - notContains: {path: 'rules[0].resourceNames', content: lakehouse-cluster-ca-cert}
   - it: renders Kafka v1 with KRaft node pool
     template: kafka.yaml
     set: {connect.buildImage: "ttl.sh/lakehouse-connect-test:24h"}   # süit tüm şablonları render eder

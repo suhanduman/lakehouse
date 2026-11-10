@@ -13,6 +13,10 @@ rules:
 {{- end }}
   - "polaris-connect"
   - "connect"                     # sqlserver schema-history istemcileri: KafkaUser Secret'ındaki sasl.jaas.config
+{{- $mssql := false }}{{- range .Values.sources }}{{- if eq .type "sqlserver" }}{{- $mssql = true }}{{- end }}{{- end }}
+{{- if $mssql }}
+  - "lakehouse-cluster-ca-cert"   # sqlserver schema-history istemcileri: Kafka küme CA'sı (satır içi PEM)
+{{- end }}
 {{- if not .Values.s3.vendedCredentials }}
   - "s3-creds"                    # STS'siz S3: sink kendi anahtarlarını okur
 {{- end }}
