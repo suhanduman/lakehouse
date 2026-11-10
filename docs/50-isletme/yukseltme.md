@@ -12,7 +12,9 @@ alanlarında okuma. Kümede elle sürüm değiştirme yetkisi **gerekmez** ve is
 
 > **Kümede `helm upgrade` yoktur.** Yükseltme = **dosyada sürümü değiştir → commit → CI
 > yeşil → eşitleme**. Tek istisna ArgoCD'siz kurulmuş geliştirme kümeleridir; orada da aynı
-> sıra geçerlidir ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.2).
+> sıra geçerlidir ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.3).
+> JupyterHub sürümü ya da not defteri imajı yükseltildiyse eşitlemeden sonra hub bir kez
+> yeniden başlatılır (aynı sayfa §5.2).
 
 ---
 

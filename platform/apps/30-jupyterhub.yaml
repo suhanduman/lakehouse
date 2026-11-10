@@ -22,13 +22,14 @@ spec:
   # "api_request to proxy failed: HTTP 403: Forbidden" ve singleuser pod'u hiç yaratılmadı.
   # Çözüm: bu üç anahtar İLK sync'te bir kez üretilir, sonraki sync'lerde ArgoCD CANLI değeri korur
   # (RespectIgnoreDifferences olmadan ignoreDifferences yalnız diff'i susturur, sync yine üzerine yazardı).
-  # Secret'ın geri kalanı (`values.yaml` = chart değerleri) sync'lenmeye DEVAM eder; bu yüzden bir values
-  # değişikliği hub Deployment'ının `checksum/secret` annotation'ını yine değiştirir ve hub yeniden başlar.
-  # Deployment annotation'ları (hub `checksum/secret`, proxy `checksum/auth-token`) BİLEREK yok sayılmadı:
-  # token'ı dondurmak için Secret'ın verisini yok saymak YETER. Bu annotation'lar her yeni render'da yine
-  # değişir ve hub + proxy'yi gereksizce döndürür — ama artık İKİSİ DE AYNI, değişmeyen token'ı okuduğu için
-  # bu zararsızdır. Bilinçli sadeleştirme: fazladan iki `ignoreDifferences` girdisi eklemek yerine anlamsız
-  # ama etkisiz bir restart'a katlanıyoruz (yok sayılsalardı hub, values değişikliğinde yeniden başlamazdı).
+  # Pod şablonundaki iki checksum annotation'ı (hub `checksum/secret`, proxy `checksum/auth-token`) bu rastgele
+  # değerlerden hesaplanır ve HER render'da değişir: dondurulmasalardı sitedeki HER commit (bir kaynak ya da pipeline
+  # eklemek bile) hub + proxy'yi yeniden başlatır, açık not defteri oturumları kısa süre kesilirdi (ocpphy: boş bir
+  # commit'te 75 pod'dan yalnız bu ikisi döndü). Bu yüzden ikisi de yok sayılır. Bedeli: JupyterHub AYARLARI
+  # (platform/values/jupyterhub.yaml, site/jupyterhub.yaml — sürüm yükseltmesi, not defteri imajı, kaynaklar)
+  # değiştiğinde hub kendiliğinden yeniden başlamaz; belgedeki tek komutla (`oc rollout restart deploy/hub`)
+  # başlatılır (docs/50-isletme/degisiklik-nasil-uygulanir.md). `checksum/config-map` / `checksum/proxy-secret`
+  # sabittir, yok sayılmaz.
   ignoreDifferences:
   - group: ""
     kind: Secret
@@ -37,6 +38,14 @@ spec:
     - /data/hub.config.ConfigurableHTTPProxy.auth_token   # hub <-> proxy API yetkisi (CONFIGPROXY_AUTH_TOKEN)
     - /data/hub.config.JupyterHub.cookie_secret           # oturum çerezi imzası
     - /data/hub.config.CryptKeeper.keys                   # auth_state şifresi
+  - group: apps
+    kind: Deployment
+    name: hub
+    jsonPointers: [/spec/template/metadata/annotations/checksum~1secret]
+  - group: apps
+    kind: Deployment
+    name: proxy
+    jsonPointers: [/spec/template/metadata/annotations/checksum~1auth-token]
   syncPolicy:
     automated: {prune: true, selfHeal: true}
     syncOptions: [CreateNamespace=true, ServerSideApply=true, RespectIgnoreDifferences=true]
