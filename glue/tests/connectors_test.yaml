@@ -1,6 +1,26 @@
 suite: connectors
 templates: [connectors.yaml]
 tests:
+  # İlk yükleme seçeneği: varsayılan Debezium snapshot'ı; incremental -> no_data (artımlı snapshot sinyalle)
+  - it: initialLoad defaults to snapshot and incremental maps to no_data
+    set:
+      sources:
+        - {name: a, type: sqlserver, host: h, port: 1433, database: A, tables: [dbo.t], signalTable: dbo.s}
+        - {name: b, type: postgres, host: h, port: 5432, database: b, tables: [public.t], signalTable: public.s, initialLoad: incremental}
+        - {name: c, type: mongodb, connectionString: "mongodb://x", collections: [c.t], initialLoad: incremental}
+    asserts:
+      - documentIndex: 0
+        equal: {path: 'spec.config["snapshot.mode"]', value: initial}
+      - documentIndex: 2
+        equal: {path: 'spec.config["snapshot.mode"]', value: no_data}
+      - documentIndex: 4
+        equal: {path: 'spec.config["snapshot.mode"]', value: no_data}
+  - it: initialLoad rejects unknown values
+    set:
+      sources:
+        - {name: a, type: postgres, host: h, port: 5432, database: a, tables: [public.t], signalTable: public.s, initialLoad: hepsi}
+    asserts:
+      - failedTemplate: {errorPattern: "initialLoad: snapshot \\| incremental"}
   # Kaynağı Git'ten durdurma (offset sıfırlama; docs/50-isletme/kaynak-veya-tablo-silme.md §3). Varsayılan: alan yok (= running).
   - it: sources[].state stops the debezium connector, sink is untouched, default renders no state
     set:

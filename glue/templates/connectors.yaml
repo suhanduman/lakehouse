@@ -1,3 +1,12 @@
+{{- /* sources[].initialLoad: kaynak ilk eklendiğinde var olan verinin nasıl yükleneceği.
+   snapshot (varsayılan): Debezium'un ilk yüklemesi (snapshot.mode=initial) — basit; yarıda kalırsa baştan başlar.
+   incremental: bağlayıcı yüklemesiz başlar (no_data), yalnız değişiklikleri izler; var olan satırlar sinyal tablosuna
+   yazılan artımlı snapshot isteğiyle parça parça gelir — kaldığı yerden sürer, tabloyu kilitlemez (büyük tablolar).
+   docs/50-isletme/yeni-kaynak-ve-pipeline.md "İlk yükleme". */ -}}
+{{- define "glue.snapshotMode" -}}
+{{- $m := .initialLoad | default "snapshot" -}}
+{{- if eq $m "snapshot" }}initial{{ else if eq $m "incremental" }}no_data{{ else }}{{ fail (printf "sources[%s].initialLoad: snapshot | incremental olmalı (verilen: %s)" .name $m) }}{{ end -}}
+{{- end -}}
 {{- /* Sinyal tablosunun Debezium'daki tam adı. SQL Server'da Debezium bütün adlara veritabanını ekler
    (<veritabanı>.<şema>.<tablo>; konu adı da <önek>.<veritabanı>.<şema>.<tablo>) — signal.data.collection ve
    sink'in konu dışlaması bunu bekler; PostgreSQL'de <şema>.<tablo>. */ -}}
@@ -20,7 +29,7 @@
   "topic.prefix" $prefix
   "collection.include.list" (join "," .collections)
   "capture.mode" "change_streams_update_full"
-  "snapshot.mode" "initial"
+  "snapshot.mode" (include "glue.snapshotMode" .)
   "tombstones.on.delete" "false"
   "heartbeat.interval.ms" "10000"
   "key.converter" "org.apache.kafka.connect.json.JsonConverter"
@@ -63,7 +72,7 @@ spec:
   "database.password" (printf "${secrets:%s/%s-db:password}" $ns .name)
   "topic.prefix" $prefix
   "table.include.list" (join "," (append .tables .signalTable))
-  "snapshot.mode" "initial"
+  "snapshot.mode" (include "glue.snapshotMode" .)
   "signal.data.collection" (include "glue.signalCollection" .)
   "signal.enabled.channels" "source"
   "time.precision.mode" "connect"
