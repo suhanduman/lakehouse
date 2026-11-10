@@ -260,23 +260,17 @@ eder ve bu YAML'ı reddeder.
 
 ---
 
-## 4. Iceberg metadata panosunu içe aktarın
+## 4. "Tablo sağlığı" panosunu içe aktarın
 
-**Neden:** tablo düzeyinde veri metrikleri (satır sayısı, dosya sayısı, boyut, son commit)
-için Iceberg'in Prometheus exporter'ı yoktur; bu bilgi tablonun kendi metadata'sındadır ve
-SQL ile okunur. Ürün, bu sorguları toplayan hazır bir Superset pano paketi getirir
-(`glue/files/superset/iceberg-metadata/`, kümede `superset-assets` ConfigMap'i →
-`/app/assets`). Paket kurulum başına **bir kez** içe aktarılır; GitOps sync'i bunu
-tekrarlamaz, çünkü import Superset'in metastore'una yazar.
+**Neden:** bütün tabloların satır sayısını, dosya sayısını, boyutunu, ortalama dosya
+boyutunu ve son yazma zamanını tek ekranda gösteren hazır bir Superset panosu ürünle gelir.
+Verisini bakım işi saatte bir `ops.table_health` tablosuna yazar; pano kurumun tablolarını
+kendiliğinden gösterir, uyarlanacak bir şey yoktur
+([50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md) §4). Paket
+(`glue/files/superset/tablo-sagligi/`) kümede `superset-assets` ConfigMap'i olarak
+`/app/assets` altına bağlanır ve kurulum başına **bir kez** içe aktarılır.
 
-> **PROD UYARISI — önce SQL'i uyarlayın.** Panonun sanal veri seti SQL'i geliştirme demo
-> tablolarına (`shop.orders`, `crm.customers`, `nginx_raw.access_log`) sabittir. Üretim
-> kurulumunda (`sources: []`, `pipelines: []`) bu tablolar **yoktur** ve SQL olduğu gibi
-> içe aktarılırsa pano `TABLE_NOT_FOUND` ile boş kalır. Import'tan **önce**
-> `glue/files/superset/iceberg-metadata/datasets/lakehouse/iceberg_table_health.yaml`
-> içindeki `sql:` alanını kendi Silver/ham tablolarınıza göre düzenleyin, commit + push
-> edin ve ArgoCD'nin ConfigMap'i güncellemesini bekleyin. Uyarlamayacaksanız panoyu hiç
-> aktarmayın; kurulumun geri kalanı panodan bağımsızdır.
+Pano, ilk pipeline eklenip ilk saatlik ölçüm alınana kadar boş görünür; bu normaldir.
 
 ### 4.1 Yönetici hesabının var olduğunu doğrulayın
 
@@ -314,11 +308,15 @@ ConfigMap anahtarları alt dizin taşıyamaz, bu yüzden dosyalar pod'da düz bi
 dizin ayracı yerine çift alt çizgi kullanılır — `/app/assets` içeriği aynen şudur:
 
 ```text
-iceberg-metadata__charts__iceberg_table_health_table.yaml
-iceberg-metadata__dashboards__iceberg_metadata.yaml
-iceberg-metadata__databases__lakehouse.yaml
-iceberg-metadata__datasets__lakehouse__iceberg_table_health.yaml
-iceberg-metadata__metadata.yaml
+tablo-sagligi__charts__kayit_sayisi_zaman.yaml
+tablo-sagligi__charts__ortalama_dosya_boyutu.yaml
+tablo-sagligi__charts__tablo_sagligi_son_durum.yaml
+tablo-sagligi__charts__veri_dosyasi_sayisi_zaman.yaml
+tablo-sagligi__dashboards__tablo_sagligi.yaml
+tablo-sagligi__databases__lakehouse.yaml
+tablo-sagligi__datasets__lakehouse__table_health.yaml
+tablo-sagligi__datasets__lakehouse__table_health_son.yaml
+tablo-sagligi__metadata.yaml
 ```
 
 Aşağıdaki ilk komut bu adları dizin ağacına geri açıp zip'ler. `oc exec` heredoc'u
@@ -334,23 +332,24 @@ SUPERSET_ADMIN=$(oc -n "$LAKEHOUSE_NS" exec deploy/superset-web-server -- \
 echo "sahip: $SUPERSET_ADMIN"
 oc -n "$LAKEHOUSE_NS" exec -i deploy/superset-web-server -- python3 - <<'PY'
 import pathlib, shutil
-src = pathlib.Path('/app/assets'); dst = pathlib.Path('/tmp/iceberg-metadata')
+src = pathlib.Path('/app/assets'); dst = pathlib.Path('/tmp/tablo-sagligi')
 shutil.rmtree(dst, ignore_errors=True)
-for f in src.glob('iceberg-metadata__*'):
+for f in src.glob('tablo-sagligi__*'):
     p = dst / f.name.split('__', 1)[1].replace('__', '/')
     p.parent.mkdir(parents=True, exist_ok=True); p.write_text(f.read_text())
-shutil.make_archive('/tmp/iceberg-metadata', 'zip', '/tmp', 'iceberg-metadata')
+shutil.make_archive('/tmp/tablo-sagligi', 'zip', '/tmp', 'tablo-sagligi')
 print('zip hazır')
 PY
 oc -n "$LAKEHOUSE_NS" exec deploy/superset-web-server -- \
-  superset import-dashboards -p /tmp/iceberg-metadata.zip -u "$SUPERSET_ADMIN"
+  superset import-dashboards -p /tmp/tablo-sagligi.zip -u "$SUPERSET_ADMIN"
 ```
 
-**Beklenen çıktı** (örnek — `sahip:` satırında kendi yöneticinizin kullanıcı adı çıkar;
-import komutu başarıda ek satır basmaz):
+**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı — `sahip:` satırında kendi
+yöneticinizin kullanıcı adı çıkar). Import komutu ardından birkaç `SAWarning` uyarı satırı
+basabilir; zararsızdır, komutun çıkış kodu `0`'dır:
 
 ```text
-sahip: ayse.yilmaz
+sahip: ladmin
 zip hazır
 ```
 
@@ -385,11 +384,11 @@ with create_app().app_context():
 **Beklenen çıktı** (örnek):
 
 ```text
-[('Iceberg metadata', 'iceberg-metadata')]
+[('Tablo sağlığı', 'tablo-sagligi')]
 ```
 
-Arayüzde **Dashboards → Iceberg metadata**. Panonun SQL'i ve yeni tablo ekleme yordamı
-[50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md) sayfasındadır.
+Arayüzde **Dashboards → Tablo sağlığı**. Grafiklerin nasıl okunacağı
+[50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md) §4'tedir.
 
 **Ters giderse:** boş liste `[]` → import çalışmamıştır (Adım 4.2 çıktısına dönün). Pano
 açılıyor ama hücreler hata veriyorsa SQL hâlâ demo tablolarını gösteriyordur (yukarıdaki
@@ -747,8 +746,7 @@ Hepsi işaretliyse kurulum teslim edilebilir:
 - [ ] `trino` Application'ı `Healthy`; `deploy/trino-coordinator` rollout'u tamam.
 - [ ] Superset'te `lakehouse` veritabanı SQL Lab'da görünüyor
       (`legacy-import-datasources` koştu).
-- [ ] Iceberg metadata panosu içe aktarıldı **ya da** bilinçli olarak atlandı; aktarıldıysa
-      sanal veri seti SQL'i müşterinin tablolarına uyarlanmıştı.
+- [ ] "Tablo sağlığı" panosu içe aktarıldı ve açılıyor.
 - [ ] Dört arayüze de (Trino UI, Superset, JupyterHub, Zeppelin) AD hesabıyla girildi.
 - [ ] `lakehouse-admins` grubundaki yönetici Superset'te `Admin` rolüyle görünüyor.
 - [ ] `oc get podmonitor,servicemonitor,prometheusrule` iki PodMonitor, bir ServiceMonitor

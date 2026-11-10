@@ -1,0 +1,33 @@
+slice_name: "Kay\u0131t say\u0131s\u0131 \u2014 zaman i\xE7inde"
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  datasource: 1__table
+  viz_type: echarts_timeseries_line
+  x_axis: olcum_zamani
+  time_grain_sqla: PT1H
+  metrics:
+  - expressionType: SIMPLE
+    column:
+      column_name: kayit
+    aggregate: MAX
+    label: kayit
+  groupby:
+  - tablo
+  row_limit: 10000
+  time_range: No filter
+query_context: '{"datasource": {"id": 1, "type": "table"}, "force": false, "queries":
+  [{"columns": [{"columnType": "BASE_AXIS", "sqlExpression": "olcum_zamani", "label":
+  "olcum_zamani", "expressionType": "SQL", "timeGrain": "PT1H"}, "tablo"], "metrics":
+  [{"expressionType": "SIMPLE", "column": {"column_name": "kayit"}, "aggregate": "MAX",
+  "label": "kayit"}], "row_limit": 10000}], "form_data": {"datasource": "1__table",
+  "viz_type": "echarts_timeseries_line", "x_axis": "olcum_zamani", "time_grain_sqla":
+  "PT1H", "metrics": [{"expressionType": "SIMPLE", "column": {"column_name": "kayit"},
+  "aggregate": "MAX", "label": "kayit"}], "groupby": ["tablo"], "row_limit": 10000,
+  "time_range": "No filter"}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: dad09124-12c3-48a7-8300-bc883719c27e
+version: 1.0.0
+dataset_uuid: 035beb94-7a8a-4f9d-9f2a-b4916cae5c57

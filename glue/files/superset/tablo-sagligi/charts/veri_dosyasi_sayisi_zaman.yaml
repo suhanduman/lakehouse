@@ -1,0 +1,33 @@
+slice_name: "Veri dosyas\u0131 say\u0131s\u0131 \u2014 zaman i\xE7inde"
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  datasource: 1__table
+  viz_type: echarts_timeseries_line
+  x_axis: olcum_zamani
+  time_grain_sqla: PT1H
+  metrics:
+  - expressionType: SIMPLE
+    column:
+      column_name: veri_dosyasi
+    aggregate: MAX
+    label: veri_dosyasi
+  groupby:
+  - tablo
+  row_limit: 10000
+  time_range: No filter
+query_context: '{"datasource": {"id": 1, "type": "table"}, "force": false, "queries":
+  [{"columns": [{"columnType": "BASE_AXIS", "sqlExpression": "olcum_zamani", "label":
+  "olcum_zamani", "expressionType": "SQL", "timeGrain": "PT1H"}, "tablo"], "metrics":
+  [{"expressionType": "SIMPLE", "column": {"column_name": "veri_dosyasi"}, "aggregate":
+  "MAX", "label": "veri_dosyasi"}], "row_limit": 10000}], "form_data": {"datasource":
+  "1__table", "viz_type": "echarts_timeseries_line", "x_axis": "olcum_zamani", "time_grain_sqla":
+  "PT1H", "metrics": [{"expressionType": "SIMPLE", "column": {"column_name": "veri_dosyasi"},
+  "aggregate": "MAX", "label": "veri_dosyasi"}], "groupby": ["tablo"], "row_limit":
+  10000, "time_range": "No filter"}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: 6ac0a3e1-d2c1-4c72-b733-c51d1604f4bf
+version: 1.0.0
+dataset_uuid: 035beb94-7a8a-4f9d-9f2a-b4916cae5c57

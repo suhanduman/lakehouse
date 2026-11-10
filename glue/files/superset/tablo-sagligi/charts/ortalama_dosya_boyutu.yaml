@@ -1,0 +1,29 @@
+slice_name: "Ortalama dosya boyutu (MiB) \u2014 k\xFC\xE7\xFCk dosya g\xF6stergesi"
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  datasource: 2__table
+  viz_type: echarts_timeseries_bar
+  x_axis: tablo
+  metrics:
+  - expressionType: SIMPLE
+    column:
+      column_name: ort_dosya_mib
+    aggregate: MAX
+    label: ort_dosya_mib
+  groupby: []
+  orientation: horizontal
+  row_limit: 1000
+query_context: '{"datasource": {"id": 2, "type": "table"}, "force": false, "queries":
+  [{"columns": ["tablo"], "metrics": [{"expressionType": "SIMPLE", "column": {"column_name":
+  "ort_dosya_mib"}, "aggregate": "MAX", "label": "ort_dosya_mib"}], "row_limit": 1000}],
+  "form_data": {"datasource": "2__table", "viz_type": "echarts_timeseries_bar", "x_axis":
+  "tablo", "metrics": [{"expressionType": "SIMPLE", "column": {"column_name": "ort_dosya_mib"},
+  "aggregate": "MAX", "label": "ort_dosya_mib"}], "groupby": [], "orientation": "horizontal",
+  "row_limit": 1000}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: e4e4c173-cea6-47c4-b203-0c4e2d266756
+version: 1.0.0
+dataset_uuid: 77718f6d-3330-4912-9215-23f3d0065c7a
