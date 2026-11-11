@@ -289,4 +289,6 @@ spark:
     compact: "0 */6 * * *"
     expireOrphanTtl: "30 3 * * *"
     mongoBronze: "*/5 * * * *"
-  maintenance: {snapshotDays: 7, orphanDays: 3, bronzeTtlDays: 30}
+  # snapshotDays: Silver/Gold'da zaman yolculuğu penceresi; bronzeSnapshotDays: Bronze ve ham tablolar (günlük
+  # zaten 30 gün Bronze'da durur, snapshot'a gerek yok); bronzeTtlDays: Bronze satırlarının saklama süresi
+  maintenance: {snapshotDays: 7, bronzeSnapshotDays: 1, orphanDays: 3, bronzeTtlDays: 30}

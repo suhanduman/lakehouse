@@ -47,7 +47,7 @@ tests:
       - documentSelector: {path: metadata.name, value: maint-compact}
         equal: {path: spec.template.arguments, value: ["--mode", "compact"]}
       - documentSelector: {path: metadata.name, value: maint-expire-orphan-ttl}
-        equal: {path: spec.template.arguments, value: ["--mode", "expire-orphan-ttl", "--snapshot-days", "7", "--orphan-days", "3", "--bronze-ttl-days", "30"]}
+        equal: {path: spec.template.arguments, value: ["--mode", "expire-orphan-ttl", "--snapshot-days", "7", "--bronze-snapshot-days", "1", "--orphan-days", "3", "--bronze-ttl-days", "30"]}
       - documentSelector: {path: metadata.name, value: maint-position-deletes}
         equal: {path: spec.concurrencyPolicy, value: Forbid}
   - it: no pipelines renders only the ConfigMaps (job code + Ivy settings)
