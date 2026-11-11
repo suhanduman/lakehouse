@@ -369,9 +369,6 @@ git commit -m "custom: gunluk-ozet zamanli spark isi"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 
 ArgoCD `custom` uygulamasını en geç üç dakikada bir yoklar.

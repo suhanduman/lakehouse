@@ -368,11 +368,10 @@ trino              Synced        Healthy
 `OutOfSync` bir satır, kümede elle bir değişiklik yapıldığı ya da eşitlemenin takıldığı
 anlamına gelir. Kendini iyileştirme açık olduğu için elle yapılan değişiklikler zaten geri
 alınır; kalıcı `OutOfSync` gerçek bir sorundur
-([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §7).
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §8).
 
-**Ters giderse:** `applications` diye bir kaynak yoksa kurulum ArgoCD'siz "helm modundadır";
-orada bu kontrolün karşılığı `helm -n "$LAKEHOUSE_NS" list` çıktısının beklenen sürümleri
-göstermesidir.
+**Ters giderse:** `the server doesn't have a resource type "applications"` görürseniz
+`$ARGOCD_NS` değişkeni yanlış ad alanını gösteriyordur.
 
 ---
 
@@ -384,7 +383,7 @@ göstermesidir.
 | 2 | Bakım işleri `COMPLETED`; dosya ve anlık görüntü sayıları düşüyor | [veri-metrikleri.md](veri-metrikleri.md) §3 |
 | 3 | Sertifikalar `True`, yenileme tarihi ileride | [sorun-giderme.md](sorun-giderme.md) §5 |
 | 4 | Connect itme jetonunun bitişine bir aydan fazla var | [yukseltme.md](yukseltme.md) §6 |
-| 5 | Bütün uygulamalar `Synced Healthy` | [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §7 |
+| 5 | Bütün uygulamalar `Synced Healthy` | [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §8 |
 
 ---
 

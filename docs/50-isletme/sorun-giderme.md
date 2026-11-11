@@ -50,9 +50,9 @@ oc -n "$LAKEHOUSE_NS" get events --sort-by=.lastTimestamp | tail -30
 hiçbir pod `CrashLoopBackOff` / `CreateContainerConfigError` / `Pending` değil, bütün
 özel kaynakların `READY` sütunu `True`.
 
-**Ters giderse:** `applications` diye bir kaynak yoksa kurulum ArgoCD'siz "helm
-modundadır" ([30-kurulum](../30-kurulum.md) "Lokal deneme (kind)"); diğer üç komut aynen
-geçerlidir.
+**Ters giderse:** `the server doesn't have a resource type "applications"` görürseniz
+`$ARGOCD_NS` değişkeni yanlış ad alanını gösteriyordur ya da OpenShift GitOps kurulu
+değildir ([20-on-kosullar](../20-on-kosullar.md) madde 2).
 
 ---
 
@@ -832,7 +832,7 @@ doğrulayın.
   (yalnız iç trafik ve sağlık yoklaması); istemciler **8443 HTTPS** kullanmalı ve
   `lakehouse-ca`'ya güvenmelidir. Jeton reddediliyorsa jetonun hedef kitlesinde `trino`
   yoktur — realm'in `trino` istemcisindeki eşleyiciye bakın
-  ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
+  ([30-kurulum](../30-kurulum.md) §8).
 - **Trino `Access Denied`:** erişim kuralları **ilk eşleşen kurala** bakar; kullanıcının
   grubu görünmüyorsa grup sağlayıcısı devrede değildir —
   [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5.
@@ -887,7 +887,7 @@ doğrulayın.
 - **Keycloak girişi `Invalid username or password`, Keycloak günlüğünde `User returned from
   LDAP has null username`:** realm'in AD kullanıcı adı eşlemesi yoktur ya da eşlemeler AD
   sağlayıcısına bağlı değildir. Ürünün realm tanımı bunu içerir; eski bir sürümle kurulduysa
-  realm'i yenileyin ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
+  realm'i yenileyin ([30-kurulum](../30-kurulum.md) §8).
 - **Zeppelin'e hiç kimse giremiyor, günlükte `LDAP: error code 49 ... data 52e`:** Zeppelin
   servis hesabıyla AD'ye bağlanamıyordur. En sık neden: `zeppelin-shiro` Secret'ında
   `systemUsername` satırına **DN** yazılmıştır; kısa ad (sAMAccountName) olmalıdır

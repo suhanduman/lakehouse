@@ -681,9 +681,6 @@ git commit -m "site: erp kaynagi ve pipeline eklendi"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 
 ArgoCD eşitlediğinde şunlar yaratılır ya da güncellenir: `KafkaUser/connect` ACL'leri
@@ -1012,9 +1009,6 @@ dosyası ve parola. Ajan sunucusu `$APPS_DOMAIN` altındaki **dört** adı çöz
 bootstrap ve her broker için birer Route (`oc -n "$LAKEHOUSE_NS" get route | grep dual-role`).
 
 **Ters giderse:** bootstrap satırı boş dönerse dış dinleyici açılmamıştır (Adım 10.1).
-ArgoCD'siz vanilla kümelerde dinleyici tipi `nodeport`'tur; adres
-`oc -n "$LAKEHOUSE_NS" get svc lakehouse-kafka-external-bootstrap` çıktısındaki düğüm
-portundan kurulur.
 
 ### 10.3 Ajanı kurun
 

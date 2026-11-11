@@ -11,8 +11,7 @@ alanlarında okuma. Kümede elle sürüm değiştirme yetkisi **gerekmez** ve is
 **Nerede çalıştırılır:** `[bastion]` — `git`, `oc` ve `helm` kurulu yönetim makinesi.
 
 > **Kümede `helm upgrade` yoktur.** Yükseltme = **dosyada sürümü değiştir → commit → CI
-> yeşil → eşitleme**. Tek istisna ArgoCD'siz kurulmuş geliştirme kümeleridir; orada da aynı
-> sıra geçerlidir ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.3).
+> yeşil → eşitleme** ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
 > JupyterHub sürümü ya da not defteri imajı yükseltildiyse eşitlemeden sonra hub bir kez
 > yeniden başlatılır (aynı sayfa §5.2).
 
@@ -314,7 +313,7 @@ Superset'in Trino bağlantısı ve girişi çalışmaz.
 ### 4.6 Keycloak: realm içe aktarımı var olan realm'i güncellemez
 
 Keycloak'ın sürümünü yükseltmek realm'e dokunmaz. Realm **içeriği** değişecekse
-[30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek" bölümündeki
+[30-kurulum](../30-kurulum.md) §8 bölümündeki
 sil-yeniden-içe-aktar yordamı uygulanır ve **kullanıcıların arayüzde elle yaptığı her şey
 gider**. AD federasyonu varsa kullanıcılar yeniden akar; yine de önce bir kopya alın:
 
@@ -326,7 +325,7 @@ oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- \
 ```
 
 **Ters giderse:** komut oturum hatası verirse önce yönetici oturumu açılmalıdır
-([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek"; oradaki
+([30-kurulum](../30-kurulum.md) §8; oradaki
 `config credentials` komutu da aynı `--config /tmp/kcadm.config` bayrağını kullanır).
 
 ---

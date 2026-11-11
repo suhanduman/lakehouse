@@ -240,8 +240,8 @@ dosyalarındaki kopyalar ve yedek klasörü orijinal ada bağlıdır.
 
 `keycloak-db` geri yüklemesi realm'i, kullanıcıları ve istemcileri **veritabanı
 seviyesinde** geri getirir; realm içe aktarımının yeniden koşmasına gerek yoktur (zaten var
-olan realm'i güncellemez — [30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan
-değiştirmek"). AD federasyonu varsa kullanıcılar zaten AD'den akar; yerel rol ve eşlemeler
+olan realm'i güncellemez — [30-kurulum](../30-kurulum.md) §8). AD federasyonu varsa
+kullanıcılar zaten AD'den akar; yerel rol ve eşlemeler
 veritabanından gelir. Realm'i sıfırdan kurmak **kullanıcıların arayüzde elle yaptığı her şeyi
 siler**.
 
@@ -562,9 +562,6 @@ git commit -m "site: ad alani yedegi acildi (OADP)"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 
 Eşitleme bittikten sonra zamanlı yedek nesnesi **OADP ad alanında** doğar:

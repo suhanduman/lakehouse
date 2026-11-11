@@ -147,9 +147,6 @@ git commit -m "site: shop kaynagina public.customers eklendi"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 Eşitleme sırasında Debezium bağlayıcısı **yeniden başlar** (yapılandırması değişmiştir);
 akış birkaç saniye duraklar ve kaldığı yerden sürer.

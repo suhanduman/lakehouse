@@ -155,7 +155,7 @@ bir değeri görmeniz gerekiyorsa `-o jsonpath='{.data.clientId}' | base64 -d` e
 | Secret | Nasıl döndürülür | Etkisi |
 |---|---|---|
 | `s3-creds`, `backup-s3-creds` | Secret'ı silip yeniden yaratın, sonra `oc -n "$LAKEHOUSE_NS" rollout restart deploy/connect-connect` | Connect ve Spark işleri yeni anahtarı alır |
-| `keycloak-clients` | Secret'ı güncelleyin, ardından realm'i yeniden içe aktarın ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek") | client sırları realm'e placeholder olarak girer; realm içe aktarımı mevcut realm'i **güncellemez** |
+| `keycloak-clients` | Secret'ı güncelleyin, ardından realm'i yeniden içe aktarın ([30-kurulum](../30-kurulum.md) §8) | client sırları realm'e placeholder olarak girer; realm içe aktarımı mevcut realm'i **güncellemez** |
 | `trino-service-accounts` | parolaları yeniden üretip Secret'ı yeniden yaratın; `zeppelin-interpreter`'ı da aynı parolayla yenileyin | Superset ve Zeppelin bağlantıları koparsa parolalar `password.db` ile uyuşmuyordur |
 | `trino-shared-secret`, `superset-secret` | yeniden yaratıp ilgili pod'ları döndürün | açık oturumlar düşer |
 | `jupyterhub-secrets` | yeniden yaratıp hub'ı döndürün | kullanıcı oturumları düşer, not defterlerindeki dosyalar etkilenmez |

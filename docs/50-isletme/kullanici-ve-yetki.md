@@ -237,9 +237,6 @@ git commit -m "site: muhasebe grubuna satir filtresi"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 
 **Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `UYARI` satırı depodaki örnek dosya
@@ -371,7 +368,7 @@ Secret yalnız bir tohumdur ([sorun-giderme.md](sorun-giderme.md) §7).
    göreceği ad odur; adı baştan doğru seçin.
 2. **Keycloak'ta** ayrıca bir şey yapmayın: AD federasyonu grubu kendiliğinden getirir.
    (Realm dosyasına elle grup eklemek gerekiyorsa
-   [30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek" bölümündeki yordam
+   [30-kurulum](../30-kurulum.md) §8 bölümündeki yordam
    uygulanır — içe aktarma var olan realm'i **güncellemez**.)
 3. **Trino** kurallarını §5.2'deki yolla güncelleyin (tam blok).
 4. Grup adı **üç yerde daha** geçer; gerekiyorsa onları da güncelleyin: Superset rol
@@ -386,7 +383,7 @@ değeri ile kuraldaki ad birebir aynı değildir.
 ## 9. Realm ve jeton bakımı
 
 - **Realm içeriği değişecekse** (yeni istemci, eşleyici, hedef kitle ayarı):
-  [30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek". İçe aktarma var olan
+  [30-kurulum](../30-kurulum.md) §8. İçe aktarma var olan
   realm'i **güncellemez**; yordam realm'i silip yeniden kurar ve **kullanıcıların Keycloak
   arayüzünde elle yaptığı her şey gider**. AD federasyonu varsa kullanıcılar yeniden akar.
 

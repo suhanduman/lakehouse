@@ -241,9 +241,6 @@ git commit -m "site: shop kaynagindan public.customers cikarildi"
 git push origin main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
 
 
 **Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde):

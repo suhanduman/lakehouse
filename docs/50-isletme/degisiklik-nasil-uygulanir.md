@@ -1,115 +1,117 @@
 # Değişiklik nasıl uygulanır
 
-**Bu bölümde:** üründe yapılan **her** yapılandırma değişikliğinin izlediği tek yol —
-`platform/values/site/` altındaki dosyayı düzenleme, yerelde denetleme, commit + push,
-ArgoCD'nin kümeye uygulamasını izleme, gerekirse eşitlemeyi zorlama ve `git revert` ile
-geri alma. Kaynak ekleme, tablo ekleme, kullanıcı yetkisi, yedek ayarı: hepsi bu
-döngüden geçer; diğer işletme bölümleri yalnız "hangi satır değişir" sorusunu yanıtlar.
-**Süre:** düzenleme ve push 5–10 dakika; ArgoCD'nin uygulaması 1–5 dakika (`glue`
-uygulamasında Kafka Connect yeniden başlarsa 10 dakikaya kadar).
-**Gereken yetki:** kurumun Git deposunda `main` dalına yazma; `$ARGOCD_NS` ad alanında
-okuma (`oc get application`). Küme üzerinde elle değişiklik yetkisi **gerekmez** ve
-istenmez.
-**Nerede çalıştırılır:** `[bastion]` — `git`, `oc` ve `helm` kurulu, `oc login` ile
-kümeye girilmiş, deponun kopyası (`~/lakehouse`) duran yönetim makinesi.
+Lakehouse'ta yapılan her ayar değişikliği aynı yoldan geçer: Git'teki bir dosya
+değiştirilir, değişiklik Git'e gönderilir ve ArgoCD onu kümeye uygular. Yeni kaynak
+eklemek, tablo eklemek, kullanıcı yetkisi vermek ya da yedek ayarını değiştirmek bu
+yolun örnekleridir. Diğer işletme sayfaları yalnız "hangi satır değişir" sorusunu
+yanıtlar; satırın kümeye nasıl ulaştığı bu sayfadadır.
 
-Döngünün tamamı:
+**Ne kadar sürer:** düzenleme ve gönderme 5–10 dakika. ArgoCD'nin uygulaması 1–5
+dakika; Kafka Connect yeniden başlıyorsa 10 dakikaya kadar.
+
+**Hangi yetkiler gerekir:** kurumun lakehouse Git deposunda `main` dalına yazma ve
+`$ARGOCD_NS` ad alanında okuma. Kümede elle değişiklik yetkisi gerekmez.
+
+**Komutlar nerede çalışır:** `[bastion]` — `git`, `oc` ve `helm` araçlarının kurulu
+olduğu, `oc login` ile kümeye bağlı ve Git deposunun bir kopyasının (`~/lakehouse`)
+bulunduğu yönetim makinesi.
+
+Yolun tamamı:
 
 ```text
-site/*.yaml düzenle -> check-site.sh -> commit + push -> ArgoCD sync -> küme
-                                                      -> git revert -> eski hâl
+dosyayı düzenle -> check-site.sh ile denetle -> commit + push -> ArgoCD kümeye uygular
+                                                             -> git revert ile geri alınır
 ```
 
-> **Kümeye elle dokunulmaz.** `glue` uygulamasının eşitleme kuralı `selfHeal: true`
-> ve `prune: true` ile açıktır (`platform/apps/10-glue.yaml`): `oc edit` ile yapılan bir
-> değişiklik birkaç dakika içinde Git'teki hâle geri alınır, Git'te karşılığı olmayan
-> nesne ise silinir. Kalıcı olan tek şey Git'e yazılandır.
+> **Kümeyi elle değiştirmeyin.** ArgoCD Git'teki hâli kümede sürekli korur. `oc edit`
+> ile yapılan bir değişiklik birkaç dakika içinde Git'teki hâline geri döner; Git'te
+> karşılığı olmayan bir nesne silinir. Kalıcı olan yalnız Git'e yazılandır. Hangi
+> nesnelerin bu korumanın içinde olduğu §7'dedir.
 
 ---
 
 ## 1. Değişkenleri yükleyin
 
-Her yeni terminal oturumunda gereklidir; komutlardaki `$ARGOCD_NS` ve `$LAKEHOUSE_NS`
+Her yeni terminalde bir kez çalıştırın. Komutlardaki `$ARGOCD_NS` ve `$LAKEHOUSE_NS`
 buradan gelir.
 
 `[bastion]`
 
 ```bash
-cd ~/lakehouse                      # depoyu `git clone` ile nereye indirdiyseniz orası
+cd ~/lakehouse
 set -a; . install/lakehouse.env; set +a
 echo "argocd=$ARGOCD_NS lakehouse=$LAKEHOUSE_NS"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 argocd=openshift-gitops lakehouse=lakehouse
 ```
 
-**Ters giderse:** boş satır görüyorsanız dosya yüklenmemiştir; şablonu
-`install/lakehouse.env.example` dosyasındadır ve değerler
-[30-kurulum](../30-kurulum.md) §1'de doldurulmuştur.
+**Ters giderse:** eşittir işaretlerinden sonrası boşsa `install/lakehouse.env` dosyası
+yoktur ya da başka bir klasördesiniz. Dosya kurulumda doldurulur
+([30-kurulum](../30-kurulum.md) §1).
 
 ---
 
 ## 2. Hangi dosya değişir
 
-Müşteriye özel **her** değer yalnız `platform/values/site/` altındaki üç dosyadadır.
-`platform/values/` kökündeki dosyalar ve `glue/values.yaml` ürün varsayılanlarıdır;
-onlara dokunulmaz — bir sonraki ürün sürümünde üzerine yazılırlar.
+Kuruma özel bütün ayarlar `platform/values/site/` klasöründeki üç dosyadadır.
+`platform/values/` klasöründeki diğer dosyalar ve `glue/values.yaml` ürünün
+varsayılanlarıdır: bunlara dokunmayın, ürün yükseltmesinde üzerlerine yazılır.
 
-| Dosya | Ne için | Sık değişen anahtarlar | `install/lakehouse.env` karşılığı |
-|---|---|---|---|
-| `platform/values/site/glue.yaml` | omurga: kaynaklar, Kafka, Polaris, Keycloak, yedek | `sources`, `pipelines`, `nginx.enabled`, `appsDomain`, `s3.endpoint`, `backup.s3.bucket` | `$APPS_DOMAIN`, `$S3_ENDPOINT`, `$S3_BUCKET_BACKUP`, `$LDAP_URL` |
-| `platform/values/site/trino.yaml` | Trino erişim kuralları, grup sağlayıcı | erişim kuralları, `group-provider` bloğu | `$LDAP_URL`, `$LDAP_GROUPS_DN` |
-| `platform/values/site/jupyterhub.yaml` | not defteri ortamı | disk boyutu, kaynak sınırları | `$STORAGE_CLASS` |
+| Dosya | Ne için | Sık değişen ayarlar |
+|---|---|---|
+| `platform/values/site/glue.yaml` | kaynaklar, Kafka, katalog, kimlik, yedek | `sources`, `pipelines`, `nginx.enabled`, `s3.endpoint`, `backup.s3.bucket` |
+| `platform/values/site/trino.yaml` | Trino erişim kuralları | satır ve kolon kuralları |
+| `platform/values/site/jupyterhub.yaml` | not defteri ortamı | disk boyutu, kaynak sınırları |
 
-Anahtarların tamamı ve varsayılanları:
+Bütün ayarların listesi ve varsayılanları:
 [90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md).
 
-**Git'e girmeyen tek şey Secret'lardır.** Parola, anahtar ve sertifika değerleri values
-dosyalarına **yazılmaz**; `oc create secret` ile kümede yaratılır ve values yalnız
-Secret'ın **adını** taşır. Liste:
+**Parolalar Git'e yazılmaz.** Parola, anahtar ve sertifikalar kümede `Secret` olarak
+yaratılır; ayar dosyaları yalnız Secret'ın **adını** taşır. Bütün Secret'ların listesi:
 [90-referans/secret-listesi.md](../90-referans/secret-listesi.md).
 
 ---
 
-## 3. Değişikliği yapın ve yerelde denetleyin
+## 3. Değişikliği yapın ve denetleyin
 
-### 3.1 Dosyayı düzenleyin ve site değerlerini denetleyin
+### 3.1 Dosyayı düzenleyin
 
-Önce deponun güncel olduğundan emin olun, sonra dosyayı düzenleyin.
+Önce deponun en güncel hâlini alın, sonra dosyayı açın:
 
 `[bastion]`
 
 ```bash
 git pull --rebase origin main
-${EDITOR:-vi} platform/values/site/glue.yaml
+vi platform/values/site/glue.yaml
+```
+
+Dosyayı kaydedip kapattıktan sonra denetleme betiğini çalıştırın:
+
+```bash
 bash scripts/check-site.sh
 ```
 
-`scripts/check-site.sh` üç site dosyasını birbiriyle çapraz doğrular (ör. AD kök CA
-Secret'ı ile Trino'nun truststore yolu birlikte açılıp kapanmış mı) ve örnek değer kalıp
-kalmadığına bakar. **Kapsamı yalnız `platform/values/site/` altındaki dosyalardır:**
-başka bir dosyada yaptığınız bir değişikliğe hiç bakmadan da `check-site: OK` basar —
-helm modunda bu çıktı değişikliğinizin kanıtı **değildir** (§5.2).
+Betik üç site dosyasını birlikte denetler: eksik ya da birbiriyle çelişen bir ayar ve
+kurulumdan kalmış bir örnek değer arar.
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `UYARI` satırı depodaki örnek
-`setup.yaml` içindir, kendi kurulumunuzda çıkmayabilir):
+**Beklenen çıktı:**
 
 ```text
-UYARI: platform/polaris/setup.yaml: endpoint 'https://s3.example.com' değil — Polaris sunucusu için ayrıca düzenlenir (docs/30-kurulum.md)
 check-site: OK
 ```
 
-**Ters giderse:** `check-site: OK` yerine `HATA` satırı basılırsa değişiklik **itilmez**;
-hata satırı hangi dosyadaki hangi anahtarın tutarsız olduğunu söyler.
+**Ters giderse:** `HATA` ile başlayan bir satır görürseniz değişikliği göndermeyin.
+Satır, hangi dosyadaki hangi ayarın sorunlu olduğunu söyler; düzeltip betiği tekrar
+çalıştırın. `UYARI` satırları göndermeyi engellemez, yalnız dikkat çeker.
 
-### 3.2 Chart'ı render edip nesne listesine bakın
+### 3.2 Kümeye ne gideceğine bakın (isteğe bağlı)
 
-Değişiklik `glue` chart'ının ürettiği nesneleri etkiliyorsa (kaynak ekleme, nginx akışı,
-hostname) kümeye gitmeden **render edip** bakabilirsiniz. Bu adım isteğe bağlıdır ama
-nesne sayısını değiştiren değişikliklerde (kaynak ekleme/çıkarma) atlanmamalıdır.
+Kaynak eklemek ya da çıkarmak gibi kümede nesne sayısını değiştiren bir değişiklikte,
+göndermeden önce ürünün kümede neler yaratacağını görebilirsiniz:
 
 `[bastion]`
 
@@ -119,77 +121,73 @@ helm template glue ./glue -n "$LAKEHOUSE_NS" \
   | grep -E '^kind: ' | sort | uniq -c | sort -rn
 ```
 
-**Beklenen çıktı** (depodaki ürün değerleriyle alınmış gerçek çıktı; kendi site
-dosyanızda `sources`/`pipelines` ve `nginx` açıksa ConfigMap ve `KafkaConnector`
-satırları artar):
+**Beklenen çıktı** (örnek: hiç kaynak tanımlanmamış bir kurulum; kaynak ekledikçe
+`ConfigMap`, `KafkaConnector` ve `KafkaUser` satırları artar):
 
 ```text
-   7 kind: ConfigMap
+   9 kind: ConfigMap
    6 kind: Route
    3 kind: ScheduledBackup
    3 kind: NetworkPolicy
    3 kind: Cluster
+   2 kind: Service
+   2 kind: RoleBinding
+   2 kind: Role
+   2 kind: PersistentVolumeClaim
+   2 kind: KafkaUser
+   2 kind: Deployment
    1 kind: Superset
-   1 kind: Service
-   1 kind: RoleBinding
-   1 kind: Role
    1 kind: PrometheusRule
    1 kind: PodMonitor
-   1 kind: PersistentVolumeClaim
    1 kind: ObjectStore
    1 kind: KeycloakRealmImport
    1 kind: Keycloak
-   1 kind: KafkaUser
    1 kind: KafkaNodePool
    1 kind: KafkaConnect
    1 kind: Kafka
    1 kind: Job
    1 kind: Issuer
-   1 kind: Deployment
    1 kind: Certificate
 ```
 
-**Ters giderse:** `helm template` `Error: ... required` ile duruyorsa zorunlu bir alan boş
-bırakılmıştır (ör. bir kaynağın `signalTable` alanı); hata satırı eksik anahtarın adını
-verir.
+**Ters giderse:** komut `Error: ... required` ile durursa zorunlu bir ayar eksiktir (ör.
+bir kaynağın `signalTable` alanı); hata satırı eksik ayarın adını verir.
 
 ---
 
-## 4. Commit edin ve itin
+## 4. Değişikliği Git'e gönderin
 
-Değişiklik kümeye **yalnız** buradan geçer.
+Değişiklik kümeye yalnız bu yoldan ulaşır.
 
 `[bastion]`
 
 ```bash
+git diff
 git add platform/values/site/glue.yaml
-git commit -m "site: erp kaynagi eklendi"
+git commit -m "site: erp kaynağı eklendi"
 git push origin main
 ```
 
-**Beklenen çıktı** (örnek — kurumun Git sunucusunun adresi ve nesne sayıları farklıdır):
+`git diff` çıktısında yalnız sizin değiştirdiğiniz satırlar görünmelidir. Commit
+mesajına ne değiştiğini kısaca yazın; geri almak gerektiğinde bu mesajla bulunur.
+
+**Beklenen çıktı** (son satırlar; Git sunucusunun adresi ve kimlikler sizde farklıdır):
 
 ```text
 To ssh://git.kurum.example.net/lakehouse.git
    4ff2cc4..9a13b7c  main -> main
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** push yeterli değildir; değişikliği
-[30-kurulum.md kind kutusundaki](../30-kurulum.md#kind-gun2) `helm upgrade` ile elle
-uygulamanız gerekir (§5.2).
-
-**Ters giderse:** `rejected ... non-fast-forward` alırsanız depoda sizden sonra başka bir
-commit vardır; `git pull --rebase origin main` çalıştırıp Adım 3'ü tekrarlayın. Çakışma
-çıkarsa **elle çözmeden önce** değişikliği yapan kişiyle konuşun: aynı `sources`
-listesine iki kişi aynı anda yazmış olabilir.
+**Ters giderse:** `rejected ... non-fast-forward` görürseniz sizden sonra başka biri de
+değişiklik göndermiştir. `git pull --rebase origin main` çalıştırın ve `git push`'u
+tekrarlayın. Çakışma çıkarsa elle çözmeden önce diğer değişikliği yapan kişiyle konuşun.
 
 ---
 
 ## 5. ArgoCD'nin uygulamasını izleyin
 
-ArgoCD depoyu **en geç üç dakikada bir** yoklar; değişikliği gördüğünde uygulamayı
-kendiliğinden eşitler (`platform/apps/10-glue.yaml` içinde `automated` kuralı `prune` ve
-`selfHeal` ile açıktır).
+ArgoCD Git deposuna en geç üç dakikada bir bakar ve değişikliği gördüğünde kendiliğinden
+uygular. Durumu görmek için:
 
 `[bastion]`
 
@@ -198,40 +196,24 @@ oc -n "$ARGOCD_NS" get application glue \
   -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde iki sözcük de bu
-hâlini alır):
+**Beklenen çıktı** (uygulama bittiğinde):
 
 ```text
 Synced Healthy
 ```
 
-Eşitleme sırasında sırayla `OutOfSync Progressing` → `Synced Progressing` →
-`Synced Healthy` görülür. Kafka Connect'in yeniden başlamasını gerektiren değişikliklerde
-(kaynak ekleme ya da çıkarma) `Progressing` aşaması birkaç dakika sürer.
+Uygulama sürerken sırayla `OutOfSync Progressing`, `Synced Progressing` ve sonunda
+`Synced Healthy` görülür. Kafka Connect'in yeniden başlaması gereken değişikliklerde
+(kaynak eklemek ya da çıkarmak) `Progressing` birkaç dakika sürer.
 
-Hangi işlemin uygulandığını görmek için:
+**Ters giderse:** beş dakika sonra hâlâ `OutOfSync` görünüyorsa değişiklik ArgoCD'ye
+ulaşmamıştır. `git log origin/main -1` ile commit'inizin depoda olduğunu kontrol edin;
+sonra §5.1 ile ArgoCD'den depoyu hemen okumasını isteyin.
 
-`[bastion]`
+### 5.1 Beklemeden uygulatmak
 
-```bash
-oc -n "$ARGOCD_NS" get application glue -o jsonpath='{.status.operationState.message}{"\n"}'
-```
-
-**Beklenen çıktı** (örnek — ArgoCD'nin başarılı eşitleme için bastığı sabit ifadedir):
-
-```text
-successfully synced (all tasks run)
-```
-
-**Ters giderse:** beş dakikadan uzun süre `Synced` görünmüyorsa değişiklik ArgoCD'ye
-ulaşmamıştır — Adım 4'teki push'un gerçekten kurumun deposuna gittiğini
-(`git remote -v`) ve `platform/apps/10-glue.yaml` içindeki `targetRevision` dalının
-ittiğiniz dal olduğunu doğrulayın.
-
-### 5.1 Eşitlemeyi beklemeden zorlamak
-
-Depoyu hemen okutmak için uygulamaya **hard refresh** açıklaması yazılır. Bu, önbelleği
-atlatır; küme üzerinde bir şeyi silmez.
+ArgoCD'nin depoyu hemen okumasını isteyebilirsiniz. Bu komut kümede bir şeyi
+değiştirmez, yalnız bekleme süresini kısaltır:
 
 `[bastion]`
 
@@ -239,23 +221,26 @@ atlatır; küme üzerinde bir şeyi silmez.
 oc -n "$ARGOCD_NS" annotate application glue argocd.argoproj.io/refresh=hard --overwrite
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı:**
 
 ```text
 application.argoproj.io/glue annotated
 ```
 
-**Ters giderse:** açıklama yazıldığı hâlde eşitleme başlamıyorsa ArgoCD depoya
-erişemiyordur; `lakehouse-repo` Secret'ındaki anahtar ya da adres bozulmuş olabilir
-([30-kurulum](../30-kurulum.md) §3).
+`custom/` klasöründeki kendi işleriniz `custom` adlı ayrı bir uygulamadadır; o klasörü
+değiştirdiyseniz komutta `glue` yerine `custom` yazın.
 
-### 5.2 JupyterHub ayarı değiştiyse hub'ı yeniden başlatın
+**Ters giderse:** komuttan sonra da uygulama başlamıyorsa ArgoCD Git deposuna
+erişemiyordur. Depo adresi ve erişim anahtarı `$ARGOCD_NS` ad alanındaki
+`lakehouse-repo` Secret'ındadır ([30-kurulum](../30-kurulum.md) §3).
 
-JupyterHub'ın ayarları (`platform/values/site/jupyterhub.yaml`: disk boyutu, kaynak
-sınırları, not defteri imajı; ürün yükseltmesinde `platform/values/jupyterhub.yaml`)
-eşitlemeyle kümeye yazılır, ama hub **kendiliğinden yeniden başlamaz** — böylece başka bir
-değişiklik (kaynak ya da pipeline eklemek) açık not defteri oturumlarını kesmez. Bu iki
-dosyadan birini değiştirdiyseniz eşitleme bittikten sonra hub'ı bir kez yeniden başlatın:
+### 5.2 JupyterHub ayarını değiştirdiyseniz hub'ı yeniden başlatın
+
+JupyterHub ayarları (`platform/values/site/jupyterhub.yaml`: disk boyutu, kaynak
+sınırları, not defteri imajı) kümeye yazılır ama hub kendiliğinden yeniden başlamaz.
+Böylece ilgisiz bir değişiklik (ör. kaynak eklemek) kullanıcıların açık oturumlarını
+kesmez. JupyterHub ayarını değiştirdiyseniz, ArgoCD uygulamayı bitirdikten sonra hub'ı
+bir kez yeniden başlatın:
 
 `[bastion]`
 
@@ -264,7 +249,7 @@ oc -n "$LAKEHOUSE_NS" rollout restart deploy/hub
 oc -n "$LAKEHOUSE_NS" rollout status deploy/hub --timeout=300s
 ```
 
-**Beklenen çıktı:**
+**Beklenen çıktı** (aradaki `Waiting for deployment …` satırlarının sayısı değişebilir):
 
 ```text
 deployment.apps/hub restarted
@@ -272,58 +257,17 @@ Waiting for deployment "hub" rollout to finish: 0 of 1 updated replicas are avai
 deployment "hub" successfully rolled out
 ```
 
-Arada birkaç `Waiting for deployment …` satırı görünmesi normaldir.
-
-Hub yeniden başlarken (yaklaşık yarım dakika) yeni giriş yapılamaz; açık not defterleri
-çalışmaya devam eder. Yeni ayar, kullanıcının **bir sonraki** not defteri sunucusunda
-geçerli olur (Jupyter'de *File → Hub Control Panel → Stop My Server*, sonra *Start*).
-
-### 5.3 ArgoCD'siz (helm modu) kurulumlar
-
-Geliştirme ve deneme kümeleri ArgoCD'siz "helm modunda" kurulmuş olabilir. **Bu modun
-tam tarifi tek bir yerdedir:** [30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2).
-Orada Adım 4 ve Adım 5 geçerli değildir; özetle:
-
-- **Site dosyası okunmaz.** Helm modunda release yalnız `platform/values/glue-dev.yaml`
-  ile yüklenir; bu sayfanın Adım 2/3'ünde `platform/values/site/glue.yaml` dosyasına
-  yazdığınız anahtar kind'da **hiçbir etki yapmaz ve hata da vermez**. Aynı anahtarlar
-  yerel bir ek değer dosyasına yazılıp ikinci `-f` olarak verilir.
-- **`scripts/check-site.sh` sizin değişikliğinizi denetlemez** (yalnız site dosyalarına
-  bakar) — Adım 3.1'deki `check-site: OK` çıktısı bu modda **kanıt değildir**; yerine
-  Adım 3.2'deki `helm template` denetimi kullanılır.
-- **ArgoCD karşılığı yoktur:** kendiliğinden eşitleme, `prune`, `selfHeal` ve Application
-  durumu komutları çalışmaz; geri alma `helm rollback` ile yapılır.
-
-`[bastion]`
-
-```bash
-helm upgrade glue ./glue -n "$LAKEHOUSE_NS" -f platform/values/glue-dev.yaml
-```
-
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `REVISION` her koşuda bir artar).
-Çıktının başında dört adet `Warning: Please migrate to v2beta1` satırı görürseniz
-**normaldir**: Helm 4, eski API sürümü kullanan alt chart'lar için bu uyarıyı yazar:
-
-```text
-Release "glue" has been upgraded. Happy Helming!
-NAME: glue
-LAST DEPLOYED: Thu Sep 24 12:16:48 2026
-NAMESPACE: lakehouse
-STATUS: deployed
-REVISION: 11
-DESCRIPTION: Upgrade complete
-```
-
-**Ters giderse:** `Error: UPGRADE FAILED: ... has no deployed releases` görürseniz release
-adı yanlıştır; `helm -n "$LAKEHOUSE_NS" list` ile doğru adı alın.
+Hub yeniden başlarken (yarım dakika kadar) yeni giriş yapılamaz; açık not defterleri
+çalışmaya devam eder. Yeni ayar, kullanıcının bir sonraki not defteri sunucusunda geçerli
+olur: Jupyter'de **File → Hub Control Panel → Stop My Server**, sonra **Start My
+Server**.
 
 ---
 
 ## 6. Değişikliği geri alın
 
-Kümeye uygulanmış bir değişiklik **kümede geri alınmaz**; Git'te geri alınır. `git revert`
-ters içerikli yeni bir commit yazar, böylece tarihçe korunur ve ArgoCD eski hâli aynı
-döngüyle uygular.
+Bir değişiklik kümede değil, Git'te geri alınır. `git revert`, değişikliğin tersini
+yapan yeni bir commit yazar; ArgoCD de eski hâli aynı yoldan uygular.
 
 `[bastion]`
 
@@ -333,77 +277,121 @@ git revert --no-edit HEAD
 git push origin main
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (ilk satırlar; commit kimliği sizde farklıdır):
 
 ```text
-[main 3c9f0a2] Revert "site: erp kaynagi eklendi"
+[main 3c9f0a2] Revert "site: erp kaynağı eklendi"
  1 file changed, 6 deletions(-)
 ```
 
-Birkaç commit öncesine dönmek için `HEAD` yerine commit kimliği yazılır
-(`git log --oneline -- platform/values/site/` ile bulunur). `git reset` ve zorlamalı push
-**kullanılmaz**: ArgoCD'nin gördüğü dal geriye alınırsa eşitleme geçmişi ile küme hâli
-arasındaki bağ kopar.
+`HEAD` en son commit'tir. Daha eski bir değişikliği geri almak için `HEAD` yerine o
+commit'in kimliğini yazın; kimliği şu komutla bulursunuz:
 
-**Ters giderse:** `error: could not revert ... your local changes would be overwritten`
-→ çalışma kopyanızda kaydedilmemiş düzenleme vardır; `git status` ile bakıp saklayın
-(`git stash`) ya da geri alın.
+```bash
+git log --oneline -- platform/values/site/
+```
 
-> **Geri alınamayan iki şey.** (1) Kaynak veritabanından silinen bir tablo ya da katalogdan
-> silinen bir Iceberg tablosu `git revert` ile geri gelmez; veri yedeklerden döner.
-> (2) Bir kaynak `sources` listesinden çıkarılıp geri eklenirse Debezium sıfırdan snapshot
-> alır. İkisi de işletme bölümündeki kaynak ve tablo silme sayfasında ayrıca anlatılır.
+`git reset` ve `git push --force` kullanmayın: ArgoCD'nin izlediği dalın geçmişi bozulur.
+
+**Ters giderse:** `your local changes would be overwritten` görürseniz kopyanızda
+kaydedilmemiş bir düzenleme vardır. `git status` ile bakın; değişikliği bırakmak
+istemiyorsanız `git stash` ile kenara alın.
+
+> **Git ile geri gelmeyen iki şey var.** Silinmiş bir Iceberg tablosu `git revert` ile
+> geri gelmez; veri yedekten döner ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md)).
+> Listeden çıkarılıp geri eklenen bir kaynak ise verisini baştan okur
+> ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §3).
 
 ---
 
-## 7. Eşitleme takılırsa
+## 7. ArgoCD neyi korur
 
-| Belirti | Olası neden | İlk bakılacak |
+Kümedeki nesnelerin hepsi Git'ten gelmez. Bir nesneyi silmeden ya da değiştirmeden önce
+nereden geldiğini bilmek, sonucunu önceden bilmek demektir.
+
+| Nesne nereden gelir | Örnek | Silinir ya da elle değiştirilirse |
 |---|---|---|
-| `OutOfSync` kalıyor, işlem mesajı boş | ArgoCD depoyu okuyamıyor | `lakehouse-repo` Secret'ı, `git remote -v` |
-| `OutOfSync Progressing` dakikalarca sürüyor | bir pod yeniden başlayamıyor | `oc -n "$LAKEHOUSE_NS" get pods` |
-| `Synced Degraded` | nesne uygulandı ama sağlıksız (ör. `KafkaConnector` FAILED) | `oc -n "$LAKEHOUSE_NS" get kafkaconnector` |
-| `ComparisonError` ya da `rpc error` | chart render hatası (eksik zorunlu alan) | Adım 3.2'deki `helm template` |
-| Değişiklik uygulandı ama kümede geri alındı | aynı nesne `oc edit` ile elle değiştirilmiş; `selfHeal` geri aldı | Git'teki hâli otoriterdir |
+| **Git** — ArgoCD kurar | `KafkaConnect`, `KafkaConnector`, Deployment'lar, zamanlı Spark işleri | birkaç dakika içinde Git'teki hâline döner |
+| **Türev** — bir operatör, Git'teki bir nesneden üretir | Kafka ve Connect pod'ları, Kafka kullanıcı parolaları, veritabanı pod'ları, sertifika Secret'ları | operatör yeniden üretir |
+| **Platform** — OpenShift üretir | servis hesaplarının imaj çekme Secret'ları | OpenShift yeniden üretir |
+| **Elle** — bir belgedeki adımla yaratılır | parolaları taşıyan Secret'lar (`s3-creds`, `polaris-root`, kaynakların `erp-db` gibi Secret'ları …) | **kimse geri getirmez**; yaratıldığı adım tekrarlanır |
 
-Belirtilerin tam tablosu ve komut komut çözümü:
-[sorun-giderme.md](sorun-giderme.md) §3.
+Elle yaratılan nesneler, yaratıldıkları belgenin adını ve adımını taşıyan bir etiketle
+işaretlenir. Etiketin adı `lakehouse.io/yonetim`, değeri `manual-` ile başlar, ardından
+belgenin adı ve adım numarası gelir. Örneğin `manual-yeni-kaynak-ve-pipeline-4`, nesnenin
+`yeni-kaynak-ve-pipeline.md` belgesinin 4. adımında yaratıldığını söyler.
+
+Bir nesnenin nereden geldiğini şu betikle görürsünüz; betiğe bir ya da birden fazla
+nesne adı verilir:
+
+`[bastion]`
+
+```bash
+scripts/nesne-kaynagi.sh secret/universite-db kafkaconnect/connect secret/connect pod/connect-connect-0
+```
+
+**Beklenen çıktı** (OpenShift provasından; `universite-db` orada bir kaynağın Secret'ıdır):
+
+```text
+secret/universite-db                         ELLE       docs/50-isletme/yeni-kaynak-ve-pipeline.md §4 — Kaynağın Secret'ını yaratın
+kafkaconnect/connect                         GIT        ArgoCD uygulaması: glue
+secret/connect                               TÜREV      KafkaUser/connect -> ArgoCD uygulaması: glue
+pod/connect-connect-0                        TÜREV      StrimziPodSet/connect-connect -> KafkaConnect/connect -> ArgoCD uygulaması: glue
+```
+
+Bir türün ad alanındaki bütün nesnelerini tek seferde görmek için:
+
+```bash
+scripts/nesne-kaynagi.sh --liste secret
+```
+
+İkinci sütun `ELLE` olan bir nesneyi sildiyseniz, üçüncü sütundaki belge adımını
+tekrarlayarak yeniden yaratın. `ETİKETSİZ` görünen nesneler belgelerin dışında elle
+yaratılmıştır; kimin ve neden yarattığını ekibinizle doğrulayın.
+
+---
+
+## 8. Uygulama takılırsa
+
+| Ne görüyorsunuz | Olası neden | Nereye bakın |
+|---|---|---|
+| `OutOfSync` kalıyor | ArgoCD Git deposunu okuyamıyor | `lakehouse-repo` Secret'ı (§5.1 Ters giderse) |
+| `OutOfSync Progressing` dakikalarca sürüyor | bir pod açılamıyor | `oc -n "$LAKEHOUSE_NS" get pods` |
+| `Synced Degraded` | nesne kuruldu ama sağlıksız (ör. bağlayıcı hata verdi) | `oc -n "$LAKEHOUSE_NS" get kafkaconnector` |
+| `ComparisonError` ya da `rpc error` | ayar dosyasında eksik ya da hatalı bir ayar | §3.2'deki `helm template` komutu |
+| Değişiklik uygulandı, sonra kendiliğinden geri döndü | nesne `oc edit` ile elle değiştirilmiş; ArgoCD Git'teki hâli geri yazdı | değişikliği Git'te yapın (§3) |
+
+Bütün belirtiler ve çözümleri: [sorun-giderme.md](sorun-giderme.md) §3.
 
 ---
 
 ## Kontrol listesi
 
 - [ ] Değişiklik yalnız `platform/values/site/` altındaki bir dosyada yapıldı.
-- [ ] `scripts/check-site.sh` `check-site: OK` bastı.
-- [ ] Commit kurumun deposundaki `main` dalına itildi.
-- [ ] `oc -n "$ARGOCD_NS" get application glue` çıktısı `Synced Healthy`.
-- [ ] Değişikliğin kümedeki karşılığı (yeni nesne, yeni tablo, yeni ayar) gözle görüldü.
-- [ ] Gerekirse geri almanın `git revert` olduğu, `oc edit` olmadığı ekipçe biliniyor.
+- [ ] `scripts/check-site.sh` `check-site: OK` yazdı.
+- [ ] Commit kurumun deposundaki `main` dalına gönderildi.
+- [ ] `oc -n "$ARGOCD_NS" get application glue` `Synced Healthy` gösteriyor.
+- [ ] Değişikliğin kümedeki sonucu (yeni nesne, yeni tablo, yeni ayar) görüldü.
+- [ ] Ekipteki herkes geri almanın `git revert` ile yapıldığını, `oc edit` ile
+      yapılmadığını biliyor.
 
 ## Sonraki bölüm
 
-Bu döngüyü kullanan ilk iki işletme görevi:
-[yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) — yeni bir kaynak veritabanının
-(PostgreSQL, SQL Server, MongoDB) ve nginx erişim günlüğü akışının eklenmesi;
-[mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan bir kaynağa
-tablo ekleme ve artımlı snapshot.
+İşletme sayfalarını baştan sona okumak isteyenler için sıra:
 
-**İşletme bölümünün okuma sırası.** Bu sayfa (1) bölümün girişidir; baştan sona okumak
-isteyen şu sırayı izler. Sayfalar birbirine konu bazında da bağlanır, bu liste yalnız
-tam turun sırasıdır:
+1. [degisiklik-nasil-uygulanir.md](degisiklik-nasil-uygulanir.md) — değişikliğin yolu (bu sayfa)
+2. [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) — yeni kaynak, nginx günlükleri
+3. [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan kaynağa tablo eklemek
+4. [kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) — kaynak ya da tablo kaldırmak
+5. [json-akisi-ekleme.md](json-akisi-ekleme.md) — uygulama ve IoT olay akışları
+6. [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) — kendi Spark işiniz (`custom/`)
+7. [kullanici-ve-yetki.md](kullanici-ve-yetki.md) — AD grupları ve erişim kuralları
+8. [veri-metrikleri.md](veri-metrikleri.md) — tablo ölçümleri ve "Tablo sağlığı" panosu
+9. [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — izleme ve alarmlar
+10. [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) — günlük ve haftalık kontroller
+11. [sorun-giderme.md](sorun-giderme.md) — belirti, neden, çözüm
+12. [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedekler ve geri dönüş
+13. [yukseltme.md](yukseltme.md) — sürüm yükseltme
 
-1. [degisiklik-nasil-uygulanir.md](degisiklik-nasil-uygulanir.md) — ortak döngü (bu sayfa)
-2. [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) — yeni kaynak, nginx akışı
-3. [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan kaynağa tablo
-4. [kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) — kaynak/tablo kaldırma
-5. [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) — kendi Spark işiniz, `custom/`
-6. [kullanici-ve-yetki.md](kullanici-ve-yetki.md) — AD grupları, Trino kuralları, Polaris
-7. [veri-metrikleri.md](veri-metrikleri.md) — tablo düzeyi ölçümler ve pano
-8. [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — izleme kapsamı ve altı alarm
-9. [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) — sabit günlük/haftalık tur
-10. [sorun-giderme.md](sorun-giderme.md) — belirti → neden → çare
-11. [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedek yolları ve geri dönüş provaları
-12. [yukseltme.md](yukseltme.md) — sürüm yükseltme
-
-Başvuru sayfaları ([90-referans/](../90-referans/oc-hizli-basvuru.md)) sıraya girmez;
-ihtiyaç duyulduğunda açılır.
+Başvuru sayfaları ([90-referans/](../90-referans/oc-hizli-basvuru.md)) bu sıraya
+girmez; ihtiyaç duyulduğunda açılır.
