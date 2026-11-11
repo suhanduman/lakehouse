@@ -12,7 +12,10 @@ spec:
   source: {repoURL: https://github.com/suhanduman/lakehouse.git, targetRevision: main, path: custom}
   destination: {server: https://kubernetes.default.svc, namespace: lakehouse}
   syncPolicy:
-    automated: {prune: true, selfHeal: true}
+    # allowEmpty: klasör ürünle BOŞ gelir; kurum son kaynağını da kaldırdığında ArgoCD'nin güvenlik kuralı
+    # ("auto-sync will wipe out all resources") silmeyi reddeder ve kaynaklar kümede kalırdı (ocpphy provası:
+    # kabul demosunun gold-kabul işi kaldırılamadı). Bu uygulamada "hiç kaynak yok" geçerli bir hâldir.
+    automated: {prune: true, selfHeal: true, allowEmpty: true}
     # CreateNamespace: custom, glue'dan bağımsız senkronize olur; ad alanı henüz yoksa ilk sync başarısız olmasın
     syncOptions: [CreateNamespace=true, ServerSideApply=true]
     retry: {limit: 5, backoff: {duration: 20s, factor: 2, maxDuration: 3m}}
