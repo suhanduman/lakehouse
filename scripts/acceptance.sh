@@ -123,6 +123,7 @@ echo "== polaris-setup (idempotent)"
 CRED=$(kubectl -n "$NS" get secret polaris-connect -o jsonpath='{.data.credential}' | base64 -d)
 kubectl -n "$NS" create secret generic polaris-smoke-cred --from-literal=CLIENT_ID="${CRED%%:*}" \
   --from-literal=CLIENT_SECRET="${CRED#*:}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" label secret polaris-smoke-cred lakehouse.io/yonetim=manual-kabul-testleri-3 --overwrite >/dev/null
 unset CRED
 
 for p in $RUN; do

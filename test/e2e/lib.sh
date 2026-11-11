@@ -25,6 +25,8 @@ acc_env() {  # kimlik değerlerini küme içi kontrol Job'larının okuyacağı 
     --from-literal=ACC_ANALYST_USER="$ACC_ANALYST_USER" --from-literal=ACC_ANALYST_PASS="$ACC_ANALYST_PASS" \
     --from-literal=ACC_USER_USER="$ACC_USER_USER" --from-literal=ACC_USER_PASS="$ACC_USER_PASS" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # elle (betikle) yaratılan nesne: nereden geldiği scripts/nesne-kaynagi.sh'ta görünsün
+  kubectl -n "$NS" label secret e2e-acceptance lakehouse.io/yonetim=manual-kabul-testleri-3 --overwrite >/dev/null
 }
 
 sink_wait() {  # Iceberg sink'in Bronze'a yazması için bekleme (sn): commit aralığından türer, sabit değil.
