@@ -1,7 +1,7 @@
 """iceberg_maintenance — spec §6 bakım (D(f) deklaratif): 3 ScheduledSparkApplication aynı dosyayı farklı --mode ile koşturur.
   --mode position-deletes   Silver: rewrite_position_delete_files (MoR delete dosyalarını katla)         saatlik
   --mode compact            Silver+Bronze: rewrite_data_files(delete-file-threshold=5, remove-dangling-deletes, partial-progress)  6 saat
-  --mode expire-orphan-ttl  Silver+Bronze: expire_snapshots(--snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük; maintain_namespaces: bakım var, TTL yok — saklama kararı F5
+  --mode expire-orphan-ttl  Silver+Bronze+katalogdaki diğer tablolar: expire_snapshots(Silver/diğer --snapshot-days, Bronze --bronze-snapshot-days) + remove_orphan_files(--orphan-days); Bronze: DELETE _cdc.ts (düz tablolarda ts) < now-ttl  günlük; maintain_namespaces: bakım var, TTL yok — saklama kararı F5
 Silver tabloları pipelines.json'dan (bronze'dan türetilir). Bronze tabloları KATALOGDAN: pipelines.json'daki
 bronze_namespaces için SHOW TABLES (+ pipelines'ın bronze adları) — Silver pipeline'ı olmayan (append-only) Bronze
 tablolar da bakım görsün. Var olmayan namespace/tablo atlanır (henüz veri gelmemiş olabilir).
@@ -35,6 +35,18 @@ def bronze_tables(spark, namespaces: list[str], from_pipelines: list[str]) -> li
             print(f"[{ns}] namespace yok/okunamadı — atlandı ({type(e).__name__}: {str(e)[:120]})")
             continue
         out |= {f"{ns}.{r['tableName']}" for r in rows}
+    return sorted(out)
+
+
+def all_tables(spark) -> list[str]:
+    """Katalogdaki bütün tablolar (ns.tablo). Okunamayan ad alanı atlanır."""
+    out = []
+    for ns_row in spark.sql(f"SHOW NAMESPACES IN {CATALOG}").collect():
+        ns = ns_row[0]
+        try:
+            out += [f"{ns}.{r['tableName']}" for r in spark.sql(f"SHOW TABLES IN {CATALOG}.{ns}").collect()]
+        except AnalysisException as e:
+            print(f"[{ns}] okunamadı — atlandı ({type(e).__name__})")
     return sorted(out)
 
 
@@ -86,6 +98,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", required=True, choices=["position-deletes", "compact", "expire-orphan-ttl"])
     ap.add_argument("--snapshot-days", type=int, default=7)
+    # Bronze (ve nginx/akış ham tabloları) zaten değişiklik günlüğüdür: zaman yolculuğu için snapshot tutmaya gerek yok.
+    # En sık yazılan tablolar oldukları için (sink 5 dakikada bir) kısa tutmak metadata'yı ve fazladan depolamayı küçültür.
+    # silver-merge'in son işlediği snapshot silinirse artımlı okuma zaman damgasıyla sınırlı okumaya düşer (merge_cdc).
+    ap.add_argument("--bronze-snapshot-days", type=int, default=1)
     ap.add_argument("--orphan-days", type=int, default=3)
     ap.add_argument("--bronze-ttl-days", type=int, default=30)
     a = ap.parse_args()
@@ -98,8 +114,15 @@ def main() -> None:
     # pipeline/mongo dışı bakım kapsamı (nginx_raw, JSON akışları): bakım var; saklama yalnız retentionDays ile
     extra = bronze_tables(spark, list(doc.get("maintain_namespaces") or []), [])
     retention = doc.get("retention") or {}
+    # Ürünün bilmediği tablolar (kurumun Gold'u, sandbox, ops): gece yalnız snapshot süresi ve yetim dosya temizliği.
+    # Satırlarına dokunulmaz (TTL yok, sıkıştırma yok); aksi hâlde snapshot'ları hiç sona ermez.
+    others = []
+    if a.mode == "expire-orphan-ttl":
+        known = set(silver) | set(bronze) | set(extra)
+        others = [t for t in all_tables(spark) if t not in known]
+        print(f"diğer tablolar (yalnız snapshot + yetim dosya): {len(others)}")
     failed = []
-    for t in (silver if a.mode == "position-deletes" else silver + bronze + extra):
+    for t in (silver if a.mode == "position-deletes" else silver + bronze + extra + others):
         try:
             # table_exists try İÇİNDE: tek bir bozuk/erişilemeyen tablo döngünün kalanını kesmesin (sonda fail-loud)
             if not table_exists(spark, f"{CATALOG}.{t}"):
@@ -114,7 +137,8 @@ def main() -> None:
                 # metadata okuma/planlama maliyetini artırır — rewrite_data_files bunu otomatik yapmaz
                 call(spark, "rewrite_manifests", t)
             else:
-                call(spark, "expire_snapshots", t, f", older_than => TIMESTAMP '{ts_days_ago(a.snapshot_days)}', retain_last => 1")
+                gun = a.bronze_snapshot_days if (t in bronze or t in extra) else a.snapshot_days
+                call(spark, "expire_snapshots", t, f", older_than => TIMESTAMP '{ts_days_ago(gun)}', retain_last => 1")
                 # prefix_listing: Hadoop FS yerine FileIO (S3FileIO) ile listeler -> resmi Spark imajında s3a yok (F2 e2e: "No FileSystem for scheme s3")
                 call(spark, "remove_orphan_files", t, f", older_than => TIMESTAMP '{ts_days_ago(a.orphan_days)}', prefix_listing => true")
                 if t in bronze:

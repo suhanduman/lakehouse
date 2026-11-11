@@ -164,7 +164,7 @@ değiştirilecek bir şey yoktur.
 | `delete_dosyasi` | silinen ya da güncellenen satırları işaretleyen dosya sayısı |
 | `boyut_mib` | tablonun dosyalarının toplam boyutu (MiB) |
 | `ort_dosya_mib` | ortalama dosya boyutu (MiB) — küçük dosya göstergesi |
-| `snapshot_sayisi` | tablonun sakladığı sürüm sayısı |
+| `snapshot_sayisi` | tablonun sakladığı sürüm (snapshot) sayısı. Tabloya her yazmada bir sürüm oluşur; gece bakım işi Silver ve Gold'da 7, Bronze'da 1 günden eskileri siler. Veri sürekli geliyorsa sayı gün içinde artar, gece düşer. Günlerce durmadan artıyorsa bakım işi çalışmıyordur (§5, [sorun-giderme.md](sorun-giderme.md) §6.1) |
 
 Ölçümler 90 gün saklanır; daha eskilerini bakım işi siler. Tabloyu doğrudan da
 sorgulayabilirsiniz:
@@ -223,8 +223,10 @@ Panoda dört grafik vardır:
 ### 5.1 Zaman yolculuğu
 
 Iceberg her yazmada tablonun yeni bir sürümünü (snapshot) tutar. Zaman yolculuğu,
-tablonun geçmişteki bir sürümünü sorgulamaktır. Ürünün bakım işi sürümleri **7 gün**
-saklar; daha eski bir ana gidilemez.
+tablonun geçmişteki bir sürümünü sorgulamaktır. Ürünün bakım işi Silver ve Gold
+tablolarının sürümlerini **7 gün** saklar; daha eski bir ana gidilemez. Bronze
+tablolarının sürümleri yalnız 1 gün saklanır: Bronze zaten her değişikliği satır olarak
+tutar (§5.2), sürümlerine gerek yoktur.
 
 Önce tablonun sürümlerini listeleyin:
 

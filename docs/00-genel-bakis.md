@@ -151,8 +151,10 @@ kopyasıdır ve son kullanıcıların sorguladığı tablo budur. Bu birleştirm
 çünkü silme dosyaları birikir. Üç bakım işi bu bedeli geri alır —
 `maint-position-deletes` silme dosyalarını katlar, `maint-compact` küçük dosyaları
 birleştirir ([compaction](#4-kavramlar-sözlüğü)), `maint-expire-orphan-ttl` eski
-[Iceberg snapshot](#4-kavramlar-sözlüğü)'larını (7 günden eski), sahipsiz dosyaları (3
-günden eski) ve Bronze'daki 30 günden eski tarihçeyi siler.
+[Iceberg snapshot](#4-kavramlar-sözlüğü)'larını (Silver, Gold ve katalogdaki diğer
+tablolarda 7, Bronze'da 1 günden eski), sahipsiz dosyaları (3 günden eski) ve Bronze'daki
+30 günden eski tarihçeyi siler. Kurumun kendi tablolarının (Gold, `sandbox`) satırlarına
+dokunmaz.
 
 [Gold](#4-kavramlar-sözlüğü) katmanı ürünle gelmez: kurumun iş kuralları `custom/`
 klasörüne konan zamanlı bir Spark işiyle (ya da dbt ile) yazılır. Nasıl yazılacağı ve
@@ -250,7 +252,7 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Silver** | Bronze'un birincil anahtara göre birleştirilmiş, kaynağın güncel hâline eşit katman. Kullanıcıların sorguladığı katman budur. |
 | **Gold** | İş kuralı uygulanmış, raporlamaya hazır türetilmiş tablolar. Ürünle gelmez; kurum kendi dbt/Spark işleriyle yazar. |
 | **Apache Iceberg** | Tabloların S3 üzerinde dosya olarak durduğu açık tablo formatı. Şema değişikliği, zaman yolculuğu ve `MERGE` gibi işlemleri dosya düzeyinde yönetir. |
-| **Iceberg snapshot** | Tablonun belirli bir andaki tam hâlinin kaydı. Eski snapshot'lar korunduğu sürece o ana geri dönülebilir; `maint-expire-orphan-ttl` 7 günden eskileri siler. |
+| **Iceberg snapshot** | Tablonun belirli bir andaki tam hâlinin kaydı. Eski snapshot'lar korunduğu sürece o ana geri dönülebilir; `maint-expire-orphan-ttl` Silver ve Gold'da 7, Bronze'da 1 günden eskileri siler. |
 | **MoR** (merge-on-read) | Silmeleri/güncellemeleri ayrı "silme dosyası" olarak yazıp okuma anında uygulama. Yazma hızlı, okuma yavaştır; karşıtı copy-on-write'tır (yazma yavaş, okuma hızlı). |
 | **compaction** | Çok sayıda küçük veri dosyasını birkaç büyük dosyada birleştirme bakımı. Sorgu hızını ve S3 istek sayısını doğrudan etkiler. |
 | **Apache Polaris** | Iceberg REST kataloğu: hangi tablonun nerede olduğunu, kimin neye erişebileceğini bilir ve istemcilere geçici S3 kimliği dağıtır. |
