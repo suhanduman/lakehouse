@@ -191,6 +191,6 @@ Panoda dört grafik vardır:
 
 ## Sonraki bölüm
 
-Bileşen sağlığı ve beş alarm: [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Bu ölçümlerin
+Bileşen sağlığı ve altı alarm: [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Bu ölçümlerin
 haftalık kontrol listesindeki yeri:
 [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) §4.

@@ -202,17 +202,18 @@ karşılaştırır ve ikisi aynıysa **HATA** basar.
 
 ```
  Kafka Connect / Kafka / Spark / Polaris --metrik--> UWM Prometheus
-                                     --> PrometheusRule (5 alarm) --> Alertmanager
+                                     --> PrometheusRule (6 alarm) --> Alertmanager
                                      --> OpenShift konsolu (Gözlem > Metrikler)
 ```
 
 İzleme kapsamı bilerek dardır: soru "boru hattı sağlam mı", "Trino ne kadar hızlı" değil.
 OpenShift'in kullanıcı iş yükü izleme yığını (UWM) `lakehouse` ad alanındaki metrik
-tanımlarını kendiliğinden toplar; ayrı bir Prometheus kurulmaz. Beş alarm vardır:
+tanımlarını kendiliğinden toplar; ayrı bir Prometheus kurulmaz. Altı alarm vardır:
 bağlayıcı görevi düştü (`LakehouseConnectTaskFailed`), sink geride kaldı
 (`LakehouseSinkStalled`), Silver birleştirmesi bayatladı (`LakehouseSilverMergeStale`),
 zamanlanmış Spark koşusu başarısız (`LakehouseSparkScheduledRunFailed`), Spark koşusu çok
-uzun sürüyor (`LakehouseSparkRunTooLong`). Eşikler `glue/values.yaml` içindeki `monitoring`
+uzun sürüyor (`LakehouseSparkRunTooLong`), hatalı kayıt konusuna kayıt düştü
+(`LakehouseDlqRecords`). Eşikler `glue/values.yaml` içindeki `monitoring`
 bloğundadır ve kurumun veri hacmine göre kurulumdan sonra ayarlanır.
 
 ---
@@ -266,7 +267,7 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Barman Cloud** | CNPG'nin S3'e sürekli yedek alan eklentisi; zaman noktasına geri dönüşü (PITR) sağlar. |
 | **Velero / OADP** | Ad alanı ve kalıcı disk yedekleme aracı. OADP, Red Hat'in OpenShift için paketlediği Velero'dur. |
 | **UWM** (kullanıcı iş yükü izleme) | OpenShift'in kullanıcı ad alanlarındaki metrikleri toplayan izleme yığını. Ayrı Prometheus kurulmaz. |
-| **PrometheusRule** | Alarm tanımını taşıyan CR. Bu üründe beş alarm tanımlıdır. |
+| **PrometheusRule** | Alarm tanımını taşıyan CR. Bu üründe altı alarm tanımlıdır. |
 | **bastion** | Kümeye `oc login` ile girilmiş yönetim makinesi; belgelerdeki `[bastion]` etiketli komutlar burada koşar. Kurumun atlama sunucusu ya da yöneticinin dizüstü olabilir. |
 | **kind** (Kubernetes in Docker) | Tek makinede konteyner içinde koşan küçük Kubernetes kümesi. Bu üründe yalnız geliştirme ve deneme için kullanılır ([30-kurulum](30-kurulum.md) "Lokal deneme (kind)"). |
 | **fixture** | Deneme kümesinde gerçek kaynak yerine geçen örnek veri ve sahte kaynak sistemler (demo PostgreSQL/MongoDB, örnek tablolar). Üretimde bulunmaz. |

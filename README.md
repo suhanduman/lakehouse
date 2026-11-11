@@ -14,7 +14,7 @@ nginx erişim günlüğü         web sunucusu -> Fluent Bit -> Kafka -> Iceberg
 Silver ve bakım              Bronze -> silver-merge (15 dk) -> Silver -> compaction/expire
 Kimlik                       Active Directory -> Keycloak -> Trino/Superset/JupyterHub
 Yedek                        PostgreSQL -> Barman -> S3 yedek bucket | ad alanı -> OADP
-İzleme                       Kafka/Connect/Spark -> OpenShift UWM -> 5 alarm
+İzleme                       Kafka/Connect/Spark -> OpenShift UWM -> 6 alarm
 ```
 
 Ayrıntılı diyagramlar ve sözlük: [docs/00-genel-bakis.md](docs/00-genel-bakis.md).

@@ -583,7 +583,7 @@ Aşağıdakiler bilinçli tasarım kararlarıdır; "eksik yapılandırma" sanıl
 **Neden:** ürün kendi Prometheus'unu kurmaz; OpenShift'in **kullanıcı iş yükü izlemesi**
 (UWM) `$LAKEHOUSE_NS` ad alanındaki izleme nesnelerini kendiliğinden toplar
 ([20-on-kosullar](20-on-kosullar.md) madde 9.1). Nesneler kümede olsa da UWM kapalıysa
-kimse okumaz: beş alarmın hiçbiri çalışmaz.
+kimse okumaz: altı alarmın hiçbiri çalışmaz.
 
 ### 6.1 Nesneler kümede mi
 
@@ -663,7 +663,7 @@ OK up .*kafka-resources-metrics.* (3)
 OK up .*spark-operator.* (2)
 OK up .*kube-state-metrics.* (1)
 OK up .*polaris.* (1)
-OK 5 kural yüklü
+OK 6 kural yüklü
 OK ateşlenen alarm yok
 ```
 
@@ -751,7 +751,7 @@ Hepsi işaretliyse kurulum teslim edilebilir:
 - [ ] `lakehouse-admins` grubundaki yönetici Superset'te `Admin` rolüyle görünüyor.
 - [ ] `oc get podmonitor,servicemonitor,prometheusrule` iki PodMonitor, bir ServiceMonitor
       ve bir PrometheusRule listeliyor.
-- [ ] Konsolda **Observe → Targets** hedefleri `Up`; beş alarm kuralı listede ve hiçbiri
+- [ ] Konsolda **Observe → Targets** hedefleri `Up`; altı alarm kuralı listede ve hiçbiri
       ateşlenmiş değil.
 - [ ] Kabul testi koşturulduysa `KABUL: 9/9 yol geçti` satırı alındı ve zamanlanmış Spark
       işleri geri açıldı.

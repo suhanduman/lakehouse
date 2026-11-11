@@ -137,7 +137,7 @@ Demo tabloları (`shop`, `crm`, `nginx_raw` ve `_raw` ad alanları) katalogda ka
 | **H.1.1** | Schema Registry **opsiyonel** | `oc -n $LAKEHOUSE_NS get kafkaconnector dbz-shop -o jsonpath='{.spec.config}'` | JSON converter + `schemas.enable=true`; ayrı registry bileşeni yok |
 | **F.1** | **iki farklı** web not defteri, kullanıcı-izole, PyIceberg önyüklü | `test/e2e/jupyterhub-path.sh` + `test/e2e/zeppelin-path.sh` | `E2E F4 JUPYTERHUB OK` (pod içinde pyiceberg → Polaris, trino TLS), `E2E F4 ZEPPELIN OK` (`%jdbc` → `shop.orders` = 3); JupyterHub'da kullanıcı başına PVC |
 | **G.1.1, F.3.1** | tüm kullanıcı servisleri AD ile OIDC/LDAPS | `test/e2e/trino-path.sh` (Keycloak Bearer + `rules.json`), `test/e2e/superset-path.sh` (giriş sayfasında keycloak), `test/e2e/jupyterhub-path.sh`, `test/e2e/zeppelin-path.sh` (Shiro/AD rol kapısı) | `analyst1` 3 satır; `user1` 2 satır + `remote` maskeli; rolsüz kullanıcı Zeppelin'de 401. Gerçek tarayıcı OIDC akışı pre-ship OpenShift'te ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5) |
-| **G.5** | Prometheus (+ Loki) | `test/e2e/monitoring-path.sh` | `E2E F5 MONITORING OK`: hedefler `up`, `kafka_consumergroup_lag` serileri, **5 alarm kuralı** `health: ok`, 0 ateşlenen alarm, 2 Grafana dashboard (yalnız dev). Loki platformdadır |
+| **G.5** | Prometheus (+ Loki) | `test/e2e/monitoring-path.sh` | `E2E F5 MONITORING OK`: hedefler `up`, `kafka_consumergroup_lag` serileri, **6 alarm kuralı** `health: ok`, 0 ateşlenen alarm, 2 Grafana dashboard (yalnız dev). Loki platformdadır |
 | **G.6** | Velero yedeği + katalog DB WAL/PITR | `test/e2e/dr-path.sh` | `E2E F5 DR OK`: 3 DB `ContinuousArchiving=True`, ≥3 `Backup completed`, ayrı kümeye restore + tablo sayımı, Velero backup (node-agent fs-backup) + işaret ConfigMap restore'u |
 | **e, f, A.4** | OCI imaj + CRD yaşam döngüsü; deklaratif YAML/CRD; Operator tercihi | `oc -n $ARGOCD_NS get applications`; `oc -n $LAKEHOUSE_NS get kafka,kafkaconnect,cluster,keycloak,superset,sparkapplication` | Her bileşen bir CR/Application; özel imaj/Dockerfile yok (Connect imajı Strimzi `spec.build` ile kümede üretilir) |
 
@@ -311,9 +311,10 @@ OK up .*kafka-resources-metrics.* (5)
 OK up .*spark-operator.* (2)
 OK up .*kube-state-metrics.* (2)
 OK up .*polaris.* (1)
-OK 5 kural yüklü
+OK 6 kural yüklü
 OK LakehouseSilverMergeStale health ok
 OK LakehouseSparkScheduledRunFailed health ok
+OK LakehouseDlqRecords health ok
 OK ateşlenen alarm yok
 UYARI GRAFANA_SKIP=1 -> Grafana dashboard iddiaları ATLANDI (UWM'de Grafana platform tarafındadır)
 E2E F5 MONITORING OK

@@ -399,7 +399,7 @@ tam turun sırasıdır:
 5. [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) — kendi Spark işiniz, `custom/`
 6. [kullanici-ve-yetki.md](kullanici-ve-yetki.md) — AD grupları, Trino kuralları, Polaris
 7. [veri-metrikleri.md](veri-metrikleri.md) — tablo düzeyi ölçümler ve pano
-8. [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — izleme kapsamı ve beş alarm
+8. [izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) — izleme kapsamı ve altı alarm
 9. [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md) — sabit günlük/haftalık tur
 10. [sorun-giderme.md](sorun-giderme.md) — belirti → neden → çare
 11. [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) — yedek yolları ve geri dönüş provaları
