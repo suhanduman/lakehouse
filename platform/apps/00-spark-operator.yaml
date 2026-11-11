@@ -14,7 +14,19 @@ spec:
       # Tamamı METİN `values`: valuesObject'teki null'ları API sunucusu siler ve ArgoCD valuesObject varken
       # `values`'ı hiç okumaz -> ikisi karıştırılamaz (gerekçe: 00-cnpg.yaml).
       values: |
-        controller: {podSecurityContext: {fsGroup: null}}
+        controller:
+          podSecurityContext: {fsGroup: null}
+          # spark-submit bu pod'un İÇİNDE koşar ve spark.jars.packages'ı sürücüden ÖNCE burada çözer: Ivy ayarı
+          # (glue'nun spark-ivysettings ConfigMap'i — küme içi Maven önbelleği ya da kurum aynası) burada da
+          # bulunmalı. optional: ConfigMap yoksa (ayna/önbellek kapalı) dizin boş kalır, işler etkilenmez.
+          # Dizin olarak bağlanır (subPath değil): ConfigMap değişince pod yeniden başlamadan güncellenir.
+          # Liste chart varsayılanının YERİNE geçer -> chart'ın tmp birimi burada yeniden yazılır.
+          volumes:
+          - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+          - {name: ivysettings, configMap: {name: spark-ivysettings, optional: true}}
+          volumeMounts:
+          - {name: tmp, mountPath: /tmp, readOnly: false}
+          - {name: ivysettings, mountPath: /opt/ivy, readOnly: true}
         webhook: {podSecurityContext: {fsGroup: null}}
         spark:
           jobNamespaces: [lakehouse]

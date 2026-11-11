@@ -85,6 +85,7 @@ servis adı + `.$LAKEHOUSE_NS.svc` biçimindedir (örnek: `trino.lakehouse.svc`)
 | `proxy-api` | 8001 | HTTP | JupyterHub hub | Proxy yönetim API'si |
 | `hub` | 8081 | HTTP | JupyterHub proxy'si ve not defteri pod'ları | Hub API'si |
 | `zeppelin` | 8080 | HTTP | Router | Zeppelin arayüzü |
+| `maven-proxy` | 8080 | HTTP | spark-operator, Spark sürücü ve yürütücüleri | Küme içi Maven önbelleği (Iceberg/Kafka kütüphaneleri) |
 | `lakehouse-kafka-bootstrap` | 9091, 9092, 9093 | TCP | Kafka Connect, Spark, kafka-exporter | Kafka istemci bağlantısı. **Üretimde yalnız 9093** (TLS + SCRAM-SHA-512); 9092 (TLS'siz) yalnız geliştirmede açılır |
 | `lakehouse-kafka-brokers` | 8443, 9090, 9091, 9092, 9093 | TCP | Kafka broker'ları, Strimzi operatörü | Broker'lar arası ve operatör trafiği (headless) |
 | `connect-connect-api` | 8083 | HTTP | Strimzi operatörü, teşhis | Kafka Connect REST API'si |
@@ -118,6 +119,7 @@ AD                          TIP         PORT
 connect-connect-api         ClusterIP   8083
 keycloak-service            ClusterIP   8080,9000
 lakehouse-kafka-bootstrap   ClusterIP   9091,9093
+maven-proxy                 ClusterIP   8080
 polaris                     ClusterIP   8181
 superset-web-server         ClusterIP   8088
 trino                       ClusterIP   8080,8443
@@ -141,7 +143,7 @@ Bu bağlantılar güvenlik duvarında açılmalıdır; kapalı ağda karşılık
 | Polaris, Kafka Connect, Spark, not defterleri | S3 (`$S3_ENDPOINT`) | 443/HTTPS | Iceberg verisi | **Evet** |
 | CloudNativePG (Barman) | Yedek S3 (`$S3_BUCKET_BACKUP`) | 443/HTTPS | PostgreSQL yedekleri | **Evet** |
 | Keycloak, Trino, Zeppelin | Active Directory (`$LDAP_URL`) | 636/LDAPS | Kimlik ve grup okuması | **Evet** |
-| Kafka Connect (imaj üretimi), Spark, Zeppelin | Maven Central | 443/HTTPS | Connector ve sürücü artefaktları | **Evet** (ya da iç ayna) |
+| Kafka Connect (imaj üretimi), Maven önbelleği (`maven-proxy`), Zeppelin | Maven Central | 443/HTTPS | Connector ve sürücü artefaktları; Spark kütüphaneleri yalnız önbellekte yoksa (yeni sürümün ilk koşusu) | **Evet** (ya da iç ayna) |
 | JupyterHub not defterleri, dbt örneği | PyPI | 443/HTTPS | `pyiceberg`, `trino`, `dbt-trino` | Not defteri veya dbt kullanılacaksa |
 | Bütün bileşenler | quay.io, ghcr.io, docker.io, `downloads.apache.org` | 443/HTTPS | İmaj ve chart çekimi | **Evet** (ya da iç ayna) |
 

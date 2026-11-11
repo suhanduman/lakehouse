@@ -1,0 +1,92 @@
+{{- if .Values.mavenProxy.enabled }}
+{{- $ns := include "glue.ns" . }}{{ $m := .Values.mavenProxy }}
+{{- /* Küme içi Maven önbelleği (Reposilite): Spark işlerinin spark.jars.packages çözümü buradan geçer (glue.ivySettings).
+       Kütüphane ilk istekte upstream'den indirilir, diske yazılır, sonra hep diskten verilir; internet kesintisi
+       zamanlı işleri düşürmez. Yazma (deploy) için kimlik yok -> depo yalnız okunur önbellektir. */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: maven-proxy, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+data:
+  shared.json: |
+    {
+      "maven": {
+        "repositories": [ {
+          "id": "releases",
+          "visibility": "PUBLIC",
+          "redeployment": false,
+          "preserveSnapshots": false,
+          "storageProvider": {"type": "fs", "quota": "100%", "mount": ""},
+          "proxied": [ {
+            "reference": {{ $m.upstream | toJson }},
+            "store": true,
+            "connectTimeout": 10,
+            "readTimeout": 120,
+            "allowedExtensions": [".jar", ".pom", ".xml", ".sha1", ".md5", ".module", ".asc"]
+          } ]
+        } ]
+      },
+      "statistics": {"enabled": false}
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+# sync-wave Deployment ile AYNI (WaitForFirstConsumer kilitlenmesi; bkz. zeppelin.yaml)
+metadata: {name: maven-proxy-data, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ $m.storageSize }}}}
+{{- with $m.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: maven-proxy, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}                 # RWO PVC
+  selector: {matchLabels: {app: maven-proxy}}
+  template:
+    metadata:
+      labels: {app: maven-proxy}
+      # yalnız ayar değişince değişir (deterministik) -> ayar değişikliği pod'u yeniler, alakasız commit yenilemez
+      annotations: {checksum/config: {{ printf "%s%s" $m.upstream $m.image | sha256sum | trunc 16 }}}
+    spec:
+      {{- if ne (include "glue.isOpenShift" .) "true" }}
+      # imajın kendi kullanıcısı 977; OpenShift rastgele UID verir (entrypoint root değilse doğrudan java'yı açar)
+      securityContext: {runAsUser: 977, runAsGroup: 977, fsGroup: 977}
+      {{- end }}
+      containers:
+      - name: reposilite
+        image: {{ $m.image }}
+        ports: [{name: http, containerPort: 8080}]
+        env:
+        - {name: REPOSILITE_OPTS, value: "--shared-configuration=/etc/reposilite/shared.json"}
+        - {name: JAVA_OPTS, value: {{ printf "%s -Dreposilite.status.remote-version-check=false" $m.javaOpts | quote }}}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities: {drop: [ALL]}
+          seccompProfile: {type: RuntimeDefault}
+        readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 10}
+        livenessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 60, periodSeconds: 30}
+        resources: {{ toJson $m.resources }}
+        volumeMounts:
+        - {name: data, mountPath: /app/data}
+        - {name: logs, mountPath: /var/log/reposilite}
+        - {name: config, mountPath: /etc/reposilite, readOnly: true}
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: maven-proxy-data}
+      - name: logs
+        emptyDir: {}
+      - name: config
+        configMap: {name: maven-proxy}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: maven-proxy, namespace: {{ $ns }}, annotations: {argocd.argoproj.io/sync-wave: "2"}}
+spec:
+  selector: {app: maven-proxy}
+  ports: [{name: http, port: 8080, targetPort: http}]
+{{- end }}

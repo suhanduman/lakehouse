@@ -69,7 +69,10 @@ müşteriye özel değerleri. **22 anahtar.**
 | `cnpg.polarisDb.storageSize`, `cnpg.keycloakDb.storageSize`, `cnpg.supersetDb.storageSize` | PostgreSQL disk boyutu. Varsayılan **10Gi**; orta kademede 20Gi, büyükte 50Gi | `cnpg: {keycloakDb: {storageSize: 20Gi}}` |
 | `backup.schedule` | CNPG yedeğinin cron'u. Varsayılan `"0 0 2 * * *"` (her gün 02:00). **Altı alanlıdır** (saniye dâhil) — beş alan yazarsanız CNPG reddeder | `backup: {schedule: "0 30 1 * * *"}` |
 | `backup.retentionPolicy` | Yedeklerin saklanma süresi (barman-cloud). Varsayılan `30d` | `backup: {retentionPolicy: "90d"}` |
-| `spark.ivySettingsXml` | **Kapalı ağda zorunlu:** iç Maven aynasının `ivysettings.xml` içeriği. Doluysa glue bir ConfigMap üretir, bütün Spark işlerine `/opt/ivy/ivysettings.xml` olarak bağlar ve `spark.jars.ivySettings` onu gösterir. Boşken Spark her koşuda Maven Central'a çıkar | çok satırlı XML bloğu |
+| `mavenProxy.enabled` | Küme içi Maven önbelleği (Reposilite, tek pod + disk). Varsayılan `true`: Spark işleri kütüphaneleri her koşuda buradan çözer, önbellek Maven Central'a yalnız ilk istekte çıkar | `mavenProxy: {enabled: false}` (kurum aynası kullanılacaksa) |
+| `mavenProxy.upstream` | Önbelleğin kütüphaneleri çektiği adres. Varsayılan `https://repo1.maven.org/maven2` | `mavenProxy: {upstream: "https://nexus.kurum.local/repository/maven-central"}` |
+| `mavenProxy.storageSize` / `mavenProxy.storageClass` | Önbellek diski. Varsayılan `5Gi`, kümenin varsayılan StorageClass'ı (bir Iceberg sürümünün kütüphaneleri ~190 MB) | `mavenProxy: {storageSize: 10Gi}` |
+| `spark.ivySettingsXml` | Kurumun kendi Maven aynası (Nexus, Artifactory) Spark işlerine **doğrudan** tanıtılacaksa `ivysettings.xml` içeriği; `mavenProxy.enabled: false` ile birlikte kullanılır. Doluysa önbelleğin yerine geçer. İçine `<caches lockStrategy="artifact-lock-nio"/>` satırını koyun (eşzamanlı işler; [sorun-giderme.md](../50-isletme/sorun-giderme.md) §6.2) | çok satırlı XML bloğu |
 
 ---
 

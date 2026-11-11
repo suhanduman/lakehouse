@@ -22,6 +22,8 @@
 #   spark.sql.catalog.lakehouse.uri / .warehouse <- glue/values.yaml iceberg.catalogUri / iceberg.warehouse
 #   image / sparkVersion / iceberg-spark-runtime sürümü <- glue/values.yaml spark.image, spark.version, versions.iceberg
 #   `s3-ca` ile işaretli yorumlu satırlar        <- s3.caSecret doluysa (özel S3 CA) açılır
+#   `ivysettings` satırları (sparkConf + 2 bağlama + volume) <- kütüphaneler küme içi Maven önbelleğinden
+#        (mavenProxy) ya da kurum aynasından (spark.ivySettingsXml) gelir; ikisi de kapalıysa bu dört satır SİLİNİR
 # Aşağıdaki değerler `helm template glue -f platform/values/glue-dev.yaml` çıktısındaki ScheduledSparkApplication
 # bloğundan BİREBİR alınmıştır (dev/kind değerleri).
 apiVersion: sparkoperator.k8s.io/v1beta2
@@ -42,6 +44,7 @@ spec:
   sparkConf:
     spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0"
     spark.jars.ivy: /tmp/.ivy2
+    spark.jars.ivySettings: /opt/ivy/ivysettings.xml   # küme içi Maven önbelleği (ürün işleriyle aynı; bkz. not)
     spark.redaction.regex: "(?i)secret|password|token|credential"   # driver/executor log ve Spark UI'da sır sızdırma
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     spark.sql.catalog.lakehouse: org.apache.iceberg.spark.SparkCatalog
@@ -78,6 +81,7 @@ spec:
     volumeMounts:
     - {name: job, mountPath: /opt/job}
     - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID imajın work-dir'ine yazamaz
+    - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
     # - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}   # SİTE — özel S3 CA (yukarıdaki not)
   executor:
     instances: 1
@@ -91,11 +95,14 @@ spec:
     volumeMounts:
     - {name: job, mountPath: /opt/job}
     - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID imajın work-dir'ine yazamaz
+    - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
     # - {name: s3-ca, mountPath: /etc/s3-ca, readOnly: true}   # SİTE — özel S3 CA (yukarıdaki not)
   volumes:
   - name: job
     configMap: {name: ornek-rapor}      # kustomization.yaml configMapGenerator (disableNameSuffixHash: true)
   - name: work-dir
     emptyDir: {}
+  - name: ivysettings                  # ürünün Ivy ayarı (glue spark-ivysettings ConfigMap)
+    configMap: {name: spark-ivysettings}
   # - name: s3-ca                        # SİTE — özel S3 CA (yukarıdaki not)
   #   secret: {secretName: s3-ca}

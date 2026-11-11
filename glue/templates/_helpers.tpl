@@ -84,3 +84,21 @@
 {{- end }}
 {{- toJson $cfg }}
 {{- end -}}
+
+{{- /* Spark işlerinin Ivy ayarı. lockStrategy: spark-submit'ler operatör pod'unda AYNI Ivy önbelleğini (/tmp/.ivy2)
+       paylaşır; önbellek boşken (operatör yeniden başladıktan sonra) eşzamanlı gönderimler birbirinin yarım
+       dosyasını görüp "unresolved dependency ... not found" ile düşüyordu (ocpphy: 3 eşzamanlı gönderimin 2'si). Öncelik: site'ın kendi aynası (spark.ivySettingsXml) > küme içi Maven önbelleği
+       (mavenProxy.enabled) > boş (Maven Central'a doğrudan). Boş dönerse ConfigMap/mount/sparkConf render edilmez. */ -}}
+{{- define "glue.ivySettings" -}}
+{{- if .Values.spark.ivySettingsXml -}}
+{{ .Values.spark.ivySettingsXml }}
+{{- else if .Values.mavenProxy.enabled -}}
+<ivysettings>
+  <settings defaultResolver="lakehouse-maven"/>
+  <caches lockStrategy="artifact-lock-nio"/>
+  <resolvers>
+    <ibiblio name="lakehouse-maven" m2compatible="true" root="http://maven-proxy.{{ include "glue.ns" . }}.svc:8080/releases/"/>
+  </resolvers>
+</ivysettings>
+{{- end -}}
+{{- end -}}

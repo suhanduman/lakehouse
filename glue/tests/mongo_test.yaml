@@ -71,7 +71,7 @@ tests:
         - {name: crm, type: mongodb, connectionString: "mongodb://h/?replicaSet=rs0", collections: [crm.customers]}
       pipelines: [{bronze: crm_raw.customers, keys: [_id], bucket_count: 4}]
     asserts:
-      - documentSelector: {path: kind, value: ConfigMap}
+      - documentSelector: {path: metadata.name, value: lakehouse-jobs}
         matchRegex: {path: 'data["pipelines.json"]', pattern: '"mongo":\[\{"bronze":"crm_raw.customers","topic":"crm.crm.customers"\}\]'}
       - documentSelector: {path: metadata.name, value: mongo-bronze}
         equal: {path: spec.schedule, value: "*/5 * * * *"}
@@ -87,4 +87,4 @@ tests:
     template: spark-jobs.yaml
     set: {connect.buildImage: "x", pipelines: [{bronze: shop_raw.orders, keys: [id]}]}
     asserts:
-      - hasDocuments: {count: 5}
+      - hasDocuments: {count: 6}

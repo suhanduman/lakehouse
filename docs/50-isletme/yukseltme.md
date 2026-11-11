@@ -222,9 +222,10 @@ sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector      1   
 sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
 ```
 
-Iceberg sürümü hem sink'i hem Spark işlerini besler → Spark işleri bir sonraki koşuda yeni
-çalışma zamanını Maven'den çeker. **Kapalı ağda önce iç ayna gerekir**
-([sorun-giderme.md](sorun-giderme.md) §6.2).
+Iceberg sürümü hem sink'i hem Spark işlerini besler → Spark işlerinin bir sonraki koşusunda
+küme içi Maven önbelleği yeni sürümü Maven Central'dan (ya da kurum aynasından) bir kez
+indirir; o koşu her zamankinden ~1 dakika uzun sürer. Önbelleğin kaynağına bu sırada erişim
+olmalıdır ([sorun-giderme.md](sorun-giderme.md) §6.2).
 
 **Ters giderse:** etiket değişmediyse Strimzi imajı yeniden üretmez ve yeni eklenti
 **sessizce** yüklenmez — bağlayıcılar eski sürümle koşmaya devam eder.
