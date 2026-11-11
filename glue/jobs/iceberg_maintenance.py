@@ -95,8 +95,9 @@ def main() -> None:
     silver = [p.silver or ml.silver_name(p.bronze) for p in pipes]
     spark = session(f"maint-{a.mode}")
     bronze = bronze_tables(spark, list(doc.get("bronze_namespaces") or []), [p.bronze for p in pipes])
-    # pipeline/mongo dışı bakım kapsamı (nginx_raw): bakım var ama TTL yok (aşağıda "if t in bronze" extra'yı hariç tutar)
+    # pipeline/mongo dışı bakım kapsamı (nginx_raw, JSON akışları): bakım var; saklama yalnız retentionDays ile
     extra = bronze_tables(spark, list(doc.get("maintain_namespaces") or []), [])
+    retention = doc.get("retention") or {}
     failed = []
     for t in (silver if a.mode == "position-deletes" else silver + bronze + extra):
         try:
@@ -122,6 +123,13 @@ def main() -> None:
                     ts_col = "_cdc.ts" if "_cdc" in spark.table(f"{CATALOG}.{t}").columns else "ts"
                     sql = (f"DELETE FROM {CATALOG}.{t} WHERE {ts_col} < "
                            f"date_trunc('DAY', current_timestamp() - INTERVAL {a.bronze_ttl_days} DAYS)")
+                    print(sql)
+                    spark.sql(sql)
+                elif t in retention:
+                    # pipeline dışı tablolar (nginx, JSON akışları): yalnız retentionDays verildiyse saklama uygulanır
+                    r = retention[t]
+                    sql = (f"DELETE FROM {CATALOG}.{t} WHERE {r['col']} < "
+                           f"date_trunc('DAY', current_timestamp() - INTERVAL {int(r['days'])} DAYS)")
                     print(sql)
                     spark.sql(sql)
         except Exception as e:  # noqa: BLE001

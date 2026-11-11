@@ -1,4 +1,4 @@
-{{- /* jobs kodu + pipelines.json tek ConfigMap; ScheduledSparkApplication'lar koşullu: silver-merge (pipelines), 3 bakım (pipelines|mongo|nginx),
+{{- /* jobs kodu + pipelines.json tek ConfigMap; ScheduledSparkApplication'lar koşullu: silver-merge (pipelines), 3 bakım (pipelines|mongo|nginx|streams),
        mongo-bronze (mongodb kaynağı) (spec §6). Credential: Secret -> env (plan P4). */ -}}
 {{- $ns := include "glue.ns" . }}
 {{- $s := .Values.spark }}
@@ -16,9 +16,18 @@
 {{- end }}{{ end }}
 {{- /* Bakım kapsamına giren ama pipeline/mongo dışı namespace'ler (şimdilik yalnız nginx_raw) — TTL YOK, saklama F5 */ -}}
 {{- $maintList := list }}
+{{- /* Pipeline dışı tablolarda saklama süresi (retentionDays): tablo -> {days, col}; yoksa süresiz */ -}}
+{{- $retention := dict }}
 {{- if .Values.nginx.enabled }}
 {{- $maintList = append $maintList (first (splitList "." .Values.nginx.table)) }}
+{{- with .Values.nginx.retentionDays }}{{ $_ := set $retention $.Values.nginx.table (dict "days" . "col" "ts") }}{{ end }}
 {{- end }}
+{{- range .Values.streams }}
+{{- $t := include "glue.streamTable" . }}
+{{- $maintList = append $maintList (first (splitList "." $t)) }}
+{{- with .retentionDays }}{{ $_ := set $retention $t (dict "days" . "col" "_kafka_ts") }}{{ end }}
+{{- end }}
+{{- $maintList = uniq $maintList }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,7 +36,7 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "3"}
 data:
 {{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
-  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList "maintain_namespaces" $maintList) | quote }}
+  pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList "maintain_namespaces" $maintList "retention" $retention) | quote }}
 {{- if $s.ivySettingsXml }}
 ---
 # iç Maven aynası (F5 backlog): boşsa bu ConfigMap render EDİLMEZ, driver/executor Maven Central'a çıkar (varsayılan)
@@ -42,7 +51,7 @@ data:
 {{- end }}
 {{- $m := $s.maintenance }}
 {{- /* bakım SSA'ları (maint-*) pipeline, mongo ya da nginx'ten HERHANGİ biri varsa çalışır: nginx_raw da bakım görsün (TTL hariç, F5) */ -}}
-{{- $maintGate := or .Values.pipelines $mongoList .Values.nginx.enabled }}
+{{- $maintGate := or .Values.pipelines $mongoList .Values.nginx.enabled .Values.streams }}
 {{- $jobs := list
   (dict "name" "silver-merge"            "file" "merge_cdc.py"           "schedule" $s.schedules.silverMerge     "args" list                                                                                                                                     "when" .Values.pipelines)
   (dict "name" "maint-position-deletes"  "file" "iceberg_maintenance.py" "schedule" $s.schedules.positionDeletes "args" (list "--mode" "position-deletes")                                                                                                       "when" $maintGate)

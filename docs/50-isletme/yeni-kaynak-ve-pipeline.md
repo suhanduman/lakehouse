@@ -1071,6 +1071,9 @@ sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector   1      
 Satırlar beş dakika içinde `nginx_raw.access_log` tablosuna düşer; sorgu Adım 9.2'deki
 not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
 
+- **Saklama süresi.** Günlük tablosu varsayılan olarak süresiz büyür. Kurumun saklama
+  kuralına göre `nginx` girdisine `retentionDays: 365` gibi bir değer yazılırsa her gece bu
+  günden eski satırlar silinir.
 - **Disk tamponu.** Ajan `storage.type filesystem` kullanır: Kafka kesilirse 1 GB'a kadar
   yerelde biriktirir, bağlantı dönünce gönderir.
 - **Günlük biçimi.** `parsers.conf` içindeki düzenli ifade nginx'in `combined` biçimini ve
@@ -1146,6 +1149,9 @@ sunucu bir satır, yanında o sunucudan gelen istek sayısı):
       değeriyle koşuyor, `sink-nginx` `READY True`.
 
 ## Sonraki bölüm
+
+Uygulamalardan ya da IoT cihazlarından Kafka'ya JSON gönderen akışlar için:
+[json-akisi-ekleme.md](json-akisi-ekleme.md).
 
 [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan bir kaynağa
 tablo eklemek; kaynak hazırlığı ve Polaris adımları tekrarlanmaz, yerine **artımlı

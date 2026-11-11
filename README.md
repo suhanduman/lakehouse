@@ -29,7 +29,8 @@ Ayrıntılı diyagramlar ve sözlük: [docs/00-genel-bakis.md](docs/00-genel-bak
 - **İşletmen** — değişiklik uygulamak, kaynak/tablo eklemek:
   [docs/50-isletme/degisiklik-nasil-uygulanir.md](docs/50-isletme/degisiklik-nasil-uygulanir.md) →
   [docs/50-isletme/yeni-kaynak-ve-pipeline.md](docs/50-isletme/yeni-kaynak-ve-pipeline.md) →
-  [docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md)
+  [docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md) →
+  [docs/50-isletme/json-akisi-ekleme.md](docs/50-isletme/json-akisi-ekleme.md)
 - **Analist** — ilk giriş, sorgu ve pano:
   [docs/40-kurulum-sonrasi.md](docs/40-kurulum-sonrasi.md)
 - **Geliştirici** — kendi Spark uygulaması/CronJob'ı:
@@ -70,6 +71,7 @@ Kitap baştan sona okunacak sırada numaralanmıştır.
   [değişiklik nasıl uygulanır](docs/50-isletme/degisiklik-nasil-uygulanir.md),
   [yeni kaynak ve pipeline](docs/50-isletme/yeni-kaynak-ve-pipeline.md),
   [mevcut kaynağa tablo ekleme](docs/50-isletme/mevcut-kaynaga-tablo-ekleme.md),
+  [JSON olay akışı ekleme](docs/50-isletme/json-akisi-ekleme.md),
   [kaynak ya da tablo kaldırma](docs/50-isletme/kaynak-veya-tablo-silme.md),
   [yeni Spark uygulaması](docs/50-isletme/yeni-spark-uygulamasi.md),
   [kullanıcı ve yetki](docs/50-isletme/kullanici-ve-yetki.md),

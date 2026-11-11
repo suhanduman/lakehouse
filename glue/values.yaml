@@ -66,6 +66,22 @@ sources: []
 #    signalCollection: crm.debezium_signal   # opsiyonel: incremental snapshot sinyal koleksiyonu
 #    extraConfig: {}
 
+# JSON olay akışları (uygulamalar, IoT cihazları): her akış için Kafka konusu <ad>.events, yalnız o konuya yazabilen
+# üretici kimliği stream-<ad> (KafkaUser, SCRAM), Iceberg sink'i ve Bronze tablosu (varsayılan <ad>_raw.events).
+# Tablo kayıtların Kafka'ya varış zamanına (_kafka_ts) göre güne bölünür. Silver yoktur (olaylar yalnız eklenir).
+# docs/50-isletme/json-akisi-ekleme.md
+streams: []
+#  - name: sensors                  # [a-z][a-z0-9_]* ; kaynak adlarıyla ve "nginx" ile çakışmaz
+#    partitions: 3                  # konu bölüm sayısı (paralel tüketim üst sınırı)
+#    retentionDays: 365             # bu günden eski satırları bakım işi siler; yok/0 = süresiz saklanır
+#    fields:                        # veri sözleşmesi (önerilir): tipine uymayan kayıt <ad>.dlq'ya gider, akış durmaz
+#      temperature_c: float64       # int32 | int64 | float32 | float64 | boolean | string
+#      humidity_pct: int64
+#    state: running                 # running | paused | stopped — bozuk kaydı atlarken durdurmak için
+#    table: sensors_raw.events      # isteğe bağlı; Polaris ad alanı setup.yaml'da açılmış olmalı
+#    sinkTasks: 1
+#    sinkExtraConfig: {}
+
 nginx:
   enabled: false                   # Fluent Bit ajanları (müşteri sunucusu) -> Kafka dış listener -> Iceberg sink
   topic: nginx.access
@@ -73,6 +89,7 @@ nginx:
   table: nginx_raw.access_log      # Polaris namespace nginx_raw setup.yaml'da (F1'de var)
   sinkTasks: 1
   sinkExtraConfig: {}
+  retentionDays: 0                 # nginx_raw.access_log: bu günden eski satırları bakım işi siler; 0 = süresiz
 
 cnpg:
   # storageClass boş = kümenin varsayılan StorageClass'ı; prod'da HA için instances: 2 (platform/values/glue.yaml)

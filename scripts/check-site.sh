@@ -196,6 +196,28 @@ else:
                     f"ARGOCD_NS='{env_argocd_ns}' ile uyuşmuyor (docs/90-referans/"
                     f"values-anahtarlari.md §1 'argocdNamespace' satırı, pre-ship 1.12)")
 
+# 6) Kaynakların, pipeline'ların ve JSON akışlarının yazacağı Polaris ad alanları setup.yaml'da açılmış mı.
+# Sink tabloyu kendisi yaratır ama ad alanını yaratmaz: eksikse ilk yazmada sessizce düşer
+# (yeni-kaynak-ve-pipeline.md §5, json-akisi-ekleme.md). UYARI: setup.yaml'a ekledikten sonra
+# scripts/polaris-setup.sh de koşmalıdır; bu denetim kümeyi göremez.
+setup_ns = {n.get("name") for c in (yaml.safe_load(p) or {}).get("catalogs", []) for n in (c.get("namespaces") or [])}
+need = {}
+for src in g.get("sources") or []:
+    need[src.get("bronzeNamespace") or f"{src.get('name')}_raw"] = f"sources[{src.get('name')}]"
+for pl in g.get("pipelines") or []:
+    b = str(pl.get("bronze", ""))
+    if "." in b:
+        need[b.split(".")[0]] = f"pipelines[{b}]"
+        silver = pl.get("silver") or b.split(".")[0].removesuffix("_raw") + "." + b.split(".")[1]
+        need[silver.split(".")[0]] = f"pipelines[{b}] (Silver)"
+for st in g.get("streams") or []:
+    tbl = st.get("table") or f"{st.get('name')}_raw.events"
+    need[tbl.split(".")[0]] = f"streams[{st.get('name')}]"
+for ns_name, who in sorted(need.items()):
+    if ns_name not in setup_ns:
+        warns.append(f"{who}: '{ns_name}' ad alanı platform/polaris/setup.yaml namespaces listesinde yok "
+                     f"(ekleyip scripts/polaris-setup.sh'i koşturun)")
+
 for w in warns:
     print("UYARI:", w)
 for e in errs:
