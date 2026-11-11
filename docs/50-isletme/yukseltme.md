@@ -237,6 +237,12 @@ koşuda bir kez indirir; o koşu her zamankinden 1 dakika kadar uzun sürer. Bu 
 önbelleğin kaynağına (Maven Central ya da kurumun Maven aynası) erişim olmalıdır
 ([sorun-giderme.md](sorun-giderme.md) §6.2).
 
+**Kendi Spark işlerinizi yeniden üretin.** Ürün kendi işlerini günceller ama `custom/`
+altındaki dosyalarınıza dokunmaz. Spark ya da Iceberg sürümü değiştiyse, eşitleme bittikten
+sonra her işinizin tanım dosyasını `scripts/spark-is-tanimi.sh` ile aynı argümanlarla
+yeniden üretin ve Git'e gönderin ([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md)
+§4.1).
+
 **Ters giderse:** etiketi değiştirmediyseniz Strimzi imajı yeniden üretmez ve yeni
 eklentiler **sessizce** yüklenmez: bağlayıcılar eski sürümle çalışmaya devam eder.
 İmaj üretimi `unauthorized` ile düşüyorsa imajı gönderen hesabın jetonu dolmuştur (§6).
@@ -518,6 +524,8 @@ kümedeki gerçek sürümleri göstermelidir
 - [ ] Trino ya da JupyterHub chart sürümü hem uygulama dosyasında hem otomatik
       testlerde güncellendi.
 - [ ] Sürüm listesi aynı değişiklikte güncellendi.
+- [ ] Spark ya da Iceberg sürümü değiştiyse `custom/` altındaki iş tanımları
+      `scripts/spark-is-tanimi.sh` ile yeniden üretildi.
 - [ ] Otomatik testlerin iki işi de başarılı; ArgoCD `Synced Healthy` gösteriyor.
 
 ## Sonraki bölüm

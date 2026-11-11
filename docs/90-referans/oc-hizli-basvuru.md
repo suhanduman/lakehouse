@@ -332,18 +332,21 @@ yaratılmadığını gösterir ([secret-listesi.md](secret-listesi.md)).
 gerektiğinde. Tek seferlik iş **Git'e konmaz**: ArgoCD onu her silindiğinde yeniden
 yaratır ve iş tekrar tekrar çalışır. Bu yüzden elle uygulanır.
 
-Örnek dosyalar deponun `custom/examples/` klasöründedir. İş, Python kodunu bir
-ConfigMap'ten okur; bu yüzden önce ConfigMap yaratılır. Örnek tanım dosyasındaki
-`# SİTE` işaretli satırların kendi ortamınıza göre düzenlenmiş olması gerekir
-([50-isletme/yeni-spark-uygulamasi.md](../50-isletme/yeni-spark-uygulamasi.md) §4.1).
+Aşağıdaki örnek, depodaki örnek programı (`custom/examples/ornek_rapor.py`) çalıştırır.
+Tanım dosyasını `scripts/spark-is-tanimi.sh` üretir; kümeye özel ayarlar kümedeki ürün
+işinden kopyalanır
+([50-isletme/yeni-spark-uygulamasi.md](../50-isletme/yeni-spark-uygulamasi.md) §4). İş,
+Python kodunu bir ConfigMap'ten okur; bu yüzden önce ConfigMap yaratılır.
 
 `[bastion]`
 
 ```bash
+cd ~/lakehouse
+scripts/spark-is-tanimi.sh --ad ornek-rapor --dosya ornek_rapor.py > /tmp/ornek-rapor.yaml
 oc -n "$LAKEHOUSE_NS" create configmap ornek-rapor --from-file=custom/examples/ornek_rapor.py
 oc -n "$LAKEHOUSE_NS" label configmap ornek-rapor lakehouse.io/yonetim=manual-yeni-spark-uygulamasi-5.2
 oc -n "$LAKEHOUSE_NS" delete sparkapplication ornek-rapor --ignore-not-found
-oc apply -f custom/examples/spark-tek-seferlik.yaml
+oc apply -f /tmp/ornek-rapor.yaml
 ```
 
 **Beklenen çıktı** (örnek):

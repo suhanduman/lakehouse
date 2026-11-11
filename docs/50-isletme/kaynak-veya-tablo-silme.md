@@ -455,18 +455,13 @@ EOF
 `PURGE` sözcüğü önemlidir: o olmadan tablo yalnız katalogdan düşer, S3'teki dosyaları
 yerinde kalır.
 
-**2. İş tanımını hazırlayın.** Ürünle gelen örnek tek seferlik işi kopyalayıp adını
-değiştirin:
+**2. İş tanımını üretin.** Tanım dosyasını ürünün betiği üretir; kümeye özel ayarlar (S3
+adresi, sertifika, katalog) kümedeki ürün işinden kopyalanır
+([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) §4):
 
 ```bash
-cp ~/lakehouse/custom/examples/spark-tek-seferlik.yaml tablo-sil.yaml
-sed -i 's/ornek-rapor/tablo-sil/g; s/ornek_rapor\.py/tablo_sil.py/' tablo-sil.yaml
-vi tablo-sil.yaml
+~/lakehouse/scripts/spark-is-tanimi.sh --ad tablo-sil --dosya tablo_sil.py > tablo-sil.yaml
 ```
-
-Dosyada `# SİTE` işaretli satırları kendi ortamınıza göre düzeltin (S3 adresi, bölge,
-özel S3 sertifikası). Hangi satırın neye karşılık geldiği
-[yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) §4.1'deki tablodadır.
 
 **3. İşi çalıştırın.**
 
@@ -519,7 +514,8 @@ configmap "tablo-sil" deleted from lakehouse namespace
 
 - Durum `FAILED` ise sürücü günlüğüne bakın:
   `oc -n "$LAKEHOUSE_NS" logs tablo-sil-driver | tail -50`. `PKIX` ya da `SSL` geçen bir
-  hata, tanım dosyasındaki `# SİTE` sertifika satırlarının eksik olduğunu gösterir.
+  hata, tanım dosyasının elle yazılıp sertifika satırlarının unutulduğunu gösterir;
+  dosyayı 2. adımdaki betikle yeniden üretin.
 - `AlreadyExists` görürseniz önceki bir denemeden kalan nesneler vardır; önce iki `delete`
   komutunu çalıştırın.
 - Tablo listede hâlâ duruyorsa adını yanlış yazmışsınızdır: `IF EXISTS` yanlış adı hata
