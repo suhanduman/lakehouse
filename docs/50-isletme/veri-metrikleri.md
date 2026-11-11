@@ -74,7 +74,7 @@ FROM lakehouse.erp."orders$snapshots"
 ORDER BY committed_at DESC LIMIT 20;
 ```
 
-**Beklenen çıktı** (OpenShift provasından, ilk üç satır; saatler SQL Lab'in saat dilimine
+**Beklenen çıktı** (örnek bir kurulumdan, ilk üç satır; saatler SQL Lab'in saat dilimine
 göre gösterilir):
 
 ```text
@@ -101,7 +101,7 @@ FROM lakehouse.erp."orders$files"
 GROUP BY file_format;
 ```
 
-**Beklenen çıktı** (OpenShift provasından):
+**Beklenen çıktı** (örnek bir kurulumdan):
 
 ```text
 file_format  dosya  kayit  boyut_mib  ort_dosya_mib
@@ -118,7 +118,7 @@ FROM lakehouse.erp."orders$history"
 ORDER BY made_current_at DESC LIMIT 20;
 ```
 
-**Beklenen çıktı** (OpenShift provasından, ilk üç satır):
+**Beklenen çıktı** (örnek bir kurulumdan, ilk üç satır):
 
 ```text
 made_current_at          snapshot_id          parent_id            is_current_ancestor
@@ -178,7 +178,7 @@ WHERE olcum_zamani = (SELECT max(olcum_zamani) FROM lakehouse.ops.table_health)
 ORDER BY katman, tablo;
 ```
 
-**Beklenen çıktı** (OpenShift provasından seçilmiş satırlar):
+**Beklenen çıktı** (örnek bir kurulumdan seçilmiş satırlar):
 
 ```text
 tablo                katman  kayit   veri_dosyasi  ort_dosya_mib  son_degisiklik
@@ -236,7 +236,7 @@ FROM lakehouse.shop."orders$snapshots"
 ORDER BY committed_at;
 ```
 
-**Beklenen çıktı** (OpenShift provasından, ilk iki satır):
+**Beklenen çıktı** (örnek bir kurulumdan, ilk iki satır):
 
 ```text
 committed_at             snapshot_id          operation
@@ -262,7 +262,7 @@ FROM lakehouse.shop.orders FOR TIMESTAMP AS OF TIMESTAMP '2026-11-08 23:40:00 Eu
 ORDER BY id;
 ```
 
-**Beklenen çıktı** (OpenShift provasından; iki sorgu da aynı sürümü gösterir):
+**Beklenen çıktı** (örnek bir kurulumdan; iki sorgu da aynı sürümü gösterir):
 
 ```text
 id  status   amount
@@ -276,7 +276,7 @@ Tablonun şu anki hâliyle karşılaştırın:
 SELECT id, status, amount FROM lakehouse.shop.orders ORDER BY id;
 ```
 
-**Beklenen çıktı** (OpenShift provasından; 4 numaralı sipariş o sürümden sonra eklenmiş):
+**Beklenen çıktı** (örnek bir kurulumdan; 4 numaralı sipariş o sürümden sonra eklenmiş):
 
 ```text
 id  status   amount
@@ -306,7 +306,7 @@ FROM lakehouse.shop_raw.orders
 ORDER BY id, _cdc.ts;
 ```
 
-**Beklenen çıktı** (OpenShift provasından; zamanlar UTC):
+**Beklenen çıktı** (örnek bir kurulumdan; zamanlar UTC):
 
 ```text
 id  islem  zaman                        status   amount

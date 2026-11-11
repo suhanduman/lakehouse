@@ -29,6 +29,7 @@ Yönetim makinesinde kurulu olması gereken araçlar (bütün belgeler için):
 | `openssl` | [30-kurulum](30-kurulum.md) §5 (rastgele parola üretimi, sertifika incelemesi) |
 | `python3` | [30-kurulum](30-kurulum.md) §5, `scripts/polaris-setup.sh` |
 | `git` | [30-kurulum](30-kurulum.md) §2–§4 |
+| `helm` | ayar değişikliğini göndermeden önce kümeye ne gideceğine bakmak için ([değişiklik nasıl uygulanır](50-isletme/degisiklik-nasil-uygulanir.md) §3.2; isteğe bağlı) |
 | `htpasswd` | [30-kurulum](30-kurulum.md) §5.7 (RHEL/Fedora: `httpd-tools`, Debian/Ubuntu: `apache2-utils`) |
 | `jq` | kabul testi ([90-referans/kabul-testleri.md](90-referans/kabul-testleri.md) §1) ve işletme komutları |
 | `keytool` | yalnız S3 sertifikası kurumun kendi CA'sıyla imzalıysa: [30-kurulum](30-kurulum.md) §5.14 (RHEL/Fedora: `sudo dnf install -y java-21-openjdk-headless`) |

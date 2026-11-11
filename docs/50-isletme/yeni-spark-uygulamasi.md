@@ -511,7 +511,7 @@ adıyla başlar ve sonunda bir zaman damgası taşır. Zamanlı işlerin kendisi
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication
 ```
 
-**Beklenen çıktı** (OpenShift provasından; `gold-kabul` bir kurumun kendi Gold işidir —
+**Beklenen çıktı** (örnek bir kurulumdan; `gold-kabul` bir kurumun kendi Gold işidir —
 §12 —, diğerleri ürünün işleridir):
 
 ```text
@@ -752,7 +752,7 @@ Tabloları katalogda görmek için:
 cur = conn.cursor(); cur.execute("show tables from gold"); cur.fetchall()
 ```
 
-**Beklenen çıktı** (OpenShift provasından; sizde kendi Gold tablolarınız görünür):
+**Beklenen çıktı** (örnek bir kurulumdan; sizde kendi Gold tablolarınız görünür):
 
 ```text
 [['kabul_senaryo1'], ['kabul_senaryo2']]

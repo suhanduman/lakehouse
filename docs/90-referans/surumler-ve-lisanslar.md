@@ -1,211 +1,205 @@
 # 90 — Sürümler ve lisanslar
 
-**Bu bölümde:** kurulumda yer alan **bütün** bileşenlerin sürümü, lisansı, nereden geldiği
-ve sürümün repoda hangi dosyada sabitlendiği; replika sayıları ve `PodDisruptionBudget`
-kararı; lisans özeti; listenin güncel tutulması.
-**Süre:** okuma 15 dakika.
-**Gereken yetki:** kümedeki fiilî sürümleri doğrulamak için `$ARGOCD_NS` ve
+Lakehouse'u oluşturan bütün bileşenlerin sürümü, lisansı, nereden geldiği ve sürümün
+depoda hangi dosyada sabitlendiği bu sayfadadır. Kopya sayıları, lisans özeti ve listenin
+güncel tutulması da buradadır.
+
+**Ne kadar sürer:** okuması 15 dakika.
+
+**Hangi yetkiler gerekir:** kümedeki gerçek sürümleri görmek için `$ARGOCD_NS` ve
 `$LAKEHOUSE_NS` ad alanlarında okuma.
-**Nerede çalıştırılır:** `[bastion]`.
 
-Şartname **a** maddesi tüm bileşenlerin açık kaynak olmasını, **J.2.1** kullanılan
-ürünlerin sürüm/lisans listesini, **J.3.2** ise bu listenin güncel tutulmasını ister.
-Aşağıdaki tablolar tek doğrudur: **Kurulum yolu** sütunu sürümün repoda hangi dosyada
-sabitlendiğini gösterir — yükseltme o dosyada yapılır.
+**Komutlar nerede çalışır:** `[bastion]` — `oc login` ile kümeye bağlı ve Git deposunun
+kopyasının (`~/lakehouse`) bulunduğu yönetim makinesi.
 
-**Üretim yığınında özel imaj sıfırdır.** Üretimde kurulan bütün imajlar upstream'in resmi
-imajlarıdır; Kafka Connect imajı Strimzi'nin `spec.build` mekanizmasıyla kümede üretilir
-(Dockerfile yoktur). Tek istisna **üretimde kurulmayan** MinIO ve `mc` imajlarıdır: MinIO
-Inc. topluluk imajlarını geri çektiği için bunlar kaynaktan derlenip kendi kayıt
-defterimize yayımlanır (bkz. §5 altındaki not). Hızlı denetim:
+Şartnamenin **a** maddesi bütün bileşenlerin açık kaynak olmasını, **J.2.1** kullanılan
+ürünlerin sürüm ve lisans listesini, **J.3.2** ise bu listenin güncel tutulmasını ister.
+Aşağıdaki tablolarda **Nerede sabitlenir** sütunu, sürümün depoda hangi dosyada
+yazdığını gösterir; yükseltme o dosyada yapılır.
+
+**Üründe özel imaj yoktur.** Kurulan bütün imajlar bileşenlerin kendi resmî imajlarıdır.
+Kafka Connect imajı, Strimzi'nin imaj üretme özelliğiyle kümenin içinde, resmî Debezium ve
+Iceberg dosyalarından üretilir.
+
+Depodaki bütün sürüm satırlarını görmek için:
 
 `[bastion]`
 
 ```bash
+cd ~/lakehouse
 grep -rn "targetRevision\|imageTag\|image:" platform/apps platform/values glue/values.yaml
 ```
 
-**Beklenen çıktı:** basılan her satır aşağıdaki tablolardan birinde geçen bir sürüm pinidir;
-tabloda karşılığı olmayan bir satır, güncellenmemiş liste demektir.
-
-**Ters giderse:** komut hiçbir şey basmıyorsa depo kökünde değilsinizdir (`cd ~/lakehouse`).
+**Ne görmelisiniz:** basılan her satır aşağıdaki tablolardan birinde geçen bir sürümdür.
+Tabloda karşılığı olmayan bir satır, bu sayfanın güncellenmediğini gösterir.
 
 ---
 
 ## 1. Platform ve operatörler
 
-| Bileşen | Sürüm | Lisans | Kaynak (chart/imaj) | Kurulum yolu | Not |
+| Bileşen | Sürüm | Lisans | Nereden gelir | Nerede sabitlenir | Not |
 |---|---|---|---|---|---|
-| ArgoCD | v3.5.2 | Apache-2.0 | `argoproj/argo-cd` deposunun v3.5.2 etiketli kurulum manifest'i | `bootstrap/bootstrap.sh` → `ARGOCD_VERSION` | OpenShift'te platformun GitOps operatörü de kullanılabilir; kök Application aynıdır |
-| cert-manager | v1.21.2 | Apache-2.0 | OCI chart `quay.io/jetstack/charts/cert-manager` | `platform/apps/00-cert-manager.yaml` | `crds.enabled=true`; `Issuer/lakehouse-ca` ve `Certificate/trino-tls` glue'dadır. Barman Cloud eklentisi de cert-manager ister |
-| Strimzi Kafka operator | 1.2.0 | Apache-2.0 | OCI chart `quay.io/strimzi-helm/strimzi-kafka-operator` | `platform/apps/00-strimzi.yaml` | `watchNamespaces={lakehouse}`; JMX exporter kuralları ve Grafana dashboard'ları Strimzi 1.2.0 örneklerinden birebir (`glue/files/metrics/`, `glue/files/dashboards/`) |
-| Apache Kafka | 4.3.1 (`metadataVersion 4.3-IV0`) | Apache-2.0 | Strimzi imajı (`Kafka` CR) | `glue/values.yaml` → `versions.kafka`, `versions.kafkaMetadata` | KRaft; yükseltme **iki adımlıdır** |
-| CloudNativePG operator | chart 0.29.0 (operatör **1.30.0**) | Apache-2.0 | `https://cloudnative-pg.github.io/charts` | `platform/apps/00-cnpg.yaml` | PostgreSQL imajı upstream CNPG imajıdır → **PostgreSQL License** (operatör Apache-2.0) |
-| CNPG Barman Cloud eklentisi | chart **0.8.0** = eklenti **v0.15.0** | Apache-2.0 | `cnpg/plugin-barman-cloud` | `platform/apps/00-cnpg-barman.yaml` | Chart sürümü ≠ eklenti sürümü (`--version 0.15.0` diye bir chart **yoktur**). In-tree `barmanObjectStore` CNPG 1.31'de kalkıyor |
-| Kubeflow spark-operator | 2.5.2 | Apache-2.0 | `https://kubeflow.github.io/spark-operator` | `platform/apps/00-spark-operator.yaml` | `prometheus.podMonitor.create=true`; exporter **uygulama başına etiket yaymaz** |
-| Keycloak operator + Keycloak | 26.7.3 | Apache-2.0 | `github.com/keycloak/keycloak-k8s-resources//kubernetes?ref=26.7.3` | `platform/keycloak-operator/kustomization.yaml` | Helm chart'ı yoktur (kustomize uzak kaynağı = yapılandırma, imaj değil). Operatör ve sunucu aynı sürümde ilerler |
-| Apache Superset Kubernetes Operator | 0.2.0 | Apache-2.0 | OCI chart `ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator` | `platform/apps/00-superset-operator.yaml` | **API `v1alpha1`** → kırıcı değişiklik riski yüksektir, sürüm takibi şarttır. Resmi Superset Helm chart'ı **deprecated** |
+| OpenShift GitOps (ArgoCD) | OpenShift'in sağladığı sürüm (ör. 1.22.3) | Apache-2.0 | Red Hat operatör kataloğu | kümede ön koşul ([20-on-kosullar](../20-on-kosullar.md) madde 2) | ürün yalnız kök uygulamayı ekler |
+| cert-manager | v1.21.2 | Apache-2.0 | `quay.io/jetstack/charts/cert-manager` | `platform/apps/00-cert-manager.yaml` | Trino'nun iç sertifikasını üretir |
+| Strimzi Kafka operatörü | 1.2.0 | Apache-2.0 | `quay.io/strimzi-helm/strimzi-kafka-operator` | `platform/apps/00-strimzi.yaml` | Kafka imajı `quay.io/strimzi/kafka:1.2.0-kafka-4.3.1` |
+| Apache Kafka | 4.3.1 (meta veri sürümü `4.3-IV0`) | Apache-2.0 | Strimzi imajı | `glue/values.yaml` → `versions.kafka`, `versions.kafkaMetadata` | yükseltme iki adımlıdır ([50-isletme/yukseltme.md](../50-isletme/yukseltme.md)) |
+| CloudNativePG operatörü | chart 0.29.0 (operatör 1.30.0) | Apache-2.0 | `https://cloudnative-pg.github.io/charts` | `platform/apps/00-cnpg.yaml` | PostgreSQL imajı operatörün varsayılanıdır (`ghcr.io/cloudnative-pg/postgresql:18.4`); PostgreSQL'in lisansı **PostgreSQL License**'tır |
+| CNPG Barman Cloud eklentisi | chart 0.8.0 (eklenti v0.15.0) | Apache-2.0 | `cnpg/plugin-barman-cloud` | `platform/apps/00-cnpg-barman.yaml` | veritabanlarının S3'e sürekli yedeği |
+| Kubeflow spark-operator | 2.5.2 | Apache-2.0 | `https://kubeflow.github.io/spark-operator` | `platform/apps/00-spark-operator.yaml` | |
+| Keycloak operatörü ve Keycloak | 26.7.3 | Apache-2.0 | `github.com/keycloak/keycloak-k8s-resources` (26.7.3) | `platform/keycloak-operator/kustomization.yaml` | operatör ve sunucu aynı sürümde ilerler |
+| Apache Superset Kubernetes operatörü | 0.2.0 | Apache-2.0 | `ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator` | `platform/apps/00-superset-operator.yaml` | API sürümü henüz `v1alpha1`'dir; yükseltmelerde sürüm notları okunmalıdır |
 
 ---
 
-## 2. Veri düzlemi
+## 2. Veri bileşenleri
 
-| Bileşen | Sürüm | Lisans | Kaynak (chart/imaj) | Kurulum yolu | Not |
+| Bileşen | Sürüm | Lisans | Nereden gelir | Nerede sabitlenir | Not |
 |---|---|---|---|---|---|
-| Debezium (postgres / sqlserver / mongodb) | 3.6.2.Final | Apache-2.0 | Maven Central zip artefaktı (`KafkaConnect.spec.build`) | `glue/values.yaml` → `versions.debezium` | Değişince Connect imajı **yeniden üretilir** (~10 dk) |
-| Apache Iceberg Kafka Connect sink | 1.11.0 | Apache-2.0 | `spec.build` maven artefaktları (`iceberg-kafka-connect`, `-transforms`, `iceberg-parquet`, `-orc`, `-aws`, `-aws-bundle`) | `glue/values.yaml` → `versions.iceberg` | Aynı değer Spark `spark.jars.packages` listesini de üretir (tek kaynak) |
-| Hadoop client (Connect build'i) | 3.4.3 | Apache-2.0 | `org.apache.hadoop:hadoop-client-api` / `-runtime` | `glue/values.yaml` → `versions.hadoopClient` | Iceberg sink'in gereksinimidir |
-| Apache Polaris (REST katalog) | 1.7.0 | Apache-2.0 | chart `https://downloads.apache.org/polaris/helm-chart` + imaj `apache/polaris:1.7.0` | `platform/apps/20-polaris.yaml`, `platform/values/polaris.yaml` | `persistence.type=relational-jdbc` → CNPG `polaris-db`; admin-tool bootstrap Job'ı glue'dadır (`versions.polarisAdminTool`) |
-| `apache-polaris` CLI | 1.7.0 | Apache-2.0 | PyPI (`pip install 'apache-polaris==1.7.0'`) | `scripts/polaris-setup.sh`, `test/e2e/run.sh` | Katalog/namespace/rol/principal kurulumu ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
-| Apache Spark | 4.1.0 | Apache-2.0 | `apache/spark:4.1.0-java21-python3` | `glue/values.yaml` → `spark.image` | Iceberg runtime her koşuda küme içi Maven önbelleğinden çözülür (`mavenProxy`); kurum aynası için `spark.ivySettingsXml` |
-| Trino | **483** (chart 1.42.2; chart appVersion `480`) | Apache-2.0 | `https://trinodb.github.io/charts` | `platform/apps/30-trino.yaml` + `platform/values/trino.yaml` (`image.tag: "483"`) | Chart varsayılan etiketi 480'dir; values 483'e sabitler. **jmx-exporter sidecar'ı kullanılmaz** (izleme kapsamı yalnız boru hattı sağlığıdır) |
-| Apache Superset | 6.1.0 — imaj etiketi `apache/superset:6.1.0-dev` | Apache-2.0 | resmi imaj + `Superset` CR | `glue/values.yaml` → `superset.imageTag` | `-dev` etiketi `psycopg2`/`trino`/`authlib` sürücülerini **içerir** (düz `6.1.0` içermez). Operatör `spec.image` alanında **digest kabul etmez** (`repository:tag`) → müşteri aynasında etiket değişmezliğiyle sabitlenir |
-| JupyterHub (z2jh) | chart 4.4.2 → JupyterHub **5.5.2** | BSD-3-Clause | `https://hub.jupyter.org/helm-chart/` | `platform/apps/30-jupyterhub.yaml` + `platform/values/jupyterhub.yaml` | |
-| Not defteri imajı | `quay.io/jupyter/pyspark-notebook:spark-4.1.2` | BSD-3-Clause | quay.io (Jupyter Docker Stacks) | `platform/values/jupyterhub.yaml` → `singleuser.image` | Soğuk çekim ~4,5 dk (`startTimeout: 1200`); `postStart` ile pyiceberg ve trino kurulur (PyPI erişimi gerekir) |
-| Apache Zeppelin | 0.12.1 | Apache-2.0 | `apache/zeppelin:0.12.1` | `glue/values.yaml` → `zeppelin.image` | Chart yoktur: Deployment + PVC (glue) |
-| Reposilite (küme içi Maven önbelleği) | 3.6.4 | Apache-2.0 | `dzikoysk/reposilite:3.6.4` | `glue/values.yaml` → `mavenProxy.image` | Chart yoktur: Deployment + PVC (glue). Kapatmak: `mavenProxy.enabled: false` |
-| Trino JDBC (Zeppelin interpreter'ı) | 483 | Apache-2.0 | Maven Central `io.trino:trino-jdbc` | `glue/values.yaml` → `zeppelin.trinoJdbcVersion` | Trino sunucusuyla birlikte yükseltilir |
-| Fluent Bit | 5.1.2 | Apache-2.0 | müşteri sunucusunda paket (e2e'de `fluent/fluent-bit:5.1.2`) | `agents/fluent-bit/` | Küme bileşeni değil, kaynak sunucudaki ajandır |
+| Debezium (PostgreSQL, SQL Server, MongoDB) | 3.6.2.Final | Apache-2.0 | Maven Central | `glue/values.yaml` → `versions.debezium` | değişince Connect imajı yeniden üretilir (10 dakika kadar) |
+| Apache Iceberg Kafka Connect sink | 1.11.0 | Apache-2.0 | Maven Central | `glue/values.yaml` → `versions.iceberg` | aynı değer Spark işlerinin Iceberg sürümünü de belirler |
+| Hadoop istemcisi (Connect imajı) | 3.4.3 | Apache-2.0 | Maven Central | `glue/values.yaml` → `versions.hadoopClient` | Iceberg sink'in gereksinimi |
+| Apache Polaris (Iceberg kataloğu) | 1.7.0 | Apache-2.0 | `https://downloads.apache.org/polaris/helm-chart`, `apache/polaris:1.7.0` | `platform/apps/20-polaris.yaml`, `platform/values/polaris.yaml` | katalog veritabanı `polaris-db`; ilk kurulum işi `apache/polaris-admin-tool:1.7.0` |
+| `apache-polaris` komut satırı aracı | 1.7.0 | Apache-2.0 | PyPI | `scripts/polaris-setup.sh` | katalog ve yetki kurulumu ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
+| Apache Spark | 4.1.0 | Apache-2.0 | `apache/spark:4.1.0-java21-python3` | `glue/values.yaml` → `spark.image` | kütüphaneler küme içi Maven önbelleğinden gelir |
+| Trino | 483 (chart 1.42.2) | Apache-2.0 | `https://trinodb.github.io/charts`, `trinodb/trino:483` | `platform/apps/30-trino.yaml`, `platform/values/trino.yaml` | chart'ın varsayılan imajı 480'dir; ürün 483'e sabitler |
+| Apache Superset | 6.1.0 (imaj `apache/superset:6.1.0-dev`) | Apache-2.0 | resmî imaj | `glue/values.yaml` → `superset.imageTag` | `-dev` imajı veritabanı sürücülerini içerir. İmaj `apachesuperset.docker.scarf.sh` adresinden çekilir; bu adres Docker Hub'a yönlendirir |
+| JupyterHub (z2jh) | chart 4.4.2, JupyterHub 5.5.2 | BSD-3-Clause | `https://hub.jupyter.org/helm-chart/` | `platform/apps/30-jupyterhub.yaml`, `platform/values/jupyterhub.yaml` | chart'la birlikte gelen imajlar: `configurable-http-proxy:5.2.0`, `kube-scheduler:v1.30.14`, `pause:3.10.1` |
+| Not defteri imajı | `quay.io/jupyter/pyspark-notebook:spark-4.1.2` | BSD-3-Clause | quay.io | `platform/values/jupyterhub.yaml` → `singleuser.image` | ilk çekim 4–5 dakika sürer |
+| Apache Zeppelin | 0.12.1 | Apache-2.0 | `apache/zeppelin:0.12.1` | `glue/values.yaml` → `zeppelin.image` | |
+| Reposilite (küme içi Maven önbelleği) | 3.6.4 | Apache-2.0 | `dzikoysk/reposilite:3.6.4` | `glue/values.yaml` → `mavenProxy.image` | kapatmak için `mavenProxy.enabled: false` |
+| Trino JDBC sürücüsü (Zeppelin) | 483 | Apache-2.0 | Maven Central | `glue/values.yaml` → `zeppelin.trinoJdbcVersion` | Trino ile birlikte yükseltilir |
+| Fluent Bit | 5.1.2 | Apache-2.0 | kurumun web sunucusuna kurulan paket | `agents/fluent-bit/` | küme bileşeni değildir; nginx sunucularındaki ajandır |
 
 ---
 
 ## 3. İzleme ve yedekleme
 
-| Bileşen | Sürüm | Lisans | Kaynak (chart/imaj) | Kurulum yolu | Not |
-|---|---|---|---|---|---|
-| kube-prometheus-stack | 91.4.1 (prometheus-operator **v0.94.0**) | Apache-2.0 | `https://prometheus-community.github.io/helm-charts` | `platform/apps/dev/40-monitoring.yaml` + `platform/values/monitoring-dev.yaml` | **DEV-ONLY** (sync-wave `-1`). Üretimde OpenShift user-workload monitoring; `$LAKEHOUSE_NS` ad alanındaki PodMonitor/PrometheusRule otomatik alınır |
-| Grafana (kube-prometheus-stack alt chart'ı) | chart ile gelen | **AGPL-3.0** | aynı chart | aynı | Yalnız dev/vanilla. Dashboard'lar: Strimzi Kafka ve Strimzi Kafka Connect (`glue/files/dashboards/`) |
-| kube-state-metrics (alt chart) | kube-prometheus-stack 91.4.1 ile gelen | Apache-2.0 | aynı chart | `platform/values/monitoring-dev.yaml` | Yalnız dev. Spark alarmlarının girdisi `kube_pod_status_phase` / `kube_pod_start_time` (driver pod'ları); OpenShift'te aynı seriler platform izlemesinden gelir |
-| Velero | chart 12.1.0 (Velero **1.18.1**) | Apache-2.0 | `https://vmware-tanzu.github.io/helm-charts` | `platform/apps/dev/40-velero.yaml` + `platform/values/velero-dev.yaml` | **DEV-ONLY**. Üretimde **OADP** (`openshift-adp`) aynı `velero.io/v1` CRD'lerini sağlar |
-| `velero-plugin-for-aws` | v1.14.2 | Apache-2.0 | `velero/velero-plugin-for-aws:v1.14.2` | `platform/values/velero-dev.yaml` (initContainer) | Uyumluluk: plugin v1.14.x ↔ Velero v1.18.x |
-| Kopia (node-agent yükleyicisi) | Velero ile gelir | Apache-2.0 | Velero imajı | `deployNodeAgent: true` | fs-backup'ın varsayılan yükleyicisidir |
+İzleme ve ad alanı yedeği OpenShift'in kendi bileşenleriyle yapılır; ürün bunlar için ayrı
+bir yazılım kurmaz.
+
+| Bileşen | Sürüm | Lisans | Nereden gelir | Not |
+|---|---|---|---|---|
+| OpenShift izlemesi (kullanıcı iş yükü izlemesi) | OpenShift'in sürümü | Apache-2.0 | OpenShift'in parçası | ürünün ölçüm toplama ve alarm tanımlarını okur ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §6) |
+| OADP (OpenShift API for Data Protection) | OpenShift'in sağladığı sürüm | Apache-2.0 | Red Hat operatör kataloğu | isteğe bağlı; ad alanı ve disk yedeği ([50-isletme/yedek-ve-geri-donus.md](../50-isletme/yedek-ve-geri-donus.md)) |
 
 ---
 
-## 4. İstemci kütüphaneleri (referans; küme bileşeni değil)
+## 4. İstemci kütüphaneleri (küme bileşeni değil)
 
-| Bileşen | Sürüm | Lisans | Kaynak | Kurulum yolu | Not |
+| Bileşen | Sürüm | Lisans | Nereden gelir | Nerede sabitlenir | Not |
 |---|---|---|---|---|---|
-| PyIceberg | `>=0.10,<0.11` | Apache-2.0 | PyPI `pyiceberg[s3fs,pyarrow]` | `platform/values/jupyterhub.yaml` (`postStart`) | Not defterleri ve e2e doğrulama Job'ları |
-| trino (Python istemcisi) | `>=0.339,<0.340` | Apache-2.0 | PyPI `trino` | `platform/values/jupyterhub.yaml` (`postStart`) | |
-| dbt-trino | 1.10.4 | Apache-2.0 | PyPI | `examples/dbt/cronjob.yaml` (referans örnek) | **Resmi dbt-trino imajı yoktur** → örnek CronJob `python:3.13-slim` kullanır ve paketi çalışma anında kurar (PyPI erişimi gerekir) |
+| PyIceberg | `>=0.10,<0.11` | Apache-2.0 | PyPI | `platform/values/jupyterhub.yaml` | not defterlerine açılışta kurulur |
+| trino (Python istemcisi) | `>=0.339,<0.340` | Apache-2.0 | PyPI | `platform/values/jupyterhub.yaml` | not defterlerine açılışta kurulur |
+| dbt-trino | 1.10.4 | Apache-2.0 | PyPI | `examples/dbt/` (örnek) | Gold katmanını dbt ile yazmak isteyenler için örnek |
 
 ---
 
-## 5. DEV-ONLY bileşenler (üretimde kurulmaz)
+## 5. Yönetim makinesindeki araçlar
 
-| Bileşen | Sürüm | Lisans | Kaynak | Kurulum yolu | Not |
-|---|---|---|---|---|---|
-| MinIO | `RELEASE.2025-09-07T16-13-09Z` | **AGPL-3.0** | `ghcr.io/suhanduman/minio` (kaynaktan derlenmiş ayna) | `glue/templates/minio.yaml` (`components.minio: true`) | Yalnız kind/dev S3'ü (veri ve yedek bucket'ları). Üretimde müşterinin S3'ü |
-| MinIO `mc` | `RELEASE.2025-08-13T08-35-41Z` | AGPL-3.0 | `ghcr.io/suhanduman/mc` (kaynaktan derlenmiş ayna) | aynı (bucket-init Job'ı) | |
-| MongoDB (e2e fixture'ı) | 8.0 | **SSPL** | `mongo:8.0` | `test/e2e/mongo-fixture.yaml` | Yalnız test fixture'ı; müşteri MongoDB'si kaynak sistemdir |
-| kind | ≥ 0.33 (CI: v0.33.0) | Apache-2.0 | kind.sigs.k8s.io | `test/e2e/kind.sh`, `.github/workflows/e2e.yaml` | Podman 6 uyumu için ≥ 0.33 |
-| Helm | v4.2.4 (CI) | Apache-2.0 | `azure/setup-helm` | `.github/workflows/e2e.yaml` | Yerelde ≥ 3.14 yeterlidir |
-| helm-unittest | 1.1.2 | MIT | GitHub eklentisi | `.github/workflows/e2e.yaml` | `glue/tests/` |
+Bunlar kümeye kurulmaz; kurulum ve işletme komutlarını çalıştıran yönetim makinesinde
+bulunur. Sürümleri kurumun kendi standardıdır; listenin tamamı ve hangi adımda gerektikleri
+[20-on-kosullar](../20-on-kosullar.md) başındaki tablodadır.
 
-<a id="minio-aynasi"></a>
-
-**MinIO imajları neden bizim kayıt defterimizde?** MinIO Inc. 2026-09'da topluluk container
-imajlarını geri çekti: `quay.io/minio/minio` ve `quay.io/minio/mc` anonim çekişte 401 döndürüyor.
-Kaynak kodu AGPL-3.0 olarak yerinde duruyor ve sürüm etiketleri okunabilir. Bu yüzden dev/e2e
-yığını **aynı iki etiketi kaynaktan derlenmiş kendi aynamızdan** çeker. Ayna resmî değildir ve
-MinIO Inc. ile ilişkisi yoktur; imaj etiketleri (`org.opencontainers.image.source`,
-`.revision`, `.licenses`) bunu açıkça yazar, `LICENSE` ve `CREDITS` dosyaları imajın içinde
-`/licenses/` altında korunur.
-
-- **Kaynak:** `https://github.com/suhanduman/minio` ve `https://github.com/suhanduman/mc`
-  (arşivlenmiş upstream depoların fork'ları, aynı etiketlerde).
-- **Yeniden üretme yordamı:** `scripts/build-minio-mirror.sh` — fork'ları etiketten klonlar,
-  commit'i doğrular, upstream ldflags ile `linux/amd64` + `linux/arm64` derler ve manifest
-  listesini iter. Betiğin başlığı upstream tarifinden bilinçli sapmaları tek tek sayar.
-- **Üretimi ilgilendirmez:** MinIO üretim yığınının parçası **değildir**; üretimde nesne deposu
-  müşterinin S3'üdür. Ayna yalnız kind/dev kümesini ve CI e2e koşusunu ayakta tutar.
+| Araç | Lisans | Ne için |
+|---|---|---|
+| `oc`, `kubectl` | Apache-2.0 | küme komutları |
+| `helm` | Apache-2.0 | değişikliği göndermeden önce kümeye ne gideceğini görmek ([50-isletme/degisiklik-nasil-uygulanir.md](../50-isletme/degisiklik-nasil-uygulanir.md) §3.2) |
+| `git` | GPL-2.0 | ürünün Git deposu (yalnız yönetim makinesinde kullanılır, teslim edilmez) |
+| `jq`, `python3` | MIT / PSF | betikler ve doğrulama komutları |
 
 ---
 
-## 6. Replika sayıları ve PodDisruptionBudget (karar: PDB yok)
+## 6. Kopya sayıları ve PodDisruptionBudget
 
-Kurulum kendisi hiçbir bileşen için `PodDisruptionBudget` yazmaz; Kafka, Kafka Connect ve
-PostgreSQL için operatörleri (Strimzi, CNPG) kendi PDB'lerini yaratır.
+Ürün kendisi hiçbir bileşen için `PodDisruptionBudget` yazmaz. Kafka, Kafka Connect ve
+PostgreSQL için operatörleri (Strimzi, CloudNativePG) kendi bütçelerini yaratır.
 
-| Bileşen | Üretim replikası | Kurulum yolu | PDB |
+| Bileşen | Kopya sayısı | Nerede değişir | PodDisruptionBudget |
 |---|---|---|---|
-| Kafka (broker/controller) | 3 | `glue/values.yaml` → `kafka.replicas` (`min.insync.replicas: 2`) | **Strimzi yönetir** (elle eklenmez) |
-| CNPG `polaris-db` / `keycloak-db` / `superset-db` | 2 | `platform/values/glue.yaml` → `cnpg.*.instances` | **CNPG yönetir** (elle eklenmez) |
-| Kafka Connect | 2 | `glue/values.yaml` → `connect.replicas` | **Strimzi yönetir** (`maxUnavailable: 1`: düğüm boşaltmada işçiler tek tek iner, görevleri diğer işçiye geçer) |
-| Trino coordinator / worker | 1 / 2 | `platform/values/trino.yaml` → `server.workers` | yok — coordinator tekildir (chart), worker durumsuzdur |
-| Polaris | 1 | `platform/apps/20-polaris.yaml` + `platform/values/polaris.yaml` | yok — tek replika |
-| Superset | 1 | `glue/values.yaml` → `superset.replicas` | yok — tek replika |
-| JupyterHub hub / Zeppelin | 1 / 1 | `platform/values/jupyterhub.yaml`, `glue/templates/zeppelin.yaml` | yok — tek replika |
+| Kafka | 3 | `glue/values.yaml` → `kafka.replicas` (`min.insync.replicas: 2`) | Strimzi yönetir |
+| PostgreSQL (`polaris-db`, `keycloak-db`, `superset-db`) | 2 | `platform/values/glue.yaml` → `cnpg.*.instances` | CloudNativePG yönetir |
+| Kafka Connect | 2 | `glue/values.yaml` → `connect.replicas` | Strimzi yönetir (`maxUnavailable: 1`: düğüm boşaltılırken pod'lar tek tek iner, görevleri diğer pod'a geçer) |
+| Trino koordinatörü / çalışanlar | 1 / 2 | `platform/values/trino.yaml` → `server.workers` | yok — koordinatör tektir, çalışanlar durum tutmaz |
+| Polaris | 1 | `platform/values/polaris.yaml` | yok — tek kopya |
+| Superset | 1 | `glue/values.yaml` → `superset.replicas` | yok — tek kopya |
+| JupyterHub hub / Zeppelin | 1 / 1 | `platform/values/jupyterhub.yaml`, `glue/values.yaml` → `zeppelin` | yok — tek kopya |
 
-**Gerekçe:** tek replikalı bir iş yüküne `minAvailable: 1` vermek düğüm boşaltmayı
-(`oc adm drain`) kalıcı olarak kilitler; `maxUnavailable: 1` ise zaten mevcut davranıştır.
-Yüksek erişilebilirlik gerekirse **önce replika sayısı** artırılır, PDB kararı o
-değişiklikle birlikte verilir. Kararın yeniden ele alınma koşulu
-[pre-ship-kontrol-listesi.md](pre-ship-kontrol-listesi.md) §5.1'dedir.
-
----
-
-## 7. Lisans özeti (teslimat kapsamı)
-
-- Üretime giden küme bileşenlerinin tamamı **Apache-2.0 / BSD-3-Clause / PostgreSQL
-  License** (izin verici lisanslar).
-- **AGPL-3.0** yalnız iki yerdedir: Grafana (geliştirme izleme yığını — OpenShift'te
-  platformun kendi izlemesi kullanılır) ve MinIO (yalnız kind/dev). İkisi de üretim
-  kurulumunda yer almaz.
-- **SSPL** yalnız e2e MongoDB fixture'ındadır (test verisi üreticisi).
-- Kaynak kod olarak teslim edilen her şey (glue chart'ı, Spark işleri, kılavuzlar) bu
-  depodadır; üçüncü taraf imajlarda değişiklik yapılmaz (özel imaj yoktur) → türev eser
-  yükümlülüğü doğmaz.
+**Neden tek kopyalı bileşenlere bütçe yok:** tek kopyalı bir bileşene "en az bir tane ayakta
+kalsın" demek düğüm boşaltmayı (`oc adm drain`) kalıcı olarak kilitler. Yüksek erişilebilirlik
+istenirse önce kopya sayısı artırılır, bütçe kararı o değişiklikle birlikte verilir
+([pre-ship-kontrol-listesi.md](pre-ship-kontrol-listesi.md) §5.1).
 
 ---
 
-## 8. Listeyi güncel tutma (J.3.2)
+## 7. Lisans özeti
 
-1. Yükseltme, [50-isletme/yukseltme.md](../50-isletme/yukseltme.md) §3'teki sırayla
-   yapılır; **aynı PR'da bu sayfadaki satır güncellenir**.
-2. PR'ın CI kapısı: `helm unittest glue` + üretim/geliştirme render'ı + kind e2e
-   (`.github/workflows/e2e.yaml`).
-3. Kurulumdan sonra fiilî sürümler kümeden doğrulanır:
+- Kümeye kurulan bütün bileşenler **Apache-2.0**, **BSD-3-Clause** ya da **PostgreSQL
+  License** lisanslıdır (izin verici lisanslar).
+- Kurulumda **AGPL-3.0** ya da **SSPL** lisanslı bir bileşen yoktur.
+- Kaynak kodu teslim edilen her şey (ürünün chart'ı, Spark işleri, belgeler) ürünün Git
+  deposundadır. Üçüncü taraf imajlarında değişiklik yapılmaz; türev eser yükümlülüğü doğmaz.
+
+---
+
+## 8. Listeyi güncel tutma
+
+1. Yükseltme [50-isletme/yukseltme.md](../50-isletme/yukseltme.md) sayfasındaki sırayla
+   yapılır. **Sürüm değiştiren her değişiklikte bu sayfadaki satır da güncellenir.**
+2. Kurulumdan ve her yükseltmeden sonra kümedeki gerçek sürümler doğrulanır:
 
 `[bastion]`
 
 ```bash
-oc -n "$ARGOCD_NS" get applications \
-  -o custom-columns='APP:.metadata.name,CHART:.spec.source.chart,REV:.spec.source.targetRevision'
+oc -n "$ARGOCD_NS" get applications -o json | jq -r '.items[] | .metadata.name as $n
+  | ([.spec.source] + (.spec.sources // []))[] | select(. != null and .chart != null)
+  | "\($n)\t\(.chart)\t\(.targetRevision)"' | column -t
 oc -n "$LAKEHOUSE_NS" get kafka lakehouse -o jsonpath='{.spec.kafka.version}{"\n"}'
-oc -n "$LAKEHOUSE_NS" get pods \
-  -o custom-columns='POD:.metadata.name,IMAJ:.spec.containers[*].image'
+oc -n "$LAKEHOUSE_NS" get pods -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' \
+  | sed 's/@sha256.*//' | sort -u
 ```
 
-**Beklenen çıktı** (örnek — ilk komutun chart kaynaklı satırları):
+**Beklenen çıktı** (örnek; üçüncü komutun çıktısından seçilmiş satırlar):
 
 ```text
-APP            CHART            REV
-cert-manager   cert-manager     v1.21.2
-cnpg           cloudnative-pg   0.29.0
-polaris        polaris          1.7.0
-trino          trino            1.42.2
+cert-manager       cert-manager            v1.21.2
+cnpg               cloudnative-pg          0.29.0
+cnpg-barman        plugin-barman-cloud     0.8.0
+jupyterhub         jupyterhub              4.4.2
+polaris            polaris                 1.7.0
+spark-operator     spark-operator          2.5.2
+strimzi            strimzi-kafka-operator  1.2.0
+superset-operator  superset-operator       0.2.0
+trino              trino                   1.42.2
+4.3.1
+apachesuperset.docker.scarf.sh/apache/superset:6.1.0-dev
+docker.io/apache/polaris:1.7.0
+docker.io/apache/spark:4.1.0-java21-python3
+docker.io/apache/zeppelin:0.12.1
+docker.io/dzikoysk/reposilite:3.6.4
+docker.io/trinodb/trino:483
+ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie
+quay.io/keycloak/keycloak:26.7.3
+quay.io/strimzi/kafka:1.2.0-kafka-4.3.1
 ```
 
-Git kaynaklı uygulamaların (`glue`, `custom`, `keycloak-operator`) `CHART` hücresi
-doldurulmaz; onların "sürümü" `REV` sütunundaki Git revizyonudur.
+Git'ten kurulan uygulamaların (`glue`, `custom`, `keycloak-operator`) ilk komutta satırı
+yoktur; onların sürümü kümenin eşitlendiği Git commit'idir:
+`oc -n "$ARGOCD_NS" get application glue -o jsonpath='{.status.sync.revision}{"\n"}'`.
 
-**Ters giderse:** `REV` sütunundaki değer bu sayfadaki sürümle uyuşmuyorsa ya küme eski bir
-commit'ten sync olmuştur ya da bu sayfa güncellenmemiştir — ikisi de J.3.2 açısından
-bulgudur. Kümenin hangi commit'te olduğunu
-`oc -n "$ARGOCD_NS" get application glue -o jsonpath='{.status.sync.revision}{"\n"}'` gösterir.
+**Ters giderse:** bir sürüm bu sayfadakiyle uyuşmuyorsa ya küme eski bir commit'ten
+eşitlenmiştir ya da bu sayfa güncellenmemiştir. İkisi de J.3.2 açısından düzeltilmesi
+gereken bir bulgudur.
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Tablolardaki sürümler kümedeki fiilî sürümlerle birebir aynı (§8).
-- [ ] Üretim kurulumunda AGPL-3.0 ve SSPL lisanslı hiçbir bileşen yok (§5, §7).
-- [ ] Yükseltme PR'ında bu sayfadaki ilgili satır da güncellendi.
+- [ ] Tablolardaki sürümler kümedeki gerçek sürümlerle aynı (§8).
+- [ ] Kurulumda AGPL-3.0 ya da SSPL lisanslı bir bileşen yok (§7).
+- [ ] Sürüm değiştiren her değişiklikte bu sayfa da güncellendi.
 - [ ] Hiçbir bileşen için özel imaj üretilmedi (baştaki `grep` denetimi).
 
 ## Sonraki bölüm
 
-[kabul-testleri.md](kabul-testleri.md) — bu tablonun şartname maddesi karşılığı ve kabul
-kanıtı. Portlar ve servisler: [port-ve-servisler.md](port-ve-servisler.md).
+[kabul-testleri.md](kabul-testleri.md) — şartname maddelerinin karşılığı ve kabul kanıtı.
+Portlar ve servisler: [port-ve-servisler.md](port-ve-servisler.md).

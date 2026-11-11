@@ -1,11 +1,12 @@
 # 00 — Genel bakış
 
-**Bu bölümde:** ürünün ne yaptığı, hangi bileşenlerden oluştuğu, verinin kaynaktan rapora
-kadar izlediği yedi akış ve baştan sona kullanılan kavramların sözlüğü.
-**Süre:** 30–40 dakika (okuma).
-**Gereken yetki:** yok — bu bölümde komut çalıştırılmaz.
-**Nerede çalıştırılır:** komut yok; okuma bölümüdür. İlk komut kurulum öncesi
-denetimlerle birlikte 20-on-kosullar.md bölümünde gelir.
+Bu bölüm ürünün ne yaptığını, hangi bileşenlerden oluştuğunu, verinin kaynaktan rapora
+kadar izlediği yedi yolu ve bütün belgelerde kullanılan kavramları anlatır.
+
+**Ne kadar sürer:** 30–40 dakika okuma.
+
+**Hangi yetkiler gerekir:** yok; bu bölümde komut çalıştırılmaz. İlk komutlar
+[20-on-kosullar.md](20-on-kosullar.md) bölümündedir.
 
 ---
 
@@ -18,11 +19,14 @@ Directory kimlikleriyle sorgulanabilir kılar.
 
 Üç özellik ürünün tamamını belirler:
 
-1. **Kod yazılmaz, değer yazılır.** Yeni bir kaynak veya tablo eklemek, bir YAML dosyasına
-   birkaç satır eklemektir; bağlayıcıları, Kafka konularını, tabloları ve zamanlanmış
-   işleri Helm şablonları üretir.
-2. **Her şey Git'ten gelir.** Kümede elle değişiklik yapılmaz; Git'e yazılır, ArgoCD kümeyi
-   Git'e eşitler. Böylece "kümede ne var" sorusunun cevabı her zaman depodadır.
+1. **Kod yazılmaz, ayar yazılır.** Yeni bir kaynak ya da tablo eklemek, bir ayar dosyasına
+   birkaç satır eklemektir. Bağlayıcıları, Kafka konularını, tabloları ve zamanlanmış
+   işleri ürün bu satırlardan kendisi üretir.
+2. **Her şey Git'ten gelir.** Kümede elle değişiklik yapılmaz; değişiklik Git'e yazılır ve
+   ArgoCD kümeyi Git'teki hâle getirir. Böylece "kümede ne var" sorusunun cevabı her zaman
+   Git deposundadır. Tek istisna parolalardır: Git'e girmezler, kurulumda elle yaratılır
+   ve hangi belgede yaratıldıklarını gösteren bir etiket taşırlar
+   ([50-isletme/degisiklik-nasil-uygulanir.md](50-isletme/degisiklik-nasil-uygulanir.md) §7).
 3. **Ürünün hiçbir bileşeni özel imaj kullanmaz.** Bütün konteyner imajları üreticinin resmi
    imajlarıdır; Kafka Connect imajı bile kümede, Strimzi'nin kendi yapı mekanizmasıyla
    üretilir. Ürün tarafında Dockerfile bakımı diye bir iş yoktur. (Kendi Spark uygulamanız
@@ -43,7 +47,7 @@ değişikliği o dosyada yapılır.
 | **cert-manager** | Küme içi sertifikalar (Trino TLS, iç kök CA) | `cert-manager` ad alanı | `platform/apps/00-cert-manager.yaml` |
 | **Strimzi Kafka Operator** | Kafka ve Kafka Connect kümelerini CR'lardan (özel kaynak, bkz. [CR](#4-kavramlar-sözlüğü)) kurar | `lakehouse` | `platform/apps/00-strimzi.yaml` |
 | **Apache Kafka** (KRaft) | Değişiklik olaylarının dayanıklı tamponu | `lakehouse` | `glue/values.yaml` → `kafka` |
-| **Kafka Connect** (Debezium + Iceberg sink) | Kaynak DB'den okur, Iceberg tablosuna yazar | `lakehouse` | `glue/templates/kafka-connect.yaml`, `glue/templates/connectors.yaml` |
+| **Kafka Connect** (Debezium + Iceberg sink) | Kaynak DB'den okur, Iceberg tablosuna yazar; 2 işçi (pod), biri düşerse işler diğerine geçer | `lakehouse` | `glue/templates/kafka-connect.yaml`, `glue/templates/connectors.yaml` |
 | **CloudNativePG (CNPG)** | Polaris, Keycloak ve Superset'in PostgreSQL veritabanları | `lakehouse` (operatör `cnpg-system`) | `platform/apps/00-cnpg.yaml`, `glue/values.yaml` → `cnpg` |
 | **Barman Cloud eklentisi** | CNPG veritabanlarının S3'e sürekli yedeği (PITR) | `cnpg-system` | `platform/apps/00-cnpg-barman.yaml`, `glue/values.yaml` → `backup` |
 | **Apache Polaris** | Iceberg REST kataloğu: tablo listesi, yetki, S3 kimlik dağıtımı | `lakehouse` | `platform/apps/20-polaris.yaml`, `platform/values/polaris.yaml`, `platform/polaris/setup.yaml` |
@@ -82,7 +86,7 @@ sırasında bilmeniz gereken şeyi anlatır.
 ```
 
 PostgreSQL'de [Debezium](#4-kavramlar-sözlüğü) veritabanının yazma-öncesi günlüğünü
-(WAL) mantıksal çoğaltma yuvasından okur; SQL Server'da Change Tracking/CDC tablolarını okur.
+(WAL) mantıksal çoğaltma yuvasından okur; SQL Server'da CDC tablolarını okur.
 Bağlayıcı ilk kez açıldığında tablonun tamamını okuyup Kafka'ya basar (bu ilk tam okumaya
 [snapshot](#4-kavramlar-sözlüğü) denir), sonra yalnız değişiklikleri akıtır. Iceberg
 [sink](#4-kavramlar-sözlüğü)'i aynı Kafka Connect kümesinde çalışır ve olayları toplu
@@ -122,10 +126,12 @@ Bu akış küme dışından başlar: web sunucusuna kurulan Fluent Bit ajanı er
 satır satır okuyup Kafka'nın **dış dinleyicisine** (OpenShift Route üzerinden, TLS ve SCRAM
 kimlik doğrulaması ile) gönderir. Kümede geri kalan yol CDC akışıyla aynıdır: Iceberg
 sink'i olayları `nginx_raw.access_log` tablosuna yazar. Akış varsayılan olarak **kapalıdır**;
-açmak için `glue/values.yaml` içindeki `nginx.enabled` ve `kafka.externalListener`
-anahtarlarının **ikisi birden** açılmalıdır (biri açık, öteki kapalı olursa ajan
-bağlanamaz). Bu tablo IP adresi içerdiği için Trino yetki kurallarında `remote` kolonu
-`lakehouse-users` grubuna maskelenmiş gösterilir.
+açmak için `platform/values/site/glue.yaml` dosyasında `nginx.enabled` ve
+`kafka.externalListener` ayarlarının **ikisi birden** açılır (biri açık, öteki kapalı olursa
+ajan bağlanamaz;
+[50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md) §10).
+Tablo IP adresi içerdiği için `remote` kolonu `lakehouse-users` grubuna maskeli gösterilir;
+analistler adresin tamamını görür.
 
 ### 3.4 Silver birleştirme ve bakım işleri
 
@@ -146,10 +152,17 @@ kopyasıdır ve son kullanıcıların sorguladığı tablo budur. Bu birleştirm
 `maint-position-deletes` silme dosyalarını katlar, `maint-compact` küçük dosyaları
 birleştirir ([compaction](#4-kavramlar-sözlüğü)), `maint-expire-orphan-ttl` eski
 [Iceberg snapshot](#4-kavramlar-sözlüğü)'larını (7 günden eski), sahipsiz dosyaları (3
-günden eski) ve Bronze'daki 30 günden eski tarihçeyi siler. [Gold](#4-kavramlar-sözlüğü)
-katmanı ürünün parçası değildir: kurumun kendi iş kuralları `custom/` klasöründeki `dbt`
-CronJob'ı ya da Spark uygulamasıyla yazılır (`examples/dbt/`,
-`custom/examples/dbt-cronjob.yaml`).
+günden eski) ve Bronze'daki 30 günden eski tarihçeyi siler.
+
+[Gold](#4-kavramlar-sözlüğü) katmanı ürünle gelmez: kurumun iş kuralları `custom/`
+klasörüne konan zamanlı bir Spark işiyle (ya da dbt ile) yazılır. Nasıl yazılacağı ve
+Superset'te Gold tablosu ile sanal veri seti arasındaki fark:
+[50-isletme/yeni-spark-uygulamasi.md](50-isletme/yeni-spark-uygulamasi.md) §12.
+
+Bir tablonun geçmişine iki yoldan bakılır: Iceberg snapshot'larıyla son 7 günün herhangi
+bir anındaki hâli (zaman yolculuğu), Bronze'la son 30 günün her değişikliği tek tek. Farkı
+ve hangisinin ne zaman kullanılacağı:
+[50-isletme/veri-metrikleri.md](50-isletme/veri-metrikleri.md) §5.
 
 ### 3.5 Kimlik akışı
 
@@ -214,8 +227,9 @@ bağlayıcı görevi düştü (`LakehouseConnectTaskFailed`), sink geride kaldı
 (`LakehouseSinkStalled`), Silver birleştirmesi bayatladı (`LakehouseSilverMergeStale`),
 zamanlanmış Spark koşusu başarısız (`LakehouseSparkScheduledRunFailed`), Spark koşusu çok
 uzun sürüyor (`LakehouseSparkRunTooLong`), hatalı kayıt konusuna kayıt düştü
-(`LakehouseDlqRecords`). Eşikler `glue/values.yaml` içindeki `monitoring`
-bloğundadır ve kurumun veri hacmine göre kurulumdan sonra ayarlanır.
+(`LakehouseDlqRecords`). Eşikler kurumun veri hacmine göre kurulumdan sonra
+`platform/values/site/glue.yaml` dosyasının `monitoring` bölümünde ayarlanır
+([50-isletme/izleme-ve-alarmlar.md](50-isletme/izleme-ve-alarmlar.md) §4).
 
 ---
 
@@ -252,7 +266,7 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Keycloak** | Kimlik sağlayıcı. Active Directory'yi okur, arayüzlere tek oturum açma verir, grup bilgisini jetona koyar. |
 | **OIDC** (OpenID Connect) | Uygulamaların "bu kullanıcı kim" sorusunu kimlik sağlayıcıya sorduğu standart. Tarayıcı Keycloak'a yönlendirilir, geri dönerken imzalı bir jeton taşır. |
 | **realm** | Keycloak'ta bağımsız bir kullanıcı/istemci/rol evreni. Bu kurulumda tek realm vardır: `lakehouse`. |
-| **Active Directory (AD)** | Kurumun kullanıcı ve grup dizini. Gün-1'den zorunludur; kullanıcı ve parola tek kaynak olarak burada durur. |
+| **Active Directory (AD)** | Kurumun kullanıcı ve grup dizini. Kurulumun ilk gününden gereklidir; kullanıcı ve parola yalnız burada durur. |
 | **LDAPS** | Dizine TLS üzerinden erişim protokolü (636 portu). Şifresiz LDAP kullanılmaz. |
 | **Route** | OpenShift'te bir servisi küme dışına açan nesne. Adresler bileşen adı + `-` + ad alanı + `.` + uygulama alan adı biçiminde türetilir. |
 | **CR** (Custom Resource — özel kaynak) | Kubernetes'in kendi nesne çeşitlerine bir operatörün eklediği yeni nesne türü. `Kafka`, `SparkApplication`, `Certificate` ve ArgoCD `Application` birer CR'dır; hepsi sıradan YAML gibi Git'e yazılır. |
@@ -261,7 +275,7 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **Helm values** | Bir chart'ın davranışını belirleyen değer dosyası. Ürün varsayılanları `platform/values/` altında, müşteriye özel değerler yalnız `platform/values/site/` altındadır. |
 | **dbt** (data build tool) | SQL dosyalarını sıralı, sürümlenebilir dönüşüm hattına çeviren açık kaynak araç. Ürünle gelmez; Gold katmanını yazmak isteyen kurum için referans örnek `examples/dbt/` altındadır. |
 | **SCRAM** | Parolayı ağdan geçirmeden doğrulayan Kafka kimlik doğrulama yöntemi (SCRAM-SHA-512). Küme içi ve dış Kafka bağlantılarında TLS ile birlikte kullanılır. |
-| **Secret** | Kubernetes'te parola/anahtar saklayan nesne. Git'e **girmez**; kurulum sırasında komutla yaratılır. |
+| **Secret** | Kubernetes'te parola ve anahtar saklayan nesne. Git'e **girmez**; kurulum sırasında komutla yaratılır ve `lakehouse.io/yonetim` etiketiyle hangi belgede yaratıldığını gösterir. |
 | **StorageClass** | Kümenin hangi depolamadan disk vereceğini belirleyen sınıf. Boş bırakılırsa kümenin varsayılanı kullanılır. |
 | **PVC** (PersistentVolumeClaim) | Bir pod'un "şu boyutta kalıcı disk istiyorum" talebi. Kafka, veritabanları, Zeppelin ve not defterleri PVC kullanır. |
 | **CNPG** (CloudNativePG) | PostgreSQL'i Kubernetes'te işleten operatör. Polaris, Keycloak ve Superset veritabanları CNPG kümeleridir. |
@@ -270,7 +284,7 @@ Belgelerin tamamında bu anlamlarla kullanılır. Ürün adları özgün hâller
 | **UWM** (kullanıcı iş yükü izleme) | OpenShift'in kullanıcı ad alanlarındaki metrikleri toplayan izleme yığını. Ayrı Prometheus kurulmaz. |
 | **PrometheusRule** | Alarm tanımını taşıyan CR. Bu üründe altı alarm tanımlıdır. |
 | **bastion** | Kümeye `oc login` ile girilmiş yönetim makinesi; belgelerdeki `[bastion]` etiketli komutlar burada koşar. Kurumun atlama sunucusu ya da yöneticinin dizüstü olabilir. |
-| **fixture** | Deneme kümesinde gerçek kaynak yerine geçen örnek veri ve sahte kaynak sistemler (demo PostgreSQL/MongoDB, örnek tablolar). Üretimde bulunmaz. |
+| **fixture** | Kabul testinin kendi kurduğu örnek kaynak veritabanları ve örnek tablolar. Gerçek kaynakların yerine geçer; kurumun verisine dokunmaz. |
 | **STS** (Security Token Service) | S3'ün geçici kimlik veren servisi. Polaris, istemcilere kalıcı anahtar yerine kısa ömürlü kimlik dağıtmak için kullanır; depolama STS desteklemiyorsa `sts_unavailable: true` ile kapatılır. |
 | **vended credentials** | Polaris'in bir istemciye tablo bazında verdiği **geçici** S3 kimliği. Böylece Spark/Trino/sink kalıcı S3 anahtarı taşımaz. |
 | **SMT** (Single Message Transform) | Kafka Connect'in tek bir olayı geçerken dönüştüren küçük eklentisi. Bu üründe Debezium olayını Iceberg satırına çeviren dönüşüm bir SMT'dir. |

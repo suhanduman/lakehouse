@@ -1,23 +1,28 @@
 # 10 — Planlama
 
-**Bu bölümde:** kuruluma başlamadan önce verilmesi gereken kararlar, bileşen başına kaynak
-ihtiyacı (küçük/orta/büyük), ağ ve port özeti, doldurmanız gereken değerlerin çalışma sayfası,
-gerçekçi süre tahmini ve hangi işin hangi ekipte olduğu.
-**Süre:** 45 dakika okuma + değerlerin ilgili ekiplerden toplanması (pratikte 2–5 iş günü bekleme).
-**Gereken yetki:** iki komut için kümede `oc` ile okuma yetkisi (`cluster-reader` yeterlidir).
-Geri kalanı okumadır.
-**Nerede çalıştırılır:** `[bastion]` — `oc` kurulu ve kümeye giriş yapılmış yönetim makinesi.
+Bu bölüm kuruluma başlamadan önce bilinmesi gerekenleri toplar: ürünle gelen kararlar,
+kaç makine kaynağı gerektiği (küçük, orta, büyük kurulum), ağ ve port özeti, ekiplerden
+toplanacak değerler, süre tahmini ve hangi işin hangi ekipte olduğu.
+
+**Ne kadar sürer:** okuma 45 dakika. Değerlerin ekiplerden toplanması genellikle 2–5 iş
+günü sürer.
+
+**Hangi yetkiler gerekir:** iki komut için kümede okuma yetkisi (`cluster-reader`
+yeterlidir). Geri kalanı okumadır.
+
+**Komutlar nerede çalışır:** `[bastion]` — `oc` kurulu ve `oc login` ile kümeye bağlı
+yönetim makinesi.
 
 ---
 
 ## 1. Mimari kararlar (verilmiş kararlar, kısa gerekçeleriyle)
 
-Bu kararlar ürünle birlikte gelir; kurulumda yeniden tartışılmaz. Sonuçları bütün belgeleri
-etkilediği için burada topluca verilir.
+Bu kararlar ürünle birlikte gelir ve kurulumda değişmez. Bütün belgeler bunlara göre
+yazıldığı için burada bir arada verilir.
 
 | Karar | Sonuç |
 |---|---|
-| **Kurulum yolu OpenShift GitOps (ArgoCD)'tur.** | Kümede elle `oc apply` yapılmaz. Kurulum da, gün-2 değişikliği de Git'e yazmakla olur. Helm ile doğrudan kurulum yalnız geliştiricilerin dizüstü kümesi (kind) içindir. |
+| **Kurulum yolu OpenShift GitOps (ArgoCD)'tur.** | Kümede elle `oc apply` yapılmaz. Kurulum da, sonraki her değişiklik de Git'e yazılarak yapılır; ArgoCD kümeyi Git'teki hâle getirir. Hangi nesnelerin Git'ten geldiği, hangilerinin elle yaratıldığı: [50-isletme/degisiklik-nasil-uygulanir.md](50-isletme/degisiklik-nasil-uygulanir.md) §7. |
 | **Depo müşterinin kendi Git sunucusuna kopyalanır.** | ArgoCD sizin kopyanızı okur (`$GIT_REPO_URL`). Ürün güncellemeleri bu kopyaya birleştirilir; böylece kurumun değişiklikleri kaybolmaz. |
 | **Müşteriye özel değerler tek dizindedir: `platform/values/site/`.** | `platform/values/site/glue.yaml`, `platform/values/site/trino.yaml`, `platform/values/site/jupyterhub.yaml` — düzenlediğiniz tek yer burasıdır. Ürün varsayılanları `platform/values/` altında kalır ve yükseltmelerde üstüne yazılır. Üç dosyanın tutarlılığını `scripts/check-site.sh` denetler. |
 | **Adresler türetilir.** | Bileşen adresi = bileşen adı + `-` + `$LAKEHOUSE_NS` + `.` + `$APPS_DOMAIN`. Yani yalnız `appsDomain` doldurulur; Keycloak yönlendirme adresleri de aynı kaynaktan üretilir. Kurumsal bir DNS adı isteyen bileşen için `platform/values/site/glue.yaml` içinde tek satır açılır. |
@@ -35,7 +40,7 @@ etkilediği için burada topluca verilir.
 | Kademe | Kim için | Kabaca |
 |---|---|---|
 | **Küçük** | pilot, tek departman; toplam 1–2 kaynak veritabanı, en çok ~50 tablo, günde birkaç milyon değişiklik olayı; 10'a kadar eşzamanlı kullanıcı | **Deponun bugünkü varsayılanları** (`glue/values.yaml` + `platform/values/`). Hiçbir şey değiştirmeden kurulur. |
-| **Orta** | üretim, birkaç kaynak sistem; ~500 tabloya kadar, günde on milyonlarca olay; 25–50 eşzamanlı kullanıcı | Depodaki yorumlu "büyük tier" bloğu (`platform/values/glue.yaml` içinde kapalı duran `spark` bloğu) açılır, disk ve replika sayıları artırılır. |
+| **Orta** | üretim, birkaç kaynak sistem; ~500 tabloya kadar, günde on milyonlarca olay; 25–50 eşzamanlı kullanıcı | §2.2 tablosundaki "Orta" değerleri site dosyalarına (`platform/values/site/`) yazılır: Spark kaynakları, disk boyutları ve kopya sayıları artırılır. |
 | **Büyük** | kurum geneli; binlerce tablo, sürekli yüksek hacim; 100+ kullanıcı | Orta kademenin çalıştırıcı sayısı ve bellek katları. **Bu sütun bir başlangıç noktasıdır, ölçüm değildir**: bir ay çalıştırıp gerçek kullanımı ölçmeden bu değerlere sabitlenmeyin. |
 
 > Küçük sütunu depodaki gerçek varsayılanlardır. Orta ve büyük sütunlar **başlangıç
@@ -77,9 +82,9 @@ bunun üzerinden yapılır.
 
 **Dikkat edilecek üç nokta.**
 
-1. **Trino'nun JVM yığını Kubernetes isteği değildir.** Değer dosyasında istek/limit yoktur ama her
-   Trino pod'u 8 GiB yığın ayırır; koordinatör + 2 işçi için **düğümlerde en az 3 × 10 GiB boş
-   bellek** bulunmalıdır. Küçük kademede bile bu böyledir.
+1. **Trino'nun belleği istek olarak yazılmaz.** Trino pod'larında bellek isteği tanımlı
+   değildir, ama her pod 8 GiB JVM yığını ayırır. Koordinatör ve 2 işçi için düğümlerde
+   **en az 3 × 10 GiB boş bellek** bulunmalıdır. Küçük kademede de bu böyledir.
 2. **Kafka diski geriye dönük doldurmayı da karşılamalıdır.** İlk tam okuma (snapshot) sırasında
    kaynak tabloların tamamı Kafka'dan geçer. Kaynak veritabanının toplam boyutunun **en az yarısı
    kadar** boş Kafka diski planlayın.
@@ -120,9 +125,11 @@ oc get ingresses.config cluster -o jsonpath='{.spec.domain}'
 apps.ocp.example.net
 ```
 
-**Ters giderse:** komut `Error from server (Forbidden)` derse hesabınızda küme düzeyinde okuma
-yetkisi yoktur; küme yöneticisinden `cluster-reader` isteyin ya da değeri doğrudan ondan alın. Boş
-çıktı, kümeye giriş yapılmadığı anlamına gelir (`oc whoami` ile doğrulayın).
+**Ters giderse:**
+
+- `Error from server (Forbidden)`: hesabınızın küme düzeyinde okuma yetkisi yoktur. Küme
+  yöneticisinden `cluster-reader` isteyin ya da değeri doğrudan ondan alın.
+- Boş çıktı: kümeye bağlı değilsiniz; `oc whoami` ile kontrol edin.
 
 ### Adım 2 — Kullanılabilir StorageClass'ları listeleyin
 
@@ -194,8 +201,11 @@ cp install/lakehouse.env.example install/lakehouse.env && chmod 600 install/lake
 **Beklenen çıktı:** komut sessizce biter (çıkış kodu 0). Dosya izni `-rw-------` olmalıdır
 (`ls -l install/lakehouse.env` ile doğrulayın).
 
-**Ters giderse:** `Permission denied` alırsanız depoyu yazma izniniz olan bir dizine klonlayın.
-Dosya zaten varsa üzerine yazmaz — `cp -i` uyarısını dikkate alın.
+**Ters giderse:**
+
+- `Permission denied`: depoyu yazma izniniz olan bir klasöre kopyalayın.
+- Dosya zaten varsa bu komut onun üzerine yazar. Daha önce doldurduğunuz bir dosya varsa
+  komutu çalıştırmayın.
 
 | Değişken | Kimden alınır | Nasıl / örnek | Alındı |
 |---|---|---|---|
@@ -240,7 +250,7 @@ Ayrıca AD ekibinden **değer değil, iş** istenir: `lakehouse-admins`, `lakeho
 | Değerlerin toplanması (AD, depolama, DNS/sertifika) | **2–5 iş günü** | Kurulumun önündeki en uzun bekleme; ilk gün başlatın. |
 | Ön koşulların doğrulanması ve operatörlerin kurulması | 1–2 saat | [20-on-kosullar.md](20-on-kosullar.md). |
 | Deponun kopyalanması, site değerlerinin doldurulması, Secret'ların yaratılması | 1 saat | `scripts/check-site.sh` yeşile dönene kadar. |
-| ArgoCD bootstrap ve bileşenlerin ayağa kalkması | **40–60 dakika** | Ağın hızına bağlı: Kafka Connect imajı kümede üretilir (~10 dk), not defteri imajı ~4,5 dakikada çekilir. |
+| ArgoCD'nin kurulumu başlatması ve bileşenlerin açılması | **40–60 dakika** | Ağın hızına bağlıdır: Kafka Connect imajı kümede üretilir (~10 dakika), not defteri imajı ~4,5 dakikada çekilir. |
 | Polaris kataloğu, ilk giriş, kabul testi | 1 saat | `scripts/polaris-setup.sh` ve `scripts/acceptance.sh`. |
 | İlk kaynak veritabanının bağlanması ve geriye dönük doldurma | tablo boyutuna bağlı: dakikalar–saatler | İlk tam okuma kaynağı meşgul eder; iş saatleri dışına planlayın. |
 
@@ -266,8 +276,8 @@ Toplam: değerler hazırsa **bir iş günü**; değerler beklenerek **bir hafta*
 | `platform/values/site/` dosyalarının doldurulması | | | | **Y** |
 | Secret'ların kümede yaratılması | D | | | **Y** |
 | Bootstrap ve doğrulama | | | | **Y** |
-| Kaynak veritabanlarında CDC'nin açılması (yuva/Change Tracking, sinyal tablosu) | | | | **Y** (kaynak DB yöneticisiyle) |
-| Gün-2: kaynak/tablo ekleme, kullanıcı yetkisi, yükseltme | D | D | | **Y** |
+| Kaynak veritabanlarında CDC'nin açılması (PostgreSQL publication, SQL Server CDC, sinyal tablosu) | | | | **Y** (kaynak DB yöneticisiyle) |
+| Kurulumdan sonraki işler: kaynak/tablo ekleme, kullanıcı yetkisi, yükseltme | D | D | | **Y** |
 | Yedeklerin izlenmesi ve geri dönüş tatbikatı | D | | D | **Y** |
 
 ---

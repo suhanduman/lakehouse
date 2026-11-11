@@ -330,7 +330,7 @@ nesne adı verilir:
 scripts/nesne-kaynagi.sh secret/universite-db kafkaconnect/connect secret/connect pod/connect-connect-0
 ```
 
-**Beklenen çıktı** (OpenShift provasından; `universite-db` orada bir kaynağın Secret'ıdır):
+**Beklenen çıktı** (örnek bir kurulumdan; `universite-db` orada bir kaynağın Secret'ıdır):
 
 ```text
 secret/universite-db                         ELLE       docs/50-isletme/yeni-kaynak-ve-pipeline.md §4 — Kaynağın Secret'ını yaratın

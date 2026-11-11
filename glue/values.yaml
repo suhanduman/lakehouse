@@ -170,7 +170,7 @@ mavenProxy:
   enabled: true
   image: docker.io/dzikoysk/reposilite:3.6.4
   upstream: https://repo1.maven.org/maven2   # önbelleğin kaynağı; kurum aynası da yazılabilir
-  storageSize: 5Gi                 # bir Iceberg sürümünün kütüphaneleri ~110 MB
+  storageSize: 5Gi                 # bir Iceberg sürümünün kütüphaneleri ~200 MB
   storageClass: ""                 # boş = kümenin varsayılan StorageClass'ı
   javaOpts: "-Xmx192m"
   resources: {requests: {cpu: 50m, memory: 256Mi}, limits: {memory: 512Mi}}
