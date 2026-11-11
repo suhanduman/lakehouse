@@ -239,7 +239,7 @@ E2E F4 JUPYTERHUB OK
 E2E F4 ZEPPELIN OK
 E2E F5 MONITORING OK
 E2E F5 DR OK
-KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp)
+KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp, argocd-ns=openshift-gitops)
 ```
 
 Iceberg yazıcısı veriyi beş dakikada bir yazdığı için Bronze beklemeleri uzundur; betik
