@@ -143,7 +143,7 @@ tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'
 | `LakehouseConnectTaskFailed` | Bir bağlayıcı görevi düştü; o kaynaktan **veri akmıyor** | critical | [sorun-giderme.md §4.1](sorun-giderme.md#connect) |
 | `LakehouseSinkStalled` | Iceberg'e yazma gecikmesi eşiği aştı; veri geliyor ama **tabloya işlenmiyor** | warning | [sorun-giderme.md §4.2](sorun-giderme.md#sink) |
 | `LakehouseSilverMergeStale` | En son **başarılı** Silver birleştirmesinin üzerinden çok zaman geçti; Silver tablolar **eskiyor** | warning | [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge) |
-| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız) | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
+| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız); iş başına tek alarm, özette başarısız koşu sayısı | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
 | `LakehouseSparkRunTooLong` | Son 6 saatte tamamlanan Spark koşularının **ortalama** süresi eşiği aştı | warning | [sorun-giderme.md §4.5](sorun-giderme.md#spark-duration) |
 | `LakehouseDlqRecords` | Son bir saatte bir hatalı kayıt konusuna (`….dlq`) yeni kayıt düştü; o kayıtlar **tabloya girmedi** | warning | [sorun-giderme.md §4.6](sorun-giderme.md#dlq) |
 

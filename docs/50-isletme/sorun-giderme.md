@@ -316,12 +316,16 @@ Kural **yalnız ürünün kendi zamanlı işlerini** izler: `silver-merge`, `mai
 bakım işleri ve `mongo-bronze`. Kendi yazdığınız Spark uygulamaları bu alarma **girmez**
 ([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md)). 1 dakika, **warning**.
 
+Alarm **iş başına bir tanedir**: aynı işin birden çok koşusu başarısız olsa da tek alarm
+gelir; özet işin adını ve başarısız koşu sayısını gösterir, örneğin
+`Zamanlanmış Spark işi başarısız: maint-expire-orphan-ttl (1 koşu)`.
+
 **Ne bak**
 
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" get sparkapplication
+oc -n "$LAKEHOUSE_NS" get sparkapplication | grep -E 'NAME|FAILED'
 APP=silver-merge-1758700000        # yukarıdaki listede FAILED görünen ad
 oc -n "$LAKEHOUSE_NS" describe sparkapplication "$APP" | tail -30
 oc -n "$LAKEHOUSE_NS" logs "$APP-driver" --tail=200
