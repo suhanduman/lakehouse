@@ -698,7 +698,7 @@ E2E F4 JUPYTERHUB OK
 E2E F4 ZEPPELIN OK
 E2E F5 MONITORING OK
 E2E F5 DR OK
-KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp)
+KABUL: 9/9 yol geçti (ns=lakehouse, mon-ns=openshift-user-workload-monitoring, velero-ns=openshift-adp, argocd-ns=openshift-gitops)
 ```
 
 **Ters giderse:** bir yol başarısız olursa betik orada durur ve özet `KABUL BAŞARISIZ`
