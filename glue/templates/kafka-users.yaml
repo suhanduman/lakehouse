@@ -36,6 +36,10 @@ spec:
     # nginx yolu: sink-nginx nginx.access'i okur, nginx.dlq'yu yaratır/yazar (F3 canlı: aksi hâlde DLQ init TopicAuthorizationException)
     - {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
 {{- end }}
+{{- range .Values.streams }}
+    # JSON akışı: sink-{{ .name }} {{ .name }}.events'i okur, {{ .name }}.dlq'yu yaratır/yazar
+    - {resource: {type: topic, name: "{{ .name }}.", patternType: prefix}, operations: [Read, Write, Describe, Create]}
+{{- end }}
     - {resource: {type: transactionalId, name: "connect", patternType: prefix}, operations: [Write, Describe]}
     # Iceberg sink'in transactional producer'ları: coordinator-txn-<uuid> ve worker-txn-<uuid> (F2 e2e: aksi hâlde task
     # TransactionalIdAuthorizationException ile ölür)
@@ -80,4 +84,22 @@ spec:
     type: simple
     acls:
     - {resource: {type: topic, name: "nginx.", patternType: prefix}, operations: [Write, Describe]}
+{{- end }}
+{{- range .Values.streams }}
+---
+# JSON akışı "{{ .name }}" üreticisi (uygulama / IoT ağ geçidi): YALNIZ {{ .name }}.events konusuna yazabilir.
+# Parolası Strimzi'nin ürettiği aynı adlı Secret'tadır (docs/50-isletme/json-akisi-ekleme.md).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: stream-{{ .name | replace "_" "-" }}
+  namespace: {{ include "glue.ns" $ }}
+  labels: {strimzi.io/cluster: lakehouse}
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+    - {resource: {type: topic, name: "{{ .name }}.events", patternType: literal}, operations: [Write, Describe]}
 {{- end }}

@@ -1,0 +1,119 @@
+suite: JSON olay akışları (streams)
+templates: [kafka-topics.yaml, kafka-users.yaml, connectors.yaml, spark-jobs.yaml]
+tests:
+  - it: renders topic, producer user and sink per stream (Kubernetes names use '-')
+    set:
+      connect.buildImage: "x"
+      streams:
+        - {name: sensors, partitions: 6, retentionDays: 365}
+        - {name: mobil_app}
+    asserts:
+      - template: kafka-topics.yaml
+        documentSelector: {path: spec.topicName, value: sensors.events}
+        equal: {path: spec.partitions, value: 6}
+      - template: kafka-topics.yaml
+        documentSelector: {path: spec.topicName, value: mobil_app.events}
+        equal: {path: metadata.name, value: mobil-app.events}
+      - template: kafka-topics.yaml
+        documentSelector: {path: spec.topicName, value: mobil_app.events}
+        equal: {path: spec.partitions, value: 3}
+      # üretici yalnız kendi konusuna yazar (literal, okuma yok)
+      - template: kafka-users.yaml
+        documentSelector: {path: metadata.name, value: stream-mobil-app}
+        equal:
+          path: spec.authorization.acls
+          value: [{resource: {type: topic, name: mobil_app.events, patternType: literal}, operations: [Write, Describe]}]
+      # Connect kullanıcısı akışın konularını okuyup DLQ'yu yaratabilir
+      - template: kafka-users.yaml
+        documentSelector: {path: metadata.name, value: connect}
+        contains: {path: spec.authorization.acls, content: {resource: {type: topic, name: "sensors.", patternType: prefix}, operations: [Read, Write, Describe, Create]}}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config.topics', value: mobil_app.events}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["iceberg.tables"]', value: mobil_app_raw.events}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["iceberg.tables.default-partition-by"]', value: day(_kafka_ts)}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["transforms.kafkats.timestamp.field"]', value: _kafka_ts}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config.transforms', value: "kafkats,kafkatsconv"}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["transforms.kafkatsconv.target.type"]', value: Timestamp}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["errors.deadletterqueue.topic.name"]', value: mobil_app.dlq}
+      # az trafikte işçinin geç gelen yanıtı turu kaçırmasın (120 s)
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-mobil-app}
+        equal: {path: 'spec.config["iceberg.control.commit.timeout-ms"]', value: "120000"}
+  - it: custom table name is honoured
+    set:
+      connect.buildImage: "x"
+      streams: [{name: iot, table: iot_raw.olcumler}]
+    asserts:
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-iot}
+        equal: {path: 'spec.config["iceberg.tables"]', value: iot_raw.olcumler}
+  - it: stream names are validated
+    set:
+      connect.buildImage: "x"
+      streams: [{name: Sensors}]
+    asserts:
+      - template: kafka-topics.yaml
+        failedTemplate: {errorPattern: "küçük harfle başlamalı"}
+  - it: stream name may not clash with a source or nginx
+    set:
+      connect.buildImage: "x"
+      sources:
+        - {name: erp, type: postgres, host: h, port: 5432, database: erp, tables: [public.o], signalTable: public.s}
+      streams: [{name: erp}]
+    asserts:
+      - template: kafka-topics.yaml
+        failedTemplate: {errorPattern: "çakışıyor"}
+  - it: streams turn maintenance on and carry retention to the job
+    set:
+      connect.buildImage: "x"
+      nginx: {enabled: true, retentionDays: 180}
+      streams: [{name: sensors, retentionDays: 365}, {name: logs}]
+    asserts:
+      - template: spark-jobs.yaml
+        documentSelector: {path: metadata.name, value: lakehouse-jobs}
+        matchRegex: {path: 'data["pipelines.json"]', pattern: '"retention":\{"nginx_raw.access_log":\{"col":"ts","days":180\},"sensors_raw.events":\{"col":"_kafka_ts","days":365\}\}'}
+      - template: spark-jobs.yaml
+        documentSelector: {path: metadata.name, value: lakehouse-jobs}
+        matchRegex: {path: 'data["pipelines.json"]', pattern: '"maintain_namespaces":\["nginx_raw","sensors_raw","logs_raw"\]'}
+  - it: only streams (no pipelines) still schedule maintenance
+    set:
+      connect.buildImage: "x"
+      streams: [{name: sensors}]
+    asserts:
+      - template: spark-jobs.yaml
+        documentSelector: {path: metadata.name, value: maint-compact}
+        isKind: {of: ScheduledSparkApplication}
+  - it: declared fields become a Cast contract applied in the transform stage
+    set:
+      connect.buildImage: "x"
+      streams: [{name: sensors, fields: {temperature_c: float64, humidity_pct: int64}, state: stopped}]
+    asserts:
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-sensors}
+        equal: {path: spec.config.transforms, value: "kafkats,kafkatsconv,contract"}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-sensors}
+        equal: {path: 'spec.config["transforms.contract.spec"]', value: "humidity_pct:int64,temperature_c:float64"}
+      - template: connectors.yaml
+        documentSelector: {path: metadata.name, value: sink-sensors}
+        equal: {path: spec.state, value: stopped}
+  - it: unknown field types are rejected
+    set:
+      connect.buildImage: "x"
+      streams: [{name: sensors, fields: {t: decimal}}]
+    asserts:
+      - template: connectors.yaml
+        failedTemplate: {errorPattern: "tip int32"}

@@ -27,3 +27,60 @@
 {{ printf "https://%s" (include "glue.hostFor" (dict "name" "keycloak" "ctx" .)) }}
 {{- end -}}
 {{- end -}}
+{{- /* JSON akışları (values.streams): Bronze tablo adı, Polaris ad alanı ve doğrulama. */ -}}
+{{- define "glue.streamTable" -}}{{ .table | default (printf "%s_raw.events" .name) }}{{- end -}}
+{{- define "glue.validateStreams" -}}
+{{- $taken := list "nginx" }}
+{{- range .Values.sources }}{{ $taken = append $taken (.topicPrefix | default .name) }}{{ end }}
+{{- $seen := list }}
+{{- range .Values.streams }}
+{{- if not (regexMatch "^[a-z][a-z0-9_]*$" (.name | default "")) }}{{ fail (printf "streams[].name %q: küçük harfle başlamalı, yalnız a-z 0-9 _ içermeli" (.name | default "")) }}{{ end }}
+{{- if has .name $taken }}{{ fail (printf "streams[%s]: ad bir kaynağın konu önekiyle ya da 'nginx' ile çakışıyor" .name) }}{{ end }}
+{{- if has .name $seen }}{{ fail (printf "streams[%s]: aynı ad iki kez verilmiş" .name) }}{{ end }}
+{{- $seen = append $seen .name }}
+{{- end }}
+{{- end -}}
+{{- /* JSON gövdeli bir Kafka konusundan Iceberg'e yazan sink'in ortak ayarları (nginx ve streams). Çağıran fromJson ile
+   dict'e çevirip konuya özel dönüşümleri ekler. Girdi: dict ctx topic table partitionBy dlq. */ -}}
+{{- define "glue.jsonSinkConfig" -}}
+{{- $c := .ctx }}{{ $ns := include "glue.ns" $c }}
+{{- $cfg := dict
+  "topics" .topic
+  "key.converter" "org.apache.kafka.connect.storage.StringConverter"
+  "value.converter" "org.apache.kafka.connect.json.JsonConverter"
+  "value.converter.schemas.enable" "false"
+  "iceberg.tables" .table
+  "iceberg.tables.auto-create-enabled" "true"
+  "iceberg.tables.evolve-schema-enabled" "true"
+  "iceberg.tables.default-partition-by" .partitionBy
+  "iceberg.tables.auto-create-props.write.metadata.delete-after-commit.enabled" "true"
+  "iceberg.catalog.type" "rest"
+  "iceberg.catalog.uri" $c.Values.iceberg.catalogUri
+  "iceberg.catalog.warehouse" $c.Values.iceberg.warehouse
+  "iceberg.catalog.credential" (printf "${secrets:%s/polaris-connect:credential}" $ns)
+  "iceberg.catalog.scope" "PRINCIPAL_ROLE:ALL"
+  "iceberg.catalog.io-impl" "org.apache.iceberg.aws.s3.S3FileIO"
+  "iceberg.catalog.s3.endpoint" $c.Values.s3.endpoint
+  "iceberg.catalog.s3.path-style-access" $c.Values.s3.pathStyleAccess
+  "iceberg.catalog.client.region" $c.Values.s3.region
+  "iceberg.kafka.session.timeout.ms" "120000"
+  "iceberg.kafka.heartbeat.interval.ms" "15000"
+  "iceberg.kafka.max.poll.interval.ms" "300000"
+  "iceberg.kafka.request.timeout.ms" "130000"
+  "iceberg.control.commit.timeout-ms" "120000"
+  "errors.tolerance" "all"
+  "errors.log.enable" "true"
+  "errors.deadletterqueue.topic.name" .dlq
+  "errors.deadletterqueue.topic.replication.factor" (index $c.Values.kafka.config "default.replication.factor") }}
+{{- if $c.Values.s3.vendedCredentials }}
+{{- $_ := set $cfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "vended-credentials" }}
+{{- else }}
+{{- $_ := set $cfg "iceberg.catalog.header.X-Iceberg-Access-Delegation" "none" }}
+{{- $_ := set $cfg "iceberg.catalog.s3.access-key-id" (printf "${secrets:%s/s3-creds:AWS_ACCESS_KEY_ID}" $ns) }}
+{{- $_ := set $cfg "iceberg.catalog.s3.secret-access-key" (printf "${secrets:%s/s3-creds:AWS_SECRET_ACCESS_KEY}" $ns) }}
+{{- end }}
+{{- with $c.Values.connect.sinkCommitIntervalMs }}
+{{- $_ := set $cfg "iceberg.control.commit.interval-ms" . }}
+{{- end }}
+{{- toJson $cfg }}
+{{- end -}}

@@ -69,6 +69,8 @@ tests:
         equal: {path: 'spec.config["decimal.handling.mode"]', value: precise}
       - documentIndex: 0
         equal: {path: 'spec.config["topic.creation.default.partitions"]', value: "3"}
+      - documentIndex: 1
+        equal: {path: 'spec.config["iceberg.control.commit.timeout-ms"]', value: "120000"}
       - documentIndex: 0
         equal: {path: 'spec.config["slot.name"]', value: debezium_shop}
       # heartbeat: düşük trafikli kaynakta replication slot/LSN ilerlesin (pg WAL birikmesi)
