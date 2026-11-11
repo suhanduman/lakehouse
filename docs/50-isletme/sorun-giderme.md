@@ -66,6 +66,8 @@ geçerlidir.
 | Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlanmış Spark koşusu FAILED](#spark) |
 | Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark koşuları yavaşladı](#spark-duration) |
 | Alarm: `LakehouseDlqRecords` | [§4.6 Hatalı kayıt konusuna kayıt düştü](#dlq) |
+| Connect pod'unun `RESTARTS` sayısı artıyor | [§4.1 Connect pod'u yeniden başlıyor](#connect-oom) |
+| Bağlayıcı `RUNNING` ama görev listesi boş | [§4.1 Görev listesi boş](#connect-gorev-yok) |
 | Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
 | Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
 | Spark işi `unresolved dependency` ya da Ivy hatası veriyor | [§6.2 Maven kütüphaneleri](#maven) |
@@ -176,6 +178,79 @@ sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1   
 
 **Ters giderse:** `trace` boşsa görev hiç başlamamıştır — Connect pod'unun günlüğüne bakın;
 imaj yapımı yarım kalmış olabilir ([§5](#kurulum)).
+
+<a id="connect-oom"></a>
+#### Connect pod'u yeniden başlıyor (bellek yetmiyor)
+
+Connect pod'larının `RESTARTS` sütunu artıyorsa son kapanmanın nedenine bakın:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get pod -l strimzi.io/kind=KafkaConnect
+oc -n "$LAKEHOUSE_NS" get pod -l strimzi.io/kind=KafkaConnect \
+  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[0].lastState.terminated.reason}{"\n"}{end}'
+```
+
+**Beklenen çıktı** (bellek yetmediğinde; OpenShift provasında alınmış gerçek değer):
+
+```text
+connect-connect-0 OOMKilled
+```
+
+`OOMKilled`, pod'un bellek sınırını aştığını gösterir. Bağlayıcı o sırada bir tablonun ilk
+okumasını yapıyorsa okuma baştan alınır; Bronze'a bazı kayıtlar iki kez yazılır (Silver
+bunları ayıklar). Belleği artırın: `platform/values/site/glue.yaml` dosyasına
+`connect.resources` ve `connect.heap` değerlerini ekleyin. Yığın (`heap`) sınırın yaklaşık
+%60'ı olmalıdır; örneğin 6 GiB için:
+
+```yaml
+connect:
+  resources:
+    requests: {cpu: 500m, memory: 6Gi}
+    limits: {memory: 6Gi}
+  heap: 3600m
+```
+
+Ürünün varsayılanı işçi başına 4 GiB'tır ([10-planlama](../10-planlama.md) §5).
+
+<a id="connect-gorev-yok"></a>
+#### Bağlayıcı çalışıyor ama görev listesi boş
+
+Birden fazla Connect işçisi varken, işçilerden biri yeniden başladıktan sonra bir
+bağlayıcının durumu `RUNNING` görünür ama görev listesi boş kalabilir. Görev gerçekte başka
+bir işçide çalışıyordur; işçilerden biri onun durum kaydını kaçırmıştır. Her işçiye ayrı
+ayrı sorun:
+
+`[bastion]`
+
+```bash
+CONNECTOR=sink-nginx        # görev listesi boş görünen bağlayıcı
+for p in $(oc -n "$LAKEHOUSE_NS" get pod -l strimzi.io/kind=KafkaConnect -o name); do
+  echo "$p: $(oc -n "$LAKEHOUSE_NS" exec "${p#pod/}" -- curl -s http://localhost:8083/connectors/$CONNECTOR/status | jq -c .tasks)"
+done
+```
+
+**Beklenen çıktı** (bu durumda; OpenShift provasında alınmış gerçek çıktı):
+
+```text
+pod/connect-connect-0: []
+pod/connect-connect-1: [{"id":0,"state":"RUNNING","worker_id":"connect-connect-1.connect-connect.lakehouse.svc:8083","version":"1.11.0"}]
+```
+
+Görevi yeniden başlatmak durum kaydını yeniler; birkaç saniye sonra iki işçi de aynı şeyi
+gösterir:
+
+```bash
+oc -n "$LAKEHOUSE_NS" exec connect-connect-0 -- \
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8083/connectors/$CONNECTOR/tasks/0/restart
+```
+
+**Beklenen çıktı:**
+
+```text
+204
+```
 
 <a id="sink"></a>
 ### 4.2 `LakehouseSinkStalled` — Iceberg sink lag'i büyüyor

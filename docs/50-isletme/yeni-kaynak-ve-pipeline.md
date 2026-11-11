@@ -527,7 +527,7 @@ Bağlayıcının günlüğü yüklemenin başladığını ve bittiğini yazar:
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --since=1h \
+oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --since=1h --tail=-1 \
   | grep -E "'INCREMENTAL' snapshot|incremental snapshotting of table|Incremental snapshot"
 ```
 
@@ -833,8 +833,12 @@ cur.fetchall()
 
 **Ters giderse:** beş dakika sonra hâlâ 0 satır varsa Connect günlüğünde snapshot
 satırlarını arayın:
-`oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=200 | grep -i snapshot`. MongoDB'de
-Bronze'u Iceberg sink değil, beş dakikada bir koşan `mongo-bronze` Spark işi yazar:
+
+```bash
+oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i snapshot
+```
+
+MongoDB'de Bronze'u Iceberg sink değil, beş dakikada bir koşan `mongo-bronze` Spark işi yazar:
 `oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication mongo-bronze` ile askıda olmadığını
 doğrulayın.
 
