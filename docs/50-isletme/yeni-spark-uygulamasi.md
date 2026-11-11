@@ -247,81 +247,79 @@ eksiktir ya da ad alanını yanlış yazmışsınızdır. Var olan ad alanların
 
 ## 4. Tanım dosyasını hazırlayın: tek seferlik mi, zamanlı mı
 
-İki örnek dosyadan biri kopyalanır. Seçim, işin **tekrar edip etmediğine** göre yapılır:
+İşin tanımı bir YAML dosyasıdır. Dosyanın türü işin **tekrar edip etmediğine** göre seçilir:
 
 | | `SparkApplication` (tek seferlik) | `ScheduledSparkApplication` (zamanlı) |
 |---|---|---|
 | Ne zaman koşar | uygulandığı **anda** | `schedule` satırındaki zamana göre (saatler UTC) |
 | Nasıl uygulanır | elle, `oc apply -f` ile | Git'e gönderilerek (ArgoCD uygular) |
 | Ne için | bir kerelik doldurma, deneme | düzenli rapor, düzenli dönüşüm |
-| Örnek dosya | `custom/examples/spark-tek-seferlik.yaml` | `custom/examples/spark-zamanli.yaml` |
 
 > **Tek seferlik işi Git'e koymayın.** `SparkApplication` uygulandığı anda koşar. Git'te
 > durursa ArgoCD onu her eşitlemede yeniden yaratır ve iş **kendiliğinden tekrar koşar**;
 > başarısız bir koşu da `custom` uygulamasını `Degraded` gösterir. Tek seferlik işler elle
 > uygulanır (§5.2), tekrar edenler Git'ten geçer (§5.1).
 
-Kopyalanan dosyada **üç** şey değişir: işin adı, çalışacak `.py` dosyasının yolu ve kodun
-geldiği ConfigMap'in adı.
-
-> **İki dosyada bu üç alan aynı yerde durmaz.** Tek seferlik dosyada işin tanımı
-> doğrudan `spec:` altındadır. Zamanlı dosyada `spec:` yalnız zamanlama ayarlarını taşır;
-> işin tanımının tamamı bir düzey aşağıda, **`spec.template:`** altındadır. Alan yanlış
-> düzeye yazılırsa küme dosyayı reddeder.
+Tanım dosyasını `scripts/spark-is-tanimi.sh` betiği üretir. Betik kümeye özel bütün
+ayarları (Spark imajı ve sürümleri, S3 adresi ve sertifikası, katalog, kimlikler) kümede
+çalışan ürün işinden kopyalar; dosyada elle düzeltilecek satır kalmaz. Betiğe işin adı ve
+Python dosyasının adı verilir; zamanlı iş için ayrıca zaman yazılır.
 
 **Tek seferlik iş:**
 
 `[bastion]`
 
 ```bash
-cp custom/examples/spark-tek-seferlik.yaml custom/spark-gunluk-ozet-tek.yaml
-vi custom/spark-gunluk-ozet-tek.yaml
+cd ~/lakehouse
+scripts/spark-is-tanimi.sh --ad gunluk-ozet --dosya gunluk_ozet.py > custom/spark-gunluk-ozet-tek.yaml
+head -8 custom/spark-gunluk-ozet-tek.yaml
 ```
 
-Değişecek satırlar:
-
-```yaml
-metadata:
-  name: gunluk-ozet                             # sürücü pod'unun adı gunluk-ozet-driver olur
-spec:
-  mainApplicationFile: local:///opt/job/gunluk_ozet.py
-  volumes:
-  - name: job
-    configMap: {name: gunluk-ozet}              # ConfigMap'in adı
-```
-
-**Zamanlı iş:**
-
-```bash
-cp custom/examples/spark-zamanli.yaml custom/spark-gunluk-ozet-zamanli.yaml
-vi custom/spark-gunluk-ozet-zamanli.yaml
-```
-
-Değişecek satırlar; aynı üç alan burada `template:` altındadır:
-
-```yaml
-metadata:
-  name: gunluk-ozet-zamanli        # her koşu bu adın sonuna zaman damgası eklenerek adlanır
-spec:
-  schedule: "0 4 * * *"          # her gece 04:00 UTC
-  suspend: false                 # örnekte true; işin gerçekten zamanlanması için false
-  concurrencyPolicy: Forbid      # önceki koşu bitmeden yenisi başlamaz
-  successfulRunHistoryLimit: 3
-  failedRunHistoryLimit: 3
-  template:                      # buradan aşağısı tek seferlik dosyanın spec: içeriğidir
-    mainApplicationFile: local:///opt/job/gunluk_ozet.py
-    volumes:
-    - name: job
-      configMap: {name: gunluk-ozet}
-    # sparkConf, driver, executor ve diğer her şey de template: altında kalır
-```
-
-**Ters giderse:** zamanlı dosyada alanları `template:` altına indirmeyi unutursanız küme
-dosyayı reddeder ve yanlış yerdeki alanların adlarını söyler (örnek):
+**Beklenen çıktı** (`head` komutunun çıktısı; imaj sürümü kurulumunuzdakidir):
 
 ```text
-Error from server (BadRequest): error when creating "yanlis-zamanli.yaml": ScheduledSparkApplication in version "v1beta2" cannot be handled as a ScheduledSparkApplication: strict decoding error: unknown field "spec.mainApplicationFile", unknown field "spec.volumes"
+# gunluk-ozet: tek seferlik iş — Git'e KONMAZ, oc apply -f ile elle uygulanır
+# Kod: ConfigMap 'gunluk-ozet' içindeki gunluk_ozet.py. Ayarlar kümedeki silver-merge işinden kopyalandı (imaj docker.io/apache/spark:4.1.0-java21-python3).
+# scripts/spark-is-tanimi.sh ile üretildi; ürün yükseltmesinden sonra aynı komutla yeniden üretin.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: gunluk-ozet
+  namespace: lakehouse
 ```
+
+Sürücü pod'unun adı `gunluk-ozet-driver` olur. Python kodu, işle aynı adı taşıyan
+`gunluk-ozet` ConfigMap'inden okunur (§5.2'de yaratılır).
+
+**Zamanlı iş:** `--zaman` ile cron biçiminde bir zaman verin. Örnek her gece 04:00 UTC'de
+koşar:
+
+```bash
+scripts/spark-is-tanimi.sh --ad gunluk-ozet-zamanli --dosya gunluk_ozet.py \
+  --configmap gunluk-ozet --zaman "0 4 * * *" > custom/spark-gunluk-ozet-zamanli.yaml
+head -5 custom/spark-gunluk-ozet-zamanli.yaml
+```
+
+**Beklenen çıktı:**
+
+```text
+# gunluk-ozet-zamanli: zamanlı iş (0 4 * * *, UTC) — Git'e konur: custom/ klasörü + configMapGenerator
+# Kod: ConfigMap 'gunluk-ozet' içindeki gunluk_ozet.py. Ayarlar kümedeki silver-merge işinden kopyalandı (imaj docker.io/apache/spark:4.1.0-java21-python3).
+# scripts/spark-is-tanimi.sh ile üretildi; ürün yükseltmesinden sonra aynı komutla yeniden üretin.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+```
+
+Her koşu, işin adının sonuna zaman damgası eklenerek adlanır. Önceki koşu bitmeden yenisi
+başlamaz; son üç başarılı ve son üç başarısız koşu saklanır.
+
+**Ters giderse:**
+
+- `HATA: --ad yalnız küçük harf, rakam ve tire içerebilir` → adı düzeltin
+  (ör. `gunluk_ozet` değil `gunluk-ozet`).
+- `HATA: kümede silver-merge işi okunamadı` → `oc` oturumu kapanmıştır ya da ürünün ilk
+  pipeline'ı henüz eklenmemiştir (`silver-merge` ilk pipeline ile açılır,
+  [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md)).
 
 **Zamanlı iş için ConfigMap satırı.** `.py` dosyasının kümeye ulaşması için
 `custom/kustomization.yaml` dosyasına ConfigMap üretim satırı da eklenir. Dosyayı açın:
@@ -347,24 +345,17 @@ adın sonuna rastgele ek gelmemelidir.
 aynı düğümlerde çalışır; kendi işinizi onların arasına değil, sonrasına koyun. Ürünün iş
 saatlerini §6'daki `oc get scheduledsparkapplication` çıktısında görürsünüz.
 
-### 4.1 Değiştirilmeyen ve kuruma özel satırlar
+### 4.1 Ürün yükseltmesinde ve elle yazarken
 
-Örnek dosyalardaki `sparkConf`, `driver` ve `executor` blokları ürünün kendi Spark
-işleriyle aynıdır: aynı Iceberg sürümü, aynı katalog, aynı servis hesabı. Çoğu satır
-olduğu gibi kalır. Kurumunuza göre değişecek satırlar dosyada `# SİTE` ile işaretlidir ve
-`platform/values/site/glue.yaml` dosyasındaki değerlerle aynı olmalıdır:
+**Ürün yükseltmesinden sonra dosyalarınızı yeniden üretin.** Spark ya da Iceberg sürümü
+değiştiğinde ürün kendi işlerini günceller ama `custom/` altındaki dosyalarınıza dokunmaz.
+Yükseltme bittikten sonra her işiniz için §4'teki komutu aynı argümanlarla tekrar
+çalıştırın, `git diff` ile değişen satırlara (imaj, sürümler) bakın ve gönderin (§5.1).
 
-| Tanım dosyasındaki satır | Neyle aynı olmalı |
-|---|---|
-| `spark.sql.catalog.lakehouse.s3.endpoint` | site dosyasında `s3.endpoint` |
-| `spark.sql.catalog.lakehouse.client.region` | site dosyasında `s3.region` |
-| `spark.sql.catalog.lakehouse.s3.path-style-access` | `s3.pathStyleAccess` (site dosyasında yoksa ürünün varsayılanı) |
-| `spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation` | site dosyasında `s3.vendedCredentials` açıksa `vended-credentials`, kapalıysa `none` |
-| `image`, `sparkVersion`, `spark.jars.packages` içindeki Iceberg sürümü | ürün sürümleri; ürün yükseltmesinde birlikte güncellenir |
-| `ivysettings` geçen dört satır | Spark kütüphaneleri küme içi Maven önbelleğinden gelir; olduğu gibi kalır |
-| `s3-ca` geçen **yorumlu** satırlar (iki `extraJavaOptions`, iki bağlama, bir birim) | site dosyasında `s3.caSecret` doluysa beşi birden açılır ([30-kurulum](../30-kurulum.md) §5.14); açılmazsa iş S3'e ilk istekte `PKIX path building failed` ile düşer |
-
-Bu değerleri ürünün kendi işinden görmek en kolay yoldur:
+**Dosyayı elle yazmak isterseniz** depodaki örnekler başlangıç noktasıdır:
+`custom/examples/spark-tek-seferlik.yaml` ve `custom/examples/spark-zamanli.yaml`. Bu
+dosyalardaki kuruma özel satırlar `# SİTE` ile işaretlidir ve ürünün kendi işindeki
+değerlerle aynı olmalıdır. O değerleri şu komut gösterir:
 
 `[bastion]`
 
@@ -373,17 +364,14 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge -o json \
   | jq -r '.spec.template.sparkConf | to_entries[] | select(.key|test("s3|region|Delegation|extraJava")) | "\(.key): \(.value)"'
 ```
 
-Çıktıdaki her satır, tanım dosyanızdaki aynı adlı satırla aynı değeri taşımalıdır.
-
-**Ürün yükseltmesinde sürümleri siz güncellersiniz.** Spark ya da Iceberg sürümü
-değişirse `custom/` altındaki dosyalarınızdaki `image`, `sparkVersion` ve
-`spark.jars.packages` satırlarını da güncelleyin; ürün sizin dosyalarınıza dokunmaz.
+Zamanlı dosyada işin tanımı `spec.template:` altındadır, tek seferlik dosyada doğrudan
+`spec:` altında. Alan yanlış düzeye yazılırsa küme dosyayı reddeder ve yanlış yerdeki
+alanların adlarını söyler.
 
 **S3 anahtarı.** Ürün varsayılan olarak her tablo için katalogdan geçici S3 anahtarı
 alır; tanım dosyasında S3 anahtarı bulunmaz. Kurumunuzda bu özellik kapalıysa
-(`s3.vendedCredentials: false`) delegation satırı `none` yapılır ve `driver` ile
-`executor` bloklarındaki yorumlu `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` satırları
-açılır; değerler `s3-creds` Secret'ından **adıyla** okunur.
+(`s3.vendedCredentials: false`) ürünün kendi işi `s3-creds` Secret'ını adıyla okur; betik
+bu ayarı da olduğu gibi kopyalar.
 
 > **Parolalar Git'e girmez.** Tanım dosyaları Secret'lara yalnız adlarıyla başvurur
 > (`secretKeyRef: {name: polaris-spark, key: credential}`). Bu kural `custom/` için de
