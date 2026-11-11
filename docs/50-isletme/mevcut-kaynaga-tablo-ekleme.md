@@ -248,7 +248,7 @@ db.getSiblingDB("shop").debezium_signal.insertOne({
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" logs connect-connect-0 --tail=500 \
+oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
   | grep -iE "incremental snapshot|'INCREMENTAL' snapshot"
 ```
 

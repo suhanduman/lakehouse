@@ -61,7 +61,7 @@ bunun üzerinden yapılır.
 |---|---|---|---|---|
 | **Kafka broker** (3 adet) | CPU/RAM isteği **tanımlı değil** (kümenin varsayılanı geçerlidir); disk **100Gi/broker** | disk 250Gi/broker | disk 500Gi/broker, 5 broker | `platform/values/site/glue.yaml` → `kafka.storageSize`, `kafka.replicas` |
 | **Kafka Exporter** | 10m CPU / 64Mi (limit 128Mi) | aynı | aynı | şablonda sabit, değiştirilmez (`glue/templates/kafka.yaml`) |
-| **Kafka Connect** (Debezium + Iceberg sink) | 1 kopya, 500m CPU / 1536Mi (limit 2Gi) | 2 kopya, 1 CPU / 3Gi (limit 4Gi) | 3 kopya, 2 CPU / 6Gi (limit 8Gi) | `platform/values/site/glue.yaml` → `connect.replicas`, `connect.resources` |
+| **Kafka Connect** (Debezium + Iceberg sink) | 2 kopya, 500m CPU / 4Gi (limit 4Gi), JVM yığını 2400m | 2 kopya, 1 CPU / 6Gi (limit 6Gi), yığın 3600m | 3 kopya, 2 CPU / 8Gi (limit 8Gi), yığın 4800m | `platform/values/site/glue.yaml` → `connect.replicas`, `connect.resources`, `connect.heap` |
 | **Spark sürücü** | 1 çekirdek / 2g + 512m ek | 2 çekirdek / 4g + 1g ek | 2 çekirdek / 4g + 1g ek | `platform/values/site/glue.yaml` → `spark.driver` |
 | **Spark çalıştırıcı** | 1 adet × 1 çekirdek / 2g + 512m ek | 2 adet × 2 çekirdek / 4g + 1g ek | 4 adet × 2 çekirdek / 8g + 2g ek | `platform/values/site/glue.yaml` → `spark.executor` |
 | **Spark shuffle bölümü** | 8 | 200 | 400 | `platform/values/site/glue.yaml` → `spark.shufflePartitions` |
@@ -91,9 +91,9 @@ bunun üzerinden yapılır.
 
 | Kademe | Düğümlerden istenen CPU | Düğümlerden istenen RAM | Kalıcı disk (kullanıcı diskleri hariç) |
 |---|---|---|---|
-| Küçük | ~8 vCPU | ~48 GiB | ~370 GiB |
-| Orta | ~20 vCPU | ~96 GiB | ~800 GiB |
-| Büyük | ~48 vCPU | ~200 GiB | ~2 TiB |
+| Küçük | ~8 vCPU | ~56 GiB | ~370 GiB |
+| Orta | ~20 vCPU | ~102 GiB | ~800 GiB |
+| Büyük | ~48 vCPU | ~206 GiB | ~2 TiB |
 
 Bu satırlar Iceberg verisini **içermez**: veri S3'tedir ve tabloların boyutu kaynak sistemlere
 bağlıdır. S3 tarafında kaynak veritabanlarının toplam boyutunun 2–3 katını planlayın (Bronze

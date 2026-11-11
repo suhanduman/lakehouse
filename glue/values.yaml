@@ -28,21 +28,26 @@ kafka:
     transaction.state.log.min.isr: 2
 
 connect:
-  replicas: 1
+  # İşçi (pod) sayısı. Bağlayıcı görevleri işçilere kendiliğinden dağılır; bir işçi düşerse görevleri ~6 sn içinde
+  # diğerlerine geçer (ocpphy provası 2026-11-11: 13 görev 2 işçide 6/7, pod silinince 13'ü tek işçide).
+  # Strimzi PDB'si (maxUnavailable 1) düğüm boşaltmada işçileri tek tek indirir.
+  replicas: 2
   # spec.build çıktısı. Varsayılan YOK: prod'da zorunlu (registry/repo:tag, ör.
   # image-registry.openshift-image-registry.svc:5000/<ns>/connect:2.0.0); dev: ttl.sh (platform/values/glue-dev.yaml)
   buildImage: ""
   buildPushSecret: ""           # özel registry için docker-registry Secret adı; boş = anonim (ttl.sh)
   topicPartitions: 6            # Debezium topic.creation.default.partitions (dev: 3)
   sinkCommitIntervalMs: ""      # Iceberg sink commit aralığı; BOŞ = upstream 300 s (prod). Yalnız dev/e2e: "30000"
+  # İşçi başına bellek. İstek = sınır: JVM yığını açılışta ayrılır (-Xms = -Xmx), kullanım dalgalanmaz.
+  # 2 GiB yetmedi (ocpphy provası 2026-11-11: 8 kaynak + sink tek işçide boşta 1954 MiB; 12 tabloluk ilk okumada
+  # OOMKilled -> okuma baştan alındı, Bronze'a tekrar satır yazıldı).
   resources:
-    requests: {cpu: 500m, memory: 1536Mi}
-    limits: {memory: 2Gi}
-  # JVM yığını (-Xms/-Xmx) — limits.memory'nin ~%60'ı. Verilmezse Strimzi sınırın %75'ini yığına verir ve Iceberg
-  # sink'in Parquet/doğrudan bellek kullanımına ~500 MiB kalır: iki kaynak + iki sink'le pod OOMKilled olup döngüye
-  # girer, commit'ler gecikir (ocpphy provası 2026-11-08: 2 GiB sınırda 1,72 GiB kullanım, 4 yeniden başlama).
+    requests: {cpu: 500m, memory: 4Gi}
+    limits: {memory: 4Gi}
+  # JVM yığını (-Xms/-Xmx) — limits.memory'nin ~%60'ı. Kalan pay yığın dışı belleğe (sınıf meta verisi, iş
+  # parçacıkları, ağ ve Parquet tamponları) gider; yığın sınırın %75'ine çıkarsa pod OOMKilled olur.
   # limits.memory büyütülürse bu da orantılı büyütülür.
-  heap: 1200m
+  heap: 2400m
 
 # Kaynak DB'ler → KafkaUser ACL'leri + KafkaConnector çifti (dbz-<name>, sink-<name>). Secret: <name>-db (username, password).
 # Bronze namespace <name>_raw (Polaris setup.yaml'da yaratılmış olmalı — docs/50-isletme/yeni-kaynak-ve-pipeline.md)

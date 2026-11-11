@@ -125,13 +125,14 @@ MinIO Inc. ile ilişkisi yoktur; imaj etiketleri (`org.opencontainers.image.sour
 
 ## 6. Replika sayıları ve PodDisruptionBudget (karar: PDB yok)
 
-Kurulum hiçbir bileşen için `PodDisruptionBudget` üretmez.
+Kurulum kendisi hiçbir bileşen için `PodDisruptionBudget` yazmaz; Kafka, Kafka Connect ve
+PostgreSQL için operatörleri (Strimzi, CNPG) kendi PDB'lerini yaratır.
 
 | Bileşen | Üretim replikası | Kurulum yolu | PDB |
 |---|---|---|---|
 | Kafka (broker/controller) | 3 | `glue/values.yaml` → `kafka.replicas` (`min.insync.replicas: 2`) | **Strimzi yönetir** (elle eklenmez) |
 | CNPG `polaris-db` / `keycloak-db` / `superset-db` | 2 | `platform/values/glue.yaml` → `cnpg.*.instances` | **CNPG yönetir** (elle eklenmez) |
-| Kafka Connect | 1 | `glue/values.yaml` → `connect.replicas` | yok — tek replika, PDB düğüm boşaltmayı kilitler |
+| Kafka Connect | 2 | `glue/values.yaml` → `connect.replicas` | **Strimzi yönetir** (`maxUnavailable: 1`: düğüm boşaltmada işçiler tek tek iner, görevleri diğer işçiye geçer) |
 | Trino coordinator / worker | 1 / 2 | `platform/values/trino.yaml` → `server.workers` | yok — coordinator tekildir (chart), worker durumsuzdur |
 | Polaris | 1 | `platform/apps/20-polaris.yaml` + `platform/values/polaris.yaml` | yok — tek replika |
 | Superset | 1 | `glue/values.yaml` → `superset.replicas` | yok — tek replika |

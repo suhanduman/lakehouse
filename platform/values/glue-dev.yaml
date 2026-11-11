@@ -12,6 +12,12 @@ kafka:
     transaction.state.log.replication.factor: 1
     transaction.state.log.min.isr: 1
 connect:
+  # kind (dar CI düğümü): tek işçi, küçük bellek — ürün varsayılanı 2 × 4 GiB'tır
+  replicas: 1
+  resources:
+    requests: {cpu: 250m, memory: 1536Mi}
+    limits: {memory: 2Gi}
+  heap: 1200m
   buildImage: ttl.sh/lakehouse-connect-dev:24h
   topicPartitions: 3
   sinkCommitIntervalMs: "30000"
