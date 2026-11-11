@@ -1,104 +1,119 @@
 # Yeni kaynak ve pipeline ekleme
 
-**Bu bölümde:** ürüne yeni bir kaynak veritabanı (PostgreSQL, SQL Server ya da MongoDB)
-bağlamanın tam yolu — kaynak tarafındaki CDC hazırlığı, kaynağın Secret'ı, Polaris ad
-alanları, `platform/values/site/glue.yaml` içindeki `sources` ve `pipelines` girdileri,
-doğrulama ve sık hatalar. Son alt bölüm, veritabanı olmayan tek akışı, nginx erişim
-günlüğünü (Fluent Bit ajanı) anlatır.
-**Süre:** kaynak hazırlığı (DBA) 30–60 dakika; küme tarafı 20 dakika; ilk Bronze
-satırları 5 dakikaya kadar, ilk Silver tablosu bir sonraki `silver-merge` koşusunda
-(üretimde 15 dakikada bir).
-**Gereken yetki:** kaynak veritabanında yönetici; `$LAKEHOUSE_NS` ad alanında Secret
-yaratma; kurumun Git deposunda `main` dalına yazma; Polaris kök kimliği
-(`polaris-root` Secret'ı) ad alanı eklemek için.
-**Nerede çalıştırılır:** `[bastion]` küme ve Git komutları için; `[kaynak DB]` kaynak
-veritabanı istemcisinin (`psql`, `sqlcmd`, `mongosh`) koştuğu makine; `[pod]` JupyterHub
-not defteri hücresi (doğrulama sorguları); `[nginx ajan sunucusu]` yalnız son alt bölümde.
+Bu sayfa, lakehouse'a yeni bir kaynak veritabanı (PostgreSQL, SQL Server ya da MongoDB)
+bağlamayı baştan sona anlatır: kaynak veritabanında değişiklik yakalamanın (CDC)
+açılması, parolanın kümeye kaydedilmesi, katalog ad alanlarının açılması, ayar dosyasına
+kaynağın ve tabloların yazılması ve sonucun doğrulanması. Son bölüm, veritabanı olmayan
+nginx erişim günlüğü akışını anlatır.
 
-**Bu bölümde örnek kaynak adı `erp`'dir; kendi kaynağınızın adını yazın.** Örnekte
-PostgreSQL veritabanı `erp`, yakalanan tablo `public.orders`, Kubernetes Secret'ı
-`erp-db`, Bronze ad alanı `erp_raw`, Silver ad alanı `erp`'tir. SQL Server ve MongoDB alt
-bölümleri **aynı** `erp` adını kullanır; yalnız kaynak tarafındaki komutlar değişir.
-Ad bir kez seçilir ve sonradan değiştirilmez: Kafka konu adları, çoğaltma yuvası,
-Secret adı ve iki katalog ad alanı bu addan türer.
+**Ne kadar sürer:** kaynak veritabanının hazırlanması 30–60 dakika, küme tarafı 20
+dakika. İlk Bronze satırları 5–15 dakika içinde, ilk Silver tablosu bir sonraki
+`silver-merge` çalışmasında (15 dakikada bir) görünür.
 
-| Addan türeyen | Nerede | Örnekte |
-|---|---|---|
-| Kafka konu ön eki | Debezium `topic.prefix` (varsayılan = kaynak adı) | `erp.public.orders` |
-| PostgreSQL çoğaltma yuvası | `slot.name` | `debezium_erp` |
-| PostgreSQL publication | `publication.name` | `dbz_erp_pub` |
-| Kubernetes Secret | kaynak adı + `-db` | `erp-db` |
-| Bronze ad alanı (katalog) | `bronzeNamespace` (varsayılan: kaynak adı + `_raw`) | `erp_raw` |
-| Silver ad alanı (katalog) | Bronze adından `_raw` düşürülerek | `erp` |
-| Bağlayıcılar | `dbz-` + ad ve `sink-` + ad | `dbz-erp`, `sink-erp` |
+**Hangi yetkiler gerekir:**
 
-Akış (PostgreSQL ve SQL Server):
+- kaynak veritabanında yönetici hesabı (veritabanı yöneticisi yapar);
+- `$LAKEHOUSE_NS` ad alanında Secret yaratma;
+- kurumun lakehouse Git deposunda `main` dalına yazma.
+
+**Komutlar nerede çalışır:**
+
+- `[bastion]` — kümeye `oc` ile bağlı ve Git deposuna erişen yönetim makinesi;
+- `[kaynak DB]` — kaynak veritabanının istemcisinin (`psql`, `sqlcmd`, `mongosh`)
+  çalıştığı makine;
+- `[pod]` — JupyterHub'da bir not defteri hücresi (doğrulama sorguları);
+- `[nginx ajan sunucusu]` — yalnız son bölümde, nginx'in çalıştığı sunucu.
+
+**Bu sayfadaki örnek kaynağın adı `erp`'dir; komutlarda kendi kaynağınızın adını
+yazın.** Örnekte PostgreSQL veritabanı `erp`, yakalanan tablo `public.orders`'tır. SQL
+Server ve MongoDB bölümleri de aynı `erp` adını kullanır; yalnız kaynak veritabanındaki
+komutlar değişir.
+
+Kaynağın adı bir kez seçilir ve sonradan değiştirilmez; aşağıdaki adların hepsi ondan
+türer:
+
+| Addan türeyen | Örnekte |
+|---|---|
+| Kafka konusu | `erp.public.orders` (SQL Server'da `erp.erp.dbo.orders`) |
+| PostgreSQL çoğaltma yuvası | `debezium_erp` |
+| PostgreSQL publication | `dbz_erp_pub` |
+| Parolanın tutulduğu Secret | `erp-db` |
+| Bronze ad alanı (katalogda) | `erp_raw` |
+| Silver ad alanı (katalogda) | `erp` |
+| Bağlayıcılar | `dbz-erp` (kaynaktan okur), `sink-erp` (Bronze'a yazar) |
+
+Verinin yolu (PostgreSQL ve SQL Server):
 
 ```text
 kaynak DB --Debezium--> Kafka --Iceberg sink--> erp_raw.orders --silver-merge--> erp.orders
 ```
 
-MongoDB'de Iceberg sink yoktur: Bronze'u beş dakikada bir koşan `mongo-bronze` Spark işi
-yazar, Silver yine `silver-merge` ile üretilir
+MongoDB'de Bronze'u bağlayıcı değil, beş dakikada bir çalışan `mongo-bronze` Spark işi
+yazar; Silver yine `silver-merge` ile üretilir
 ([00-genel-bakis](../00-genel-bakis.md) §3.2).
 
 ---
 
 ## 1. Değişkenleri yükleyin
 
+Her yeni terminalde bir kez çalıştırın.
+
 `[bastion]`
 
 ```bash
-cd ~/lakehouse                      # depoyu `git clone` ile nereye indirdiyseniz orası
+cd ~/lakehouse
 set -a; . install/lakehouse.env; set +a
 echo "ns=$LAKEHOUSE_NS argocd=$ARGOCD_NS"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 ns=lakehouse argocd=openshift-gitops
 ```
 
-**Ters giderse:** boş satır görürseniz dosya yüklenmemiştir; şablon
-`install/lakehouse.env.example`, doldurma [30-kurulum](../30-kurulum.md) §1.
+**Ters giderse:** eşittir işaretlerinden sonrası boşsa `install/lakehouse.env` dosyası
+yoktur ya da başka bir klasördesiniz. Dosya kurulumda doldurulur
+([30-kurulum](../30-kurulum.md) §1).
 
 ---
 
 ## 2. CDC kullanıcısının parolasını üretin
 
-Parola Git'e **girmez**; bu kabuk oturumunda üretilir, kaynakta ve Secret'ta aynı değer
-kullanılır. Oturumun sonunda `unset` ile silinir (Adım 4).
+Lakehouse, kaynak veritabanına kendine ait bir kullanıcıyla bağlanır. Bu kullanıcının
+parolası burada üretilir; aynı değer hem kaynak veritabanında hem kümede kullanılır.
+Parola Git'e yazılmaz.
 
 `[bastion]`
 
 ```bash
 ERP_DB_PASSWORD="$(openssl rand -hex 24)"
 export ERP_DB_PASSWORD
-printf '%s\n' "$ERP_DB_PASSWORD"    # DBA'ya güvenli kanaldan iletin; ekranı sonra temizleyin
+printf '%s\n' "$ERP_DB_PASSWORD"
 ```
 
-**Beklenen çıktı** (örnek — her koşuda başka bir değer; 48 onaltılık karakter):
+Ekrana yazılan parolayı veritabanı yöneticisine güvenli bir kanalla iletin, sonra ekranı
+temizleyin (`clear`).
+
+**Beklenen çıktı** (her çalıştırmada başka bir değer; 48 karakter):
 
 ```text
 9f4c1a77b0e2d5386ca41fbb0d7e2c93a6155e80f2bb47d1
 ```
 
-**Ters giderse:** `openssl: command not found` → makinede OpenSSL yoktur; parolayı
-kurumun parola kasasında üretip aynı değişkene okutun (`read -r -s ERP_DB_PASSWORD`).
+**Ters giderse:** `openssl: command not found` görürseniz parolayı kurumun parola
+kasasında üretin ve `read -r -s ERP_DB_PASSWORD` ile değişkene okutun.
 
 ---
 
 ## 3. Kaynak veritabanını hazırlayın
 
-Bu adım **kaynak veritabanı yöneticisinin** işidir ve kümede değil, kaynakta yapılır.
-Kaynak türüne göre yalnız bir alt bölüm uygulanır.
+Bu adım **kaynak veritabanının yöneticisinin** işidir ve kaynak veritabanında yapılır.
+Kaynağın türüne göre aşağıdaki üç alt bölümden **yalnız biri** uygulanır.
 
-**Önce parolayı bu makineye alın.** Adım 2'deki `ERP_DB_PASSWORD` değişkeni yönetim
-makinesinin kabuğundadır; aşağıdaki komutlar kaynak veritabanı istemcisinin koştuğu
-**başka bir makinede** çalışır ve aynı adlı değişkeni orada da bekler. Veritabanı
-yöneticisi, Adım 2'de kendisine güvenli kanalla iletilen parolayı bu bloğa yazar
-(`read -r -s` parolayı ekrana basmaz ve kabuk geçmişine düşürmez):
+**Önce parolayı bu makineye alın.** Adım 2'deki parola yönetim makinesindedir;
+aşağıdaki komutlar başka bir makinede çalışır ve aynı adlı değişkeni orada da bekler.
+Veritabanı yöneticisi kendisine iletilen parolayı şu komutla girer:
 
 `[kaynak DB]`
 
@@ -107,22 +122,23 @@ read -r -s ERP_DB_PASSWORD
 export ERP_DB_PASSWORD
 ```
 
-Parolayı yazıp `Enter`'a bastığınızda ekranda hiçbir şey görünmez; bu normaldir. Oturumun
-sonunda `unset ERP_DB_PASSWORD` ile silin.
+Parolayı yazıp `Enter`'a basın. Ekranda hiçbir şey görünmez; bu normaldir. İş bitince
+`unset ERP_DB_PASSWORD` ile silin.
 
-**Ters giderse:** bu bloğu atlarsanız değişken **boştur** ve aşağıdaki komutlar sessizce
-**parolasız** bir hesap yaratır; bağlayıcı sonra `password authentication failed for user
-"debezium"` ile düşer (Adım 9.4).
+**Ters giderse:** bu adımı atlarsanız değişken boş kalır ve aşağıdaki komutlar
+**parolasız** bir kullanıcı yaratır. Bağlayıcı sonra `password authentication failed`
+hatası verir (Adım 9.4).
 
 ### 3.1 PostgreSQL
 
-Debezium, PostgreSQL'in mantıksal çoğaltma günlüğünü okur. Üç şey gerekir: `logical`
-seviyesinde WAL, çoğaltma yetkili bir rol ve bir **sinyal tablosu** (artımlı snapshot
-için; ürün bu tabloyu zorunlu tutar).
+Lakehouse, PostgreSQL'in değişiklik günlüğünü (mantıksal çoğaltma) okur. Bunun için
+üç şey gerekir: değişiklik günlüğünün `logical` seviyesinde tutulması, çoğaltma yetkisi
+olan bir kullanıcı ve bir **sinyal tablosu**. Sinyal tablosu, var olan verinin sonradan
+parça parça yüklenmesi (artımlı yükleme) için kullanılır ve zorunludur.
 
-**3.1.1 — WAL seviyesi.** `wal_level` değişikliği **yeniden başlatma** ister; bakım
-penceresi planlayın. Yönetilen bir PostgreSQL (CNPG, RDS, Cloud SQL) kullanıyorsanız bu
-üç parametre sunucunun kendi yapılandırmasından ayarlanır.
+**3.1.1 — Değişiklik günlüğü seviyesi.** Bu ayar veritabanının **yeniden başlatılmasını**
+gerektirir; bir bakım penceresi planlayın. Yönetilen bir PostgreSQL hizmeti (RDS, Cloud
+SQL ve benzeri) kullanıyorsanız bu üç ayar hizmetin kendi panelinden yapılır.
 
 `[kaynak DB]`
 
@@ -132,9 +148,13 @@ ALTER SYSTEM SET max_replication_slots = 10;
 ALTER SYSTEM SET max_wal_senders = 10;
 ```
 
-Yeniden başlatmadan sonra `SHOW wal_level;` ile doğrulayın.
+Veritabanı yeniden başladıktan sonra kontrol edin:
 
-**Beklenen çıktı** (kind kümesindeki PostgreSQL'den alınmış gerçek çıktı):
+```sql
+SHOW wal_level;
+```
+
+**Beklenen çıktı:**
 
 ```text
  wal_level 
@@ -143,22 +163,22 @@ Yeniden başlatmadan sonra `SHOW wal_level;` ile doğrulayın.
 (1 row)
 ```
 
-**Ters giderse:** `logical` yerine `replica` görüyorsanız sunucu yeniden başlamamıştır ya
-da `postgresql.conf` içindeki değer `ALTER SYSTEM`'i eziyordur. `wal_level` düzelmeden
-bağlayıcı çoğaltma yuvasını açamaz.
+**Ters giderse:** `logical` yerine `replica` görüyorsanız veritabanı yeniden
+başlamamıştır ya da `postgresql.conf` dosyasındaki değer bu ayarı eziyordur. Bu ayar
+düzelmeden bağlayıcı çalışamaz.
 
-**3.1.2 — CDC rolü, sinyal tablosu ve publication.** Bu adımı kaynak veritabanının
-yöneticisi yapar. Tabloların sahipliği **değişmez**; CDC rolü (`debezium`) yalnız okur:
+**3.1.2 — CDC kullanıcısı, sinyal tablosu ve publication.** Tabloların sahibi
+değişmez; CDC kullanıcısı (`debezium`) yalnız okur. Aşağıdaki komutlar şunları yapar:
 
-- `debezium` rolü: oturum açma ve çoğaltma (`REPLICATION`) yetkisi.
-- Yakalanacak tablolarda yalnız `SELECT`.
-- Sinyal tablosunda okuma ve yazma (ürün artımlı snapshot sırasında buraya işaret satırı yazar).
-- **Publication**: hangi tabloların değişikliklerinin dışarı verileceğini söyleyen liste.
-  Adı `dbz_` + kaynak adı + `_pub` olmalıdır (bu örnekte `dbz_erp_pub`); ürün bu adla arar.
+- `debezium` kullanıcısını oturum açma ve çoğaltma yetkisiyle yaratır;
+- yakalanacak tablolarda yalnız okuma (`SELECT`) yetkisi verir;
+- sinyal tablosunu yaratır ve kullanıcıya bu tabloda okuma-yazma yetkisi verir;
+- **publication** yaratır: hangi tabloların değişikliklerinin dışarı verileceğini
+  söyleyen liste. Adı `dbz_` + kaynak adı + `_pub` olmalıdır (burada `dbz_erp_pub`);
+  lakehouse bu adla arar.
 
-Aşağıdaki blok `erp` veritabanına bağlanır ve parolayı Adım 2'deki değişkenden alır.
 Yakalanacak tabloları `GRANT SELECT` ve `CREATE PUBLICATION` satırlarında virgülle
-sıralayın; sinyal tablosu publication'da **bulunmalıdır**.
+sıralayın. Sinyal tablosu publication'da **bulunmalıdır**.
 
 `[kaynak DB]`
 
@@ -175,7 +195,7 @@ CREATE PUBLICATION dbz_erp_pub FOR TABLE public.orders, public.debezium_signal;
 SQL
 ```
 
-**Beklenen çıktı** (`psql` her ifade için bir satır basar):
+**Beklenen çıktı** (`psql` her komut için bir satır yazar):
 
 ```text
 CREATE ROLE
@@ -187,38 +207,57 @@ GRANT
 CREATE PUBLICATION
 ```
 
-Sonradan bu kaynağa tablo eklemek de yöneticinin iki satırıdır
+Publication'ın içeriğini kontrol edin:
+
+```sql
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'dbz_erp_pub';
+```
+
+**Beklenen çıktı** (yakaladığınız tablolar ve `debezium_signal`; aşağıdaki çıktı
+`orders` ve `customers` tablolarını yakalayan bir kaynaktan):
+
+```text
+    tablename    
+-----------------
+ orders
+ debezium_signal
+ customers
+(3 rows)
+```
+
+Bu kaynağa sonradan tablo eklemek de yöneticinin iki satırıdır
 ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) Adım 2).
 
-**Ters giderse:** `permission denied to create role` → bağlandığınız hesap yeterli yetkiye
-sahip değildir. `role "debezium" already exists` → rol vardır; parolayı yenilemek için
-`ALTER ROLE debezium WITH PASSWORD :'parola';` kullanın. Sinyal tablosu zaten varsa
-`CREATE TABLE` satırını çıkarın; şeması **aynı** olmalıdır. `publication "dbz_erp_pub"
-already exists` → publication vardır; içeriğini
-`SELECT tablename FROM pg_publication_tables WHERE pubname = 'dbz_erp_pub';` ile görün ve
-eksik tabloları `ALTER PUBLICATION dbz_erp_pub ADD TABLE …;` ile ekleyin.
+**Ters giderse:**
+
+- `permission denied to create role` — bağlandığınız hesabın yetkisi yetmiyor.
+- `role "debezium" already exists` — kullanıcı zaten var; parolasını değiştirmek için
+  `ALTER ROLE debezium WITH PASSWORD :'parola';` kullanın.
+- Sinyal tablosu zaten varsa `CREATE TABLE` satırını çıkarın; tablonun kolonları
+  yukarıdakilerle aynı olmalıdır.
+- `publication "dbz_erp_pub" already exists` — publication zaten var; eksik tabloları
+  `ALTER PUBLICATION dbz_erp_pub ADD TABLE …;` ile ekleyin.
 
 ### 3.2 SQL Server
 
-SQL Server'da CDC hem veritabanı hem tablo düzeyinde açılır ve **SQL Server Agent
-servisinin çalışıyor olması şarttır** — yakalama işleri Agent üzerinde koşar. Bu adımı
-kaynak veritabanının yöneticisi yapar; tabloların sahipliği değişmez.
+SQL Server'da CDC hem veritabanında hem her tabloda ayrıca açılır. **SQL Server Agent
+servisi çalışıyor olmalıdır**; değişiklikleri yakalayan işler onun üzerinde çalışır.
+Tabloların sahibi değişmez.
 
-Aşağıdaki iki dosyayı `erp` veritabanında, `sqlcmd` ile sırayla çalıştırın. `$(parola)`
-`sqlcmd`'in değişkenidir; parola Adım 2'deki kabuk değişkeninden gelir.
+Aşağıdaki iki dosyayı `erp` veritabanında `sqlcmd` ile sırayla çalıştırın.
 
-**`cdc-ac.sql`** — CDC'yi açar, sinyal tablosunu yaratır. Sinyal tablosunda da CDC
-**açılır**: SQL Server'da ürün sinyalleri bu tablonun değişikliklerinden okur.
+**`cdc-ac.sql`** — CDC'yi açar ve sinyal tablosunu yaratır. Sinyal tablosunda da CDC
+**açılır**: SQL Server'da lakehouse sinyalleri bu tablonun değişikliklerinden okur.
 
 ```sql
--- veritabanı düzeyi (bir kez)
+-- veritabanı düzeyinde (bir kez)
 EXEC sys.sp_cdc_enable_db;
 
 -- yakalanacak her tablo için
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'orders',
                              @role_name = NULL;
 
--- artımlı snapshot sinyal tablosu (CDC'si de açılır)
+-- sinyal tablosu (CDC'si de açılır)
 CREATE TABLE dbo.debezium_signal (id varchar(42) PRIMARY KEY, type varchar(32) NOT NULL,
                                   data varchar(2048));
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'debezium_signal',
@@ -226,9 +265,9 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'debezium_
 GO
 ```
 
-**`cdc-kullanici.sql`** — CDC kullanıcısı: yakalanan tablolarda ve `cdc` şemasında
-yalnız okuma, sinyal tablosunda yazma (ürün artımlı snapshot sırasında buraya işaret
-satırı yazar).
+**`cdc-kullanici.sql`** — CDC kullanıcısını yaratır: yakalanan tablolarda ve `cdc`
+şemasında yalnız okuma, sinyal tablosunda yazma yetkisi verir. `$(parola)`, `sqlcmd`'e
+komut satırından verilen değişkendir.
 
 ```sql
 CREATE LOGIN debezium WITH PASSWORD = '$(parola)';
@@ -246,8 +285,8 @@ sqlcmd -S erp-db.kurum.example.net -U sa -d erp -i cdc-ac.sql
 sqlcmd -S erp-db.kurum.example.net -U sa -d erp -v parola="$ERP_DB_PASSWORD" -i cdc-kullanici.sql
 ```
 
-**Beklenen çıktı** (SQL Server 2022 üzerinde alınmış gerçek çıktı; ikinci komut bir şey
-basmaz). İlk satır yalnız bilgi notudur, CLR kapalıyken her zaman görünür:
+**Beklenen çıktı** (ikinci komut bir şey yazmaz). `Update mask evaluation …` satırı bir
+bilgi notudur; CDC açılan her tablo için bir kez görünür:
 
 ```text
 Update mask evaluation will be disabled in net_changes_function because the CLR configuration option is disabled.
@@ -256,34 +295,38 @@ Job 'cdc.erp_cleanup' started successfully.
 Update mask evaluation will be disabled in net_changes_function because the CLR configuration option is disabled.
 ```
 
-**SQL Server'da adlar veritabanıyla yazılır.** Kafka konusu `erp.erp.dbo.orders`
-biçimindedir (önek, veritabanı, şema, tablo); artımlı snapshot sinyalinde de tablo
-`erp.dbo.orders` diye verilir ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md)
-Adım 6). Ürün bunu kendisi ayarlar; `sources` girdisinde tablolar yine `dbo.orders`
-biçiminde yazılır.
+**SQL Server'da adlarda veritabanı da geçer.** Kafka konusu `erp.erp.dbo.orders`
+biçimindedir: kaynak adı, veritabanı, şema, tablo. Artımlı yükleme isteğinde de tablo
+`erp.dbo.orders` diye yazılır (Adım 6.1). Ayar dosyasında ise tablolar yine `dbo.orders`
+biçiminde yazılır; gerisini lakehouse ayarlar.
 
-**TLS zorunludur.** Bağlayıcı `database.encrypt=true` ile açılır. Sunucunun sertifikası
-kurumsal bir CA'dan geliyorsa ve Connect o CA'ya güvenmiyorsa iki seçenek vardır:
+**Bağlantı şifrelidir.** Bağlayıcı SQL Server'a TLS ile bağlanır. Sunucunun sertifikası
+kurumsal bir CA'dan geliyorsa ve Kafka Connect o CA'ya güvenmiyorsa iki seçenek vardır:
 
-- **Üretim:** truststore'u `sources[].extraConfig` ile verin (`database.trustStore` ve
-  `database.trustStorePassword` anahtarları).
+- **Üretim:** CA'yı içeren bir truststore'u `sources[].extraConfig` ile verin
+  (`database.trustStore` ve `database.trustStorePassword` ayarları).
 - **Yalnız deneme ortamı:** `sources[].trustServerCertificate: true`. Bu ayar sertifika
   **doğrulamasını kapatır**; üretimde kullanılmaz.
 
 **Günlükte görülebilecek iki uyarı zararsızdır:** `Cannot query the status of the SQL
-Server Agent` ve `Exception caught while querying sys.dm_cdc_log_scan_sessions`. Bağlayıcı
-bunları yalnız izleme için sorar; CDC kullanıcısı sunucu düzeyinde yetkiye sahip olmadığı
-için yanıt alamaz, akış etkilenmez.
+Server Agent` ve `Exception caught while querying sys.dm_cdc_log_scan_sessions`.
+Bağlayıcı bu bilgileri yalnız izleme için sorar; CDC kullanıcısının sunucu düzeyinde
+yetkisi olmadığı için yanıt alamaz. Veri akışı etkilenmez.
 
-**Ters giderse:** `SQLServerAgent is not currently running` → Agent kapalıdır, CDC
-tabloları dolmaz. `The driver could not establish a secure connection ... certificate`
-→ yukarıdaki truststore maddesi. Artımlı snapshot sinyali yazıldığı hâlde günlükte
-`Requested 'INCREMENTAL' snapshot` satırı yoksa sinyal tablosunda CDC açılmamıştır.
+**Ters giderse:**
+
+- `SQLServerAgent is not currently running` — Agent kapalıdır; değişiklikler
+  yakalanmaz. Agent'ı başlatın.
+- `The driver could not establish a secure connection ... certificate` — yukarıdaki
+  truststore maddesine bakın.
+- Artımlı yükleme isteği yazıldığı hâlde günlükte `Requested 'INCREMENTAL' snapshot`
+  satırı görünmüyorsa sinyal tablosunda CDC açılmamıştır.
 
 ### 3.3 MongoDB
 
-Debezium MongoDB bağlayıcısı **change stream** kullanır; bu yüzden sunucu bir **replica
-set** olmalıdır (tek üyeli `rs0` yeterlidir, tek başına `mongod` çalışmaz).
+MongoDB bağlayıcısı **change stream** kullanır; bu yüzden sunucu bir **replica set**
+olmalıdır. Tek üyeli bir replica set (`rs0`) yeterlidir; tek başına çalışan bir `mongod`
+yetmez.
 
 `[kaynak DB]`
 
@@ -304,50 +347,51 @@ mongosh "mongodb://erp-db.kurum.example.net:27017/?replicaSet=rs0" --quiet --eva
 { ok: 1 }
 ```
 
-Sinyal koleksiyonu MongoDB'de **isteğe bağlıdır** (`signalCollection`); yalnız artımlı
-snapshot kullanacaksanız gerekir ve sıradan bir koleksiyondur — önceden yaratmanız
+MongoDB'de sinyal koleksiyonu **isteğe bağlıdır** (`signalCollection`). Yalnız artımlı
+yükleme kullanacaksanız gerekir; sıradan bir koleksiyondur ve önceden yaratılması
 gerekmez.
 
-**Ters giderse:** `not running with --replSet` → sunucu replica set değildir;
-`command createUser requires authentication` → yönetici kimliğiyle bağlanmadınız.
+**Ters giderse:**
 
-#### MongoDB tablolarının şekli pg/mssql'den farklıdır
+- `not running with --replSet` — sunucu bir replica set değildir.
+- `command createUser requires authentication` — yönetici hesabıyla bağlanmadınız.
 
-Belgeler şemasız olduğu için Bronze ve Silver tabloları kolon kolon açılmaz; koleksiyon
-başına **iki** iş kolonu vardır (`glue/jobs/mongo_bronze.py`):
+#### MongoDB tablolarının biçimi farklıdır
+
+MongoDB belgelerinin sabit bir kolon yapısı olmadığı için Bronze ve Silver tablolarında
+kolonlar açılmaz. Her koleksiyonun tablosunda **iki** veri kolonu vardır:
 
 | Kolon | Tip | İçerik |
 |---|---|---|
 | `_id` | `string` | belgenin `_id` alanı, metne çevrilmiş |
-| `_doc` | `string` | **belgenin tamamı JSON metni olarak**; silme olaylarında silinmeden önceki hâli |
-| `_cdc` | struct | pg/mssql ile aynı: `op`, `ts`, `offset`, `source`, `target`, `key` |
+| `_doc` | `string` | **belgenin tamamı JSON metni olarak**; silinen belgelerde silinmeden önceki hâli |
+| `_cdc` | yapı | değişikliğin bilgileri: `op`, `ts`, `offset`, `source`, `target`, `key` |
 
-Alanlara Trino'da `json_extract(_doc, '$.alan')` ile erişilir; tek bir metin/sayı değeri
-istendiğinde `json_extract_scalar` daha kullanışlıdır (`json_extract` sonucu yine JSON
-değeridir). Örnek sorgu Adım 9.2'dedir. Kolon kolon sorgulanabilir bir Gold tablosu
-isteniyorsa bu dönüşüm kurumun kendi dbt/Spark işiyle yapılır.
+Belgenin alanlarına Trino'da `json_extract_scalar(_doc, '$.alan')` ile ulaşılır
+(örnek sorgu Adım 9.2'de). Alanları ayrı kolonlar olarak sorgulamak istiyorsanız bu
+dönüşüm kendi Gold işinizle yapılır
+([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md)).
 
-Ayrıca her koleksiyon için bir **karantina** tablosu yaratılır: Bronze adının sonuna
-`__quarantine` eklenir (ör. `erp_raw.orders__quarantine`). İşlenemeyen kayıt buraya
-`_key`, `_value`, `reason`, `ts`, `partition`, `offset` ile düşer; `reason` dört değerden
-biridir (`glue/jobs/mongo_lib.py`):
+Her koleksiyon için ayrıca bir **karantina** tablosu yaratılır: Bronze adının sonuna
+`__quarantine` eklenir (ör. `erp_raw.orders__quarantine`). İşlenemeyen bir değişiklik
+buraya düşer; `reason` kolonu nedenini söyler:
 
 | `reason` | Anlamı |
 |---|---|
-| `bad-envelope` | Debezium zarfı çözülemedi ya da `op` tanınmadı |
-| `no-key` | olayın anahtarından `_id` çıkarılamadı |
-| `no-ts` | zaman damgası (`ts_ms`) yok ya da sayı değil |
-| `after-null` | ekleme/güncelleme olayında `after` belgesi boş |
+| `bad-envelope` | değişiklik kaydı çözülemedi ya da işlem türü tanınmadı |
+| `no-key` | kayıttan `_id` çıkarılamadı |
+| `no-ts` | kaydın zaman bilgisi yok ya da sayı değil |
+| `after-null` | ekleme ya da güncelleme kaydında belgenin kendisi boş |
 
-Karantina tablosunun **boş kalması beklenir**; dolmaya başlarsa kaynak tarafındaki
-belgelerde ya da bağlayıcı ayarlarında bir sorun var demektir.
+Karantina tablosunun **boş kalması beklenir**. Dolmaya başlarsa kaynak veritabanındaki
+belgelerde ya da bağlayıcı ayarlarında bir sorun vardır.
 
 ---
 
 ## 4. Kaynağın Secret'ını yaratın
 
-Bağlayıcı kimlik bilgisini values'tan değil, `erp-db` Secret'ından okur (`username` ve
-`password` anahtarları). Secret **Git'e girmez**.
+Bağlayıcı, kaynak veritabanına bağlanırken kullanıcı adını ve parolayı kümedeki `erp-db`
+Secret'ından okur. Secret Git'e girmez.
 
 `[bastion]`
 
@@ -355,36 +399,54 @@ Bağlayıcı kimlik bilgisini values'tan değil, `erp-db` Secret'ından okur (`u
 oc -n "$LAKEHOUSE_NS" create secret generic erp-db \
   --from-literal=username=debezium \
   --from-literal=password="$ERP_DB_PASSWORD"
+oc -n "$LAKEHOUSE_NS" label secret erp-db lakehouse.io/yonetim=manual-yeni-kaynak-ve-pipeline-4
 unset ERP_DB_PASSWORD
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı:**
 
 ```text
 secret/erp-db created
+secret/erp-db labeled
 ```
 
-**Ters giderse:** `already exists` → Secret vardır; değeri değiştirmek için
-`oc -n "$LAKEHOUSE_NS" delete secret erp-db` sonrası komutu tekrarlayın (bağlayıcı
-yeniden başlar). Secret adı **kaynak adı + `-db`** olmak zorundadır: Connect'in Secret
-okuma yetkisi bu ada göre verilir.
+İkinci komut, Secret'ı bu adımda elle yaratıldığını gösteren etiketle işaretler
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §7).
+
+**Ters giderse:**
+
+- `already exists` — Secret zaten var. Değerini değiştirmek için önce
+  `oc -n "$LAKEHOUSE_NS" delete secret erp-db` çalıştırın, sonra bu adımın komutlarını
+  tekrarlayın. Bağlayıcı yeni parolayla yeniden başlar.
+- Secret'ın adı **kaynak adı + `-db`** olmalıdır; Kafka Connect'in okuma izni bu ada
+  göre verilir.
 
 ---
 
-## 5. Polaris ad alanlarını açın
+## 5. Katalog ad alanlarını açın
 
-Iceberg sink tabloyu kendiliğinden yaratır ama **ad alanını yaratmaz**. `erp_raw`
-(Bronze) ve `erp` (Silver) katalog ad alanları önceden var olmalıdır.
+Bronze tablosu ilk veri geldiğinde kendiliğinden yaratılır, ama tablonun **ad alanı**
+önceden var olmalıdır. Bu örnekte iki ad alanı gerekir: `erp_raw` (Bronze) ve `erp`
+(Silver).
 
-`platform/polaris/setup.yaml` içindeki `namespaces:` listesine iki satır eklenir:
+`platform/polaris/setup.yaml` dosyasını açın:
+
+`[bastion]`
+
+```bash
+vi platform/polaris/setup.yaml
+```
+
+Dosyanın sonuna doğru `namespaces:` listesini bulun ve listenin son satırının altına iki
+satır ekleyin. Satırların başındaki boşluk, listedeki diğer satırlarla aynı olmalıdır:
 
 ```yaml
-    namespaces:
       - name: erp_raw
       - name: erp
 ```
 
-Sonra kurulum betiği yeniden koşturulur; **idempotenttir**, var olan nesneleri bozmaz:
+Dosyayı kaydedin ve kurulum betiğini çalıştırın. Betik var olan ad alanlarına dokunmaz,
+yalnız eksikleri yaratır:
 
 `[bastion]`
 
@@ -392,92 +454,108 @@ Sonra kurulum betiği yeniden koşturulur; **idempotenttir**, var olan nesneleri
 PATH="$PWD/.venv/bin:$PATH" scripts/polaris-setup.sh --ns "$LAKEHOUSE_NS"
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktıdan seçilmiş satırlar — var olan
-ad alanları "already exists" ile geçilir, yenisi yaratılır; son satır yeni principal
-üretilmediğini söyler):
+**Beklenen çıktı:** çıktı uzundur. Her ad alanı için bir `Creating namespace` satırı
+görünür; zaten var olanlar hemen ardından `already exists` ile geçilir. Son satır yeni
+bir kullanıcı yaratılmadığını söyler. Örnek satırlar (tarih ve saat sizde farklıdır):
 
 ```text
-2026-09-24 12:35:07,150 INFO Creating namespace: 'crm' in catalog: 'lakehouse'
-2026-09-24 12:35:07,187 INFO Namespace 'crm' already exists in catalog 'lakehouse'.
-2026-09-24 12:35:07,244 INFO Creating namespace: 'shop_raw' in catalog: 'lakehouse'
-2026-09-24 12:35:07,261 INFO Namespace 'shop_raw' already exists in catalog 'lakehouse'.
+2026-11-11 16:01:03,098 INFO Creating namespace: 'universite' in catalog: 'lakehouse'
+2026-11-11 16:01:03,319 INFO Namespace 'universite' already exists in catalog 'lakehouse'.
 Yeni principal yok (idempotent çalıştırma).
 ```
 
-**Ters giderse:** `polaris CLI yok` → sanal ortam yüklenmemiştir
-([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.1). Yetki hatası alıyorsanız
-`polaris-root` Secret'ı okunamıyordur. Ad alanı açılmadan devam ederseniz sink, ilk
-yazmada ad alanı bulunamadı hatasıyla durur (Adım 9.4 tablosu).
+**Ters giderse:**
+
+- `polaris CLI yok` — betiğin kullandığı Python ortamı kurulmamıştır
+  ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.1).
+- Yetki hatası — betik `polaris-root` Secret'ını okuyamıyordur.
+- Bu adım atlanırsa Bronze'a yazan bağlayıcı ilk yazmada "ad alanı bulunamadı" hatasıyla
+  durur (Adım 9.4).
 
 ---
 
 ## 6. `sources` girdisini yazın
 
-Artık tek değişiklik `platform/values/site/glue.yaml` dosyasındadır. PostgreSQL örneği:
+Bundan sonraki değişiklik `platform/values/site/glue.yaml` dosyasındadır. Dosyayı açın:
+
+`[bastion]`
+
+```bash
+vi platform/values/site/glue.yaml
+```
+
+`sources:` listesini bulun ve listenin son öğesinin altına kaynağınızın girdisini
+ekleyin. Liste boşsa (`sources: []`) `[]` işaretini silip girdiyi başlığın altına yazın.
+
+PostgreSQL örneği:
 
 ```yaml
 sources:
-- name: erp                               # Secret, konu ön eki ve ad alanı adları bundan türer
+- name: erp                               # Secret, Kafka konusu ve ad alanı adları bundan türer
   type: postgres                          # postgres | sqlserver | mongodb
   host: erp-db.kurum.example.net
   port: 5432
-  database: erp                           # pg: database.dbname; mssql: database.names
+  database: erp
   tables: [public.orders]                 # yakalanacak tabloların tam adı (şema dâhil)
-  signalTable: public.debezium_signal     # ZORUNLU (pg/mssql): artımlı snapshot sinyal tablosu
+  signalTable: public.debezium_signal     # zorunlu (PostgreSQL ve SQL Server)
 ```
 
-MongoDB örneği — `connectionString` **kimlik bilgisi içermez**, kullanıcı adı ve parola
-yine `erp-db` Secret'ından okunur:
+SQL Server'da `type: sqlserver`, `port: 1433` ve tablolar `dbo.orders` biçiminde
+yazılır.
+
+MongoDB örneği — bağlantı adresinde kullanıcı adı ve parola **bulunmaz**; onlar yine
+`erp-db` Secret'ından okunur:
 
 ```yaml
 sources:
 - name: erp
   type: mongodb
   connectionString: "mongodb://erp-db.kurum.example.net:27017/?replicaSet=rs0"
-  collections: [erp.orders]               # db.koleksiyon biçiminde
+  collections: [erp.orders]               # veritabanı.koleksiyon biçiminde
   signalCollection: erp.debezium_signal   # isteğe bağlı
 ```
 
-Alanların tamamı:
+Bütün alanlar:
 
 | Alan | Zorunlu | Anlamı |
 |---|---|---|
-| `name` | evet | kaynağın adı; Secret, konu ön eki, yuva, publication ve ad alanları bundan türer |
-| `type` | evet | `postgres`, `sqlserver` ya da `mongodb`; başka değer chart'ı hata ile durdurur |
-| `host`, `port` | pg/mssql | kaynak sunucunun adresi ve portu |
-| `database` | pg/mssql | pg: `database.dbname`; mssql: `database.names` |
-| `tables` | pg/mssql | yakalanacak tablolar; sinyal tablosu listeye **eklenmez**, chart kendisi ekler |
-| `signalTable` | pg/mssql | sinyal tablosunun tam adı; Iceberg'e yazılmaz (sink onu dışlar) |
-| `connectionString` | mongodb | kimlik bilgisi **içermez**; replica set adı sorgu parametresinde |
-| `collections` | mongodb | `db.koleksiyon` biçiminde yakalanacak koleksiyonlar |
-| `signalCollection` | hayır | mongodb'de artımlı snapshot sinyal koleksiyonu |
-| `topicPrefix` | hayır | Kafka konu ön eki; varsayılan `name` |
+| `name` | evet | kaynağın adı; Secret, Kafka konusu, yuva, publication ve ad alanları bundan türer |
+| `type` | evet | `postgres`, `sqlserver` ya da `mongodb` |
+| `host`, `port` | PostgreSQL, SQL Server | kaynak sunucunun adresi ve portu |
+| `database` | PostgreSQL, SQL Server | veritabanının adı |
+| `tables` | PostgreSQL, SQL Server | yakalanacak tablolar; sinyal tablosu bu listeye **yazılmaz** |
+| `signalTable` | PostgreSQL, SQL Server | sinyal tablosunun tam adı; bu tablo Bronze'a yazılmaz |
+| `connectionString` | MongoDB | bağlantı adresi; kullanıcı adı ve parola içermez |
+| `collections` | MongoDB | `veritabanı.koleksiyon` biçiminde yakalanacak koleksiyonlar |
+| `signalCollection` | hayır | MongoDB'de artımlı yükleme için sinyal koleksiyonu |
+| `topicPrefix` | hayır | Kafka konularının ön eki; varsayılan `name` |
 | `bronzeNamespace` | hayır | Bronze ad alanı; varsayılan `name` + `_raw` |
-| `sinkTasks` | hayır | Iceberg sink görev sayısı (varsayılan 1); yüksek hacimli kaynakta artırılır |
-| `initialLoad` | hayır | tablolardaki var olan verinin nasıl geleceği: `snapshot` (varsayılan; bağlayıcı açılırken okur) ya da `incremental` (parça parça, kaldığı yerden süren yükleme — büyük tablolar). Ayrıntı Adım 6.1 |
-| `state` | hayır | Debezium bağlayıcısının durumu: `running` (varsayılan), `paused` ya da `stopped`. Kaynağı Git'ten durdurmanın tek kalıcı yolu budur — Kafka Connect'e elle `stop` gönderilirse Strimzi birkaç saniyede geri açar. Offset sıfırlama bunu ister ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §3) |
-| `trustServerCertificate` | hayır | yalnız `sqlserver`; `true` sertifika doğrulamasını **kapatır** (laboratuvar) |
-| `extraConfig` | hayır | Debezium bağlayıcısına eklenen ya da onu ezen anahtarlar |
-| `sinkExtraConfig` | hayır | Iceberg sink bağlayıcısına eklenen ya da onu ezen anahtarlar |
+| `sinkTasks` | hayır | Bronze'a yazan görev sayısı (varsayılan 1); çok yoğun kaynaklarda artırılır |
+| `initialLoad` | hayır | tablolardaki var olan verinin nasıl geleceği: `snapshot` (varsayılan) ya da `incremental` (Adım 6.1) |
+| `state` | hayır | bağlayıcının durumu: `running` (varsayılan), `paused` ya da `stopped`. Kaynağı kalıcı olarak durdurmanın yolu budur; Kafka Connect'e elle gönderilen durdurma birkaç saniye içinde geri alınır ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §3) |
+| `trustServerCertificate` | hayır | yalnız SQL Server; `true` sertifika doğrulamasını **kapatır** (deneme ortamı) |
+| `extraConfig` | hayır | bağlayıcıya eklenecek ya da onu değiştirecek ayarlar |
+| `sinkExtraConfig` | hayır | Bronze'a yazan bağlayıcıya eklenecek ya da onu değiştirecek ayarlar |
 
-**Ters giderse:** `signalTable zorunlu` uyarısı → alan yazılmamıştır.
-`postgres|sqlserver|mongodb olmalı` → desteklenmeyen tür. İkisi de `helm template`
-aşamasında görülür ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §3.2).
+Dosyayı kaydedin. Göndermeyi Adım 8'de, `pipelines` girdisiyle birlikte yapacaksınız.
+
+**Ters giderse:** Adım 8'deki denetim `signalTable zorunlu` ya da
+`postgres|sqlserver|mongodb olmalı` hatası verirse ilgili alan eksik ya da yanlıştır.
 
 ### 6.1 İlk yükleme: tablolardaki var olan veri nasıl gelir
 
-Kaynak eklendiğinde tablolarda **zaten** veri vardır. Ürün bu veriyi iki yoldan biriyle
+Kaynak eklendiğinde tablolarda zaten veri vardır. Lakehouse bu veriyi iki yoldan biriyle
 getirir; seçim `sources` girdisindeki `initialLoad` alanıyla yapılır.
 
 | | `snapshot` (varsayılan) | `incremental` |
 |---|---|---|
-| Nasıl çalışır | Bağlayıcı açılırken tabloları baştan sona okur, sonra değişiklikleri izlemeye geçer | Bağlayıcı yalnız değişiklikleri izleyerek açılır; var olan satırlar sizin göndereceğiniz bir istekle **parça parça** (varsayılan 1.024 satır) okunur |
-| Yarıda kalırsa | Yükleme **baştan** başlar (veri kaybolmaz; Bronze'a o ana kadarki satırlar ikinci kez yazılır, Silver yine doğru olur) | **Kaldığı parçadan** sürer |
+| Nasıl çalışır | Bağlayıcı açılırken tabloları baştan sona okur, sonra değişiklikleri izlemeye geçer | Bağlayıcı yalnız değişiklikleri izleyerek açılır; var olan satırlar sizin göndereceğiniz bir istekle **parça parça** (1.024 satırlık parçalar) okunur |
+| Yarıda kalırsa | Okuma **baştan** başlar. Veri kaybolmaz; Bronze'a o ana kadar okunan satırlar ikinci kez yazılır, Silver yine doğru olur | **Kaldığı parçadan** devam eder |
 | Kaynak tabloya etkisi | SQL Server'da okuma süresince satırlar okuma kilidinde kalır | Kilit yoktur; yükleme sırasında canlı değişiklikler de akar |
-| Duraklatma / iptal | Yoktur | Vardır (aşağıda) |
-| Ne zaman | Binlerce, yüz binlerce satır; okuma dakikalar sürer | Milyonlarca satır, saatler sürecek yükleme ya da kilitlenmemesi gereken tablolar |
+| Duraklatma, iptal | yoktur | vardır (aşağıda) |
+| Ne zaman seçilir | binlerce, yüz binlerce satır; okuma dakikalar sürer | milyonlarca satır, saatler sürecek yükleme ya da kilitlenmemesi gereken tablolar |
 
-Tablolarınız küçükse hiçbir şey yazmanıza gerek yoktur. Büyük tablolar için girdiye bir
+Tablolarınız küçükse bir şey yazmanız gerekmez. Büyük tablolar için kaynağın girdisine bir
 satır eklenir:
 
 ```yaml
@@ -487,19 +565,18 @@ satır eklenir:
   initialLoad: incremental
 ```
 
-**SQL Server ve `snapshot` için not:** okuma kilidini istemiyorsanız ama `snapshot` yolunu
-kullanmak istiyorsanız, veritabanı yöneticisi veritabanında *snapshot isolation*'ı açabilir
-(`ALTER DATABASE erp SET ALLOW_SNAPSHOT_ISOLATION ON;`) ve girdiye
-`extraConfig: {snapshot.isolation.mode: snapshot}` eklenir. Okuma tutarlı bir kopyadan
-yapılır, yazmalar beklemez.
+**SQL Server'da `snapshot` ile kilitten kaçınmak:** veritabanı yöneticisi veritabanında
+*snapshot isolation*'ı açabilir (`ALTER DATABASE erp SET ALLOW_SNAPSHOT_ISOLATION ON;`)
+ve kaynağın girdisine `extraConfig: {snapshot.isolation.mode: snapshot}` eklenir. Okuma
+tutarlı bir kopyadan yapılır, kaynağa yazanlar beklemez.
 
 #### Artımlı yüklemeyi başlatın
 
-`initialLoad: incremental` ile eklenen kaynakta bağlayıcı `RUNNING` olduktan sonra
-(Adım 9.1) kaynağın sinyal tablosuna bir istek satırı yazılır. Birden fazla tablo aynı
-satırda virgülle verilebilir.
+`initialLoad: incremental` ile eklenen bir kaynakta, bağlayıcı çalışmaya başladıktan
+sonra (Adım 9.1) kaynağın sinyal tablosuna bir istek satırı yazılır. Birden fazla tablo
+aynı satırda virgülle verilebilir.
 
-`[kaynak DB]` — SQL Server (tablo adının başında **veritabanı adı** vardır)
+`[kaynak DB]` — SQL Server (tablo adının başında **veritabanı adı** vardır):
 
 ```sql
 INSERT INTO dbo.debezium_signal (id, type, data)
@@ -507,7 +584,7 @@ VALUES (CONVERT(varchar(42), NEWID()), 'execute-snapshot',
         '{"data-collections": ["erp.dbo.orders"], "type": "incremental"}');
 ```
 
-`[kaynak DB]` — PostgreSQL
+`[kaynak DB]` — PostgreSQL:
 
 ```sql
 INSERT INTO public.debezium_signal (id, type, data)
@@ -518,7 +595,7 @@ VALUES (gen_random_uuid()::text, 'execute-snapshot',
 MongoDB'de istek kaynağın `signalCollection` koleksiyonuna yazılır
 ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) Adım 6).
 
-**Beklenen çıktı:** `(1 rows affected)` (SQL Server) ya da `INSERT 0 1` (PostgreSQL).
+**Beklenen çıktı:** SQL Server'da `(1 rows affected)`, PostgreSQL'de `INSERT 0 1`.
 
 #### İlerlemeyi izleyin
 
@@ -531,8 +608,8 @@ oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --since=1h --tail=-1 
   | grep -E "'INCREMENTAL' snapshot|incremental snapshotting of table|Incremental snapshot"
 ```
 
-Kaç satırın Kafka'ya ulaştığı konunun uç konumlarının toplamıdır (SQL Server'da konu adı
-önek, veritabanı, şema ve tablodur):
+Kafka'ya o ana kadar kaç satır ulaştığını görmek için (SQL Server'da konu adı kaynak
+adı, veritabanı, şema ve tablodan oluşur):
 
 `[bastion]`
 
@@ -541,9 +618,8 @@ scripts/kafka-cli.sh kafka-get-offsets.sh --topic erp.erp.dbo.orders \
   | awk -F: '{s+=$3} END {print s}'
 ```
 
-**Beklenen çıktı** (gerçek çıktılar: günlük satırı bir SQL Server kaynağından, sayı
-300.000 satırlık bir SQL Server tablosunda istekten 40 saniye sonra alındı — sayı her
-1.024 satırda bir artar):
+**Beklenen çıktı** (örnek: `fin` adlı bir SQL Server kaynağında, 300.000 satırlık bir
+tabloda istekten 40 saniye sonra; sayı her 1.024 satırda bir artar):
 
 ```text
 2026-11-09 11:19:29 INFO  [debezium-sqlserverconnector-fin-change-event-source-coordinator] ExecuteSnapshot:64 - Requested 'INCREMENTAL' snapshot of data collections '[fin.dbo.invoices]' …
@@ -551,12 +627,12 @@ scripts/kafka-cli.sh kafka-get-offsets.sh --topic erp.erp.dbo.orders \
 ```
 
 Yükleme bitince günlükte `incremental snapshotting of table '…' finished` satırı görünür
-ve sayı kaynak tablonun satır sayısına ulaşır. Bronze ve Silver tablolardaki sayıyı Adım
-9.2'deki not defteri hücresiyle karşılaştırın (Silver bir `silver-merge` koşusundan sonra
+ve sayı kaynak tablonun satır sayısına ulaşır. Bronze ve Silver'daki sayıları Adım 9.2
+ve 9.3'teki sorgularla karşılaştırın (Silver bir `silver-merge` çalışmasından sonra
 güncellenir).
 
-**Örnek sonuç** (300.000 satırlık SQL Server tablosu; yükleme sürerken Connect pod'u bilerek
-silindi, yeniden açılınca kaldığı yerden sürdü — gerçek sayılar):
+**Örnek sonuç:** 300.000 satırlık bir SQL Server tablosu yüklenirken Kafka Connect
+yeniden başlatıldı; yükleme kaldığı yerden devam etti ve sayılar tuttu:
 
 ```text
 konudaki kayıt              : 300000
@@ -566,9 +642,9 @@ Silver  count / count(distinct id) : 300000 / 300000
 
 #### Duraklatın, sürdürün, iptal edin
 
-Kaynak sunucunun yoğun olduğu saatlerde yüklemeyi durdurup sonra sürdürebilirsiniz. İstek
-yine sinyal tablosuna yazılır (SQL Server örneği; PostgreSQL'de `id` için
-`gen_random_uuid()::text` kullanın):
+Kaynak sunucunun yoğun olduğu saatlerde yüklemeyi durdurup sonra sürdürebilirsiniz.
+İstek yine sinyal tablosuna yazılır. Aşağıdaki örnek SQL Server içindir; PostgreSQL'de
+`id` için `gen_random_uuid()::text` kullanın:
 
 `[kaynak DB]`
 
@@ -577,14 +653,14 @@ yine sinyal tablosuna yazılır (SQL Server örneği; PostgreSQL'de `id` için
 INSERT INTO dbo.debezium_signal (id, type, data) VALUES (CONVERT(varchar(42), NEWID()), 'pause-snapshot', NULL);
 -- kaldığı yerden sürdür
 INSERT INTO dbo.debezium_signal (id, type, data) VALUES (CONVERT(varchar(42), NEWID()), 'resume-snapshot', NULL);
--- iptal et (yeniden başlatmak için önce bu, sonra yeni bir execute-snapshot isteği)
+-- iptal et (baştan başlatmak için önce bu, sonra yeni bir execute-snapshot isteği)
 INSERT INTO dbo.debezium_signal (id, type, data)
 VALUES (CONVERT(varchar(42), NEWID()), 'stop-snapshot',
         '{"data-collections": ["erp.dbo.orders"], "type": "incremental"}');
 ```
 
-**Beklenen çıktı** (günlükte; duraklatma ve sürdürme için gerçek satırlar — duraklatılmışken
-konudaki sayı artmaz, sürdürülünce artmaya devam eder):
+**Beklenen çıktı** (bağlayıcının günlüğünde; duraklatılmışken Kafka'daki sayı artmaz,
+sürdürülünce artmaya devam eder):
 
 ```text
 … AbstractIncrementalSnapshotChangeEventSource:257 - Incremental snapshot was paused.
@@ -593,111 +669,135 @@ konudaki sayı artmaz, sürdürülünce artmaya devam eder):
 
 #### Bağlayıcı yarıda kalırsa
 
-Bir şey yapmanız gerekmez. Connect yeniden açıldığında (pod yeniden başladı, düğüm
-değişti) artımlı yükleme son tamamlanan parçadan kendiliğinden sürer; günlükte şu satır
-görünür:
+Bir şey yapmanız gerekmez. Kafka Connect yeniden açıldığında (pod yeniden başladı, düğüm
+değişti) artımlı yükleme son tamamlanan parçadan kendiliğinden devam eder. Günlükte şu
+satır görünür:
 
 ```text
 … AbstractIncrementalSnapshotChangeEventSource:235 - Incremental snapshot in progress, need to read new chunk on start
 ```
 
-Yarıda kalan parça yeniden okunduğu için Bronze'a birkaç yüz satır ikinci kez yazılabilir;
-Silver birincil anahtara göre tek satır tuttuğu için sonuç doğrudur.
+Yarıda kalan parça yeniden okunduğu için Bronze'a birkaç yüz satır ikinci kez
+yazılabilir. Silver her kayıt için yalnız bir satır tuttuğu için sonuç doğrudur.
 
-**Baştan yüklemek** gerekirse (örneğin Bronze tablosunu düşürdünüz): önce `stop-snapshot`,
-sonra yeni bir `execute-snapshot` isteği gönderin.
+**Baştan yüklemek** gerekirse (örneğin Bronze tablosunu sildiyseniz): önce
+`stop-snapshot`, sonra yeni bir `execute-snapshot` isteği gönderin.
 
 #### Bağlayıcı uzun süre kapalı kalırsa
 
-Değişiklikler kaynakta bir süre bekletilir; bu süre aşılırsa kaçırılan değişiklikler
-bir daha okunamaz:
+Kaynak veritabanı değişiklikleri bir süre saklar; bu süre aşılırsa kaçırılan
+değişiklikler bir daha okunamaz:
 
-- **SQL Server:** CDC değişiklik tablolarını varsayılan olarak **3 gün** saklar. Bağlayıcı
-  bundan uzun süre kapalı kalırsa o tablo artımlı yüklemeyle yeniden getirilir. Süreyi
-  veritabanı yöneticisi uzatabilir (`EXEC sys.sp_cdc_change_job @job_type = N'cleanup',
-  @retention = 10080;` — dakika cinsinden, bu örnekte 7 gün).
-- **PostgreSQL:** ters durum: bağlayıcı kapalıyken sunucu değişiklik günlüğünü (WAL)
-  siler**mez**, disk dolar. Bağlayıcının uzun süre kapalı kalacağı biliniyorsa ya da kaynak
-  kaldırılacaksa çoğaltma yuvası düşürülür
+- **SQL Server:** CDC değişiklikleri varsayılan olarak **3 gün** saklar. Bağlayıcı daha
+  uzun süre kapalı kalırsa o tablo artımlı yüklemeyle yeniden getirilir. Süreyi
+  veritabanı yöneticisi uzatabilir:
+  `EXEC sys.sp_cdc_change_job @job_type = N'cleanup', @retention = 10080;` (dakika
+  cinsinden; bu örnekte 7 gün).
+- **PostgreSQL:** tersi olur: bağlayıcı kapalıyken sunucu değişiklik günlüğünü
+  **silmez** ve disk dolar. Bağlayıcının uzun süre kapalı kalacağı biliniyorsa ya da
+  kaynak kaldırılacaksa çoğaltma yuvası silinir
   ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 8).
 
-İki durumu da izleme alarmı `LakehouseConnectTaskFailed` erken haber verir
+İki durumda da `LakehouseConnectTaskFailed` alarmı erken haber verir
 ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md)).
 
 ---
 
 ## 7. `pipelines` girdisini yazın
 
-`sources` Bronze'u doldurur; Silver tabloları **yalnız** `pipelines` listesine yazılan
-tablolar için üretilir. Bir tabloyu Silver'a taşımak için birincil anahtarı bilmek
-gerekir.
+`sources` girdisi Bronze'u doldurur. Silver tablosu ise **yalnız** `pipelines` listesine
+yazılan tablolar için üretilir. Bir tabloyu Silver'a almak için tablonun birincil
+anahtarını bilmek gerekir.
+
+Aynı dosyada (`platform/values/site/glue.yaml`) `pipelines:` listesini bulun ve son
+öğesinin altına ekleyin. Liste boşsa (`pipelines: []`) `[]` işaretini silin.
 
 ```yaml
 pipelines:
-- bronze: erp_raw.orders                  # Bronze ad alanı + tablo; Silver adı: erp.orders
+- bronze: erp_raw.orders                  # Bronze tablosu; Silver adı: erp.orders
   keys: [id]                              # birincil anahtar kolon(lar)ı
   bucket_count: 16                        # bölümleme kova sayısı
-  casts: {updated_at: timestamp}          # Bronze'da metin gelen zaman kolonları
+  casts: {updated_at: timestamp}          # yalnız gerekirse: metin gelen zaman kolonları
 ```
 
-| Alan | Varsayılan | Anlamı ve seçim ölçütü |
+| Alan | Varsayılan | Anlamı ve nasıl seçilir |
 |---|---|---|
-| `bronze` | — | Bronze tablonun tam adı; Silver adı `_raw` düşürülerek türetilir |
-| `keys` | — | birincil anahtar; boş olamaz. Bileşik anahtarda **kardinalitesi en yüksek kolonu başa** yazın: bölümleme yalnız ilk anahtarla yapılır |
-| `write_mode` | `merge-on-read` | büyük tablolarda varsayılan kalsın; küçük ve çok okunan tablolarda `copy-on-write` okumayı hızlandırır |
-| `bucket_count` | `16` | `bucket(bucket_count, keys[0])`. Kabaca her kovaya 100–500 MB düşecek şekilde seçin: milyon satır altı tablolarda 4–8, on milyonlarda 16–32 |
-| `casts` | `{}` | kolon → Spark tipi. Zaman dilimli zaman kolonları Bronze'a **metin** olarak gelir; Silver'da zaman tipi isteniyorsa buraya yazılır |
-| `silver` | türetilir | Silver tablo adını elle vermek için; ad kuralından sapmak gerekmedikçe kullanılmaz |
+| `bronze` | — | Bronze tablosunun tam adı; Silver adı `_raw` atılarak bulunur |
+| `keys` | — | birincil anahtar; boş olamaz. Birden fazla kolonluk anahtarda **en çok farklı değer alan kolonu başa** yazın: bölümleme yalnız ilk kolonla yapılır |
+| `write_mode` | `merge-on-read` | büyük tablolarda değiştirmeyin; küçük ve çok okunan tablolarda `copy-on-write` okumayı hızlandırır |
+| `bucket_count` | `16` | tablonun bölüneceği parça sayısı. Her parçaya kabaca 100–500 MB düşecek şekilde seçin: milyonun altında satırlı tablolarda 4–8, on milyonlarda 16–32 |
+| `casts` | `{}` | kolonların Silver'daki tipini değiştirmek için (kolon → tip) |
+| `silver` | türetilir | Silver tablo adını elle vermek için; gerekmedikçe kullanmayın |
 
-**Append-only tablolar listelenmez.** Silver, kaynağın güncel hâline eşit olan
-birleştirilmiş katmandır; günlük ve olay tabloları yalnız Bronze'da kalır ve oradan
-sorgulanır.
+**Kolon tipleri ve `casts`.** PostgreSQL ve SQL Server'da tarih (`date`), mantıksal
+(SQL Server `bit`, PostgreSQL `boolean`) ve ondalık (`decimal`, `numeric`) kolonlar
+Bronze'a aynı tiple gelir; bunlar için `casts` gerekmez. Yalnız **saat dilimli** zaman
+kolonları (PostgreSQL `timestamptz`, SQL Server `datetimeoffset`) Bronze'a metin olarak
+gelir. Silver'da bu kolonların zaman tipinde olmasını istiyorsanız `casts` ile
+belirtin: `casts: {updated_at: timestamp}`.
 
-**MongoDB pipeline'ı.** Koleksiyonlarda anahtar her zaman `keys: [_id]`'dir ve `casts`
-kullanılmaz: Bronze'da iş kolonu yoktur, belge `_doc` içinde JSON metni olarak durur
-(Adım 3.3). Silver de aynı `(_id, _doc)` şeklini taşır.
+**Yalnız eklenen tablolar listeye yazılmaz.** Silver, kaynak tablonun güncel hâlini
+tutar. Günlük ve olay tabloları gibi satırları hiç güncellenmeyen tablolar yalnız
+Bronze'da kalır ve oradan sorgulanır.
+
+**MongoDB.** Koleksiyonlarda anahtar her zaman `keys: [_id]`'dir ve `casts` kullanılmaz:
+belge `_doc` kolonunda JSON metni olarak durur (Adım 3.3). Silver da aynı `_id`, `_doc`
+biçimindedir.
 
 ```yaml
 pipelines:
 - {bronze: erp_raw.orders, keys: [_id], bucket_count: 16}
 ```
 
-**Ters giderse:** `'bronze' ve boş olmayan 'keys' zorunlu` → anahtar verilmemiştir.
-`casts bilinmeyen kolon(lar)` → `casts` içinde Bronze'da olmayan bir kolon adı vardır.
+**Ters giderse:** Adım 8'deki denetim `'bronze' ve boş olmayan 'keys' zorunlu` hatası
+verirse anahtar yazılmamıştır. `casts bilinmeyen kolon(lar)` hatası, `casts` içinde
+Bronze'da olmayan bir kolon adı olduğunu gösterir.
 
 ---
 
-## 8. Commit edin, itin, eşitlemeyi izleyin
+## 8. Değişikliği Git'e gönderin
 
-Bu adımın tamamı ortak döngüdür:
-[değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
+Adım 5'te `setup.yaml` dosyasını, Adım 6 ve 7'de `glue.yaml` dosyasını değiştirdiniz.
+İkisini birlikte gönderin. Bu adımın ayrıntısı
+[değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) sayfasındadır.
 
 `[bastion]`
 
 ```bash
 bash scripts/check-site.sh
+git diff
 git add platform/values/site/glue.yaml platform/polaris/setup.yaml
-git commit -m "site: erp kaynagi ve pipeline eklendi"
+git commit -m "site: erp kaynağı ve pipeline eklendi"
 git push origin main
 ```
 
+`check-site.sh` `check-site: OK` yazmalıdır; `git diff` çıktısında yalnız sizin
+eklediğiniz satırlar görünmelidir.
 
+ArgoCD değişikliği birkaç dakika içinde uygular ve şunları yaratır:
 
-ArgoCD eşitlediğinde şunlar yaratılır ya da güncellenir: `KafkaUser/connect` ACL'leri
-(kaynağın konu ön eki için), `Role/connect-secrets-reader` (Connect'in `erp-db`
-Secret'ını okuyabilmesi için; `glue/templates/kafka-connect.yaml`),
-`KafkaConnector/dbz-erp` ve `KafkaConnector/sink-erp`, `ConfigMap/lakehouse-jobs`
-(Silver pipeline tanımları) ve — ilk pipeline eklendiğinde —
-`ScheduledSparkApplication/silver-merge` ile üç bakım işi.
+- `dbz-erp` ve `sink-erp` bağlayıcıları;
+- Kafka Connect'in `erp-db` Secret'ını okuma izni ve kaynağın Kafka konularına yazma
+  izni;
+- Silver tablolarının tanımı ve — ilk pipeline'da — `silver-merge` işi ile bakım işleri.
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü; eşitleme bittiğinde):
+Uygulamanın bittiğini kontrol edin:
+
+`[bastion]`
+
+```bash
+oc -n "$ARGOCD_NS" get application glue \
+  -o jsonpath='{.status.sync.status} {.status.health.status}{"\n"}'
+```
+
+**Beklenen çıktı:**
 
 ```text
 Synced Healthy
 ```
 
-**Ters giderse:** `Synced Degraded` → nesneler uygulandı ama bağlayıcı sağlıksızdır;
-Adım 9.4'e geçin.
+**Ters giderse:** `Synced Degraded` görürseniz nesneler kuruldu ama bağlayıcı
+sağlıksızdır; Adım 9.4'e geçin.
 
 ---
 
@@ -708,19 +808,18 @@ Adım 9.4'e geçin.
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" get kafkaconnector
+oc -n "$LAKEHOUSE_NS" get kafkaconnector dbz-erp sink-erp
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; oradaki kaynağın adı `shop`,
-sizde `dbz-erp` ve `sink-erp` satırlarını görürsünüz):
+**Beklenen çıktı** (iki satırda da `READY` sütunu `True`):
 
 ```text
-NAME         CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
-dbz-shop     connect   io.debezium.connector.postgresql.PostgresConnector   1           True
-sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
+NAME       CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
+dbz-erp    connect   io.debezium.connector.postgresql.PostgresConnector   1           True
+sink-erp   connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
 ```
 
-Görev düzeyinde durum:
+Bağlayıcının görevinin durumu:
 
 `[bastion]`
 
@@ -729,13 +828,15 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector dbz-erp \
   -o jsonpath='{.status.connectorStatus.tasks[0]}{"\n"}'
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `shop` kaynağının görevi):
+**Beklenen çıktı** (`state` alanı `RUNNING`; `worker_id` görevin çalıştığı Kafka Connect
+pod'udur):
 
 ```text
-{"id":0,"state":"RUNNING","version":"3.6.2.Final","worker_id":"connect-connect-0.connect-connect.lakehouse.svc:8083"}
+{"id":0,"state":"RUNNING","version":"3.6.2.Final","worker_id":"connect-connect-1.connect-connect.lakehouse.svc:8083"}
 ```
 
-PostgreSQL kaynaklarında yuvanın gerçekten açıldığını kaynak tarafında da görebilirsiniz:
+PostgreSQL kaynaklarında çoğaltma yuvasının açıldığını kaynak veritabanında da
+görebilirsiniz:
 
 `[kaynak DB]`
 
@@ -743,24 +844,25 @@ PostgreSQL kaynaklarında yuvanın gerçekten açıldığını kaynak tarafında
 SELECT slot_name, plugin, active FROM pg_replication_slots;
 ```
 
-**Beklenen çıktı** (kind kümesindeki PostgreSQL'den alınmış gerçek çıktı; yuva adı
-`debezium_` + kaynak adıdır):
+**Beklenen çıktı** (yuvanın adı `debezium_` + kaynak adıdır):
 
 ```text
-   slot_name   |  plugin  | active 
----------------+----------+--------
- debezium_shop | pgoutput | t
+  slot_name   |  plugin  | active 
+--------------+----------+--------
+ debezium_erp | pgoutput | t
 (1 row)
 ```
 
-**Ters giderse:** `READY` sütunu boş ya da `False` → Adım 9.4 tablosuna bakın.
-`active` sütunu `f` ise bağlayıcı yuvaya bağlı değildir (görev düşmüştür).
+**Ters giderse:** `READY` sütunu boş ya da `False` ise Adım 9.4'teki tabloya bakın.
+`active` sütunu `f` ise bağlayıcı yuvaya bağlı değildir (görevi durmuştur).
 
 ### 9.2 Bronze
 
-İlk satırların görünmesi iki şeyi bekler: Iceberg sink'in denetim tüketicisinin gruba
-katılması (ölçülen ~2 dakika) ve ilk commit aralığının dolması (üretimde 300 saniye,
-geliştirme kurulumunda 30 saniye). Yani **ilk beş dakika boş tablo normaldir.**
+Bronze'a yazan bağlayıcı verileri **beş dakikada bir** tabloya işler. İlk satırların
+görünmesi bağlayıcı açıldıktan sonra **5–15 dakika** sürebilir; bu sürede tablonun boş
+ya da hiç olmaması normaldir.
+
+Sorgular bir JupyterHub not defteri hücresinde çalıştırılır. Önce bağlantıyı kurun:
 
 `[pod]` (JupyterHub not defteri hücresi)
 
@@ -772,47 +874,49 @@ conn = trino.dbapi.connect(host=os.environ["TRINO_HOST"], port=8443, http_scheme
 cur = conn.cursor(); cur.execute("select count(*) from erp_raw.orders"); cur.fetchall()
 ```
 
-Hücre ilk çalıştığında bir giriş adresi basar ve bekler: adresi tarayıcıda açıp kendi AD
-hesabınızla Keycloak'a girin, hücre sonra kendiliğinden devam eder. Hücre
-`CA cert does not include key usage extension` hatası verirse iç kök CA eski komutla
-üretilmiştir: [sorun-giderme.md](sorun-giderme.md) §7.
+Hücre ilk çalıştığında bir giriş adresi yazar ve bekler. Adresi tarayıcıda açıp kendi AD
+hesabınızla girin; hücre sonra kendiliğinden devam eder. Hücre `CA cert does not include
+key usage extension` hatası verirse [sorun-giderme.md](sorun-giderme.md) §7'ye bakın.
 
-**Beklenen çıktı** (örnek — kaynak tablonuzdaki olay sayısı):
+**Beklenen çıktı** (kaynak tablonuzdaki satır sayısı; bu örnekte 201):
 
 ```text
-[[12483]]
+[[201]]
 ```
 
-Bronze satırı, iş kolonlarının yanında bir `_cdc` yapısı taşır: `op` (`I`, `U` ya da
-`D`), `ts`, `offset`, `source`, `target`, `key`. Silme olayları da satır olarak durur;
-bu yüzden Bronze sayısı kaynaktakinden **büyüktür**.
+Bronze bir **değişiklik günlüğüdür**: her satırın yanında değişikliğin bilgilerini
+taşıyan bir `_cdc` yapısı vardır (`op`: `I` ekleme, `U` güncelleme, `D` silme; `ts`
+zamanı). Kaynakta güncellenen ya da silinen satırlar Bronze'da ayrı satırlar olarak
+durur; bu yüzden zamanla Bronze'daki satır sayısı kaynaktakinden **büyük** olur.
+Bağlayıcının ilk okuması yarıda kalıp baştan alınırsa da bazı satırlar iki kez yazılır.
+Bronze'u kaynakla karşılaştırırken bu yüzden toplam satır yerine **farklı anahtar
+sayısına** bakın: `select count(distinct id) from erp_raw.orders`.
 
-**MongoDB kaynaklarında sorgu farklıdır.** Bronze'da iş kolonu yoktur; belge `_doc`
-içinde JSON metni olarak durur (Adım 3.3), bu yüzden alanlara `json_extract` ile
-bakılır. Aşağıdaki hücre hem satır sayısını hem bir alanın gerçekten geldiğini gösterir:
+**MongoDB kaynaklarında sorgu farklıdır.** Belge `_doc` kolonunda JSON metni olarak
+durduğu için (Adım 3.3) alanlara `json_extract_scalar` ile bakılır. Aşağıdaki hücre son
+değişiklikleri ve bir alanın değerini gösterir:
 
 `[pod]` (JupyterHub not defteri hücresi)
 
 ```python
 cur = conn.cursor()
 cur.execute("""select _id,
-                      json_extract_scalar(_doc, '$.status') as status,
+                      json_extract_scalar(_doc, '$.name') as name,
                       _cdc.op
                from erp_raw.orders
                order by _cdc.ts desc
-               limit 5""")
+               limit 3""")
 cur.fetchall()
 ```
 
-**Beklenen çıktı** (örnek — kendi belgelerinizin alanlarıyla):
+**Beklenen çıktı** (örnek: `name` alanı olan bir koleksiyondan; silinmiş belgelerde alan
+boş gelebilir):
 
 ```text
-[['66f0c1a2e4b09a7d3c5f1234', 'new', 'I'], ['66f0c1a2e4b09a7d3c5f1235', 'paid', 'U']]
+[['000000000000000000000004', 'Deniz', 'I'], ['000000000000000000000002', None, 'D'], ['000000000000000000000001', 'Ada', 'U']]
 ```
 
-MongoDB kaynağında ayrıca **karantina tablosunun boş olduğunu** doğrulayın; dolu bir
-tablo, işlenemeyen olay demektir (`reason`: `bad-envelope`, `no-key`, `no-ts`,
-`after-null` — Adım 3.3):
+MongoDB kaynağında ayrıca **karantina tablosunun boş olduğunu** kontrol edin:
 
 `[pod]` (JupyterHub not defteri hücresi)
 
@@ -822,27 +926,27 @@ cur.execute("select reason, count(*) from erp_raw.orders__quarantine group by 1"
 cur.fetchall()
 ```
 
-**Beklenen çıktı** (örnek — sağlıklı bir akışta karantina boştur):
+**Beklenen çıktı** (sağlıklı bir akışta karantina boştur):
 
 ```text
 []
 ```
 
-**Ters giderse:** beş dakika sonra hâlâ 0 satır varsa Connect günlüğünde snapshot
+**Ters giderse:** 15 dakika sonra hâlâ satır yoksa Kafka Connect günlüğünde ilk okumanın
 satırlarını arayın:
 
 ```bash
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i snapshot
 ```
 
-MongoDB'de Bronze'u Iceberg sink değil, beş dakikada bir koşan `mongo-bronze` Spark işi yazar:
-`oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication mongo-bronze` ile askıda olmadığını
-doğrulayın.
+MongoDB'de Bronze'u `mongo-bronze` işi yazar; işin askıda olmadığını kontrol edin:
+`oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication mongo-bronze` (`SUSPEND` sütunu
+`false` olmalıdır).
 
 ### 9.3 Silver
 
-Silver tablosu ilk `silver-merge` koşusunda Spark tarafından yaratılır (üretimde 15
-dakikada bir). Zamanlamayı görmek için:
+Silver tablosu, Bronze'a veri geldikten sonraki ilk `silver-merge` çalışmasında yaratılır.
+İş 15 dakikada bir çalışır. Durumunu görmek için:
 
 `[bastion]`
 
@@ -850,16 +954,15 @@ dakikada bir). Zamanlamayı görmek için:
 oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı** (`SUSPEND` sütunu `false`; `LAST RUN` son çalışmadan bu yana geçen
+süre):
 
 ```text
 NAME           SCHEDULE       TIMEZONE   SUSPEND   LAST RUN   LAST RUN NAME                      AGE
-silver-merge   */15 * * * *              false     59s        silver-merge-1794154500000843588   115m
+silver-merge   */15 * * * *              false     6m41s      silver-merge-1794415500000843808   3d2h
 ```
 
-`SUSPEND` sütunu `false` olmalıdır.
-
-Koşu bittikten sonra Silver'ı sorgulayın:
+Çalışma bittikten sonra Silver'ı sorgulayın:
 
 `[pod]` (JupyterHub not defteri hücresi)
 
@@ -867,35 +970,38 @@ Koşu bittikten sonra Silver'ı sorgulayın:
 cur = conn.cursor(); cur.execute("select count(*) from erp.orders"); cur.fetchall()
 ```
 
-**Beklenen çıktı** (örnek — kaynaktaki **güncel** satır sayısına eşit olmalıdır):
+**Beklenen çıktı** (kaynak tablodaki **güncel** satır sayısı; bu örnekte 201):
 
 ```text
-[[9741]]
+[[201]]
 ```
 
-**Ters giderse:** tablo bulunamadı hatası → henüz hiç `silver-merge` koşmamış ya da
-`pipelines` girdisi eksiktir. `SUSPEND` sütunu `true` ise iş askıdadır: kabul testi
-koşarken işleri askıya alır ve bitince geri açar, ancak test yarıda kesilirse (bağlantı
-koptu, dizüstü kapandı) askıda kalırlar. ArgoCD bunu düzeltmez; geri açmak için
-[sorun-giderme.md](sorun-giderme.md) §6.1. Açıldıktan sonra kaçırılan koşu hemen yapılır.
+**Ters giderse:**
 
-### 9.4 Sık hatalar
+- Tablo bulunamadı hatası — `silver-merge` henüz çalışmamıştır ya da `pipelines` girdisi
+  eksiktir.
+- `SUSPEND` sütunu `true` — iş askıdadır. Kabul testi çalışırken işleri askıya alır ve
+  bitince geri açar; test yarıda kesilirse askıda kalırlar. ArgoCD bunu düzeltmez; geri
+  açmak için [sorun-giderme.md](sorun-giderme.md) §6.1. Açıldıktan sonra kaçırılan
+  çalışma hemen yapılır.
 
-| Belirti | Neden | Çözüm |
+### 9.4 Sık karşılaşılan hatalar
+
+| Ne görüyorsunuz | Neden | Ne yapılır |
 |---|---|---|
-| `dbz-erp` FAILED, `password authentication failed for user "debezium"` (mssql/mongo: `Login failed` / `Authentication failed`) | kaynakta hesap **boş parolayla** yaratılmış: Adım 3'ün başındaki `read -r -s ERP_DB_PASSWORD` bloğu atlanmış ya da `erp-db` Secret'ındaki değer farklı | parolayı kaynakta yenileyin (`ALTER ROLE debezium WITH PASSWORD :'parola';`) ve `erp-db` Secret'ını aynı değerle yeniden yaratın (Adım 4) |
-| `dbz-erp` FAILED, izde `must be superuser or replication role` | rolde `REPLICATION` yok | Adım 3.1.2'deki `CREATE ROLE ... REPLICATION` |
-| `dbz-erp` FAILED, `replication slot ... already exists and is active` | aynı adla başka bir bağlayıcı yuvayı tutuyor | eski kaynağı kaldırın ya da kaynağa başka bir ad verin |
-| `dbz-erp` FAILED, publication hatası ve rol tablo sahibi değil | `filtered` publication yaratılamıyor | tabloların sahibini CDC rolüne alın (Adım 3.1.2) |
-| `dbz-erp` FAILED, sertifika güven hatası (SQL Server) | TLS güven zinciri eksik | truststore'u `extraConfig` ile verin (Adım 3.2) |
-| `dbz-erp` FAILED, `not running with --replSet` (MongoDB) | kaynak replica set değil | Adım 3.3 |
-| Bağlayıcılar `True` ama Bronze boş | denetim tüketicisi henüz katılmadı ya da ilk commit aralığı dolmadı | 5 dakika bekleyin; sonra Connect günlüğüne bakın |
-| Sink FAILED, ad alanı bulunamadı ya da Polaris yetki hatası | Bronze ad alanı katalogda yok | Adım 5'i koşturun |
-| Sink FAILED, `TopicAuthorizationException` | ACL kaynağın konu ön ekini kapsamıyor | `topicPrefix` ile Kafka konusunun ön eki aynı mı |
-| Bronze doluyor, Silver güncellenmiyor | `silver-merge` askıda ya da düşüyor | `SUSPEND` sütunu; `LakehouseSilverMergeStale` alarmı |
-| Silver'da `SchemaConflict` | kolon tipi güvenli genişletilemiyor | Silver'da elle `ALTER TABLE` ya da yeni kolon |
+| `dbz-erp` hata veriyor: `password authentication failed for user "debezium"` (SQL Server'da `Login failed`, MongoDB'de `Authentication failed`) | kaynaktaki kullanıcı parolasız ya da başka bir parolayla yaratılmış (Adım 3'ün başı atlanmış) ya da `erp-db` Secret'ındaki değer farklı | parolayı kaynakta yenileyin (`ALTER ROLE debezium WITH PASSWORD :'parola';`) ve `erp-db` Secret'ını aynı değerle yeniden yaratın (Adım 4) |
+| `dbz-erp` hata veriyor: `must be superuser or replication role` | kullanıcının çoğaltma yetkisi yok | Adım 3.1.2'deki `CREATE ROLE ... REPLICATION` |
+| `dbz-erp` hata veriyor: `replication slot ... already exists and is active` | aynı adlı yuvayı başka bir bağlayıcı kullanıyor | eski kaynağı kaldırın ya da kaynağa başka bir ad verin |
+| `dbz-erp` hata veriyor ve hata metninde `dbz_erp_pub` geçiyor | publication yok ya da yakalanan bir tablo publication'da değil | Adım 3.1.2'deki `CREATE PUBLICATION` / `ALTER PUBLICATION ... ADD TABLE` |
+| `dbz-erp` hata veriyor: sertifika hatası (SQL Server) | sunucunun sertifikasına güvenilmiyor | truststore'u `extraConfig` ile verin (Adım 3.2) |
+| `dbz-erp` hata veriyor: `not running with --replSet` (MongoDB) | kaynak bir replica set değil | Adım 3.3 |
+| Bağlayıcılar `True` ama Bronze boş | ilk yazma henüz olmadı | 15 dakika bekleyin; sonra Kafka Connect günlüğüne bakın (Adım 9.2) |
+| `sink-erp` hata veriyor: ad alanı bulunamadı ya da katalog yetki hatası | Bronze ad alanı katalogda yok | Adım 5 |
+| `sink-erp` hata veriyor: `TopicAuthorizationException` | Kafka izni kaynağın konularını kapsamıyor | `topicPrefix` alanı ile Kafka konularının ön eki aynı mı, kontrol edin |
+| Bronze doluyor, Silver güncellenmiyor | `silver-merge` askıda ya da hata veriyor | `SUSPEND` sütunu (Adım 9.3); `LakehouseSilverMergeStale` alarmı |
+| Silver'da `SchemaConflict` | bir kolonun tipi Silver'da güvenle genişletilemiyor | [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) |
 
-Bağlayıcıyı yeniden başlatmak (deklaratif; nesneyi silmez):
+Bağlayıcıyı yeniden başlatmak (nesneyi silmez):
 
 `[bastion]`
 
@@ -903,7 +1009,7 @@ Bağlayıcıyı yeniden başlatmak (deklaratif; nesneyi silmez):
 oc -n "$LAKEHOUSE_NS" annotate kafkaconnector dbz-erp strimzi.io/restart=true --overwrite
 ```
 
-Hata izini okumak:
+Hatanın ayrıntısını okumak:
 
 `[bastion]`
 
@@ -912,58 +1018,56 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector dbz-erp \
   -o jsonpath='{.status.connectorStatus.tasks[0].trace}{"\n"}' | head -30
 ```
 
-**Ölü mektup kuyruğu hakkında bir uyarı:** Iceberg sink hatalı kaydı kuyruğa **yazmaz**;
-sonu `.dlq` olan konu yalnız dönüştürücü ve SMT hatalarını alır. Yazma hatası görevi
-durdurur ve izleme alarmıyla görünür.
+**Hatalı kayıtlar hakkında:** Bronze'a yazan bağlayıcı, okuyamadığı ya da
+dönüştüremediği kaydı adı `.dlq` ile biten konuya (ör. `erp.dlq`) bırakır ve devam eder.
+Tabloya yazma sırasında oluşan bir hata ise görevi durdurur ve alarmla görünür
+([sorun-giderme.md](sorun-giderme.md) §4.1).
 
-Bağlayıcı yeniden başlatmaya rağmen düzelmiyor ve tüketici konumu ileriye kaymışsa
-(kaydın işlenmeden geçilmesi) **offset sıfırlama** gerekir; bu, veri yinelemesine yol
-açabildiği için ayrı bir yordamdır ve
-[sorun-giderme.md](sorun-giderme.md) §4.1'de anlatılır. Belirtilerin tam tablosu da
-oradadır (§3).
+Bütün belirtiler ve çözümleri: [sorun-giderme.md](sorun-giderme.md) §3.
 
 ---
 
 ## 10. nginx erişim günlüğü akışı
 
-Bu akış veritabanı değildir: müşterinin web sunucusunda koşan **Fluent Bit 5.1.2** ajanı
-erişim günlüğünü doğrudan Kafka'ya yazar, Iceberg sink de `nginx_raw.access_log`
-tablosuna aktarır. `sources` listesine bir şey eklenmez.
+Bu akış bir veritabanı değildir. Web sunucusunda çalışan **Fluent Bit 5.1.2** ajanı nginx
+erişim günlüğünü doğrudan Kafka'ya gönderir; bir bağlayıcı da satırları
+`nginx_raw.access_log` tablosuna yazar. `sources` listesine bir şey eklenmez.
 
 ```text
-access.log -> Fluent Bit -> Kafka dış dinleyici (TLS + SCRAM) -> sink -> nginx_raw.access_log
+access.log -> Fluent Bit -> Kafka (dış adres, TLS + parola) -> bağlayıcı -> nginx_raw.access_log
 ```
 
-**Birden fazla nginx sunucusu** varsa hepsi aynı konuya ve aynı tabloya yazar; satırın
-hangi sunucudan geldiği `server` kolonundadır. Sunucu başına ayrı tablo açılmaz: sorgular
-`where server = '…'` ile süzülür, yeni sunucu eklemek küme tarafında hiçbir değişiklik
-gerektirmez (Adım 10.5). Günlükler yalnız eklenir, hiç güncellenmez; bu yüzden Silver
-katmanı yoktur, özetler doğrudan bu tablodan üretilir.
+**Birden fazla nginx sunucusu** varsa hepsi aynı tabloya yazar; satırın hangi sunucudan
+geldiği `server` kolonundadır. Sunucu başına ayrı tablo açılmaz; sorgular
+`where server = '…'` ile süzülür. Yeni bir sunucu eklemek kümede bir değişiklik
+gerektirmez (Adım 10.5). Günlük satırları yalnız eklenir, hiç güncellenmez; bu yüzden
+Silver katmanı yoktur, raporlar doğrudan bu tablodan üretilir.
 
-Tablo `day(ts)` ile bölümlenir; `ts` log satırının kendi zamanı (milisaniye), `_fb_ts`
-ajanın alım zamanıdır. **Ham IP saklanır**; maskeleme istenirse sink tarafında bir SMT ile
-eklenir.
+Tablo günlere bölünür (`ts` kolonuna göre). `ts` günlük satırının kendi zamanı, `_fb_ts`
+ajanın satırı okuduğu zamandır. İstemci IP adresi (`remote` kolonu) olduğu gibi saklanır;
+kimin görebileceği Trino erişim kurallarıyla sınırlanır
+([kullanici-ve-yetki.md](kullanici-ve-yetki.md)).
 
 ### 10.1 Küme tarafını açın
 
-`platform/values/site/glue.yaml` dosyasında iki anahtar açılır. `nginx:` satırı dosyada
-zaten vardır, `enabled` değerini `true` yapın. `kafka:` satırı şablonda **yoktur**; `nginx:`
-satırının hemen üstüne ekleyin:
+`platform/values/site/glue.yaml` dosyasında iki satır gerekir. `nginx:` satırı dosyada
+zaten vardır; `enabled` değerini `true` yapın. `kafka:` satırı yoksa `nginx:` satırının
+hemen üstüne ekleyin:
 
 ```yaml
 kafka: {externalListener: true}
 nginx: {enabled: true, partitions: 3}
 ```
 
-Dış dinleyiciyi açmak Kafka broker'larını sırayla yeniden başlatır (provada ~2,5 dakika);
-bu sırada boru hattı durmaz.
+İlk satır Kafka'yı küme dışından (ajanlardan) erişilebilir yapar. Bu değişiklik Kafka
+sunucularını sırayla yeniden başlatır (2–3 dakika); bu sırada veri akışı durmaz.
 
-Commit ve push sonrası ArgoCD şunları yaratır: `KafkaTopic/nginx.access`,
-`KafkaUser/fluentbit` (yalnız `nginx.` ön ekine yazma yetkisi),
-`KafkaConnector/sink-nginx` ve OpenShift'te her broker için birer Route.
+Değişikliği Adım 8'deki gibi gönderin. ArgoCD şunları yaratır: `nginx.access` Kafka
+konusu, ajanların kullanacağı `fluentbit` Kafka kullanıcısı (yalnız `nginx.` ile başlayan
+konulara yazabilir), `sink-nginx` bağlayıcısı ve Kafka'nın dış adresleri.
 
-**Ön koşul:** ajan sunucularından kümeye `443/TCP` açık, `$APPS_DOMAIN` altındaki adlar
-çözülebilir olmalıdır ([20-on-kosullar](../20-on-kosullar.md) §8).
+**Ön koşul:** ajan sunucularından kümeye `443/TCP` açık olmalı ve `$APPS_DOMAIN` altındaki
+adlar çözülebilmelidir ([20-on-kosullar](../20-on-kosullar.md) §8).
 
 `[bastion]`
 
@@ -971,15 +1075,15 @@ Commit ve push sonrası ArgoCD şunları yaratır: `KafkaTopic/nginx.access`,
 oc -n "$LAKEHOUSE_NS" get kafkatopic nginx.access
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 NAME           CLUSTER     PARTITIONS   REPLICATION FACTOR   READY
 nginx.access   lakehouse   3            3                    True
 ```
 
-**Ters giderse:** konu görünmüyorsa `nginx.enabled` hâlâ `false`'tur ya da eşitleme
-tamamlanmamıştır.
+**Ters giderse:** konu görünmüyorsa `nginx.enabled` hâlâ `false`'tur ya da ArgoCD henüz
+uygulamamıştır.
 
 ### 10.2 Ajanın ihtiyaç duyduğu üç değeri alın
 
@@ -993,32 +1097,53 @@ oc -n "$LAKEHOUSE_NS" get secret lakehouse-cluster-ca-cert \
 oc -n "$LAKEHOUSE_NS" get secret fluentbit -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-**Beklenen çıktı** (OpenShift provasında doğrulandı; parola örnektir): blok üç komut
-içerir ama ekrana **iki** satır basar — ortadaki komut hiçbir şey yazdırmaz, CA'yı
-`kafka-ca.crt` dosyasına yazar (`ls -l kafka-ca.crt` ile doğrulayın). Bu, Kafka'nın kendi
-CA'sıdır; kurulumdaki `lakehouse-ca` (Trino) ile karıştırmayın. Birinci satır
-Route host'u ve 443, ikinci satır ajanın SCRAM parolasıdır:
+**Beklenen çıktı** (adres ve parola sizde farklıdır): üç komut ekrana **iki** satır
+yazar. Birinci satır Kafka'nın dış adresidir, ikinci satır ajanın parolasıdır. Ortadaki
+komut ekrana bir şey yazmaz; Kafka'nın sertifikasını `kafka-ca.crt` dosyasına kaydeder
+(`ls -l kafka-ca.crt` ile kontrol edin).
 
 ```text
 lakehouse-kafka-bootstrap-lakehouse.apps.ocp.example.net:443
 4f6b2c1d9e8a7350b1c4d2e6f0a9837c
 ```
 
-Üçü de ajan sunucusuna güvenli bir kanalla taşınır: bootstrap adresi, `kafka-ca.crt`
-dosyası ve parola. Ajan sunucusu `$APPS_DOMAIN` altındaki **dört** adı çözebilmelidir:
-bootstrap ve her broker için birer Route (`oc -n "$LAKEHOUSE_NS" get route | grep dual-role`).
+Bu sertifika Kafka'nın kendi sertifikasıdır; kurulumdaki `lakehouse-ca` ile
+karıştırmayın.
 
-**Ters giderse:** bootstrap satırı boş dönerse dış dinleyici açılmamıştır (Adım 10.1).
+Üç değeri (adres, `kafka-ca.crt` dosyası, parola) ajan sunucusuna güvenli bir kanalla
+taşıyın. Ajan sunucusu `$APPS_DOMAIN` altındaki **dört** adı çözebilmelidir: dış adres
+ve her Kafka sunucusu için birer ad. Adları görmek için:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get route | grep -E 'bootstrap|dual-role' | awk '{print $1}'
+```
+
+**Beklenen çıktı:**
+
+```text
+lakehouse-dual-role-0
+lakehouse-dual-role-1
+lakehouse-dual-role-2
+lakehouse-kafka-bootstrap
+```
+
+**Ters giderse:** dış adres satırı boşsa Kafka'nın dış adresi açılmamıştır (Adım 10.1).
 
 ### 10.3 Ajanı kurun
 
-Fluent Bit 5.1.2 paketi kurulur, ardından depodaki iki yapılandırma dosyası kopyalanır:
-`agents/fluent-bit/fluent-bit.conf` ve `agents/fluent-bit/parsers.conf` →
-`/etc/fluent-bit/`.
+Web sunucusuna Fluent Bit 5.1.2 paketini kurun. Depodaki iki ayar dosyasını
+(`agents/fluent-bit/fluent-bit.conf` ve `agents/fluent-bit/parsers.conf`) ve Adım
+10.2'deki `kafka-ca.crt` dosyasını sunucuya kopyalayın.
+
+Aşağıdaki komutları sunucuda, bu üç dosyanın bulunduğu klasörde çalıştırın:
 
 `[nginx ajan sunucusu]`
 
 ```bash
+read -r KAFKA_BOOTSTRAP
+read -r -s KAFKA_PASSWORD
 install -m 0644 fluent-bit.conf parsers.conf /etc/fluent-bit/
 install -m 0644 kafka-ca.crt /etc/fluent-bit/kafka-ca.crt
 cat > /etc/default/fluent-bit <<EOF
@@ -1033,25 +1158,36 @@ chmod 600 /etc/default/fluent-bit
 systemctl enable --now fluent-bit
 ```
 
-`KAFKA_BOOTSTRAP` ve `KAFKA_PASSWORD` kabuk değişkenlerine Adım 10.2'de alınan iki değer
-yazılır. `NGINX_SERVER_NAME` bu sunucunun tablodaki adıdır (`server` kolonu); komut
-sunucunun kısa adını yazar, isterseniz `web01` gibi kendi adınızı verin. Her sunucuda
-**farklı** olmalıdır. Dosya parola içerdiği için yalnız `root` tarafından okunabilir olmalıdır.
-`READ_FROM_HEAD=off` ajanın yalnız **yeni** satırları göndermesini sağlar; var olan
-dosyanın tamamını geri yüklemek isterseniz ilk açılışta `on` yapın.
+İlk iki komuttan sonra sırasıyla Adım 10.2'deki adresi ve parolayı yazıp `Enter`'a basın
+(parola ekranda görünmez).
 
-**Beklenen çıktı** (örnek — `systemctl status fluent-bit` ilk satırları):
+- `NGINX_SERVER_NAME` bu sunucunun tablodaki adıdır (`server` kolonu). Komut sunucunun
+  kısa adını yazar; isterseniz `web01` gibi kendi adınızı verin. Her sunucuda **farklı**
+  olmalıdır.
+- `READ_FROM_HEAD=off`, ajanın yalnız **yeni** satırları göndermesini sağlar. Dosyadaki
+  eski satırları da göndermek isterseniz ilk açılışta `on` yapın.
+- Dosya parola içerdiği için yalnız `root` okuyabilir (`chmod 600`).
+
+Ajanın çalıştığını kontrol edin:
+
+```bash
+systemctl status fluent-bit
+```
+
+**Beklenen çıktı** (örnek — ilk satırlar):
 
 ```text
 ● fluent-bit.service - Fluent Bit
      Active: active (running)
 ```
 
-**Ters giderse:** `journalctl -u fluent-bit` çıktısında yetki hatası → parola yanlıştır;
-sertifika hatası → CA dosyası yanlış yolda ya da bozuktur; dosya bulunamadı →
-`NGINX_ACCESS_LOG` yolu yanlıştır.
+**Ters giderse:** `journalctl -u fluent-bit` çıktısına bakın:
 
-### 10.4 Doğrulayın ve bilinmesi gerekenler
+- yetki hatası — parola yanlıştır;
+- sertifika hatası — `kafka-ca.crt` dosyası yanlış yerde ya da bozuktur;
+- dosya bulunamadı — `NGINX_ACCESS_LOG` yolu yanlıştır.
+
+### 10.4 Doğrulayın
 
 `[bastion]`
 
@@ -1059,34 +1195,32 @@ sertifika hatası → CA dosyası yanlış yolda ya da bozuktur; dosya bulunamad
 oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-nginx
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 NAME         CLUSTER   CONNECTOR CLASS                                   MAX TASKS   READY
 sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector   1           True
 ```
 
-Satırlar beş dakika içinde `nginx_raw.access_log` tablosuna düşer; sorgu Adım 9.2'deki
-not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
+Satırlar 5–15 dakika içinde `nginx_raw.access_log` tablosuna düşer. Sorgu Adım 9.2'deki
+not defteri hücresiyle aynıdır; yalnız tablo adını değiştirin.
+
+**Bilinmesi gerekenler:**
 
 - **Saklama süresi.** Günlük tablosu varsayılan olarak süresiz büyür. Kurumun saklama
-  kuralına göre `nginx` girdisine `retentionDays: 365` gibi bir değer yazılırsa her gece bu
-  günden eski satırlar silinir.
-- **Disk tamponu.** Ajan `storage.type filesystem` kullanır: Kafka kesilirse 1 GB'a kadar
-  yerelde biriktirir, bağlantı dönünce gönderir.
-- **Günlük biçimi.** `parsers.conf` içindeki düzenli ifade nginx'in `combined` biçimini ve
-  nginx'in **varsayılan** `main` biçimini (sonunda `"$http_x_forwarded_for"` olan; resmi
-  imajda ve RHEL paketinde gelen) tanır. Sondaki ek tırnaklı alanlar yok sayılır. Kurum
-  bambaşka bir `log_format` kullanıyorsa ifade güncellenir; uymayan satır kaybolmaz, aşağıdaki
-  "ayrıştırılamayan satır" maddesine bakın.
-- **Proxy arkasında.** `remote` alanı proxy'nin IP'sidir. Gerçek istemci IP'si için
-  nginx'te `real_ip` modülü ya da `X-Forwarded-For` taşıyan bir `log_format` gerekir; bu
-  durumda `parsers.conf` de güncellenir.
-- **Zaman.** Ay adları ajanda `%b` ile çözülür; sunucunun yerel dili sorun çıkarmaz.
-- **Ayrıştırılamayan satır.** Biçime uymayan satır **kaybolmaz**: tabloya iş kolonları
-  (`remote`, `path`, `code` …) boş, satırın tamamı `log` kolonunda olarak yazılır; `ts`
-  ajanın okuma zamanıdır. `log` kolonu tabloda ancak ilk böyle satırda belirir. Varsa
-  şöyle bulunur (Adım 9.2'deki not defteri hücresiyle):
+  kuralına göre `nginx` girdisine `retentionDays: 365` gibi bir değer yazarsanız her gece
+  bu süreden eski satırlar silinir.
+- **Bağlantı kesilirse.** Ajan Kafka'ya ulaşamazsa satırları sunucunun diskinde 1 GB'a
+  kadar biriktirir ve bağlantı gelince gönderir.
+- **Günlük biçimi.** Ajan nginx'in `combined` biçimini ve nginx'in varsayılan `main`
+  biçimini (sonunda `"$http_x_forwarded_for"` olan) tanır. Kurumunuz farklı bir
+  `log_format` kullanıyorsa `parsers.conf` dosyasındaki ifade buna göre güncellenir.
+- **Proxy arkasındaki sunucular.** `remote` kolonu proxy'nin IP adresidir. Gerçek
+  istemci adresi için nginx'te `real_ip` modülü ya da `X-Forwarded-For` alanını yazan bir
+  `log_format` kullanılır; o durumda `parsers.conf` da güncellenir.
+- **Ayrıştırılamayan satırlar kaybolmaz.** Biçime uymayan bir satır tabloya yine yazılır:
+  `remote`, `path`, `code` gibi kolonlar boş kalır ve satırın tamamı `log` kolonunda durur.
+  Bu satırları şöyle bulursunuz (Adım 9.2'deki not defteri hücresiyle):
 
   ```python
   cur = conn.cursor()
@@ -1094,24 +1228,25 @@ not defteri hücresiyle aynıdır, yalnız tablo adı değişir.
   cur.fetchall()
   ```
 
-  Satır görürseniz `parsers.conf` ifadesini o satıra uydurun; ajan yeniden başlatılınca
-  yeni satırlar doğru kolonlara düşer (eski satırlar olduğu gibi kalır).
-- **`nginx.dlq`.** Sink'in hiç okuyamadığı kayıtlar (JSON olmayan ileti gibi) bu konuya
-  düşer; ajan doğru kurulduğunda boş kalır.
+  Satır görürseniz `parsers.conf` dosyasındaki ifadeyi o satırın biçimine uydurun ve
+  ajanı yeniden başlatın; yeni satırlar doğru kolonlara yazılır.
+- **`nginx.dlq` konusu.** Bağlayıcının hiç okuyamadığı kayıtlar (JSON olmayan bir ileti
+  gibi) bu konuya düşer; ajan doğru kurulduğunda boş kalır. Kayıt düşerse
+  `LakehouseDlqRecords` alarmı gelir.
 
-**Ters giderse:** `sink-nginx` `True` ama tablo boşsa ajan yazamıyordur;
-`journalctl -u fluent-bit` çıktısına ve `fluentbit` Secret'ındaki parolaya bakın.
-`oc -n "$LAKEHOUSE_NS" get kafkatopic nginx.dlq` bir konu gösteriyorsa yukarıdaki
-madde geçerlidir.
+**Ters giderse:** `sink-nginx` `True` görünüyor ama tablo boşsa ajan Kafka'ya
+yazamıyordur. Ajan sunucusunda `journalctl -u fluent-bit` çıktısına bakın ve parolanın
+`fluentbit` Secret'ındakiyle aynı olduğunu kontrol edin.
 
 ### 10.5 Yeni bir nginx sunucusu eklemek
 
-Küme tarafında bir şey değişmez: yeni sunucuya Adım 10.3 aynen uygulanır, yalnız
-`NGINX_SERVER_NAME` o sunucunun adı olur. Bootstrap adresi, `kafka-ca.crt` ve parola
-bütün sunucularda aynıdır (Adım 10.2'deki değerler).
+Kümede bir şey değişmez: yeni sunucuya Adım 10.3 aynen uygulanır, yalnız
+`NGINX_SERVER_NAME` o sunucunun adı olur. Adres, `kafka-ca.crt` ve parola bütün
+sunucularda aynıdır.
 
-Birkaç dakika sonra yeni sunucunun satırları aynı tabloda görünür (Adım 9.2'deki not
-defteri hücresiyle):
+Birkaç dakika sonra yeni sunucunun satırları aynı tabloda görünür:
+
+`[pod]` (JupyterHub not defteri hücresi)
 
 ```python
 cur = conn.cursor()
@@ -1119,39 +1254,40 @@ cur.execute("select server, count(*) from nginx_raw.access_log group by server o
 cur.fetchall()
 ```
 
-**Beklenen çıktı** (iki sunucuyla — `web01` ve `web02` — alınmış gerçek çıktı; her
-sunucu bir satır, yanında o sunucudan gelen istek sayısı):
+**Beklenen çıktı** (iki sunucuyla — `web01` ve `web02`; her sunucu için bir satır ve o
+sunucudan gelen istek sayısı):
 
 ```text
 [['web01', 3], ['web02', 2]]
 ```
 
 **Ters giderse:** yeni sunucu listede yoksa o sunucuda `journalctl -u fluent-bit`
-çıktısına bakın (Adım 10.3'ün "Ters giderse" maddeleri). İki sunucu aynı adla görünüyorsa
-`NGINX_SERVER_NAME` değerleri aynıdır; birini değiştirip ajanı yeniden başlatın.
-
+çıktısına bakın (Adım 10.3). İki sunucu aynı adla görünüyorsa `NGINX_SERVER_NAME`
+değerleri aynıdır; birini değiştirip ajanı yeniden başlatın
+(`systemctl restart fluent-bit`).
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Kaynakta CDC hazırlığı yapıldı (WAL ya da CDC açık, rol ve yetkiler verildi).
-- [ ] Sinyal tablosu (pg/mssql) kaynakta var ve şeması doğru.
-- [ ] `erp-db` Secret'ı kümede; parola Git'e girmedi ve kabuk değişkeni silindi.
-- [ ] `platform/polaris/setup.yaml` içinde iki yeni ad alanı var ve betik koşturuldu.
+- [ ] Kaynak veritabanında CDC hazırlandı (PostgreSQL'de `wal_level = logical`, SQL
+      Server'da CDC açık), kullanıcı ve yetkiler verildi.
+- [ ] Sinyal tablosu (PostgreSQL, SQL Server) kaynakta var; PostgreSQL'de publication'da.
+- [ ] `erp-db` Secret'ı kümede ve etiketli; parola Git'e girmedi, değişkenler silindi.
+- [ ] `platform/polaris/setup.yaml` içinde iki yeni ad alanı var ve betik çalıştırıldı.
 - [ ] `sources` ve `pipelines` girdileri `platform/values/site/glue.yaml` dosyasında.
-- [ ] Commit itildi; `glue` uygulaması `Synced Healthy`.
+- [ ] Değişiklik gönderildi; `glue` uygulaması `Synced Healthy`.
 - [ ] `dbz-` ve `sink-` bağlayıcılarının ikisi de `READY True`.
-- [ ] Bronze tabloda satır var; bir `silver-merge` koşusundan sonra Silver tablo var.
-- [ ] (nginx kullanılacaksa) dış dinleyici açık, ajan her sunucuda kendi `NGINX_SERVER_NAME`
-      değeriyle koşuyor, `sink-nginx` `READY True`.
+- [ ] Bronze tablosunda satır var; bir `silver-merge` çalışmasından sonra Silver tablosu
+      var ve satır sayısı kaynakla aynı.
+- [ ] (nginx kullanılıyorsa) Kafka dış adresi açık, ajan her sunucuda kendi
+      `NGINX_SERVER_NAME` değeriyle çalışıyor, `sink-nginx` `READY True`.
 
 ## Sonraki bölüm
 
-Uygulamalardan ya da IoT cihazlarından Kafka'ya JSON gönderen akışlar için:
-[json-akisi-ekleme.md](json-akisi-ekleme.md).
-
-[mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan bir kaynağa
-tablo eklemek; kaynak hazırlığı ve Polaris adımları tekrarlanmaz, yerine **artımlı
-snapshot** ile geçmiş satırların geri doldurulması anlatılır. Ortak GitOps döngüsü:
-[değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
+- [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) — var olan bir kaynağa
+  tablo eklemek ve geçmiş satırları artımlı yüklemeyle getirmek.
+- [json-akisi-ekleme.md](json-akisi-ekleme.md) — uygulamalardan ya da IoT cihazlarından
+  JSON olay akışı eklemek.
+- [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) — değişikliğin Git'ten
+  kümeye yolu.

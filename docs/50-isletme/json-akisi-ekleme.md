@@ -1,56 +1,68 @@
 # JSON olay akışı ekleme
 
-**Bu bölümde:** bir uygulamanın ya da IoT cihazlarının Kafka'ya JSON kayıt gönderdiği bir
-akışı ürüne bağlamak — site değerlerine tek girdi, üreticiye verilecek bağlantı bilgileri,
-örnek bir üretici, tablonun doğrulanması, veri sözleşmesi, saklama süresi, bozuk kayıtların
-ne olduğu ve akışın kaldırılması.
-**Süre:** küme tarafı 15 dakika; ilk satırlar tabloya 5 dakika içinde düşer.
-**Gereken yetki:** kurumun Git deposunda `main` dalına yazma; `$LAKEHOUSE_NS` ad alanında
-Secret okuma; Polaris kök kimliği (`polaris-root` Secret'ı) ad alanı eklemek için.
-**Nerede çalıştırılır:** `[bastion]` küme ve Git komutları; `[üretici]` kaydı gönderen
-uygulamanın ya da ağ geçidinin koştuğu makine; `[pod]` doğrulama sorgusu.
+Bu sayfa, bir uygulamanın ya da IoT cihazlarının Kafka'ya JSON kayıt gönderdiği bir akışı
+lakehouse'a bağlamayı anlatır. Site değerlerine tek bir girdi eklenir; ürün Kafka konusunu,
+üreticinin kullanıcısını ve kayıtları tabloya yazan bağlayıcıyı kendisi kurar. Sayfa ayrıca
+üreticiye verilecek bağlantı bilgilerini, örnek bir üreticiyi, veri sözleşmesini, saklama
+süresini, bozuk kayıtları ve akışın kaldırılmasını anlatır.
 
-**Bu bölümde örnek akış adı `sensors`'tür** (bina sensörlerinden sıcaklık ve nem ölçümleri).
+**Ne kadar sürer:** küme tarafı 15 dakika. Gönderilen ilk kayıtlar tabloya 5 dakika içinde
+düşer.
 
-| Addan türeyen | Örnekte |
+**Hangi yetkiler gerekir:** kurumun lakehouse Git deposunda `main` dalına yazma,
+`$LAKEHOUSE_NS` ad alanında Secret okuma, ad alanı açmak için Polaris kök kimliği
+(`polaris-root` Secret'ı).
+
+**Komutlar nerede çalışır:**
+
+- `[bastion]` — küme ve Git komutları
+- `[üretici]` — kaydı gönderen uygulamanın ya da ağ geçidinin çalıştığı makine
+- `[pod]` — JupyterHub not defteri (doğrulama sorgusu)
+
+**Bu sayfadaki örnek akışın adı `sensors`'tür** (bina sensörlerinden sıcaklık ve nem
+ölçümleri). Akışın adından şunlar türer:
+
+| Ne | Örnekte |
 |---|---|
 | Kafka konusu | `sensors.events` |
 | Üreticinin Kafka kullanıcısı | `stream-sensors` (yalnız bu konuya yazabilir) |
 | Bronze tablosu | `sensors_raw.events` |
 | Hatalı kayıt konusu | `sensors.dlq` |
 
-Akış adı küçük harfle başlar, yalnız `a-z`, `0-9` ve `_` içerir, bir kaynağın adıyla ya da
-`nginx` ile aynı olamaz.
+Akış adı küçük harfle başlar ve yalnız `a-z`, `0-9` ve `_` içerir. Bir kaynağın adıyla ya
+da `nginx` ile aynı olamaz.
 
 ```text
-uygulama / IoT ağ geçidi -> Kafka (TLS + kullanıcı/parola) -> sensors.events -> sink -> sensors_raw.events
+uygulama / IoT ağ geçidi -> Kafka (TLS + kullanıcı/parola) -> sensors.events -> bağlayıcı -> sensors_raw.events
 ```
 
 **Tablo nasıl tutulur:**
 
 - Her akış **tek bir tabloya** yazar; cihaz ya da uygulama başına ayrı tablo açılmaz.
   Kayıtları ayırmak için kayıtta bir alan bulunur (örnekte `device_id`, `room`).
-- Kolonlar gelen JSON'dan çıkarılır; yeni bir alan geldiğinde tabloya kendiliğinden yeni
-  kolon eklenir. İç içe nesneler iç içe kolon olur (örnekte `battery.level_pct`).
-- Ürün her kayda `_kafka_ts` kolonunu ekler: kaydın Kafka'ya vardığı an. Tablo bu
-  kolona göre güne bölünür; sorgularda tarih süzgeci için bu kolonu kullanın. Kaydın kendi
+- Kolonlar gelen JSON'dan çıkarılır. Yeni bir alan geldiğinde tabloya kendiliğinden yeni
+  bir kolon eklenir. İç içe nesneler iç içe kolon olur (örnekte `battery.level_pct`).
+- Ürün her kayda `_kafka_ts` kolonunu ekler: kaydın Kafka'ya vardığı an. Tablo bu kolona
+  göre günlere bölünür; sorgularda tarih süzgeci için bu kolonu kullanın. Kaydın kendi
   zaman alanı (örnekte `measured_at`) olduğu gibi saklanır.
-- Olaylar yalnız eklenir, güncellenmez; Silver katmanı yoktur. Özetler ve raporlar bu
-  tablodan üretilir.
+- Kayıtlar yalnız eklenir, güncellenmez; bu yüzden Silver katmanı yoktur. Özetler ve
+  raporlar bu tablodan üretilir.
 
 ---
 
 ## 1. Değişkenleri yükleyin
 
+Her yeni terminalde bir kez çalıştırın.
+
 `[bastion]`
 
 ```bash
-cd ~/lakehouse                      # depoyu `git clone` ile nereye indirdiyseniz orası
+cd ~/lakehouse
 set -a; . install/lakehouse.env; set +a
 echo "ns=$LAKEHOUSE_NS argocd=$ARGOCD_NS"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 ns=lakehouse argocd=openshift-gitops
@@ -58,23 +70,33 @@ ns=lakehouse argocd=openshift-gitops
 
 ---
 
-## 2. Polaris ad alanını açın
+## 2. Katalogda ad alanını açın
 
-Sink tabloyu kendiliğinden yaratır ama **ad alanını yaratmaz**.
-`platform/polaris/setup.yaml` içindeki `namespaces:` listesine bir satır ekleyin:
+Bağlayıcı tabloyu kendiliğinden yaratır ama **ad alanını yaratmaz**. Ad alanını önce
+açmak gerekir.
+
+`platform/polaris/setup.yaml` dosyasını açın:
+
+`[bastion]`
+
+```bash
+vi platform/polaris/setup.yaml
+```
+
+`namespaces:` listesinin son satırının altına şu satırı ekleyin (baştaki boşluk listedeki
+diğer satırlarla aynı olmalıdır):
 
 ```yaml
-    namespaces:
       - name: sensors_raw
 ```
 
-`[bastion]`
+Kaydedin ve ad alanını katalogda yaratın:
 
 ```bash
 PATH="$PWD/.venv/bin:$PATH" scripts/polaris-setup.sh --ns "$LAKEHOUSE_NS" | grep sensors_raw
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; tarih sizde farklıdır):
+**Beklenen çıktı** (satır başlarındaki tarih ve saat sizde farklıdır):
 
 ```text
 2026-11-11 13:19:48,285 INFO Creating namespace: 'sensors_raw' in catalog: 'lakehouse'
@@ -85,7 +107,17 @@ PATH="$PWD/.venv/bin:$PATH" scripts/polaris-setup.sh --ns "$LAKEHOUSE_NS" | grep
 
 ## 3. Akışı site değerlerine ekleyin
 
-`platform/values/site/glue.yaml` dosyasına `streams` girdisi eklenir:
+`platform/values/site/glue.yaml` dosyasını açın:
+
+`[bastion]`
+
+```bash
+vi platform/values/site/glue.yaml
+```
+
+Dosyada `streams:` satırı yoksa dosyanın sonuna şu bloğu ekleyin. `streams: []` satırı
+varsa o satırı silip yerine bu bloğu yazın. `streams:` altında başka akışlar varsa yalnız
+`- name: sensors` ile başlayan kısmı listenin sonuna ekleyin.
 
 ```yaml
 streams:
@@ -105,20 +137,26 @@ streams:
 | `table` | hayır | Bronze tablosunun adı (varsayılan: akış adı + `_raw.events`) |
 | `state` | hayır | `running` (varsayılan) ya da `stopped` — Adım 8 |
 
-Üretici kümenin **dışındaysa** (uygulama sunucusu, IoT ağ geçidi) Kafka'nın dış dinleyicisi
-açık olmalıdır: dosyada `kafka: {externalListener: true}` satırı yoksa ekleyin
+Üretici kümenin **dışındaysa** (uygulama sunucusu, IoT ağ geçidi) Kafka'nın dışarıya açık
+olması gerekir. Dosyada `kafka: {externalListener: true}` satırı yoksa onu da ekleyin
 ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 10.1 aynı satırı anlatır).
+
+Kaydedin, denetleyin ve gönderin:
 
 `[bastion]`
 
 ```bash
 bash scripts/check-site.sh
+git diff
 git add platform/polaris/setup.yaml platform/values/site/glue.yaml
-git commit -m "site: sensors JSON akisi"
+git commit -m "site: sensors JSON akışı"
 git push origin main
 ```
 
-**Beklenen çıktı:** `check-site: OK`. Adım 2'yi atladıysanız denetim şu uyarıyı verir:
+**Beklenen çıktı:** `check-site: OK`.
+
+**Ters giderse:** Adım 2'yi atladıysanız denetim şu uyarıyı verir; Adım 2'yi yapın ve
+betiği tekrar çalıştırın:
 
 ```text
 UYARI: streams[sensors]: 'sensors_raw' ad alanı platform/polaris/setup.yaml namespaces listesinde yok (ekleyip scripts/polaris-setup.sh'i koşturun)
@@ -126,10 +164,10 @@ UYARI: streams[sensors]: 'sensors_raw' ad alanı platform/polaris/setup.yaml nam
 
 ---
 
-## 4. Küme tarafının hazır olduğunu doğrulayın
+## 4. Küme tarafının hazır olduğunu kontrol edin
 
-Eşitleme birkaç dakika sürer. Üç nesne hazır olmalıdır: konu, üreticinin kullanıcısı ve
-sink.
+ArgoCD değişikliği birkaç dakika içinde uygular. Üç nesne hazır olmalıdır: Kafka konusu,
+üreticinin kullanıcısı ve bağlayıcı.
 
 `[bastion]`
 
@@ -138,7 +176,7 @@ oc -n "$LAKEHOUSE_NS" wait kafkatopic/sensors.events kafkauser/stream-sensors \
   kafkaconnector/sink-sensors --for=condition=Ready --timeout=300s
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 kafkatopic.kafka.strimzi.io/sensors.events condition met
@@ -146,16 +184,20 @@ kafkauser.kafka.strimzi.io/stream-sensors condition met
 kafkaconnector.kafka.strimzi.io/sink-sensors condition met
 ```
 
-**Ters giderse:** `timed out` → `oc -n "$ARGOCD_NS" get application glue` ile eşitlemenin
-bittiğini doğrulayın; bitmişse `oc -n "$LAKEHOUSE_NS" describe kafkaconnector sink-sensors`
-çıktısının sonundaki hata iletisine bakın.
+**Ters giderse:**
+
+- `timed out` ya da `NotFound` görürseniz ArgoCD henüz uygulamamıştır.
+  `oc -n "$ARGOCD_NS" get application glue` çıktısının `Synced Healthy` olmasını bekleyip
+  komutu tekrarlayın.
+- Uygulama bitmiş ama bağlayıcı hazır değilse hatanın nedenini görün:
+  `oc -n "$LAKEHOUSE_NS" describe kafkaconnector sink-sensors` (çıktının son satırları).
 
 ---
 
 ## 5. Üreticiye bağlantı bilgilerini verin
 
-Üretici dört bilgiye ihtiyaç duyar: Kafka adresi, Kafka'nın CA sertifikası, kullanıcı adı
-ve parola.
+Üreticinin dört bilgiye ihtiyacı vardır: Kafka adresi, Kafka'nın CA sertifikası,
+kullanıcı adı ve parola.
 
 `[bastion]`
 
@@ -167,8 +209,8 @@ oc -n "$LAKEHOUSE_NS" get secret lakehouse-cluster-ca-cert \
 oc -n "$LAKEHOUSE_NS" get secret stream-sensors -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-**Beklenen çıktı** (parola örnektir; ortadaki komut ekrana bir şey basmaz, CA'yı
-`kafka-ca.crt` dosyasına yazar):
+**Beklenen çıktı** (örnek: adres ve parola sizde farklıdır). Ortadaki komut ekrana bir şey
+yazmaz, CA sertifikasını `kafka-ca.crt` dosyasına kaydeder:
 
 ```text
 lakehouse-kafka-bootstrap-lakehouse.apps.ocp.example.net:443
@@ -176,18 +218,42 @@ lakehouse-kafka-bootstrap-lakehouse.apps.ocp.example.net:443
 ```
 
 Kullanıcı adı `stream-sensors`'tür. Dört bilgiyi uygulama ekibine güvenli bir kanalla
-iletin. Bu kullanıcı **yalnız** `sensors.events` konusuna yazabilir; başka bir konuya
-yazmayı denerse `TOPIC_AUTHORIZATION_FAILED` hatası alır, hiçbir şey okuyamaz.
+iletin. Bu kullanıcı **yalnız** `sensors.events` konusuna yazabilir. Başka bir konuya
+yazmaya çalışırsa `TOPIC_AUTHORIZATION_FAILED` hatası alır; hiçbir konudan okuyamaz.
+
+Parolayı taşıyan `stream-sensors` Secret'ını elle yaratmazsınız: Kafka operatörü onu
+Git'teki akış tanımından üretir. Silinirse operatör yeniden üretir ve parola değişir;
+üreticiye yeni parolayı vermeniz gerekir. Bir nesnenin nereden geldiğini
+`scripts/nesne-kaynagi.sh` ile görebilirsiniz
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §7):
+
+```bash
+scripts/nesne-kaynagi.sh secret/stream-sensors
+```
+
+**Beklenen çıktı:**
+
+```text
+secret/stream-sensors                        TÜREV      KafkaUser/stream-sensors -> ArgoCD uygulaması: glue
+```
 
 ---
 
 ## 6. Örnek bir üreticiyle deneyin
 
-Uygulama ekibinin dilindeki herhangi bir Kafka istemcisi kullanılabilir. Bağlantı ayarları
-her dilde aynıdır: `SASL_SSL`, `SCRAM-SHA-512`, kullanıcı adı ve parola, CA dosyası.
-Aşağıdaki Python örneği (`pip install confluent-kafka`) üç ölçüm gönderir.
+Uygulama ekibi kendi dilindeki herhangi bir Kafka istemcisini kullanabilir. Bağlantı
+ayarları her dilde aynıdır: `SASL_SSL`, `SCRAM-SHA-512`, kullanıcı adı, parola ve CA
+dosyası. Aşağıdaki Python örneği üç ölçüm gönderir. Önce kitaplığı kurun ve parolayı
+değişkene verin (parola ekranda görünmez):
 
 `[üretici]`
+
+```bash
+pip install confluent-kafka
+read -rs KAFKA_PASSWORD && export KAFKA_PASSWORD
+```
+
+Sonra şu programı çalıştırın (`bootstrap.servers` satırına Adım 5'teki adresi yazın):
 
 ```python
 import json, os
@@ -213,9 +279,11 @@ print("iletilemeyen:", p.flush(30))
 iletilemeyen: 0
 ```
 
-`key` olarak cihaz kimliği verilmesi, aynı cihazın kayıtlarının sırayla işlenmesini sağlar.
+`key` olarak cihaz kimliğinin verilmesi, aynı cihazın kayıtlarının sırasıyla işlenmesini
+sağlar.
 
-Kayıtlar beş dakika içinde tabloya düşer. Not defterinden (Trino bağlantısı:
+Kayıtlar beş dakika içinde tabloya düşer. Bir not defterinde kontrol edin (Trino
+bağlantısının nasıl kurulduğu:
 [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 9.2):
 
 `[pod]`
@@ -227,33 +295,35 @@ cur.execute("""select room, count(*) adet, round(avg(temperature_c), 2) ort_sica
 cur.fetchall()
 ```
 
-**Beklenen çıktı** (provada dört odadan 200 ölçüm gönderilmişti — gerçek değerler):
+**Beklenen çıktı** (örnek: dört odadan 200 ölçüm gönderilmiş bir akış):
 
 ```text
 [['A-101', 50, 22.5], ['A-102', 50, 21.72], ['B-201', 50, 22.34], ['Lab-3', 50, 22.12]]
 ```
 
-**Ters giderse:** satır gelmiyorsa önce `sensors.dlq` konusuna bakın (Adım 7); orada da
-yoksa sink görevinin durumuna bakın (Adım 8).
+**Ters giderse:** satır gelmiyorsa önce `sensors.dlq` konusuna bakın (Adım 7). Orada da
+kayıt yoksa bağlayıcının durumuna bakın (Adım 8).
 
 ---
 
 ## 7. Veri sözleşmesi: hatalı kayıtlar ne olur
 
-JSON şemasızdır: bir cihaz bir gün sıcaklığı sayı yerine metin olarak gönderebilir.
-Ürünün davranışı alanın `fields` listesinde bildirilip bildirilmediğine bağlıdır:
+JSON'da şema yoktur: bir cihaz bir gün sıcaklığı sayı yerine metin olarak gönderebilir.
+Ürünün ne yapacağı, alanın `fields` listesinde bildirilip bildirilmediğine bağlıdır:
 
 | Kayıt | `fields`'ta bildirilmiş alan | Bildirilmemiş alan |
 |---|---|---|
 | Doğru tipte | tabloya yazılır | tabloya yazılır |
-| Tipe çevrilebilen metin (`"19.75"`) | sayıya çevrilir, yazılır | ilk gelen tipe göre kolon açılır; sonraki farklı tip **akışı durdurur** |
-| Tipe uymayan değer (`"yirmi iki"`) | `sensors.dlq` konusuna gider, **akış sürer** | sink görevi **durur**, sonraki bütün kayıtlar bekler (Adım 8) |
+| Sayıya çevrilebilen metin (`"19.75"`) | sayıya çevrilir, yazılır | ilk gelen tipe göre kolon açılır; sonraki farklı tip **akışı durdurur** |
+| Tipe uymayan değer (`"yirmi iki"`) | `sensors.dlq` konusuna gider, **akış sürer** | bağlayıcı **durur**, sonraki bütün kayıtlar bekler (Adım 8) |
 | JSON olmayan kayıt | `sensors.dlq` konusuna gider, akış sürer | aynı |
 
-Bu yüzden akıştaki **bütün sayısal ve mantıksal alanları** `fields` altında bildirin. Yeni
-bir alan eklendiğinde listeye de ekleyin. Metin alanlarının bildirilmesi gerekmez.
+Bu yüzden akıştaki **bütün sayısal ve mantıksal (true/false) alanları** `fields` altında
+bildirin. Akışa yeni bir sayısal alan eklendiğinde onu da listeye ekleyin. Metin
+alanlarının bildirilmesi gerekmez.
 
-Hatalı kayıtlara bakmak için:
+`sensors.dlq` konusuna yeni bir kayıt düştüğünde `LakehouseDlqRecords` alarmı gelir
+([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §3). Hatalı kayıtlara bakmak için:
 
 `[bastion]`
 
@@ -263,9 +333,9 @@ scripts/kafka-cli.sh kafka-console-consumer.sh --topic sensors.dlq --from-beginn
   --max-messages 10 --timeout-ms 15000
 ```
 
-**Beklenen çıktı** (provadan gerçek çıktı — ilk satır konudaki kayıt sayısıdır; JSON olmayan
-kayıt iki kez görünür, çünkü akış Adım 8'deki gibi durdurulup yeniden başlatılınca o kayıt
-yeniden işlendi):
+**Beklenen çıktı** (örnek: konuda üç hatalı kayıt olan bir akış). İlk satırın sonundaki
+sayı konudaki kayıt sayısıdır. Aynı kayıt iki kez görünebilir: akış Adım 8'deki gibi
+durdurulup yeniden başlatıldığında bekleyen kayıtlar bir kez daha işlenir.
 
 ```text
 sensors.dlq:0:3
@@ -274,15 +344,15 @@ bu JSON değil
 {"device_id": "sensor-9", "room": "C-301", "temperature_c": "yine bozuk", "humidity_pct": 40}
 ```
 
-Hatalı kayıtları kaynağında düzeltip yeniden göndermek uygulama ekibinin işidir; ürün
-onları tabloya almaz.
+Hatalı kayıtları kaynakta düzeltip yeniden göndermek uygulama ekibinin işidir; ürün onları
+tabloya almaz.
 
 ---
 
 ## 8. Akış durursa: bozuk kaydı atlayın
 
-Bildirilmemiş bir alanın tipi değiştiyse sink görevi durur ve aynı kayıtta takılı kalır.
-Belirti: tabloya yeni satır gelmez ve görev `FAILED` görünür.
+Bildirilmemiş bir alanın tipi değiştiyse bağlayıcı durur ve aynı kayıtta takılı kalır.
+Belirti: tabloya yeni satır gelmez ve bağlayıcının görevi `FAILED` görünür.
 
 `[bastion]`
 
@@ -292,17 +362,26 @@ oc -n "$LAKEHOUSE_NS" exec connect-connect-0 -- \
   | jq -r '.tasks[0].state, (.tasks[0].trace // "" | split("\n") | map(select(test("Caused by"))) | last)'
 ```
 
-**Beklenen çıktı** (provadan gerçek çıktı):
+**Beklenen çıktı** (bu durumda):
 
 ```text
 FAILED
 Caused by: java.lang.NumberFormatException: For input string: "yirmi iki"
 ```
 
-Akışı yeniden başlatmak dört adımdır.
+Akışı yeniden yürütmek dört adımdır.
 
-**8.1 Akışı durdurun.** Site dosyasında akışa `state: stopped` satırını ekleyip itin
-(Adım 3'teki gibi). Eşitlemeden sonra:
+### 8.1 Akışı durdurun
+
+`platform/values/site/glue.yaml` dosyasında akışın girdisine şu satırı ekleyin:
+
+```yaml
+- name: sensors
+  state: stopped
+  # diğer satırlar aynen kalır
+```
+
+Adım 3'teki gibi kaydedip gönderin. ArgoCD uyguladıktan sonra (bir iki dakika):
 
 `[bastion]`
 
@@ -311,10 +390,18 @@ oc -n "$LAKEHOUSE_NS" exec connect-connect-0 -- \
   curl -s localhost:8083/connectors/sink-sensors/status | jq -r .connector.state
 ```
 
-**Beklenen çıktı:** `STOPPED`
+**Beklenen çıktı:**
 
-**8.2 Bekleyen kayıtları bulun.** `LAG` sütunu sıfırdan büyük olan bölümlerde işlenmemiş
-kayıtlar vardır; ilki takılan kayıttır:
+```text
+STOPPED
+```
+
+`RUNNING` görürseniz ArgoCD henüz uygulamamıştır; bir dakika sonra tekrar deneyin.
+
+### 8.2 Takılan kaydı bulun
+
+`LAG` sütunu sıfırdan büyük olan bölümlerde işlenmemiş kayıtlar vardır. O bölümdeki
+`CURRENT-OFFSET` değeri takılan kaydın konumudur:
 
 `[bastion]`
 
@@ -322,7 +409,7 @@ kayıtlar vardır; ilki takılan kayıttır:
 scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-sensors
 ```
 
-**Beklenen çıktı** (provadan seçilmiş sütunlar — 1 numaralı bölümde 100. kayıt):
+**Beklenen çıktı** (örnek; seçilmiş sütunlar — 1 numaralı bölümde 100. kayıt takılı):
 
 ```text
 TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
@@ -330,9 +417,7 @@ sensors.events  0          100             100             0
 sensors.events  1          100             102             2
 ```
 
-Kaydı görmek için:
-
-`[bastion]`
+Takılan kaydı görmek için bölüm ve konum numarasını yazın:
 
 ```bash
 scripts/kafka-cli.sh kafka-console-consumer.sh --topic sensors.events --partition 1 \
@@ -345,8 +430,10 @@ scripts/kafka-cli.sh kafka-console-consumer.sh --topic sensors.events --partitio
 {"device_id": "sensor-9", "room": "C-301", "temperature_c": "yirmi iki", "humidity_pct": 40}
 ```
 
-**8.3 Konumu bozuk kaydın bir sonrasına alın.** Yalnız o kayıt atlanır; arkasındaki kayıtlar
-işlenir:
+### 8.3 Konumu bozuk kaydın bir sonrasına alın
+
+Yalnız bozuk kayıt atlanır; arkasındaki kayıtlar işlenir. Komuttaki `:1` bölüm numarası,
+`101` ise takılan konumun bir fazlasıdır:
 
 `[bastion]`
 
@@ -362,48 +449,54 @@ GROUP                TOPIC           PARTITION  NEW-OFFSET
 connect-sink-sensors sensors.events  1          101
 ```
 
-**8.4 Akışı yeniden başlatın.** `state: stopped` satırını silip itin. Aynı sorunun bir daha
-akışı durdurmaması için o alanı `fields` listesine de ekleyin (Adım 7). Görev `RUNNING`
-olur ve bekleyen kayıtlar beş dakika içinde tabloya düşer.
+**Ters giderse:** komut grubun etkin olduğunu söyleyen bir hatayla reddedilirse akış henüz
+durmamıştır; 8.1'deki çıktının `STOPPED` olduğunu kontrol edin.
 
-**Ters giderse:** 8.3 grubun etkin olduğunu söyleyen bir hatayla reddedilirse akış henüz
-durmamıştır; 8.1'deki çıktının `STOPPED` olduğunu doğrulayın.
+### 8.4 Akışı yeniden başlatın
+
+`state: stopped` satırını silip gönderin. Aynı sorunun akışı bir daha durdurmaması için o
+alanı `fields` listesine de ekleyin (Adım 7). Bağlayıcının görevi `RUNNING` olur ve bekleyen
+kayıtlar beş dakika içinde tabloya düşer.
 
 ---
 
 ## 9. Saklama süresi
 
-`retentionDays` verilmişse her gece 03:30'da (UTC) koşan bakım işi `_kafka_ts`'si bu süreden
-eski satırları siler. Süre sonradan değiştirilebilir; bir sonraki gece geçerli olur.
-Verilmezse tablo süresiz büyür. nginx günlük tablosu için aynı ayar
-`nginx.retentionDays` anahtarıdır.
+`retentionDays` verilmişse, her gece 03:30'da (UTC) çalışan bakım işi `_kafka_ts` değeri bu
+süreden eski satırları siler. Süre sonradan değiştirilebilir; değişiklik bir sonraki gece
+geçerli olur. `retentionDays` verilmezse tablo süresiz büyür. nginx günlük tablosu için
+aynı ayar `nginx.retentionDays`'dir.
 
 Akışın tablosu "Tablo sağlığı" panosunda kendiliğinden görünür
-([veri-metrikleri.md](veri-metrikleri.md) §4); büyüme ve dosya sayısı oradan izlenir.
+([veri-metrikleri.md](veri-metrikleri.md) §4); tablonun büyümesi ve dosya sayısı oradan
+izlenir.
 
 ---
 
 ## 10. Akışı kaldırmak
 
-1. Site dosyasından `streams` girdisini silip itin. ArgoCD konuyu (içindeki kayıtlarla),
-   üreticinin kullanıcısını ve sink'i kaldırır; üretici artık bağlanamaz.
+1. `platform/values/site/glue.yaml` dosyasından akışın girdisini silip gönderin. ArgoCD
+   Kafka konusunu (içindeki kayıtlarla birlikte), üreticinin kullanıcısını ve bağlayıcıyı
+   kaldırır; üretici artık bağlanamaz.
 2. Tabloyu verisiyle silmek isterseniz tek seferlik Spark işiyle `DROP TABLE … PURGE`
-   ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 6.2).
-3. `sensors.dlq` konusu ve `connect-sink-sensors` tüketici grubu kalır; aynı adla yeniden
-   kurmayacaksanız silin (aynı sayfa Adım 5).
+   çalıştırın ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 6.2).
+3. `sensors.dlq` konusu ve `connect-sink-sensors` tüketici grubu kalır. Aynı adla yeniden
+   kurmayacaksanız bunları da silin (aynı sayfanın Adım 5'i).
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Polaris'te akışın ad alanı (örnekte `sensors_raw`) açıldı.
-- [ ] `streams` girdisi itildi; konu, kullanıcı ve sink `Ready`.
+- [ ] Katalogda akışın ad alanı (örnekte `sensors_raw`) açıldı.
+- [ ] `streams` girdisi gönderildi; konu, kullanıcı ve bağlayıcı `Ready`.
 - [ ] Sayısal ve mantıksal alanlar `fields` altında bildirildi.
-- [ ] Saklama süresi kurumla konuşulup `retentionDays` yazıldı (ya da bilinçli olarak süresiz).
-- [ ] Üreticiye dört bağlantı bilgisi güvenli kanalla verildi; örnek kayıtlar tabloda görüldü.
-- [ ] Hatalı kayıt konusunu (örnekte `sensors.dlq`) kimin, ne sıklıkla izleyeceği belirlendi.
+- [ ] Saklama süresi kurumla konuşulup `retentionDays` yazıldı (ya da bilerek süresiz
+      bırakıldı).
+- [ ] Üreticiye dört bağlantı bilgisi güvenli kanalla verildi; örnek kayıtlar tabloda
+      görüldü.
+- [ ] Hatalı kayıt konusunu (örnekte `sensors.dlq`) kimin izleyeceği belirlendi.
 
 ## Sonraki bölüm
 
 Veritabanı kaynakları için: [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md).
-Tablonun izlenmesi: [veri-metrikleri.md](veri-metrikleri.md).
+Tabloların izlenmesi için: [veri-metrikleri.md](veri-metrikleri.md).
