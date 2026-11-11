@@ -568,21 +568,21 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   *Kaynak: [50-isletme/yukseltme.md](../50-isletme/yukseltme.md) §4.5;
   [surumler-ve-lisanslar.md](surumler-ve-lisanslar.md).*
 
-- [ ] **4.4 Maven ve PyPI erişimi ya da iç ayna**
+- [ ] **4.4 Maven önbelleği ve PyPI erişimi ya da iç ayna**
 
   `[bastion]`
 
   ```bash
-  oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings \
-    -o jsonpath='{.data.ivysettings\.xml}' | head
+  oc -n "$LAKEHOUSE_NS" get pod -l app=maven-proxy
   oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge \
     -o jsonpath='{.spec.template.sparkConf.spark\.jars\.ivySettings}{"\n"}'
   ```
 
-  Beklenen: ya Maven Central'a sürekli erişim var (ConfigMap yok), ya da ayna tanımı dolu ve
-  bütün Spark işleri iç aynayı gösteriyor. Aynı sınıftan diğer ihtiyaçlar: Zeppelin'in JDBC
-  indirmesi, JupyterHub ve dbt örneğinin paket kurulumları → kapalı ağda iç PyPI aynası da
-  şarttır.
+  Beklenen: `maven-proxy` pod'u `Running` ve ikinci komut `/opt/ivy/ivysettings.xml`
+  yazıyor. Önbellek Maven Central'a (ya da `mavenProxy.upstream` ile verilen kurum aynasına)
+  kurulumda ve sürüm yükseltmesinden sonraki ilk koşuda erişebilmelidir. Aynı sınıftan
+  diğer ihtiyaçlar: Zeppelin'in JDBC indirmesi, JupyterHub ve dbt örneğinin paket
+  kurulumları → kapalı ağda iç PyPI aynası da şarttır.
   *Kaynak: [50-isletme/sorun-giderme.md](../50-isletme/sorun-giderme.md) §6.2;
   [20-on-kosullar](../20-on-kosullar.md) madde 10.*
 

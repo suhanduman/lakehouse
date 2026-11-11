@@ -85,7 +85,10 @@ spec:
       # Başarısız koşunun driver pod'u Failed evresinde kalır (TTL'e, en çok 24 saate dek) -> alarm o süre açık.
       # İş başına TEK alarm: pod adından iş adı ("is") çıkarılır, başarısız koşular sayılır. Koşu başına alarm
       # (eski hâl) bir kesintide onlarca bildirim üretiyordu (ocpphy: internet kesintisinde 11 alarm).
-      expr: count by (namespace, is) (label_replace(kube_pod_status_phase{phase="Failed", pod=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+-driver"} == 1, "is", "$1", "pod", "(.+)-[0-9]+-driver")) > 0
+      # İkinci kol: koşu sürücü pod'u AÇILMADAN düşerse (spark-submit operatör pod'unda hata verir — ör. Maven
+      # kütüphanesi çözülemedi) pod yoktur, ilk kol görmez. Operatör sayacı iş adı taşımaz (app_type="Unknown");
+      # "gönderim hatası" etiketiyle son 1 saatteki sayı verilir. Kullanıcı uygulamalarının gönderim hataları da sayılır.
+      expr: count by (namespace, is) (label_replace(kube_pod_status_phase{phase="Failed", pod=~"(silver-merge|maint-.*|mongo-bronze)-[0-9]+-driver"} == 1, "is", "$1", "pod", "(.+)-[0-9]+-driver")) > 0 or label_replace(round(sum by (namespace) (increase(spark_application_failed_submission_count{namespace="{{ $ns }}"}[1h]))) > 0, "is", "gönderim hatası", "", "")
       for: 1m
       labels: {severity: warning}
       annotations: {summary: "Zamanlanmış Spark işi başarısız: {{ "{{ $labels.is }}" }} ({{ "{{ $value }}" }} koşu)", runbook: docs/50-isletme/sorun-giderme.md#spark}

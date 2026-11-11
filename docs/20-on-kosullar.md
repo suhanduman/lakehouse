@@ -922,20 +922,22 @@ kolaylaştırır. Yoksa `oc logs` yeterlidir.
 
 ## 10. Dış erişim (egress) alan adları
 
-**Neden:** kurulum ve **çalışma zamanı** dışarıya erişir. Özellikle Spark işleri Iceberg
-kütüphanelerini **her koşuda** Maven'den çözer: kapalı ağda bu işler `Ivy` hatasıyla
-başarısız olur. Aşağıdaki listedeki her adres ya doğrudan ya da kurumsal ayna üzerinden
+**Neden:** kurulum ve **çalışma zamanı** dışarıya erişir. Spark işlerinin Iceberg
+kütüphaneleri küme içindeki Maven önbelleğinden (`maven-proxy`) gelir; önbellek bir
+kütüphaneyi Maven Central'dan yalnız ilk istendiğinde indirir. Bu yüzden Maven Central'a
+erişim kurulumda ve her sürüm yükseltmesinden sonraki ilk koşuda gerekir; arada kesilirse
+işler etkilenmez. Aşağıdaki listedeki her adres ya doğrudan ya da kurumsal ayna üzerinden
 erişilebilir olmalıdır.
 **Kimin işi:** platform/ağ ekibi açar; kurulumcu doğrular.
 
 | Adres | Kim kullanır | Ne zaman |
 |---|---|---|
 | `$GIT_REPO_URL` (müşterinin Git sunucusu) | ArgoCD | sürekli (her sync) |
-| `repo1.maven.org` (Maven Central) | Kafka Connect build'i; Spark işleri; Zeppelin JDBC sürücüsü | build anında ve **her Spark koşusunda** |
+| `repo1.maven.org` (Maven Central) | Kafka Connect build'i; Maven önbelleği (`maven-proxy`); Zeppelin JDBC sürücüsü | build anında; kurulumda ve sürüm yükseltmesinden sonraki ilk Spark koşusunda |
 | `pypi.org`, `files.pythonhosted.org` | not defteri `postStart` (pyiceberg, trino), dbt örneği, `apache-polaris` CLI | pod açılışında ve kurulumda |
 | `quay.io` | Strimzi chart'ı + Kafka/Connect imajları, cert-manager chart'ı + imajları, `quay.io/jupyter/pyspark-notebook` | kurulum ve imaj çekimi |
 | `ghcr.io` | Superset operatör chart'ı, CloudNativePG + Barman Cloud eklentisi imajları, spark-operator imajı | kurulum |
-| `docker.io` | `apache/spark`, `apache/zeppelin`, `apache/polaris`, `apache/superset`, `trinodb/trino` | kurulum ve imaj çekimi |
+| `docker.io` | `apache/spark`, `apache/zeppelin`, `apache/polaris`, `apache/superset`, `trinodb/trino`, `dzikoysk/reposilite` | kurulum ve imaj çekimi |
 | `apachesuperset.docker.scarf.sh` | Superset operatörünün varsayılan imaj adresi (yönlendirici) | kurulum — kurumsal ayna kullanılırsa gerekmez |
 | `registry.redhat.io` ve `redhat-operators` kataloğu | OpenShift GitOps operatörü, (isteğe bağlı) OADP | operatör kurulumu |
 | `cloudnative-pg.io` (eski adres `cloudnative-pg.github.io` buraya yönlendirir), `kubeflow.github.io`, `trinodb.github.io`, `hub.jupyter.org`, `downloads.apache.org` | ArgoCD (Helm chart depoları) | kurulum ve her yükseltme |
@@ -983,8 +985,10 @@ Küme çıkışı vekil sunucudan (proxy) geçiyorsa `oc get proxy cluster -o ya
 ayarların yukarıdaki adresleri kapsadığını platform ekibiyle doğrulayın.
 
 **Ters giderse:** kapalı ağda (air-gap) kurulum yapılacaksa iki ayna zorunludur: **iç Maven
-aynası** (kurulumda `platform/values/site/glue.yaml` yanında `spark.ivySettingsXml`
-değeriyle verilir; Spark işleri aynayı oradan okur) ve **iç PyPI aynası**. İmajlar için
+aynası** ve **iç PyPI aynası**. Maven aynası iki yoldan tanıtılır: küme içi önbelleğin
+kaynağı olarak (`mavenProxy.upstream`) ya da doğrudan Spark işlerine
+(`mavenProxy.enabled: false` ve `spark.ivySettingsXml`) —
+[sorun-giderme.md](50-isletme/sorun-giderme.md) §6.2. İmajlar için
 kurumsal registry aynası kullanılır. Bu üç ayna hazırlanmadan kurulum başlatılmamalıdır:
 eksiklik kurulumda değil, ilk Spark koşusunda ortaya çıkar.
 

@@ -2,6 +2,7 @@
        mongo-bronze (mongodb kaynağı) (spec §6). Credential: Secret -> env (plan P4). */ -}}
 {{- $ns := include "glue.ns" . }}
 {{- $s := .Values.spark }}
+{{- $ivy := include "glue.ivySettings" . }}
 {{- /* Bakım işi Bronze tablolarını katalogdan bulur: her kaynağın Bronze namespace'i (pipeline'ı olmayan append-only tablolar da). */ -}}
 {{- $nsList := list }}
 {{- range .Values.sources }}
@@ -37,9 +38,9 @@ metadata:
 data:
 {{ (.Files.Glob "jobs/*.py").AsConfig | indent 2 }}
   pipelines.json: {{ toJson (dict "pipelines" .Values.pipelines "bronze_namespaces" $nsList "mongo" $mongoList "maintain_namespaces" $maintList "retention" $retention) | quote }}
-{{- if $s.ivySettingsXml }}
+{{- if $ivy }}
 ---
-# iç Maven aynası (F5 backlog): boşsa bu ConfigMap render EDİLMEZ, driver/executor Maven Central'a çıkar (varsayılan)
+# Ivy ayarı (glue.ivySettings): küme içi Maven önbelleği (varsayılan) ya da sitenin kendi aynası; ikisi de yoksa render EDİLMEZ
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -47,7 +48,7 @@ metadata:
   namespace: {{ $ns }}
   annotations: {argocd.argoproj.io/sync-wave: "3"}
 data:
-  ivysettings.xml: {{ $s.ivySettingsXml | quote }}
+  ivysettings.xml: {{ $ivy | quote }}
 {{- end }}
 {{- $m := $s.maintenance }}
 {{- /* bakım SSA'ları (maint-*) pipeline, mongo ya da nginx'ten HERHANGİ biri varsa çalışır: nginx_raw da bakım görsün (TTL hariç, F5) */ -}}
@@ -91,7 +92,7 @@ spec:
       {{- /* Iceberg runtime + AWS bundle sürümü versions.iceberg'den (values'ta ikinci bir literal sürüm tutulmaz) */}}
       spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:{{ $.Values.versions.iceberg }},org.apache.iceberg:iceberg-aws-bundle:{{ $.Values.versions.iceberg }}{{ if $job.kafka }},org.apache.spark:spark-sql-kafka-0-10_2.13:{{ $s.version }}{{ end }}"
       spark.jars.ivy: /tmp/.ivy2
-      {{- if $s.ivySettingsXml }}
+      {{- if $ivy }}
       spark.jars.ivySettings: /opt/ivy/ivysettings.xml
       {{- end }}
       spark.redaction.regex: "(?i)secret|password|token|credential"   # driver/executor log ve Spark UI'da sır sızdırma
@@ -140,7 +141,7 @@ spec:
       volumeMounts:
       - {name: job, mountPath: /opt/job}
       - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID (bkz. volumes)
-      {{- if $s.ivySettingsXml }}
+      {{- if $ivy }}
       - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
       {{- end }}
       {{- if $job.kafka }}
@@ -170,7 +171,7 @@ spec:
       volumeMounts:
       - {name: job, mountPath: /opt/job}
       - {name: work-dir, mountPath: /opt/spark/work-dir}   # OpenShift: rastgele UID (bkz. volumes)
-      {{- if $s.ivySettingsXml }}
+      {{- if $ivy }}
       - {name: ivysettings, mountPath: /opt/ivy/ivysettings.xml, subPath: ivysettings.xml}
       {{- end }}
       {{- if $job.kafka }}
@@ -187,7 +188,7 @@ spec:
       emptyDir: {}
     - name: job
       configMap: {name: lakehouse-jobs}
-    {{- if $s.ivySettingsXml }}
+    {{- if $ivy }}
     - name: ivysettings
       configMap: {name: spark-ivysettings}
     {{- end }}

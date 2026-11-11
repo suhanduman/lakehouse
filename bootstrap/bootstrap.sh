@@ -32,8 +32,13 @@ if [[ "$MODE" == "helm" ]]; then
   helm upgrade --install plugin-barman-cloud cnpg/plugin-barman-cloud --version 0.8.0 -n cnpg-system --create-namespace --set resources.requests.cpu=10m --set resources.requests.memory=64Mi --wait --timeout 5m
   kubectl apply -k "$ROOT/platform/keycloak-operator"
   helm repo add spark-operator https://kubeflow.github.io/spark-operator >/dev/null 2>&1 || true; helm repo update spark-operator >/dev/null
-  # podMonitor: ArgoCD yolunda platform/apps/00-spark-operator.yaml values'ından gelir; helm modunda --set ile
-  helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse --set 'spark.jobNamespaces={lakehouse}' --set prometheus.metrics.enable=true --set prometheus.podMonitor.create=true --wait --timeout 5m
+  # Değerler TEK kaynaktan: platform/apps/00-spark-operator.yaml'daki `values: |` metni (ArgoCD yolu da onu okur) —
+  # jobNamespaces, podMonitor, OpenShift fsGroup ve Ivy ayarı bağlaması (Maven önbelleği) iki yolda aynı kalır.
+  SO_VALUES=$(mktemp)
+  awk '/^      values: \|/{f=1;next} f&&/^        /{sub(/^        /,"");print;next} f&&!/^[[:space:]]*$/{exit}' \
+    "$ROOT/platform/apps/00-spark-operator.yaml" > "$SO_VALUES"
+  helm upgrade --install spark-operator spark-operator/spark-operator --version 2.5.2 -n lakehouse -f "$SO_VALUES" --wait --timeout 5m
+  rm -f "$SO_VALUES"
   helm upgrade --install superset-operator oci://ghcr.io/apache/superset-kubernetes-operator/charts/superset-operator --version 0.2.0 -n lakehouse --wait --timeout 5m
   # Velero YALNIZ dev'de ve glue'dan ÖNCE: glue `Schedule/lakehouse-daily`i velero ns'ine yazar -> velero.io CRD'leri
   # ve ns önce var olmalı. S3 Secret'ı chart üretir (velero-dev.yaml credentials.secretContents), glue'ya bağımlılık YOK.

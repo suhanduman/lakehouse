@@ -68,7 +68,7 @@ geçerlidir.
 | Alarm: `LakehouseDlqRecords` | [§4.6 Hatalı kayıt konusuna kayıt düştü](#dlq) |
 | Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
 | Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
-| Spark işi `UnresolvedAddressException` ya da Ivy hatası veriyor | [§6.2 İç Maven aynası](#maven) |
+| Spark işi `unresolved dependency` ya da Ivy hatası veriyor | [§6.2 Maven kütüphaneleri](#maven) |
 | Bronze tablo boş kalıyor, satır gelmiyor | [§6 Boru hattı](#boru-hatti) |
 | Karantina (`__quarantine`) tablosu doluyor | [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §3.3 ve §9.2 |
 | `nginx.dlq` konusunda kayıt birikiyor | [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §10 |
@@ -320,6 +320,22 @@ Alarm **iş başına bir tanedir**: aynı işin birden çok koşusu başarısız
 gelir; özet işin adını ve başarısız koşu sayısını gösterir, örneğin
 `Zamanlanmış Spark işi başarısız: maint-expire-orphan-ttl (1 koşu)`.
 
+Koşu sürücü pod'u **hiç açılmadan** düşerse (gönderim hatası; en sık nedeni Maven
+kütüphanesinin çözülememesidir, bkz. [§6.2](#maven)) özet iş adı yerine
+`gönderim hatası` yazar: `Zamanlanmış Spark işi başarısız: gönderim hatası (5 koşu)`. Bu
+sayı son bir saattekidir ve kendi Spark uygulamalarınızın gönderim hatalarını da içerir; bu
+tür alarm, hata yinelenmezse bir saat sonra kendiliğinden kapanır. Hangi koşuların
+düştüğünü ve hata iletisini görmek için:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get sparkapplication | grep FAILED
+APP=silver-merge-1794398400001535062     # yukarıdaki listede FAILED görünen ad
+oc -n "$LAKEHOUSE_NS" get sparkapplication "$APP" \
+  -o jsonpath='{.status.applicationState.errorMessage}' | tail -5
+```
+
 **Ne bak**
 
 `[bastion]`
@@ -335,7 +351,7 @@ oc -n "$LAKEHOUSE_NS" logs "$APP-driver" --tail=200
 
 | Belirti | Kök | Çözüm |
 |---|---|---|
-| `UnresolvedAddressException` / Ivy hatası | Maven Central'a çıkış yok | [§6.2 İç Maven aynası](#maven) |
+| `unresolved dependency` / Ivy hatası | Kütüphane önbellekte yok ve önbellek Maven Central'a (ya da kurum aynasına) erişemiyor | [§6.2 Maven kütüphaneleri](#maven) |
 | `SchemaConflict` (silver-merge) | Silver kolon tipi güvenli genişletilemiyor | Elle `ALTER TABLE` ya da yeni kolon ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md)) |
 | `KAFKA_JAAS` yok (mongo-bronze) | `spark` adlı Kafka kullanıcısı yalnız MongoDB kaynağı tanımlıyken oluşur | Kaynağı ekleyin ya da işi kapatın |
 | Bellek hatası / uzun çöp toplama (mongo-bronze, uzun kesinti sonrası) | Birikmiş kayıtlar sürücüye sığmıyor | Tek koşuluk `spark.driver.memory` artırın ya da Bronze tablosundaki Kafka konum özelliğini elle ilerletin (konum yalnız başarıda ilerler) |
@@ -619,32 +635,109 @@ cron'u değiştirdikten sonra işin hemen koşması bekleniyorsa nesneyi silip y
 (GitOps'ta: değişikliği itip eşitlemeyi zorlayın).
 
 <a id="maven"></a>
-### 6.2 İç Maven aynası (kapalı ya da kısıtlı ağ)
+### 6.2 Maven kütüphaneleri (küme içi önbellek ve kurum aynası)
 
-Spark işleri **her koşuda** Iceberg çalışma zamanını ve AWS paketini Maven Central'dan
-çözer. Dışarı erişim yoksa işler `UnresolvedAddressException` ya da Ivy hatasıyla `FAILED`
-olur. Çözüm, iç ayna tanımını değerlere koymaktır: `platform/values/site/glue.yaml`
-dosyasının sonundaki yorumlu `spark.ivySettingsXml` bloğunu açın ve aynanın adresini kendi
-sunucunuzunkiyle değiştirin
-([90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) §1). Anahtar
-boşken (varsayılan) hiçbir ek nesne üretilmez ve Maven Central kullanılır.
+Spark işleri her koşuda Iceberg ve Kafka kütüphanelerini **küme içindeki Maven önbelleğinden**
+(`maven-proxy` pod'u) alır. Önbellek bir kütüphaneyi Maven Central'dan yalnız ilk istendiğinde
+indirir ve diskinde saklar; sonraki koşular internete çıkmaz. İnternet erişimi kesilse de
+işler çalışmaya devam eder. Ürün yükseltmesinde Iceberg ya da Spark sürümü değişirse yeni
+sürüm, ilk koşuda bir kez indirilir; bunun için elle bir şey yapılmaz.
 
-Doluysa `glue` bir ConfigMap üretir, bütün Spark işlerine bağlar ve Spark'ın ayar yolunu ona
-çevirir:
+Önbelleğin çalıştığını ve işlerin onu kullandığını görmek için:
 
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings -o jsonpath='{.data.ivysettings\.xml}' | head
-oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge \
-  -o jsonpath='{.spec.template.sparkConf.spark\.jars\.ivySettings}{"\n"}'
+oc -n "$LAKEHOUSE_NS" get pod -l app=maven-proxy
+oc -n "$LAKEHOUSE_NS" exec deploy/maven-proxy -- du -sh /app/data/repositories/releases
+DRIVER=$(oc -n "$LAKEHOUSE_NS" get pod -o name | grep -E 'silver-merge-[0-9]+-driver' | tail -1)
+oc -n "$LAKEHOUSE_NS" logs "$DRIVER" | grep "in lakehouse-maven" | head -3
 ```
 
-**Beklenen çıktı** (örnek — ikinci komut, ayna açıkken):
+**Beklenen çıktı** (örnek):
 
 ```text
-/opt/ivy/ivysettings.xml
+NAME                           READY   STATUS    RESTARTS   AGE
+maven-proxy-646879d475-z4sm2   1/1     Running   0          2d
+186M	/app/data/repositories/releases
+	found org.apache.iceberg#iceberg-spark-runtime-4.1_2.13;1.11.0 in lakehouse-maven
+	found org.apache.iceberg#iceberg-aws-bundle;1.11.0 in lakehouse-maven
 ```
+
+**Kurumun kendi Maven aynası varsa** (Nexus, Artifactory; kapalı ağda zorunlu), önbelleğin
+kaynağını ona çevirin. `platform/values/site/glue.yaml` dosyasına ekleyin:
+
+```yaml
+mavenProxy:
+  upstream: https://nexus.kurum.local/repository/maven-public
+```
+
+Önbelleği hiç kullanmadan Spark işlerini doğrudan kurum aynasına bağlamak da mümkündür:
+`mavenProxy.enabled: false` ve `spark.ivySettingsXml` değerine aynanın `ivysettings.xml`
+içeriği ([90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) §1). Bu
+durumda kurum aynasına her koşuda erişilir. Kendi `ivysettings.xml` içeriğinize aşağıdaki
+çıktıdaki `<caches lockStrategy="artifact-lock-nio"/>` satırını da koyun: aynı anda başlayan
+Spark işleri ortak bir Ivy önbelleği kullanır ve bu satır olmadan bazıları `unresolved
+dependency` ile düşebilir.
+
+Her iki yolda da `glue`, Spark işlerinin okuduğu `spark-ivysettings` ConfigMap'ini üretir:
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings -o jsonpath='{.data.ivysettings\.xml}{"\n"}'
+```
+
+**Beklenen çıktı** (varsayılan, küme içi önbellek):
+
+```text
+<ivysettings>
+  <settings defaultResolver="lakehouse-maven"/>
+  <caches lockStrategy="artifact-lock-nio"/>
+  <resolvers>
+    <ibiblio name="lakehouse-maven" m2compatible="true" root="http://maven-proxy.lakehouse.svc:8080/releases/"/>
+  </resolvers>
+</ivysettings>
+```
+
+**Ters giderse:**
+
+- Spark koşusu sürücü pod'u hiç açılmadan `FAILED` oluyor ve koşunun hata iletisinde
+  `unresolved dependency` geçiyorsa istenen kütüphane önbellekte yoktur **ve** önbellek onu
+  kaynağından indirememiştir. Bu genellikle bir sürüm yükseltmesinden sonraki ilk koşuda ve
+  dış erişim kapalıyken olur. Hata iletisi koşu nesnesindedir:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" get sparkapplication | grep FAILED
+  APP=silver-merge-1794398400001535062     # yukarıdaki listede FAILED görünen ad
+  oc -n "$LAKEHOUSE_NS" get sparkapplication "$APP" \
+    -o jsonpath='{.status.applicationState.errorMessage}' | grep unresolved
+  ```
+
+  **Beklenen çıktı** (örnek — bu durumda):
+
+  ```text
+  Exception in thread "main" java.lang.RuntimeException: [unresolved dependency: org.apache.iceberg#iceberg-core;1.10.0: not found]
+  ```
+
+  Önbellek pod'undan kaynağa erişimi sınayın:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" exec deploy/maven-proxy -- \
+    curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 https://repo1.maven.org/maven2/
+  ```
+
+  `200` dışı bir değer (ör. `000`) erişim olmadığını gösterir: güvenlik duvarında Maven
+  Central'ı açın ya da `mavenProxy.upstream` ile kurum aynasını tanıtın. Erişim geldikten
+  sonraki ilk koşu kütüphaneyi indirir.
+- `maven-proxy` pod'u çalışmıyorsa (`Pending`, `CrashLoopBackOff`) Spark işleri de
+  kütüphanelerini alamaz. Pod'un olaylarına bakın:
+  `oc -n "$LAKEHOUSE_NS" describe pod -l app=maven-proxy | tail -20`. `Pending` genellikle
+  diskin (`maven-proxy-data`) bağlanamadığını gösterir.
 
 Aynı sınıftan diğer dış erişim ihtiyaçları: Zeppelin'in Trino JDBC sürücüsünü indirmesi
 (Maven), JupyterHub'ın ek paket kurulumu ve dbt örneği (PyPI). Kapalı ağda iç PyPI aynası da

@@ -54,18 +54,18 @@ tests:
     template: spark-jobs.yaml
     set: {nginx.enabled: true}
     asserts:
-      - hasDocuments: {count: 4}
-      - documentSelector: {path: kind, value: ConfigMap}
+      - hasDocuments: {count: 5}
+      - documentSelector: {path: metadata.name, value: lakehouse-jobs}
         matchRegex: {path: 'data["pipelines.json"]', pattern: '"maintain_namespaces":\["nginx_raw"\]'}
-      - documentIndex: 1
-        equal: {path: metadata.name, value: maint-position-deletes}
       - documentIndex: 2
-        equal: {path: metadata.name, value: maint-compact}
+        equal: {path: metadata.name, value: maint-position-deletes}
       - documentIndex: 3
+        equal: {path: metadata.name, value: maint-compact}
+      - documentIndex: 4
         equal: {path: metadata.name, value: maint-expire-orphan-ttl}
   - it: nginx kapalı ve pipelines/mongo yokken yalnız ConfigMap render edilir
     template: spark-jobs.yaml
     set: {}
     asserts:
-      - hasDocuments: {count: 1}
+      - hasDocuments: {count: 2}
       - equal: {path: kind, value: ConfigMap}

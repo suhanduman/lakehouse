@@ -335,6 +335,7 @@ satırlar dosyalarda `# SİTE` ile işaretlidir ve **üretimde
 | `spark.sql.catalog.lakehouse.s3.path-style-access` | `s3.pathStyleAccess` (ürün varsayılanı `glue/values.yaml`; gerekirse site dosyasında ezilir) |
 | `spark.sql.catalog.lakehouse.header.X-Iceberg-Access-Delegation` | site `s3.vendedCredentials`: açıksa `vended-credentials`, kapalıysa `none` |
 | `image`, `sparkVersion`, `spark.jars.packages` içindeki Iceberg sürümü | ürün sürümleri: `glue/values.yaml` `spark.image`, `spark.version`, `versions.iceberg` |
+| `ivysettings` geçen satırlar (bir `sparkConf` anahtarı, iki bağlama, bir volume) | kütüphaneler ürün işleriyle aynı küme içi Maven önbelleğinden gelir. Olduğu gibi kalır; yalnız site değerlerinde `mavenProxy.enabled: false` **ve** `spark.ivySettingsXml` boşsa dördü birden silinir |
 | `s3-ca` geçen **yorumlu** satırlar (iki `extraJavaOptions`, iki bağlama, bir volume) | site `s3.caSecret` doluysa (S3 sertifikası kurumun **özel** CA'sıyla imzalı — [30-kurulum](../30-kurulum.md) §5.14) beşi birden **açılır**; boşsa yorumlu kalır. Açılmazsa iş S3'e ilk istekte `PKIX path building failed` ile düşer |
 
 **Sürüm senkronu elle yapılır.** Ürün yükseltmesinde Spark ya da Iceberg sürümü
@@ -529,9 +530,9 @@ GUNLUK_OZET_OK 1
 > Ölçüt `_OK` satırının **varlığıdır**; yoksa koşu gerçekten düşmüştür. Yalnız sonucu
 > görmek isterseniz kalıbı daraltın: `grep -E "GUNLUK_OZET_OK"`.
 
-Koşu sürerken günlüğü canlı izlemek için `--tail=20 -f` kullanılır. İlk koşuda günlüğün
-başında Iceberg paketlerinin Maven'den indiği satırlar görünür; bu normaldir ve ikinci
-koşuda önbellekten gelir.
+Koşu sürerken günlüğü canlı izlemek için `--tail=20 -f` kullanılır. Günlüğün başında Iceberg
+paketlerinin çözüldüğü satırlar (`found ... in lakehouse-maven`) görünür; bu normaldir:
+kütüphaneler küme içi Maven önbelleğinden gelir.
 
 **Ters giderse:** sürücü pod'u bulunamıyorsa `timeToLiveSeconds` süresi dolmuş ve pod
 silinmiştir; koşuyu tekrarlayın. Günlükte `Exception` satırı varsa Adım 10 tablosuna bakın.
@@ -603,8 +604,9 @@ anlatılır.
 
 | Belirti | Neden | Çözüm |
 |---|---|---|
-| `ClassNotFoundException: org.apache.iceberg.spark.SparkCatalog` ya da paket indirme hatası | sürücü Maven Central'a çıkamıyor | kümeden Maven Central erişimini açın ya da iç Maven aynasını `spark.ivySettingsXml` ile tanıtın (ürün işleri de aynı yolu kullanır) |
-| İlk koşu dakikalarca `RUNNING`, günlükte Maven'den indirme satırları | Iceberg paketleri ilk kez iniyor | bekleyin; ikinci koşu önbellekten gelir |
+| `Ivy settings file /opt/ivy/ivysettings.xml does not exist` | `spark-ivysettings` ConfigMap'i yok (Maven önbelleği ve kurum aynası kapalı) | CR'daki dört `ivysettings` satırını silin |
+| `ClassNotFoundException: org.apache.iceberg.spark.SparkCatalog` ya da `unresolved dependency` | CR'da `ivysettings` satırları yok ya da Maven önbelleği kütüphaneyi indiremedi | §4.1'deki `ivysettings` satırlarını kontrol edin; önbellek için [sorun-giderme.md](sorun-giderme.md) §6.2 |
+| İlk koşu her zamankinden uzun, günlükte indirme satırları | kütüphaneler sürücüye ilk kez iniyor | bekleyin; kütüphaneler küme içi önbellekten gelir |
 | `401 Unauthorized` (Polaris) | betikte `POLARIS_CREDENTIAL` → katalog `credential` ayarı satırı yok ya da CR'da env tanımlı değil | Adım 3'teki dört satır ve CR'daki `secretKeyRef` |
 | `403 Forbidden` (Polaris) | kimlik doğru ama o ad alanına yazma yetkisi yok | `sandbox` ad alanına yazın; başka bir ad alanı gerekiyorsa yetki sayfasındaki rol tablosuna bakın |
 | `NoSuchNamespaceException` | hedef ad alanı katalogda yok | betikte `CREATE NAMESPACE IF NOT EXISTS` satırı |

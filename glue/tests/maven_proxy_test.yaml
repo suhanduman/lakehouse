@@ -1,0 +1,38 @@
+suite: maven proxy
+templates: [maven-proxy.yaml]
+tests:
+  - it: default — Reposilite with PVC, read-only Central proxy config, Service
+    asserts:
+      - hasDocuments: {count: 4}
+      - containsDocument: {kind: Deployment, apiVersion: apps/v1, name: maven-proxy}
+        documentIndex: 2
+      - documentIndex: 0
+        matchRegex: {path: 'data["shared.json"]', pattern: '"reference": "https://repo1.maven.org/maven2"'}
+      - documentIndex: 0
+        matchRegex: {path: 'data["shared.json"]', pattern: '"store": true'}
+      - documentIndex: 2
+        equal: {path: 'spec.template.spec.containers[0].image', value: docker.io/dzikoysk/reposilite:3.6.4}
+      - documentIndex: 2
+        equal: {path: spec.strategy.type, value: Recreate}
+      - documentIndex: 2
+        contains: {path: 'spec.template.spec.containers[0].volumeMounts', content: {name: data, mountPath: /app/data}}
+      - documentIndex: 2
+        contains: {path: 'spec.template.spec.volumes', content: {name: data, persistentVolumeClaim: {claimName: maven-proxy-data}}}
+      - documentIndex: 2
+        equal: {path: 'spec.template.spec.securityContext.runAsUser', value: 977}
+      - documentIndex: 3
+        equal: {path: 'spec.ports[0].port', value: 8080}
+  - it: OpenShift — no fixed UID (SCC assigns one)
+    set: {platform: openshift}
+    documentIndex: 2
+    asserts:
+      - isNull: {path: spec.template.spec.securityContext}
+  - it: custom upstream lands in config
+    set: {mavenProxy.upstream: "https://nexus.example.local/repository/maven-central"}
+    documentIndex: 0
+    asserts:
+      - matchRegex: {path: 'data["shared.json"]', pattern: '"reference": "https://nexus\.example\.local/repository/maven-central"'}
+  - it: disabled renders nothing
+    set: {mavenProxy.enabled: false}
+    asserts:
+      - hasDocuments: {count: 0}

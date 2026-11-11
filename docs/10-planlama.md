@@ -163,7 +163,7 @@ gereken kadarı:
 | Küme → dışarı | Kafka Connect, Spark | Kaynak MongoDB | 27017/TCP | CDC okuması |
 | Küme → dışarı | Polaris, Connect, Spark, not defterleri | S3 (`$S3_ENDPOINT`) | 443/HTTPS | Iceberg verisi ve yedekler |
 | Küme → dışarı | Keycloak, Trino | Active Directory (`$LDAP_URL`) | 636/LDAPS | kimlik ve grup okuması |
-| Küme → dışarı | Spark, JupyterHub, dbt örneği | Maven Central, PyPI | 443/HTTPS | çalışma anında kütüphane indirme (kapalı ağda iç ayna gerekir) |
+| Küme → dışarı | Maven önbelleği (`maven-proxy`), JupyterHub, dbt örneği | Maven Central, PyPI | 443/HTTPS | kütüphane indirme: Spark kütüphaneleri yalnız ilk istekte, sonra küme içi önbellekten (kapalı ağda iç ayna gerekir) |
 | Dışarıdan → küme | Tarayıcılar | Trino, Superset, JupyterHub, Zeppelin, Keycloak Route'ları | 443/HTTPS | kullanıcı arayüzleri |
 | Dışarıdan → küme | Fluent Bit ajanları (yalnız nginx akışı açıksa) | Kafka dış dinleyicisi (Route) | 443/TLS + SCRAM | erişim günlüğü |
 | Küme içi | Superset, Zeppelin, JupyterHub, Spark | Trino | 8443/HTTPS | SQL |

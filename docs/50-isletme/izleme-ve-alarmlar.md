@@ -143,7 +143,7 @@ tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'
 | `LakehouseConnectTaskFailed` | Bir bağlayıcı görevi düştü; o kaynaktan **veri akmıyor** | critical | [sorun-giderme.md §4.1](sorun-giderme.md#connect) |
 | `LakehouseSinkStalled` | Iceberg'e yazma gecikmesi eşiği aştı; veri geliyor ama **tabloya işlenmiyor** | warning | [sorun-giderme.md §4.2](sorun-giderme.md#sink) |
 | `LakehouseSilverMergeStale` | En son **başarılı** Silver birleştirmesinin üzerinden çok zaman geçti; Silver tablolar **eskiyor** | warning | [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge) |
-| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız); iş başına tek alarm, özette başarısız koşu sayısı | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
+| `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız); iş başına tek alarm, özette başarısız koşu sayısı; sürücü pod'u açılmadan düşen koşular `gönderim hatası` olarak sayılır | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
 | `LakehouseSparkRunTooLong` | Son 6 saatte tamamlanan Spark koşularının **ortalama** süresi eşiği aştı | warning | [sorun-giderme.md §4.5](sorun-giderme.md#spark-duration) |
 | `LakehouseDlqRecords` | Son bir saatte bir hatalı kayıt konusuna (`….dlq`) yeni kayıt düştü; o kayıtlar **tabloya girmedi** | warning | [sorun-giderme.md §4.6](sorun-giderme.md#dlq) |
 
@@ -155,7 +155,9 @@ sayfanın ilgili başlığını gösterir.
 1. **`LakehouseSparkScheduledRunFailed` yalnız ürünün kendi işlerini kapsar**
    (`silver-merge`, `maint-` ile başlayan bakım işleri, `mongo-bronze`). Kendi yazdığınız
    Spark uygulamaları bu alarma **girmez**; onların izlenmesi
-   [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasındadır.
+   [yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md) sayfasındadır. Tek istisna gönderim
+   hatalarıdır (sürücü pod'u hiç açılmadan düşen koşu): operatörün sayacı iş adı taşımadığı
+   için bunlar bütün uygulamalar için toplu sayılır.
 2. **`LakehouseSparkRunTooLong` küme geneldir.** spark-operator'ün ölçüm yayını iş başına
    etiket üretmez; kural bu yüzden tek bir işi değil, penceredeki bütün koşuların
    ortalamasını ölçer.

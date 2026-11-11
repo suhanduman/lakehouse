@@ -49,6 +49,7 @@ değişikliği o dosyada yapılır.
 | **Apache Polaris** | Iceberg REST kataloğu: tablo listesi, yetki, S3 kimlik dağıtımı | `lakehouse` | `platform/apps/20-polaris.yaml`, `platform/values/polaris.yaml`, `platform/polaris/setup.yaml` |
 | **Spark Operator** | `SparkApplication` CR'larını gerçek Spark koşularına çevirir | `lakehouse` | `platform/apps/00-spark-operator.yaml` |
 | **Spark işleri** | Silver birleştirme, Iceberg bakımı, MongoDB Bronze yükleme | `lakehouse` (geçici pod'lar) | `glue/templates/spark-jobs.yaml`, `glue/jobs/` |
+| **Maven önbelleği** (Reposilite) | Spark işlerinin Iceberg/Kafka kütüphanelerini diskte tutar; Maven Central'a yalnız ilk istekte çıkar | `lakehouse` | `glue/templates/maven-proxy.yaml`, `glue/values.yaml` → `mavenProxy` |
 | **Trino** | SQL sorgu motoru (tek giriş kapısı); satır/kolon yetkilendirmesi | `lakehouse` | `platform/apps/30-trino.yaml`, `platform/values/trino.yaml`, `platform/values/site/trino.yaml` |
 | **Apache Superset** | Pano ve grafik arayüzü | `lakehouse` | `platform/apps/00-superset-operator.yaml`, `glue/templates/superset.yaml` |
 | **JupyterHub** | Kişisel Python not defteri ortamı (PySpark, PyIceberg) | `lakehouse` | `platform/apps/30-jupyterhub.yaml`, `platform/values/jupyterhub.yaml`, `platform/values/site/jupyterhub.yaml` |

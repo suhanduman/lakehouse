@@ -157,6 +157,19 @@ zeppelin:
   interpreterSecret: zeppelin-interpreter    # key interpreter.json — Trino JDBC url/user/password (files/zeppelin/interpreter.json şablonu)
   resources: {requests: {cpu: 250m, memory: 1Gi}, limits: {memory: 2560Mi}}
 
+# Küme içi Maven önbelleği (Reposilite, tek pod + disk). Spark işleri Iceberg/Kafka kütüphanelerini her koşuda
+# buradan çözer; sunucu bir kütüphaneyi Maven Central'dan YALNIZ İLK İSTEKTE indirir ve diskte tutar -> internet
+# kesintisinde işler çalışmaya devam eder. Sürüm yükseltmesinde yeni sürüm ilk koşuda bir kez indirilir.
+# Kurumun kendi Maven aynası (Nexus/Artifactory) varsa: enabled: false + spark.ivySettingsXml.
+mavenProxy:
+  enabled: true
+  image: docker.io/dzikoysk/reposilite:3.6.4
+  upstream: https://repo1.maven.org/maven2   # önbelleğin kaynağı; kurum aynası da yazılabilir
+  storageSize: 5Gi                 # bir Iceberg sürümünün kütüphaneleri ~110 MB
+  storageClass: ""                 # boş = kümenin varsayılan StorageClass'ı
+  javaOpts: "-Xmx192m"
+  resources: {requests: {cpu: 50m, memory: 256Mi}, limits: {memory: 512Mi}}
+
 components:
   minio: false                  # DEV-ONLY tek-replika S3 (kind). Prod: müşterinin S3'ü
   devSecrets: false             # DEV-ONLY: keycloak-clients, trino-service-accounts, trino-shared-secret, superset-secret, zeppelin-shiro, zeppelin-interpreter, jupyterhub-secrets (sentetik; prod'da kurulumcu yaratır)
@@ -261,9 +274,9 @@ spark:
   executor: {instances: 1, cores: 1, coreRequest: "", memory: 2g, memoryOverhead: 512m}
   shufflePartitions: 8                          # küçük tier (F0 S4); büyük tier'da 200
   kafkaSecret: spark                 # KafkaUser spark'ın Secret'ı (sasl.jaas.config) — mongo-bronze Kafka okuması
-  # boş = Maven Central (varsayılan); doluysa ConfigMap spark-ivysettings + tüm SSA'larda /opt/ivy/ivysettings.xml
-  # mount edilir ve spark.jars.ivySettings o yolu gösterir (iç Maven aynası:
-  # docs/50-isletme/sorun-giderme.md §6.2)
+  # boş = küme içi Maven önbelleği (mavenProxy; kapalıysa Maven Central). Doluysa kurumun kendi aynası kullanılır:
+  # ConfigMap spark-ivysettings + tüm SSA'larda /opt/ivy/ivysettings.xml, spark.jars.ivySettings o yolu gösterir
+  # (docs/50-isletme/sorun-giderme.md §6.2)
   ivySettingsXml: ""
   schedules:
     silverMerge: "*/15 * * * *"
