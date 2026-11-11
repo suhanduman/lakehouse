@@ -69,13 +69,6 @@ spec:
       for: 15m
       labels: {severity: warning}
       annotations: {summary: "Iceberg sink lag eşiği aştı: {{ "{{ $labels.consumergroup }}" }}/{{ "{{ $labels.topic }}" }}", runbook: docs/50-isletme/sorun-giderme.md#sink}
-    # Aşağıdaki iki kural Spark DRIVER POD'larının standart kube-state-metrics serilerine dayanır
-    # (kube_pod_status_phase, kube_pod_start_time): OpenShift'in kendi izlemesi de, dev yığını da bunları
-    # varsayılan toplar. Eskiden SparkApplication CR'ı için KSM CustomResourceState metrikleri kullanılıyordu;
-    # onlar yalnız dev yığınında vardı -> iki alarm OpenShift'te hiç ateşlenemiyordu (ocpphy provası
-    # 2026-11-08). OpenShift'te user-workload kuralları Thanos Ruler'da değerlendirilir ve aynı ns'in platform
-    # metriklerini (kube_pod_*) görür. Zamanlanmış koşunun driver pod'u <ad>-<zaman>-driver adını taşır ve
-    # koşu bitince silinmez (successful/failedRunHistoryLimit 3, timeToLiveSeconds 86400).
     - alert: LakehouseSilverMergeStale
       # en son BAŞARILI silver-merge koşusunun başlangıcından bu yana > eşik (prod 45 dk; dev gecelik cron -> 2 gün).
       # Askıya alınmış iş (spec.suspend) de böyle yakalanır: yeni koşu olmaz, eski başarılı pod'ların yaşı büyür.
@@ -110,6 +103,22 @@ spec:
       for: 10m
       labels: {severity: warning}
       annotations: {summary: "Spark koşularının son 6 saatteki ortalama süresi eşiği aştı (>{{ .Values.monitoring.sparkRunMaxSeconds }}s)", runbook: docs/50-isletme/sorun-giderme.md#spark-duration}
+    - alert: LakehouseDlqRecords
+      # Hatalı kayıt konuları (<kaynak>.dlq, nginx.dlq, <akış>.dlq): sink'in işleyemediği kayıtlar (JSON değil,
+      # veri sözleşmesine uymuyor) buraya düşer ve tabloya GİRMEZ. Son bir saatte yeni kayıt geldiyse uyarır.
+      # kafka-exporter'ın konu uç konumu (kafka_topic_partition_current_offset); increase() konu yeniden
+      # yaratılınca sıfırlanmayı doğru sayar. Kayıt gelmedikçe sonuç boştur -> INACTIVE.
+      expr: sum by (topic) (increase(kafka_topic_partition_current_offset{topic=~".+\\.dlq"}[1h])) > 0
+      for: 1m
+      labels: {severity: warning}
+      annotations: {summary: "Hatalı kayıt konusuna yeni kayıt düştü: {{ "{{ $labels.topic }}" }}", runbook: docs/50-isletme/sorun-giderme.md#dlq}
+    # Aşağıdaki iki kural Spark DRIVER POD'larının standart kube-state-metrics serilerine dayanır
+    # (kube_pod_status_phase, kube_pod_start_time): OpenShift'in kendi izlemesi de, dev yığını da bunları
+    # varsayılan toplar. Eskiden SparkApplication CR'ı için KSM CustomResourceState metrikleri kullanılıyordu;
+    # onlar yalnız dev yığınında vardı -> iki alarm OpenShift'te hiç ateşlenemiyordu (ocpphy provası
+    # 2026-11-08). OpenShift'te user-workload kuralları Thanos Ruler'da değerlendirilir ve aynı ns'in platform
+    # metriklerini (kube_pod_*) görür. Zamanlanmış koşunun driver pod'u <ad>-<zaman>-driver adını taşır ve
+    # koşu bitince silinmez (successful/failedRunHistoryLimit 3, timeToLiveSeconds 86400).
 ---
 # Grafana dashboard ConfigMap'leri: sidecar etiketi grafana_dashboard, searchNamespace ALL (monitoring-dev.yaml) ->
 # bu ns'te (lakehouse) olabilirler. Kaynak/lisans/datasource notu: glue/files/dashboards/README.md.

@@ -1,7 +1,7 @@
 # Sorun giderme
 
 **Bu bölümde:** kurulumdan işletmeye kadar karşılaşılan belirtilerin tek listesi — önce
-bir **belirti tablosu**, sonra her belirtinin komut komut teşhisi ve çözümü. Beş alarmın
+bir **belirti tablosu**, sonra her belirtinin komut komut teşhisi ve çözümü. Altı alarmın
 her biri buradaki kendi bölümüne bağlanır: alarm bildiriminin içindeki `runbook`
 açıklaması doğrudan bu sayfanın ilgili başlığını gösterir.
 **Süre:** ilk bakış 2–5 dakika; kök nedene göre değişir.
@@ -65,6 +65,7 @@ geçerlidir.
 | Alarm: `LakehouseSilverMergeStale` | [§4.3 silver-merge eskidi](#silver-merge) |
 | Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlanmış Spark koşusu FAILED](#spark) |
 | Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark koşuları yavaşladı](#spark-duration) |
+| Alarm: `LakehouseDlqRecords` | [§4.6 Hatalı kayıt konusuna kayıt düştü](#dlq) |
 | Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
 | Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
 | Spark işi `UnresolvedAddressException` ya da Ivy hatası veriyor | [§6.2 İç Maven aynası](#maven) |
@@ -117,6 +118,7 @@ LakehouseSinkStalled	ok	inactive
 LakehouseSilverMergeStale	ok	inactive
 LakehouseSparkScheduledRunFailed	ok	inactive
 LakehouseSparkRunTooLong	ok	inactive
+LakehouseDlqRecords	ok	inactive
 ```
 
 **Ters giderse:** `health` sütunu `err` ise kural ifadesi değerlendirilemiyordur (çoğu
@@ -384,6 +386,47 @@ oc -n "$LAKEHOUSE_NS" logs -l spark-role=driver --tail=200 \
 koşmuyor" durumu [§4.3](#silver-merge) ile bakılır.
 
 ---
+
+<a id="dlq"></a>
+### 4.6 `LakehouseDlqRecords` — hatalı kayıt konusuna kayıt düştü
+
+Bir sink'in işleyemediği kayıtlar (JSON olmayan, veri sözleşmesine uymayan) kaynağın ya da
+akışın hatalı kayıt konusuna (adı `.dlq` ile biter) gider ve **tabloya girmez**. Son bir saatte
+böyle bir kayıt geldiyse alarm konunun adıyla uyarır; 1 dakika, **warning**. Yeni kayıt
+gelmezse bir saat sonra kendiliğinden kapanır.
+
+**Ne bak** — alarmdaki konuyu yazın (örnekte `sensors.dlq`):
+
+`[bastion]`
+
+```bash
+scripts/kafka-cli.sh kafka-get-offsets.sh --topic sensors.dlq
+scripts/kafka-cli.sh kafka-console-consumer.sh --topic sensors.dlq --from-beginning \
+  --max-messages 10 --timeout-ms 15000
+```
+
+**Beklenen çıktı** (OpenShift provasından gerçek çıktı — ilk satır konudaki kayıt sayısı,
+ardından kayıtların kendisi):
+
+```text
+sensors.dlq:0:3
+bu JSON değil
+bu JSON değil
+{"device_id": "sensor-9", "room": "C-301", "temperature_c": "yine bozuk", "humidity_pct": 40}
+```
+
+**Ne yap**
+
+- **JSON akışı** (akış adı + `.dlq`, örneğin `sensors.dlq`): kaydı gönderen uygulama ya da
+  cihaz hatalı veri üretiyordur; kayıtları uygulama ekibine iletin. Alan tipi bilerek
+  değiştiyse veri sözleşmesini güncelleyin ([json-akisi-ekleme.md](json-akisi-ekleme.md) Adım 7).
+- **nginx** (`nginx.dlq`): ajan JSON olmayan bir ileti göndermiştir; ajanın günlüğüne bakın
+  ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 10.4).
+- **Veritabanı kaynağı** (kaynak adı + `.dlq`, örneğin `erp.dlq`): bağlayıcı olağan dışı
+  bir kayıt üretmiştir; kaydı ve Connect günlüğünü ([§4.1](#connect)) inceleyin.
+
+Hatalı kayıt konusundaki kayıtlar konunun saklama süresi (7 gün) dolunca kendiliğinden
+silinir; elle temizlemek gerekmez.
 
 <a id="kurulum"></a>
 ## 5. Kurulum ve eşitleme

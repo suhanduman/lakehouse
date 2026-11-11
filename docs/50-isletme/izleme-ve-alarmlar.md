@@ -1,7 +1,7 @@
 # İzleme ve alarmlar
 
 **Bu bölümde:** ürünün izleme kapsamı (ve **bilerek** dışarıda bıraktıkları), kümeye yazdığı
-izleme nesneleri, beş alarm kuralının anlamı ve karşılık gelen eylem, eşiklerin nereden
+izleme nesneleri, altı alarm kuralının anlamı ve karşılık gelen eylem, eşiklerin nereden
 değiştirileceği, bildirimin nereden gittiği ve OpenShift konsolunda nereye bakılacağı.
 **Süre:** ilk okuma 20 dakika; eşik değiştirme 10 dakika (düzenleme + eşitleme).
 **Gereken yetki:** `$LAKEHOUSE_NS` ad alanında okuma; konsolda **Observe** sekmesine erişim;
@@ -9,7 +9,7 @@ eşik değiştirmek için Git deposunda `main` dalına yazma.
 **Nerede çalıştırılır:** `[bastion]` — `oc login` ile kümeye girilmiş yönetim makinesi.
 
 > **Ürün kendi Prometheus'unu kurmaz.** Metrikleri OpenShift'in **kullanıcı iş yükü
-> izlemesi** toplar. Kapalıysa izleme nesneleri kümede durur ama kimse okumaz: beş alarmın
+> izlemesi** toplar. Kapalıysa izleme nesneleri kümede durur ama kimse okumaz: altı alarmın
 > hiçbiri çalışmaz ([20-on-kosullar](../20-on-kosullar.md) madde 9.1).
 
 ---
@@ -136,7 +136,7 @@ tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'
 
 ---
 
-## 3. Beş alarm: anlamı ve karşılık gelen eylem
+## 3. Altı alarm: anlamı ve karşılık gelen eylem
 
 | Alarm | Ne demek | Şiddet | İlk eylem |
 |---|---|---|---|
@@ -145,6 +145,7 @@ tam komut [90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md) §3'
 | `LakehouseSilverMergeStale` | En son **başarılı** Silver birleştirmesinin üzerinden çok zaman geçti; Silver tablolar **eskiyor** | warning | [sorun-giderme.md §4.3](sorun-giderme.md#silver-merge) |
 | `LakehouseSparkScheduledRunFailed` | Ürünün zamanlı Spark işlerinden biri `FAILED` bitti (sürücü pod'u başarısız) | warning | [sorun-giderme.md §4.4](sorun-giderme.md#spark) |
 | `LakehouseSparkRunTooLong` | Son 6 saatte tamamlanan Spark koşularının **ortalama** süresi eşiği aştı | warning | [sorun-giderme.md §4.5](sorun-giderme.md#spark-duration) |
+| `LakehouseDlqRecords` | Son bir saatte bir hatalı kayıt konusuna (`….dlq`) yeni kayıt düştü; o kayıtlar **tabloya girmedi** | warning | [sorun-giderme.md §4.6](sorun-giderme.md#dlq) |
 
 Alarm bildiriminin içinde bir `runbook` açıklaması vardır; değeri doğrudan yukarıdaki
 sayfanın ilgili başlığını gösterir.
@@ -185,6 +186,7 @@ LakehouseSinkStalled	ok	inactive
 LakehouseSilverMergeStale	ok	inactive
 LakehouseSparkScheduledRunFailed	ok	inactive
 LakehouseSparkRunTooLong	ok	inactive
+LakehouseDlqRecords	ok	inactive
 ```
 
 **Ters giderse:** `health` `err` ise kural ifadesi değerlendirilemiyordur — metrik kaynağı

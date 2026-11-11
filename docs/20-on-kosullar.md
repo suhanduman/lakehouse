@@ -826,7 +826,7 @@ kurulamaz. nginx akışını kullanmayacaksanız bu maddeyi atlayın, kontrol li
 OpenShift'in kendi izleme yığını toplar; bunun için **kullanıcı iş yükü izlemesinin**
 açık olması gerekir. Kapalıysa glue'nun `lakehouse` ad alanına yazdığı
 `PodMonitor`/`ServiceMonitor`/`PrometheusRule` nesneleri kümede durur ama kimse okumaz:
-beş alarmın hiçbiri çalışmaz.
+altı alarmın hiçbiri çalışmaz.
 **Kimin işi:** platform ekibi (cluster-admin).
 
 Önce ConfigMap'in **var olup olmadığına** bakın; varsa üzerine yazmayın, düzenleyin:

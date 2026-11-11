@@ -357,7 +357,7 @@ kümede** tekrarıdır; geliştirme kümesinde karşılıkları yoktur ya da far
   *Kaynak: [50-isletme/izleme-ve-alarmlar.md](../50-isletme/izleme-ve-alarmlar.md) §2;
   [40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §6.2.*
 
-- [ ] **2.3 Beş alarm kuralı sağlıklı**
+- [ ] **2.3 Altı alarm kuralı sağlıklı**
 
   `[bastion]`
 

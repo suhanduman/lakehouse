@@ -8,7 +8,7 @@ bakılacağı.
 okuma. Hiçbir kontrol kümede değişiklik yapmaz.
 **Nerede çalıştırılır:** `[bastion]` — `oc login` ile kümeye girilmiş yönetim makinesi.
 
-> **Neden alarm yetmiyor?** Beş alarm kuralı "bozuldu" durumunu yakalar, "hiç çalışmıyor"
+> **Neden alarm yetmiyor?** Altı alarm kuralı "bozuldu" durumunu yakalar, "hiç çalışmıyor"
 > durumunu değil: veri yokken kurallar ateşlenmez
 > ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §3). Sessizce duran bir boru hattı ancak bu
 > listeyle görülür. Yedekler için **hiç** alarm kuralı yoktur.
@@ -63,6 +63,7 @@ LakehouseSinkStalled	ok	inactive
 LakehouseSilverMergeStale	ok	inactive
 LakehouseSparkScheduledRunFailed	ok	inactive
 LakehouseSparkRunTooLong	ok	inactive
+LakehouseDlqRecords	ok	inactive
 ```
 
 **Geliştirme (kind) kümesinde:** `thanos-querier` Route'u **yoktur** (komut

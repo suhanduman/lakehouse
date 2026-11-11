@@ -82,6 +82,8 @@ M 'kafka_connect_sink_task_offset_commit_completion_total'
 # (connect-sink-shop/-shop-coord/-nginx/-nginx-coord — canlı doğrulandı, kafka-consumer-groups.sh --list).
 # LakehouseSinkStalled kuralının dayandığı seri budur (glue monitoring.yaml).
 M 'kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"}'
+# LakehouseDlqRecords'un girdisi: hatalı kayıt konularının uç konumu (kafka-exporter)
+M 'kafka_topic_partition_current_offset{topic=~".+\\.dlq"}'
 # LakehouseSilverMergeStale / LakehouseSparkScheduledRunFailed'in girdileri. Evre serisi HER evreyi (0/1) yayar ->
 # seri varlığı yetmez, değeri 1 olmalı. Başlangıç zamanı şimdiki zamana yakın olmalı (1 saatten yeni).
 M "kube_pod_status_phase{namespace=\"$NS\",pod=\"$RUN-driver\",phase=\"Succeeded\"} == 1"
@@ -93,8 +95,8 @@ M 'spark_application_success_count'
 M 'spark_application_success_execution_time_seconds_count'
 
 echo "== kurallar"
-n=$(P /api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "5" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 5 kural yüklü"
-for a in LakehouseConnectTaskFailed LakehouseSinkStalled LakehouseSilverMergeStale LakehouseSparkScheduledRunFailed LakehouseSparkRunTooLong; do
+n=$(P /api/v1/rules | jq '[.data.groups[] | select(.name=="lakehouse") | .rules[]] | length'); [[ "$n" == "6" ]] || { echo "HATA kural sayısı $n"; exit 1; }; echo "OK 6 kural yüklü"
+for a in LakehouseConnectTaskFailed LakehouseSinkStalled LakehouseSilverMergeStale LakehouseSparkScheduledRunFailed LakehouseSparkRunTooLong LakehouseDlqRecords; do
   st=$(P /api/v1/rules | jq -r ".data.groups[].rules[] | select(.name==\"$a\") | .health"); [[ "$st" == "ok" ]] || { echo "HATA $a health=$st"; exit 1; }; echo "OK $a health ok"
 done
 # Ateşlenen Lakehouse alarmları HER ZAMAN raporlanır (pozitif kanıt olabilir): önce listele, sonra
