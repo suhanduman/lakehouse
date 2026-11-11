@@ -1,23 +1,31 @@
 # Kullanıcı ve yetki
 
-**Bu bölümde:** kimin hangi veriyi görebileceğinin nerede tanımlandığı — Active
-Directory grubundan başlayıp Keycloak, Trino, Superset, JupyterHub ve Zeppelin'e kadar;
-kullanıcı ekleme ve çıkarma, yeni bir grubun açılması, satır filtresi ve kolon maskesi
-yazma, yazma alanı (`sandbox`) ve paylaşımlı servis hesaplarının sınırları.
-**Süre:** var olan bir gruba kullanıcı eklemek dakikalar (AD tarafındaki iş); yeni bir
-erişim kuralı yazmak 15–30 dakika (düzenleme + eşitleme + doğrulama).
-**Gereken yetki:** AD tarafında grup üyeliği düzenleme (kimlik ekibi); Git deposunda
-`main` dalına yazma; `$LAKEHOUSE_NS` ad alanında okuma.
-**Nerede çalıştırılır:** `[bastion]` — `git` ve `oc` kurulu, `oc login` ile kümeye
-girilmiş yönetim makinesi. Doğrulama sorguları `[pod]` etiketiyle işaretlidir.
+Bu sayfa, kimin hangi veriyi görebileceğinin nerede belirlendiğini anlatır. Yol Active
+Directory'deki gruptan başlar; Keycloak, Trino, Superset, JupyterHub ve Zeppelin bu
+gruba göre davranır. Sayfada kullanıcı ekleme ve çıkarma, yeni grup açma, satır filtresi
+ve kolon maskesi yazma, yazılabilir alan (`sandbox`) ve paylaşımlı servis hesapları
+anlatılır.
 
-> **Yetki kümede elle verilmez.** Bütün erişim kuralları Git'teki değer dosyalarındadır;
-> `oc edit` ile yapılan bir değişikliği eşitleme birkaç dakika içinde geri alır
-> ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
+**Ne kadar sürer:** var olan bir gruba kullanıcı eklemek birkaç dakika (AD'deki iş).
+Yeni bir erişim kuralı yazmak 15–30 dakika (düzenleme, uygulama, doğrulama).
+
+**Hangi yetkiler gerekir:** AD'de grup üyeliği düzenleme (kimlik ekibi), kurumun
+lakehouse Git deposunda `main` dalına yazma, `$LAKEHOUSE_NS` ad alanında okuma.
+
+**Komutlar nerede çalışır:**
+
+- `[bastion]` — `git` ve `oc` kurulu, `oc login` ile kümeye bağlı yönetim makinesi
+- `[pod]` — Trino'nun web arayüzü ya da kendi kimliğinizle bağlanan bir SQL istemcisi
+
+> **Yetkiyi kümede elle vermeyin.** Bütün erişim kuralları Git'teki ayar
+> dosyalarındadır. `oc edit` ile yapılan bir değişikliği ArgoCD birkaç dakika içinde
+> geri alır ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
 
 ---
 
 ## 1. Değişkenleri yükleyin
+
+Her yeni terminalde bir kez çalıştırın.
 
 `[bastion]`
 
@@ -27,77 +35,79 @@ set -a; . install/lakehouse.env; set +a
 echo "lakehouse=$LAKEHOUSE_NS grup agaci=$LDAP_GROUPS_DN"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 lakehouse=lakehouse grup agaci=OU=Groups,DC=example,DC=com
 ```
 
-**Ters giderse:** ikinci alan boşsa `install/lakehouse.env` doldurulmamıştır
+**Ters giderse:** ikinci değer boşsa `install/lakehouse.env` doldurulmamıştır
 ([30-kurulum](../30-kurulum.md) §1).
 
 ---
 
 ## 2. Tek kimlik kaynağı: Active Directory
 
-Kullanıcı hesabı ve grup üyeliği **yalnız AD'de** tutulur. Ürün kendi kullanıcı listesini
-taşımaz; her bileşen grubu farklı bir yoldan öğrenir ama **grup adı hepsinde aynıdır**:
+Kullanıcı hesapları ve grup üyelikleri **yalnız AD'de** tutulur. Lakehouse'un kendi
+kullanıcı listesi yoktur. Her bileşen grubu farklı bir yoldan öğrenir ama grup adı
+hepsinde aynıdır.
 
-- AD grubu → Keycloak grubu → Trino grubu, üçü de aynı adla.
 - Üç grup vardır ve adları değişmez: `lakehouse-admins`, `lakehouse-analysts`,
   `lakehouse-users` ([20-on-kosullar](../20-on-kosullar.md) madde 6).
+- Aynı ad AD'de, Keycloak'ta ve Trino'da kullanılır.
 
-| Bileşen | Kimlik nereden | Grup bilgisi nereden gelir |
+| Bileşen | Kullanıcı nereden giriş yapar | Grubunu nereden öğrenir |
 |---|---|---|
-| Trino | Keycloak (tarayıcı/jeton) ya da servis hesabı (kullanıcı adı + parola) | **Grup sağlayıcısı**: üretimde doğrudan AD/LDAP (`platform/values/site/trino.yaml` → `group-provider.properties`), geliştirme kümesinde dosya (`platform/values/trino-dev.yaml`). Trino grubu jetondan **okuyamaz**, bu yüzden ayrı bir sağlayıcı gerekir |
-| Superset | Keycloak | Keycloak'ın kullanıcı bilgisi yanıtındaki `groups` talebi → rol eşlemesi |
-| JupyterHub | Keycloak | Aynı `groups` talebi → izinli gruplar ve yönetici grupları |
-| Zeppelin | **Doğrudan AD (LDAPS)** — Keycloak kullanmaz | AD grup üyeliği → Zeppelin rolü (`examples/zeppelin/shiro-ad.ini`) |
+| Trino | Keycloak (tarayıcı) ya da servis hesabı (kullanıcı adı + parola) | doğrudan AD'den (LDAP grup sorgusu) |
+| Superset | Keycloak | Keycloak'ın gönderdiği grup listesi |
+| JupyterHub | Keycloak | Keycloak'ın gönderdiği grup listesi |
+| Zeppelin | doğrudan AD (LDAPS) | AD grup üyeliği |
 
-**Zeppelin'in ayrı olması bilinçlidir:** kullanılan Zeppelin sürümünde OIDC desteği yoktur;
-giriş doğrudan AD'ye LDAPS ile yapılır. Sonuç aynıdır (aynı üç grup), yol farklıdır.
+Zeppelin'in Keycloak kullanmaması bilinçlidir: kullanılan Zeppelin sürümü Keycloak'la
+(OIDC) girişi desteklemez. Sonuç aynıdır; aynı üç grup aynı rolleri verir.
+
+Trino, AD'ye bağlanırken AD'nin sertifikasını Java'nın güvendiği sertifikalar listesiyle
+doğrular. AD sertifikası kurumun kendi CA'sından geliyorsa bu CA kurulumda listeye
+eklenir ([30-kurulum](../30-kurulum.md) §5.13).
 
 ---
 
-## 3. Grup ↔ rol tablosu
+## 3. Grup ve rol tablosu
 
 | | `lakehouse-admins` | `lakehouse-analysts` | `lakehouse-users` |
 |---|---|---|---|
-| **Trino — katalog** | tam erişim (`lakehouse`, `system`) | tam erişim | yalnız okuma |
-| **Trino — şema sahipliği** | her şemada sahip (tablo yaratma/silme) | yalnız `sandbox` şemasında sahip | sahiplik yok |
-| **Trino — tablo** | `SELECT`, `INSERT`, `DELETE`, `UPDATE`, sahiplik | `sandbox`'ta tam; diğer şemalarda `SELECT` | yalnız `SELECT` + satır filtresi ve kolon maskesi |
+| **Trino — katalog** | tam erişim | tam erişim | yalnız okuma |
+| **Trino — şema** | her şemada tablo yaratabilir ve silebilir | yalnız `sandbox` şemasında tablo yaratabilir ve silebilir | tablo yaratamaz |
+| **Trino — tablo** | okuma, yazma, silme | `sandbox`'ta her şey; diğer şemalarda okuma | yalnız okuma; tanımlıysa satır filtresi ve kolon maskesiyle |
 | **Superset** | `Admin` | `Alpha` (kendi grafik ve panolarını yaratır) | `Gamma` (yalnız kendisine açılanı görür) |
-| **JupyterHub** | giriş + hub yöneticisi | giriş | giriş |
+| **JupyterHub** | giriş ve hub yöneticiliği | giriş | giriş |
 | **Zeppelin** | `admin` rolü | `analyst` rolü | `user` rolü |
 
-Eşlemelerin tanımlı olduğu yerler: Superset `glue/values.yaml` → `superset.roleMapping`;
-JupyterHub `platform/values/jupyterhub.yaml` (izinli gruplar üçü de, yönetici grubu yalnız
-`lakehouse-admins`); Zeppelin `examples/zeppelin/shiro-ad.ini`; Trino ise §5'teki erişim
-kurallarıdır. Bu dört yer **ürün varsayılanıdır**; grup adları değişmediği sürece dokunulmaz.
+Bu eşlemeler ürünün varsayılanıdır. Grup adları değişmedikçe dokunmanız gerekmez.
 
-**Rolsüz kullanıcı ne görür?** Zeppelin'de hiçbir şey: son kural üç rolden birini zorunlu
-tutar, rolü olmayan kullanıcı giriş yapsa bile not defteri listesini alamaz (401). Trino'da
-hiçbir katalog görünmez. Superset'te ise kullanıcı **hesap açabilir** ama `Public` rolünde
-kalır: veri kaynağı, SQL Lab, pano ve grafik izinlerinin hiçbiri yoktur, boş bir arayüz
-görür. Bu bilinçli bir ayardır — Superset'in kullandığı çerçevede ilk girişte kullanıcı
-kaydı yaratılmazsa `lakehouse-admins` üyesi bile giremez. Grubu olmayanı Superset'e hiç
-sokmamak isteniyorsa doğru yer **Keycloak**'tır (`superset` istemcisine grup zorunluluğu
-eklenir); Superset tarafında kaydı kapatmak girişi **herkes için** kırar.
+**Hiçbir gruptan olmayan biri ne görür?**
+
+- **Zeppelin:** hiçbir şey. Giriş yapsa bile not defteri listesini alamaz.
+- **Trino:** hiçbir katalog görünmez.
+- **Superset:** hesap açılır ama hiçbir yetkisi olmayan boş bir arayüz görür. Bu
+  bilinçlidir: Superset'te ilk girişte hesap açılması kapatılırsa yöneticiler de
+  giremez. Grubu olmayan birinin Superset'e hiç girmemesi isteniyorsa bu, Keycloak'ta
+  `superset` istemcisine grup zorunluluğu eklenerek yapılır.
 
 ---
 
 ## 4. Kullanıcı ekleme ve çıkarma
 
-**Kullanıcı eklemek = AD grubuna üye eklemek.** Üründe yapılacak hiçbir şey yoktur:
-kullanıcı yaratılmaz, parola verilmez, izin satırı yazılmaz.
+**Kullanıcı eklemek, AD'deki gruba üye eklemektir.** Lakehouse'ta yapılacak bir şey
+yoktur: kullanıcı yaratılmaz, parola verilmez, kural yazılmaz.
 
-1. Kimlik ekibi kullanıcıyı ilgili gruba ekler (`lakehouse-admins`, `lakehouse-analysts`
-   ya da `lakehouse-users`).
-2. Kullanıcı arayüzlerden birine girer; hesabı ilk girişte kendiliğinden oluşur.
-3. Rol her girişte grup üyeliğinden **yeniden hesaplanır** — gruptan çıkarılan kullanıcı bir
-   sonraki girişinde yetkisini kaybeder.
+1. Kimlik ekibi kullanıcıyı gruplardan birine ekler: `lakehouse-admins`,
+   `lakehouse-analysts` ya da `lakehouse-users`.
+2. Kullanıcı arayüzlerden birine girer; hesabı ilk girişte kendiliğinden açılır.
+3. Rol her girişte grup üyeliğine göre yeniden belirlenir. Gruptan çıkarılan kullanıcı
+   bir sonraki girişinde yetkisini kaybeder.
 
-Üyeliğin AD'de göründüğünü doğrulamak için:
+Üyeliği AD'de görmek için (komut bağlanma hesabının parolasını sorar):
 
 `[bastion]`
 
@@ -106,69 +116,59 @@ ldapsearch -LLL -H "$LDAP_URL" -D "$LDAP_BIND_DN" -W \
   -b "$LDAP_GROUPS_DN" "(cn=lakehouse-analysts)" member
 ```
 
-**Beklenen çıktı** (örnek — AD'ye özgü, **OpenShift'te doğrulanır**): grubun `member`
-satırlarında kullanıcının tam adı (DN) görünür.
-
-**Ters giderse:** `ldapsearch` bağlanamıyorsa bağlanma hesabı ya da LDAPS sertifikası
-sorunludur ([20-on-kosullar](../20-on-kosullar.md) madde 6).
-
-### 4.1 Değişiklik ne zaman etkili olur
-
-| Bileşen | Etkili olma anı |
-|---|---|
-| Superset, JupyterHub, Zeppelin | Kullanıcının **bir sonraki girişinde** |
-| Trino (üretim, AD/LDAP grup sağlayıcısı) | Kullanıcının bir sonraki oturumunda; ayrıca bir işlem gerekmez |
-| Trino (geliştirme kümesi, dosya sağlayıcısı) | **Kendiliğinden olmaz** |
-
-**Bu ayrım önemlidir.** Üretimde Trino grupları doğrudan AD'den okunur; AD'de yapılan üyelik
-değişikliği başka hiçbir adım gerektirmez. Geliştirme ve kind kurulumlarında ise gruplar bir
-**dosyadan** gelir (`platform/values/trino-dev.yaml` → `auth.groups`) ve bu dosyanın yenileme
-periyodu **yoktur**: Trino onu yalnız açılışta okur. Orada bir grup adı değiştirildiğinde
-`trino` sürümünün yeniden kurulması **ve** ardından koordinatörün yeniden başlatılması
-gerekir:
-
-`[bastion]`
-
-```bash
-oc -n "$LAKEHOUSE_NS" rollout restart deploy/trino-coordinator
-```
-
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek; adlar kurumunuzun AD'sine göre değişir):
 
 ```text
-deployment.apps/trino-coordinator restarted
+dn: CN=lakehouse-analysts,OU=Groups,DC=example,DC=com
+member: CN=Ali Analist,OU=Users,DC=example,DC=com
 ```
 
-Erişim **kuralları** (§5) bundan farklıdır: onlar bir ConfigMap'ten okunur ve 60 saniyede bir
-tazelenir, yeniden başlatma gerektirmez.
+**Ters giderse:** `ldapsearch` bağlanamıyorsa bağlanma hesabını ya da AD'nin LDAPS
+sertifikasını kontrol edin ([20-on-kosullar](../20-on-kosullar.md) madde 6).
+
+### 4.1 Değişiklik ne zaman geçerli olur
+
+| Bileşen | Geçerli olduğu an |
+|---|---|
+| Superset, JupyterHub, Zeppelin | kullanıcının bir sonraki girişinde |
+| Trino | kullanıcının bir sonraki sorgusunda; ayrıca bir işlem gerekmez |
+
+Trino grupları AD'den doğrudan okur; AD'deki üyelik değişikliği başka bir adım
+gerektirmez. Erişim **kuralları** (§5) da yeniden başlatma gerektirmez: Trino onları
+dakikada bir yeniden okur.
 
 ---
 
 ## 5. Trino erişim kuralları
 
-Yetkilendirmenin kalbi tek bir JSON belgesidir. Üründeki hâli `platform/values/trino.yaml`
-→ `accessControl.rules` altındadır; müşteriye özel hâli `platform/values/site/trino.yaml`
-dosyasına yazılır.
+Kimin hangi tabloyu nasıl görebileceği tek bir kural listesinde yazılıdır. Ürün bu
+listenin bir varsayılanıyla gelir; kurumunuza özel kurallar
+`platform/values/site/trino.yaml` dosyasına yazılır (§5.2).
 
-### 5.1 Üç bölüm ve tek kural
+### 5.1 Kural listesinin üç bölümü
 
-- **`catalogs`** — katalog görünürlüğü: `all`, `read-only` ya da `none`.
-- **`schemas`** — şema **sahipliği**: `owner: true` = o şemada tablo yaratma ve silme hakkı.
-- **`tables`** — tablo ayrıcalıkları + **satır filtresi** + **kolon maskesi**.
+- **`catalogs`** — hangi grup hangi kataloğu görür: `all` (tam), `read-only` (yalnız
+  okuma) ya da `none` (görmez).
+- **`schemas`** — hangi grup hangi şemada tablo yaratıp silebilir (`owner: true`).
+- **`tables`** — hangi grup hangi tabloda neyi yapabilir; ayrıca **satır filtresi** ve
+  **kolon maskesi**.
 
-**İLK EŞLEŞEN KURAL KAZANIR.** Bu yüzden özel kurallar (bir gruba özgü filtre ya da maske)
-genel `SELECT` kuralından **önce** yazılır. Sırayı bozmak filtreyi sessizce devre dışı
-bırakır — hata mesajı alınmaz, yalnız kural işlemez.
+**Her bölümde ilk eşleşen kural geçerlidir.** Bu yüzden belirli bir gruba ya da tabloya
+özel kurallar, genel `SELECT` kuralından **önce** yazılır. Sıra yanlışsa kural sessizce
+işlemez; hata mesajı da çıkmaz.
 
-Eşleştirme alanları düzenli ifadedir (`"group": "lakehouse-admins|lakehouse-analysts"`);
-`user` alanı servis hesapları içindir (§7).
+- `group` ve `user` alanları `|` ile birden fazla ad alabilir:
+  `"lakehouse-admins|lakehouse-analysts"`. `user` alanı servis hesapları içindir (§7).
+- **Satır filtresi:** `"filter": "status <> 'shipped'"` — kurala uyan kullanıcının o
+  tablodaki her sorgusuna bu koşul eklenir.
+- **Kolon maskesi:** `"columns": [{"name": "remote", "mask": "'x.x.x.x'"}]` — kolon
+  yerine bu ifadenin değeri döner. İfade kolonun tipine uygun olmalıdır.
 
-- **Satır filtresi:** `"filter": "status <> 'shipped'"` — kurala düşen kullanıcının o tabloya
-  her erişimine `WHERE` koşulu olarak eklenir.
-- **Kolon maskesi:** `"columns": [{"name": "remote", "mask": "'x.x.x.x'"}]` — maske bir SQL
-  ifadesidir (sabit değer, `CASE`, karma fonksiyonu…) ve kolonun tipiyle uyumlu olmalıdır.
+Ürünün varsayılan kurallarında iki örnek vardır: `lakehouse-users` grubu `shop.orders`
+tablosunda gönderilmiş siparişleri görmez (satır filtresi) ve nginx erişim günlüğünde
+ziyaretçi IP adresini (`remote`) maskeli görür. Analistler IP adresini açık görür.
 
-Kümedeki güncel hâli okumak için:
+Kümede geçerli olan kuralları görmek için:
 
 `[bastion]`
 
@@ -177,8 +177,7 @@ oc -n "$LAKEHOUSE_NS" get configmap trino-access-control-volume-coordinator \
   -o jsonpath='{.data.rules\.json}' | head -20
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — ürün varsayılanının ilk 20
-satırı):
+**Beklenen çıktı** (ürün varsayılanının ilk 20 satırı):
 
 ```text
 {
@@ -202,84 +201,115 @@ satırı):
     {"group": "lakehouse-users", "privileges": ["SELECT"]},
 ```
 
-**Ters giderse:** ConfigMap bulunamıyorsa Trino uygulaması eşitlenmemiştir
-([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) Adım 5).
+**Ters giderse:** `NotFound` görürseniz Trino uygulaması henüz kurulmamıştır
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5).
 
-### 5.2 Kural eklerken: blok **tamamen** ezilir
+### 5.2 Kural eklemek: listenin tamamı site dosyasına taşınır
 
-`platform/values/site/trino.yaml` değer listesinin **en sonundadır**; Helm çok satırlı metin
-bloklarını birleştirmez, son dosyanınki bütünüyle geçer. Bu yüzden site dosyasına bir kural
-eklemek demek, **kuralların tamamını** oraya taşımak demektir: ürünün varsayılan satırları da
-dâhil. Aynı kural site dosyasındaki diğer bloklar için de geçerlidir ve dosyanın başındaki
-yorumda yazılıdır.
+Kural listesi tek parça bir metindir. Site dosyasına yazılan liste, ürünün listesinin
+**yerine geçer**; ikisi birleştirilmez. Bu yüzden kendi kuralınızı eklemek için ürünün
+bütün kurallarını da site dosyasına taşırsınız.
 
-Yol:
-
-1. Yukarıdaki `oc get configmap …` çıktısını ya da `platform/values/trino.yaml` içindeki
-   bloğu **tam olarak** kopyalayın.
-2. `platform/values/site/trino.yaml` dosyasına `accessControl.rules` altında `rules.json`
-   anahtarıyla yapıştırın.
-3. Kendi kuralınızı **doğru sıraya** ekleyin: özel kurallar genel `SELECT` kuralından önce.
-4. Ürün satırlarının eksilmediğini denetleyip commit edin. `scripts/check-site.sh`,
-   blok verilmişse ürünün **servis hesabı** satırlarını arar
-   (`{"user": "superset|zeppelin|e2e", …}` — `catalogs` ve `tables` dizilerindeki iki
-   satır); bunlar düşerse Superset panoları ve Zeppelin not defterleri Trino'dan sessizce
-   `Access Denied` alır. `|e2e` eki isteğe bağlıdır: yalnız e2e koşusunun kullandığı
-   hesaptır, üretimde çıkarabilirsiniz.
+**İlk kez kural ekliyorsanız** (site dosyasında henüz `accessControl:` yoksa), kümede
+geçerli olan listenin tamamını doğru girintiyle site dosyasının sonuna ekleyin:
 
 `[bastion]`
 
 ```bash
-${EDITOR:-vi} platform/values/site/trino.yaml
-bash scripts/check-site.sh
-git add platform/values/site/trino.yaml
-git commit -m "site: muhasebe grubuna satir filtresi"
-git push origin main
+grep -c '^accessControl:' platform/values/site/trino.yaml
 ```
 
-**ArgoCD'siz (helm/kind) kurulumda:** bkz.
-[30-kurulum.md kind kutusu](../30-kurulum.md#kind-gun2) (`helm upgrade`) — site dosyası bu
-modda okunmaz.
+Bu komut `0` yazıyorsa şunları çalıştırın:
 
+```bash
+{
+  echo "accessControl:"
+  echo "  rules:"
+  echo "    rules.json: |-"
+  oc -n "$LAKEHOUSE_NS" get configmap trino-access-control-volume-coordinator \
+    -o jsonpath='{.data.rules\.json}' | sed 's/^/      /'
+  echo
+} >> platform/values/site/trino.yaml
+tail -5 platform/values/site/trino.yaml
+```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `UYARI` satırı depodaki örnek dosya
-içindir, kendi kurulumunuzda çıkmayabilir):
+**Beklenen çıktı** (`tail` komutu: eklenen listenin son beş satırı):
 
 ```text
-UYARI: platform/polaris/setup.yaml: endpoint 'https://s3.example.com' değil — Polaris sunucusu için ayrıca düzenlenir (docs/30-kurulum.md)
+          {"group": "lakehouse-users", "privileges": ["SELECT"]},
+          {"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]},
+          {"catalog": "system", "privileges": ["SELECT"]}
+        ]
+      }
+```
+
+`1` yazıyorsa liste daha önce eklenmiştir; doğrudan bir sonraki adıma geçin.
+
+**Kuralınızı ekleyin.** Dosyayı açın:
+
+```bash
+vi platform/values/site/trino.yaml
+```
+
+`accessControl:` altındaki listede kendi kuralınızı doğru yere ekleyin: özel kurallar
+genel `SELECT` kuralından **önce** (örnek §5.3'te). Satırların başındaki boşluk,
+listedeki diğer satırlarla aynı olmalıdır. Kaydedin ve denetleyin:
+
+```bash
+bash scripts/check-site.sh
+```
+
+**Beklenen çıktı:**
+
+```text
 check-site: OK
 ```
 
-**Ters giderse:** `check-site.sh` `HATA` satırı basarsa değişiklik itilmez; satır hangi ürün
-satırının eksildiğini söyler — örneğin
-`HATA: site/trino.yaml: ürün satırı eksik -> {"user": "superset|zeppelin|e2e", "privileges":
-["SELECT"]} (accessControl.rules."rules.json" içinde bulunmalı)`. Eksik satırı
-`platform/values/trino.yaml` içindeki bloktan kopyalayıp doğru diziye geri koyun.
+Betik, ürünün servis hesabı kurallarının listede kalıp kalmadığına bakar
+(`{"user": "superset|zeppelin|e2e", …}` ile başlayan iki satır). Bu satırlar silinirse
+Superset panoları ve Zeppelin not defterleri Trino'dan sessizce `Access Denied` alır.
+
+**Gönderin:**
+
+```bash
+git diff
+git add platform/values/site/trino.yaml
+git commit -m "site: erp.invoices için bölge filtresi"
+git push origin main
+```
+
+**Ters giderse:** `check-site.sh` `HATA` yazarsa göndermeyin. Satır hangi ürün kuralının
+eksik olduğunu söyler, örneğin:
+
+```text
+HATA: site/trino.yaml: ürün satırı eksik -> {"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]} (accessControl.rules."rules.json" içinde bulunmalı)
+```
+
+Eksik satırı §5.1'deki komutun çıktısından kopyalayıp listede doğru bölüme geri koyun.
 
 ### 5.3 Örnek: bir gruba satır filtresi ve kolon maskesi
 
-`lakehouse-users` üyeleri `erp.invoices` tablosunda yalnız kendi bölgelerinin kayıtlarını
-görecek ve `vergi_no` kolonu maskelenecek olsun. `tables` dizisinde genel
-`{"group": "lakehouse-users", "privileges": ["SELECT"]}` satırının **üstüne** şu satır
-eklenir:
+`lakehouse-users` üyeleri `erp.invoices` tablosunda yalnız kendi bölgelerinin
+kayıtlarını görsün ve `vergi_no` kolonu maskeli dönsün. `tables` bölümünde,
+`{"group": "lakehouse-users", "privileges": ["SELECT"]},` satırının **hemen üstüne**
+şu kural eklenir:
 
 ```json
 {"group": "lakehouse-users", "schema": "erp", "table": "invoices",
  "privileges": ["SELECT"], "filter": "bolge = 'IC ANADOLU'",
- "columns": [{"name": "vergi_no", "mask": "'***'"}]}
+ "columns": [{"name": "vergi_no", "mask": "'***'"}]},
 ```
 
-Kuralın yayılması: eşitleme bittikten sonra ConfigMap pod'a yansır (~1 dakika) ve Trino
-dosyayı 60 saniyede bir yeniden okur → **toplam 2 dakikadan az**. Koordinatörü yeniden
-başlatmak gerekmez.
+Gönderdikten sonra kural 2 dakikadan kısa sürede geçerli olur: ArgoCD değişikliği
+uygular, Trino listeyi dakikada bir yeniden okur. Trino'yu yeniden başlatmanız gerekmez.
 
 ### 5.4 Doğrulama
 
-Kuralın gerçekten uygulandığını, o gruptaki bir kullanıcının **kendi kimliğiyle** yaptığı
-sorguyla doğrulayın. En hızlı yol Trino'nun web arayüzüdür (`/ui`); not defterinden de
-yapılabilir ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.4).
+Kuralı, o gruptaki bir kullanıcının **kendi kimliğiyle** yaptığı sorgularla doğrulayın.
+En kolay yol Trino'nun web arayüzüdür (Trino adresinin sonuna `/ui` eklenir); not
+defterinden de yapılabilir ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.4).
 
-`[pod]` — Trino web arayüzünde ya da OIDC destekli bir istemcide:
+`[pod]`
 
 ```sql
 SHOW SCHEMAS FROM lakehouse;
@@ -287,64 +317,69 @@ SELECT count(*) FROM lakehouse.erp.invoices;
 SELECT vergi_no FROM lakehouse.erp.invoices LIMIT 1;
 ```
 
-**Beklenen sonuç:** şema listesi kullanıcının görebildikleriyle sınırlıdır; satır sayısı
-filtrenin bıraktığı kadardır; maskeli kolon `***` döner.
+**Beklenen sonuç:**
 
-**Ters giderse:** kural işlemiyorsa iki şeye bakın — (1) kullanıcının grubu Trino'ya ulaşıyor
-mu (§4.1), (2) sizin kuralınızdan **önce** eşleşen daha genel bir kural var mı (§5.1). Sorgu
-`Access Denied` ile düşüyorsa kullanıcının o katalogda hiç görünürlüğü yoktur.
+- şema listesinde yalnız kullanıcının görebildiği şemalar vardır;
+- satır sayısı yalnız filtreye uyan kayıtlardır;
+- `vergi_no` kolonu `***` olarak döner.
 
----
+**Ters giderse:**
 
-## 6. Yazma alanı: `sandbox`
-
-Analistlerin kendi tablolarını yaratabileceği tek şema `sandbox`'tır. Yazma **iki katmandan**
-birden geçer:
-
-1. **Polaris (katalog).** `platform/polaris/setup.yaml` içindeki katalog rolü yalnız
-   `sandbox` ad alanında tablo yaratma/silme/okuma/yazma verir ve bunu `trino` ile
-   `notebooks` kimliklerine bağlar. Yani **motor** ancak oraya yazabilir.
-2. **Trino erişim kuralları.** `schemas` bölümünde `lakehouse-analysts` için `sandbox`
-   sahipliği, `tables` bölümünde aynı grup için `sandbox` şemasında tam ayrıcalık.
-   `lakehouse-users` bu kurallara düşmez → yazma reddedilir.
-
-Analist ile kullanıcı ayrımı Trino'da, **motor sınırı** Polaris'tedir. Bronze ve Silver ad
-alanlarına Trino üzerinden **hiç kimse** yazamaz; oraya yalnız veri akışının kendi kimlikleri
-yazar. Yeni bir şemayı yazılabilir yapmak isterseniz **iki yeri birden** değiştirmeniz
-gerekir; yalnız Trino kuralını değiştirmek katalogdan yetki almadığı için işe yaramaz.
-
-**Veriyle birlikte silme.** `DROP TABLE` sırasında dosyaların da silinmesi katalog düzeyinde
-açılır ve yalnız `lakehouse` kataloğunu kapsar. Var olan bir kurulumda ayar sonradan
-eklenecekse katalog özelliği güncellenir ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md)
-§2.4). Kapsam ve riskler: [kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 6 ve 7.
+- Kural işlemiyorsa sizin kuralınızdan **önce** eşleşen daha genel bir kural olup
+  olmadığına bakın (§5.1).
+- Kullanıcının AD grubunu §4'teki komutla doğrulayın.
+- Sorgu `Access Denied` ile düşüyorsa kullanıcının o kataloğu görme yetkisi yoktur.
 
 ---
 
-## 7. Servis hesapları — ve kimliğin taşınmadığı yer
+## 6. Yazılabilir alan: `sandbox`
 
-Superset ve Zeppelin, Trino'ya **paylaşımlı servis hesabıyla** bağlanır. Hesaplar
-`trino-service-accounts` Secret'ındadır
+Analistlerin kendi tablolarını yaratabildiği tek şema `sandbox`'tır. Yazma iki ayrı
+kapıdan geçer:
+
+1. **Katalog (Polaris):** Trino ve not defterleri yalnız `sandbox` ad alanına
+   yazabilir. Bu, `platform/polaris/setup.yaml` dosyasındaki `lakehouse_sandbox`
+   rolüyle belirlenir.
+2. **Trino kuralları:** `sandbox` şemasında tablo yaratma ve yazma yalnız
+   `lakehouse-analysts` grubuna (ve yöneticilere) verilmiştir. `lakehouse-users` grubu
+   yazamaz.
+
+Bronze ve Silver tablolarına Trino üzerinden **hiç kimse** yazamaz; onlara yalnız veri
+akışının kendi bileşenleri yazar. Başka bir şemayı yazılabilir yapmak istiyorsanız
+**iki yeri birden** değiştirmeniz gerekir: Polaris rolünü ve Trino kuralını. Yalnız
+Trino kuralını değiştirmek yetmez; katalog yazmayı yine reddeder.
+
+**Tablo silindiğinde dosyalar da silinir.** `sandbox`'ta `DROP TABLE`, tablonun
+S3'teki dosyalarını da kaldırır. Ayrıntılar:
+[kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 6 ve 7.
+
+---
+
+## 7. Servis hesapları ve kimliğin taşınmadığı yer
+
+Superset ve Zeppelin, Trino'ya **paylaşımlı bir servis hesabıyla** bağlanır. Hesapların
+parolaları `trino-service-accounts` Secret'ındadır
 ([90-referans/secret-listesi.md](../90-referans/secret-listesi.md)).
 
 | Hesap | Kullanan | Yetki |
 |---|---|---|
-| `superset` | Superset'in Trino bağlantısı | yalnız `SELECT`; `sandbox`'a yazamaz |
-| `zeppelin` | Zeppelin'in JDBC yorumlayıcısı | aynı |
-| `e2e` | yalnız geliştirme ve kabul koşusu (üretimde yaratılmaz) | aynı |
+| `superset` | Superset'in Trino bağlantısı | yalnız okuma; `sandbox`'a yazamaz |
+| `zeppelin` | Zeppelin'in Trino bağlantısı | yalnız okuma |
+| `e2e` | kabul testi | yalnız okuma |
 
-**Doğrudan sonucu:** Superset ve Zeppelin son kullanıcının kimliğini Trino'ya **taşımaz** →
-o araçlarda **satır filtresi ve kolon maskesi uygulanmaz**; servis hesabı maskesiz veriyi
-görür. Satır ve kolon yetkilendirmesi isteniyorsa kullanıcı Trino'ya **kendi kimliğiyle**
-bağlanmalıdır: Trino web arayüzü, OIDC destekli bir JDBC/CLI istemcisi ya da not defterinden
-OIDC ile bağlanma ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.6, birinci madde).
+**Bunun sonucu:** Superset ve Zeppelin, ekrandaki kullanıcının kimliğini Trino'ya
+taşımaz. Bu yüzden bu iki araçta **satır filtresi ve kolon maskesi uygulanmaz**; servis
+hesabı veriyi maskesiz görür. Satır ve kolon kuralları isteniyorsa kullanıcı Trino'ya
+**kendi kimliğiyle** bağlanır: Trino web arayüzü, Keycloak destekli bir SQL istemcisi ya
+da not defteri ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.6).
 
-Bu nedenle Superset ve Zeppelin'de kullanıcılara açılan veri **araç düzeyinde**
-sınırlandırılır: Superset'te `Gamma` rolü + veri kaynağı/şema izinleri, Zeppelin'de not
-defteri paylaşım izinleri.
+Superset ve Zeppelin'de kullanıcının ne göreceği bu yüzden **araç içinde** sınırlanır:
+Superset'te `Gamma` rolü ve veri seti izinleriyle, Zeppelin'de not defteri paylaşım
+izinleriyle.
 
-**Parola değiştirme.** Servis hesabı parolaları değiştirilirse Secret yeniden yaratılır;
-Trino parola dosyasını kendiliğinden yeniden okur, ama Superset parolayı ortam değişkeninden
-aldığı için yeniden başlatılmalıdır:
+**Servis hesabı parolasını değiştirmek.** Secret yeni parolayla yeniden yaratılır
+([30-kurulum](../30-kurulum.md) §5.7). Trino yeni parolayı kendiliğinden okur. Superset
+parolayı açılışta okuduğu için yeniden başlatılır:
 
 `[bastion]`
 
@@ -352,14 +387,15 @@ aldığı için yeniden başlatılmalıdır:
 oc -n "$LAKEHOUSE_NS" rollout restart deploy/superset-web-server
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı:**
 
 ```text
 deployment.apps/superset-web-server restarted
 ```
 
-**Ters giderse:** Zeppelin'de parola değişmiyorsa yorumlayıcı ayarı diskten geliyordur;
-Secret yalnız bir tohumdur ([sorun-giderme.md](sorun-giderme.md) §7).
+**Ters giderse:** Zeppelin yeni parolayı kullanmıyorsa yorumlayıcı ayarı Zeppelin'in
+kendi diskinden okunuyordur; Secret yalnız ilk kurulumda kullanılır
+([sorun-giderme.md](sorun-giderme.md) §7).
 
 ---
 
@@ -367,36 +403,33 @@ Secret yalnız bir tohumdur ([sorun-giderme.md](sorun-giderme.md) §7).
 
 Üç grubun dışında bir grup gerekiyorsa (ör. `lakehouse-muhasebe`) sıra şudur:
 
-1. **AD'de** grubu açın ve üyeleri ekleyin. Grup adının **CN** değeri neyse Trino'nun
-   göreceği ad odur; adı baştan doğru seçin.
-2. **Keycloak'ta** ayrıca bir şey yapmayın: AD federasyonu grubu kendiliğinden getirir.
-   (Realm dosyasına elle grup eklemek gerekiyorsa
-   [30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek" bölümündeki yordam
-   uygulanır — içe aktarma var olan realm'i **güncellemez**.)
-3. **Trino** kurallarını §5.2'deki yolla güncelleyin (tam blok).
-4. Grup adı **üç yerde daha** geçer; gerekiyorsa onları da güncelleyin: Superset rol
-   eşlemesi, JupyterHub izinli gruplar listesi, Zeppelin rol eşlemesi (§3).
-5. Commit + push → eşitleme → §5.4 ile doğrulayın.
+1. **AD'de** grubu açın ve üyeleri ekleyin. Grubun **CN** değeri, Trino'nun göreceği
+   addır; adı baştan doğru seçin.
+2. **Keycloak'ta** bir şey yapmayın: AD bağlantısı grubu kendiliğinden getirir.
+3. **Trino** kurallarına grubu §5.2'deki yolla ekleyin.
+4. Grubun Superset, JupyterHub ya da Zeppelin'de de bir rolü olacaksa bu eşlemeler de
+   güncellenir (§3). Bu eşlemeler ürün varsayılanıdır; değiştirmeden önce ürün ekibine
+   danışın.
+5. Gönderin, ArgoCD'nin uygulamasını bekleyin ve §5.4 ile doğrulayın.
 
-**Ters giderse:** kullanıcı yeni gruba eklendiği hâlde Trino'da görünmüyorsa AD grubunun CN
-değeri ile kuraldaki ad birebir aynı değildir.
+**Ters giderse:** kullanıcı yeni gruba eklendiği hâlde Trino'da kural işlemiyorsa AD
+grubunun CN değeri ile kuraldaki ad birebir aynı değildir (büyük-küçük harf dâhil).
 
 ---
 
-## 9. Realm ve jeton bakımı
+## 9. Keycloak ve JupyterHub bakımı
 
-- **Realm içeriği değişecekse** (yeni istemci, eşleyici, hedef kitle ayarı):
-  [30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek". İçe aktarma var olan
-  realm'i **güncellemez**; yordam realm'i silip yeniden kurar ve **kullanıcıların Keycloak
-  arayüzünde elle yaptığı her şey gider**. AD federasyonu varsa kullanıcılar yeniden akar.
+- **Keycloak yapılandırması değişecekse** (yeni istemci, eşleyici, hedef kitle ayarı):
+  [30-kurulum](../30-kurulum.md) §8. O yordam Keycloak'taki lakehouse yapılandırmasını
+  silip yeniden kurar; **kullanıcıların Keycloak arayüzünde elle yaptığı her şey gider**.
+  Kullanıcılar ve gruplar AD'den yeniden gelir.
 
-- **JupyterHub oturum anahtarları.** `jupyterhub-secrets` Secret'ı değiştirilirse hub yeniden
-  başlar ve **açık bütün not defteri oturumları düşer**; kullanıcılar yeniden giriş yapar,
-  veri kaybı olmaz.
+- **JupyterHub oturum anahtarları.** `jupyterhub-secrets` Secret'ı değiştirilirse hub
+  yeniden başlar ve **açık bütün not defteri oturumları kapanır**. Kullanıcılar yeniden
+  giriş yapar; veri kaybolmaz.
 
-- **JupyterHub ara sunucu jetonunu yenileme — tuzak.** Hub'ın ürettiği `hub` Secret'ı silinip
-  yeniden yaratılacaksa **yalnız eşitleme yetmez**; uygulamanın depoyu baştan okuması gerekir.
-  Doğru sıra:
+- **JupyterHub'ın iç jetonunu yenilemek.** Hub'ın kendi ürettiği `hub` Secret'ı silinip
+  yeniden üretilecekse ArgoCD'nin depoyu baştan okuması gerekir. Sıra:
 
   `[bastion]`
 
@@ -409,31 +442,30 @@ değeri ile kuraldaki ad birebir aynı değildir.
   **Beklenen çıktı** (örnek):
 
   ```text
-  secret "hub" deleted
+  secret "hub" deleted from lakehouse namespace
   application.argoproj.io/jupyterhub annotated
   application.argoproj.io/jupyterhub patched
   ```
 
-  **Ters giderse:** sert yenileme açıklaması yazılmadan yalnız eşitleme yapılırsa Secret
-  yeniden üretilmez ve hub ara sunucuya bağlanamaz.
+  **Ters giderse:** `refresh=hard` yazılmadan yalnız eşitleme yapılırsa Secret yeniden
+  üretilmez ve hub açılamaz. Üç komutu sırayla tekrar çalıştırın.
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Kullanıcı ekleme ve çıkarma işi **AD'de** yapıldı; üründe kullanıcı yaratılmadı.
-- [ ] Grup adları üç yerde de (AD, Keycloak, Trino) birebir aynı.
-- [ ] Yeni kural, genel `SELECT` kuralından **önce** yazıldı.
-- [ ] `platform/values/site/trino.yaml` içindeki blok ürün satırlarını da taşıyor;
-      `scripts/check-site.sh` `OK` bastı.
+- [ ] Kullanıcı ekleme ve çıkarma AD'de yapıldı; lakehouse'ta kullanıcı yaratılmadı.
+- [ ] Grup adları AD'de, Keycloak'ta ve Trino kurallarında birebir aynı.
+- [ ] Yeni kural, genel `SELECT` kuralından önce yazıldı.
+- [ ] Site dosyasındaki kural listesi ürünün kurallarını da taşıyor;
+      `scripts/check-site.sh` `check-site: OK` yazdı.
 - [ ] Kural, ilgili gruptaki bir kullanıcının kendi kimliğiyle doğrulandı.
-- [ ] Superset ve Zeppelin'de satır/kolon kısıtının **uygulanmadığı** ekipçe biliniyor; o
-      araçlarda sınırlama araç düzeyinde yapıldı.
-- [ ] Yazma yalnız `sandbox` şemasında; başka bir şema açıldıysa Polaris tarafı da
-      güncellendi.
+- [ ] Ekip, Superset ve Zeppelin'de satır/kolon kurallarının uygulanmadığını ve
+      sınırlamanın araç içinde yapıldığını biliyor.
+- [ ] Yazma yalnız `sandbox`'ta; başka bir şema açıldıysa Polaris rolü de güncellendi.
 
 ## Sonraki bölüm
 
-Yetki hatalarının belirti tablosu: [sorun-giderme.md](sorun-giderme.md) §7. Yedek ve geri
-dönüş: [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md). Ortak GitOps döngüsü her zaman
-aynıdır: [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).
+Yetki hatalarının belirtileri ve çözümleri: [sorun-giderme.md](sorun-giderme.md) §7.
+Yedek ve geri dönüş: [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md). Her ayar
+değişikliği aynı yoldan geçer: [değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md).

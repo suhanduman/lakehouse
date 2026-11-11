@@ -1,46 +1,48 @@
 # 30 — Kurulum
 
-**Bu bölümde:** ürünün sıfırdan kurulması — depoyu kurumun kendi Git sunucusuna alma,
-ArgoCD'ye depo kimliği verme, site değerlerini doldurma, Secret'ları yaratma,
-`bootstrap/bootstrap.sh` ile başlatma ve kurulumun doğrulanması. Bölüm sonunda bütün
-bileşenler ayakta olur; Polaris kataloğu, ilk giriş ve kabul testi bir sonraki bölümdedir.
-**Süre:** komut çalıştırma 1–1,5 saat; ardından bileşenlerin ayağa kalkması **40–60
-dakika** (ağın hızına bağlı; Kafka Connect imajı kümede üretilir, tek başına ~10 dakika).
-**Gereken yetki:** kümede **cluster-admin**, `$ARGOCD_NS` ve `$LAKEHOUSE_NS` ad
-alanlarında yazma, kurumun Git sunucusunda depo açma/itme yetkisi.
-**Nerede çalıştırılır:** `[bastion]` — `oc`, `git`, `openssl`, `htpasswd`, `python3` kurulu
-ve kümeye `oc login` ile girilmiş yönetim makinesi.
+Bu bölüm ürünü sıfırdan kurar: depo kurumun Git sunucusuna alınır, ArgoCD'ye depoyu
+okuma izni verilir, kuruma özel ayarlar doldurulur, parolalar kümeye Secret olarak
+yazılır, kurulum başlatılır ve bileşenlerin ayağa kalktığı doğrulanır. Polaris kataloğu,
+ilk giriş ve kabul testi bir sonraki bölümdedir.
 
-> **Başlamadan önce [20-on-kosullar](20-on-kosullar.md) kontrol listesinin on maddesi de
-> işaretli olmalıdır.** Özellikle madde 2 (GitOps operatörü), madde 5 (`connect-push`
-> Secret'ı ve `$LAKEHOUSE_NS` ad alanı) ve madde 6 (AD grupları) bu bölümün girdisidir.
-> Eksik bir ön koşulla başlanan kurulum yarıda kalır; geri almak yeniden kurmaktan
-> pahalıdır.
+**Ne kadar sürer:** komutları çalıştırmak 1–1,5 saat. Ardından bileşenlerin ayağa
+kalkması 40–60 dakika (ağın hızına bağlıdır; Kafka Connect imajı kümede üretilir ve tek
+başına 10 dakika kadar sürer).
 
-`htpasswd` komutu RHEL/Fedora'da `httpd-tools` paketiyle gelir
-(`sudo dnf install -y httpd-tools`), Debian/Ubuntu'da `apache2-utils` ile.
+**Hangi yetkiler gerekir:** kümede **cluster-admin**; `$ARGOCD_NS` ve `$LAKEHOUSE_NS` ad
+alanlarında yazma; kurumun Git sunucusunda depo açma ve gönderme.
 
-**Kurulumun sırası neden önemli:** ArgoCD Git'teki hâli kümeye uygular. Secret'lar Git'e
-girmediği için **kümede önceden** bulunmalıdır; eksik Secret'la başlatılan sync, pod'ları
-`CreateContainerConfigError` durumunda bekletir. Bu yüzden akış şudur:
+**Komutlar nerede çalışır:** `[bastion]` — `oc`, `git`, `openssl`, `htpasswd` ve
+`python3` araçlarının kurulu olduğu, `oc login` ile kümeye bağlı yönetim makinesi.
+`htpasswd` RHEL/Fedora'da `httpd-tools` paketiyle (`sudo dnf install -y httpd-tools`),
+Debian/Ubuntu'da `apache2-utils` paketiyle gelir.
+
+> **Başlamadan önce [20-on-kosullar](20-on-kosullar.md) kontrol listesinin bütün
+> maddeleri işaretli olmalıdır.** Özellikle madde 2 (GitOps operatörü), madde 5
+> (`connect-push` Secret'ı ve `$LAKEHOUSE_NS` ad alanı) ve madde 6 (AD grupları) bu
+> bölümde kullanılır. Eksik bir ön koşulla başlanan kurulum yarıda kalır.
+
+**Adımların sırası önemlidir.** ArgoCD Git'teki hâli kümeye uygular. Parolalar Git'e
+girmez, bu yüzden kurulum başlamadan önce kümede bulunmaları gerekir; eksik bir Secret
+varsa ilgili pod `CreateContainerConfigError` durumunda bekler. Sıra şudur:
 
 ```text
-Git kopyası -> ArgoCD depo kimliği -> site değerleri (Git'e it) -> Secret'lar (kümeye)
-            -> bootstrap -> doğrulama
+Git kopyası -> ArgoCD'ye depo izni -> kuruma özel ayarlar (Git'e) -> Secret'lar (kümeye)
+            -> kurulumu başlat -> doğrula
 ```
 
 ---
 
 ## 1. Değişkenleri yükleyin
 
-[10-planlama](10-planlama.md) §5'te kopyalayıp doldurduğunuz dosyayı her yeni terminal
-oturumunda yüklemeniz gerekir. **Bu bölümdeki bütün komutlar aynı terminal oturumunda
-çalıştırılmalıdır:** Adım 5.7'de üretilen parola Adım 5.10'da yeniden kullanılır.
+[10-planlama](10-planlama.md) §5'te doldurduğunuz `install/lakehouse.env` dosyasını
+yükleyin. **Bu bölümdeki bütün komutları aynı terminalde çalıştırın:** Adım 5.7'de
+üretilen bir parola Adım 5.10'da yeniden kullanılır.
 
 `[bastion]`
 
 ```bash
-cd ~/lakehouse                      # depoyu `git clone` ile nereye indirdiyseniz orası
+cd ~/lakehouse
 set -a; . install/lakehouse.env; set +a
 for v in GIT_REPO_URL ARGOCD_NS LAKEHOUSE_NS APPS_DOMAIN INTERNAL_REGISTRY \
          S3_ENDPOINT S3_BUCKET_DATA S3_BUCKET_BACKUP S3_REGION \
@@ -53,31 +55,34 @@ done
 echo "degisken denetimi bitti"
 ```
 
-**Beklenen çıktı** (tek satır; `EKSIK:` ile başlayan hiçbir satır olmamalıdır):
+**Beklenen çıktı** (tek satır; `EKSIK:` ile başlayan satır olmamalıdır):
 
 ```text
 degisken denetimi bitti
 ```
 
-`STORAGE_CLASS`, `KEYCLOAK_ADMIN_PASSWORD`, `S3_CA_FILE` ve `S3_EGRESS_CIDRS` bilerek listede
-değildir: dördü de duruma göre boş kalabilir (kümenin varsayılan StorageClass'ı kullanılır,
-Keycloak parolası üretilir, S3 sertifikası herkesçe bilinen bir CA'dandır, S3 iç ağda değildir).
+`STORAGE_CLASS`, `KEYCLOAK_ADMIN_PASSWORD`, `S3_CA_FILE` ve `S3_EGRESS_CIDRS` bu listede
+yoktur, çünkü boş kalabilirler: boşsa kümenin varsayılan StorageClass'ı kullanılır,
+Keycloak parolası üretilir, S3 sertifikasının herkesçe bilinen bir CA'dan geldiği ve
+S3'ün iç ağda olmadığı kabul edilir.
 
-**Ters giderse:** `EKSIK:` satırı gördüğünüz her değişken için
-[10-planlama](10-planlama.md) §5'teki çalışma sayfasına dönün ve değeri ilgili ekipten
-alın. `No such file or directory` → dosya kopyalanmamıştır
-(`cp install/lakehouse.env.example install/lakehouse.env`). Dosya yüklenirken
-`command not found` gibi bir satır görürseniz bir değerde **boşluk** vardır ve tırnaksız
-yazılmıştır: o değeri çift tırnak içine alın (ör. `LDAP_BIND_DN="CN=svc lakehouse,..."`),
-dosyayı yeniden yükleyin.
+**Ters giderse:**
+
+- `EKSIK:` satırı: o değişkeni [10-planlama](10-planlama.md) §5'teki çalışma sayfasından
+  doldurun.
+- `No such file or directory`: dosya kopyalanmamıştır;
+  `cp install/lakehouse.env.example install/lakehouse.env` ile kopyalayıp doldurun.
+- Dosya yüklenirken `command not found` gibi bir satır: bir değerde boşluk vardır ve
+  tırnak içinde değildir. O değeri çift tırnağa alın (ör.
+  `LDAP_BIND_DN="CN=svc lakehouse,..."`) ve dosyayı yeniden yükleyin.
 
 ---
 
 ## 2. Depoyu kurumun Git sunucusuna kopyalayın
 
-**Neden:** ArgoCD kurulumu ve bundan sonraki **bütün** değişiklikleri Git'ten okur. Ürünün
-genel deposu değil, **sizin kopyanız** tek doğru kaynaktır: site değerlerini oraya
-yazacaksınız. Boş bir depo Git sunucunuzda önceden açılmış olmalıdır (`$GIT_REPO_URL`).
+ArgoCD kurulumu ve bundan sonraki bütün değişiklikleri Git'ten okur. Okuduğu yer
+ürünün genel deposu değil, **kurumun kendi kopyasıdır**; kuruma özel ayarlar oraya
+yazılır. Git sunucunuzda önceden boş bir depo açılmış olmalıdır (`$GIT_REPO_URL`).
 
 `[bastion]`
 
@@ -89,7 +94,7 @@ git -C ~/lakehouse fetch origin
 git -C ~/lakehouse status -sb | head -1
 ```
 
-**Beklenen çıktı** (örnek — ilk iki komut ağ hızına göre 10–60 saniye sürer):
+**Beklenen çıktı** (örnek; ilk iki komut ağ hızına göre 10–60 saniye sürer):
 
 ```text
 Cloning into bare repository '/home/kurulum/lakehouse-mirror.git'...
@@ -98,25 +103,27 @@ To ssh://git.kurum.example.net/veri/lakehouse.git
 ## main...origin/main
 ```
 
-Son satırda `ahead`/`behind` yazmamalıdır: yerel kopyanız ile kurumun deposu aynı
+Son satırda `ahead` ya da `behind` yazmamalıdır: yerel kopya ile kurumun deposu aynı
 noktadadır.
 
-**Ters giderse:** `Permission denied (publickey)` → Git sunucusunda itme yetkiniz yok ya
-da SSH anahtarınız tanımlı değil; `git ls-remote "$GIT_REPO_URL"` ile ayrı ayrı sınayın.
-`remote rejected` / `pre-receive hook declined` → hedef depo boş değil ya da korumalı
-daldır; Git yöneticisinden boş bir depo isteyin. `Repository not found` → `$GIT_REPO_URL`
-yanlış yazılmıştır. Kurum genel internete kapalıysa depoyu internete açık bir makinede
-klonlayıp `git bundle` ile taşıyın.
+**Ters giderse:**
+
+- `Permission denied (publickey)`: Git sunucusunda gönderme yetkiniz yoktur ya da SSH
+  anahtarınız tanımlı değildir. `git ls-remote "$GIT_REPO_URL"` ile ayrıca deneyin.
+- `remote rejected` ya da `pre-receive hook declined`: hedef depo boş değildir ya da dal
+  korumalıdır; Git yöneticisinden boş bir depo isteyin.
+- `Repository not found`: `$GIT_REPO_URL` yanlış yazılmıştır.
+- Kurum ağı internete kapalıysa depoyu internete açık bir makinede klonlayıp
+  `git bundle` ile taşıyın.
 
 ---
 
-## 3. ArgoCD'ye depo kimliği verin
+## 3. ArgoCD'ye depoyu okuma izni verin
 
-**Neden:** ArgoCD `$GIT_REPO_URL` adresini okuyabilmelidir. Kimlik bilgisi, `$ARGOCD_NS`
-ad alanında `argocd.argoproj.io/secret-type: repository` etiketli bir Secret ile verilir.
-Aşağıdaki komut yalnız bu kurulum için bir SSH anahtar çifti üretir; **açık anahtarı** Git
-sunucunuzda deponun dağıtım anahtarı (deploy key) listesine eklemeniz gerekir; salt okuma
-yetkisi yeter.
+ArgoCD `$GIT_REPO_URL` adresini okuyabilmelidir. İzin, `$ARGOCD_NS` ad alanında özel bir
+etiket taşıyan bir Secret ile verilir. Aşağıdaki komutlar yalnız bu kurulum için bir SSH
+anahtar çifti üretir; anahtarın **açık** kısmını Git sunucunuzda deponun dağıtım
+anahtarları (deploy key) listesine eklersiniz. Salt okuma yetkisi yeterlidir.
 
 ### 3.1 Anahtarı üretin ve açık kısmını Git sunucusuna tanıtın
 
@@ -127,7 +134,7 @@ ssh-keygen -t ed25519 -N "" -C "argocd-lakehouse" -f "$HOME/.ssh/lakehouse_deplo
 cat "$HOME/.ssh/lakehouse_deploy.pub"
 ```
 
-**Beklenen çıktı** (örnek — son satırı Git sunucusunun dağıtım anahtarı ekranına
+**Beklenen çıktı** (örnek; son satırı Git sunucusunun dağıtım anahtarı ekranına
 yapıştırın):
 
 ```text
@@ -136,9 +143,9 @@ Your identification has been saved in /home/kurulum/.ssh/lakehouse_deploy
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKk3s2vQ0m3Q6l8y9m1Yb2d4e6f8g0h2 argocd-lakehouse
 ```
 
-**Ters giderse:** dosya zaten varsa `ssh-keygen` üzerine yazmayı sorar; var olan anahtarı
-kullanacaksanız bu adımı atlayın. `$GIT_REPO_URL` HTTPS ile başlıyorsa SSH anahtarı
-gerekmez — Adım 3.2'deki HTTPS seçeneğini kullanın.
+**Ters giderse:** dosya zaten varsa `ssh-keygen` üzerine yazmayı sorar; var olan
+anahtarı kullanacaksanız bu adımı atlayın. `$GIT_REPO_URL` `https://` ile başlıyorsa SSH
+anahtarı gerekmez; Adım 3.2'deki HTTPS komutunu kullanın.
 
 ### 3.2 Secret'ı yaratın
 
@@ -149,7 +156,8 @@ oc -n "$ARGOCD_NS" create secret generic lakehouse-repo \
   --from-literal=type=git \
   --from-literal=url="$GIT_REPO_URL" \
   --from-file=sshPrivateKey="$HOME/.ssh/lakehouse_deploy"
-oc -n "$ARGOCD_NS" label secret lakehouse-repo argocd.argoproj.io/secret-type=repository
+oc -n "$ARGOCD_NS" label secret lakehouse-repo argocd.argoproj.io/secret-type=repository \
+  lakehouse.io/yonetim=manual-30-kurulum-3.2
 ```
 
 **Beklenen çıktı:**
@@ -159,8 +167,13 @@ secret/lakehouse-repo created
 secret/lakehouse-repo labeled
 ```
 
-**HTTPS kullanıyorsanız** `--from-file=sshPrivateKey=...` satırı yerine kullanıcı adı ve
-jeton verin (jeton salt okuma yetkisiyle yeter):
+İlk etiket ArgoCD'nin Secret'ı tanıması içindir. İkincisi Secret'ın bu adımda elle
+yaratıldığını kaydeder
+([değişiklik nasıl uygulanır](50-isletme/degisiklik-nasil-uygulanir.md) §7).
+
+**HTTPS kullanıyorsanız** SSH anahtarı yerine bir kullanıcı adı ve erişim jetonu verin
+(salt okuma yetkili jeton yeterlidir). `$GIT_HTTPS_TOKEN` `install/lakehouse.env`
+dosyasındadır; SSH kullananlar onu boş bırakır.
 
 `[bastion]`
 
@@ -168,44 +181,43 @@ jeton verin (jeton salt okuma yetkisiyle yeter):
 oc -n "$ARGOCD_NS" create secret generic lakehouse-repo \
   --from-literal=type=git --from-literal=url="$GIT_REPO_URL" \
   --from-literal=username=argocd --from-literal=password="$GIT_HTTPS_TOKEN"
-oc -n "$ARGOCD_NS" label secret lakehouse-repo argocd.argoproj.io/secret-type=repository
+oc -n "$ARGOCD_NS" label secret lakehouse-repo argocd.argoproj.io/secret-type=repository \
+  lakehouse.io/yonetim=manual-30-kurulum-3.2
 ```
 
-**Beklenen çıktı** (SSH varyantıyla aynı):
+**Beklenen çıktı** (SSH komutlarıyla aynı):
 
 ```text
 secret/lakehouse-repo created
 secret/lakehouse-repo labeled
 ```
 
-**Ters giderse:** `$GIT_HTTPS_TOKEN` boşsa Secret parolasız yaratılır ve ArgoCD
-`authentication required` der; jetonu doldurup Secret'ı silip yeniden yaratın. Git
-sunucusu kullanıcı adı yerine yalnız jeton kabul ediyorsa `username` değerini o
-sunucunun istediği sabit değere çevirin (çoğu sunucuda herhangi bir değer kabul edilir).
+**Ters giderse:**
 
-`$GIT_HTTPS_TOKEN` yalnız HTTPS kullananlar içindir; `install/lakehouse.env` dosyasında
-vardır ve SSH kullanıyorsanız boş bırakılır.
-
-**Ters giderse:** `AlreadyExists` → Secret vardır; silip
-(`oc -n "$ARGOCD_NS" delete secret lakehouse-repo`) yeniden yaratın. Etiket eksik kalırsa
-ArgoCD Secret'ı **hiç görmez** ve kök Application `repository not accessible` hatası
-verir. ArgoCD `unknown host` derse Git sunucunuzun SSH ana bilgisayar anahtarını
-`$ARGOCD_NS` ad alanındaki `argocd-ssh-known-hosts-cm` ConfigMap'ine ekleyin
-(`ssh-keyscan git.kurum.example.net` çıktısı).
+- `AlreadyExists`: Secret vardır. `oc -n "$ARGOCD_NS" delete secret lakehouse-repo` ile
+  silip iki komutu tekrarlayın.
+- ArgoCD `authentication required` diyorsa `$GIT_HTTPS_TOKEN` boştur; jetonu doldurup
+  Secret'ı silin ve yeniden yaratın. Git sunucunuz kullanıcı adı olarak belirli bir değer
+  istiyorsa `username` değerini ona çevirin.
+- Kök uygulama `repository not accessible` diyorsa `argocd.argoproj.io/secret-type`
+  etiketi eksiktir; ArgoCD Secret'ı görmez.
+- ArgoCD `unknown host` diyorsa Git sunucusunun SSH anahtarını `$ARGOCD_NS` ad
+  alanındaki `argocd-ssh-known-hosts-cm` ConfigMap'ine ekleyin
+  (`ssh-keyscan git.kurum.example.net` çıktısı).
 
 ---
 
-## 4. Site değerlerini doldurun
+## 4. Kuruma özel ayarları doldurun
 
-**Neden:** müşteriye özel her değer tek dizindedir: `platform/values/site/`. Anahtarların
-tam listesi ve anlamları
-[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md) dosyasındadır.
-Ürün varsayılanlarına (`platform/values/glue.yaml` ve yanındakiler) **dokunulmaz**.
+Kuruma özel bütün ayarlar `platform/values/site/` klasöründedir. Ayarların listesi ve
+anlamları [90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md)
+dosyasındadır. Ürünün varsayılan dosyalarına (`platform/values/glue.yaml` ve yanındakiler)
+dokunmayın.
 
-### 4.1 Üç site dosyasını değişkenlerden doldurun
+### 4.1 Üç ayar dosyasını değişkenlerden doldurun
 
-Şablonlardaki örnek değerler (`apps.ocp.example.net`, `https://s3.example.com`, örnek AD
-DN'leri) tek komutla gerçek değerlerinizle değiştirilir.
+Dosyalardaki örnek değerler (`apps.ocp.example.net`, `https://s3.example.com`, örnek AD
+adresleri) tek komutla gerçek değerlerinizle değiştirilir.
 
 `[bastion]`
 
@@ -241,22 +253,18 @@ grep -nE 'apps\.ocp\.example\.net|s3\.example\.com|ad\.example\.com|DC=example,D
 ornek deger kalmadi
 ```
 
-`$INTERNAL_REGISTRY` değerini varsayılandan (küme içi registry adresi) değiştirdiyseniz
-`connect.buildImage` satırını elle düzeltin. İmaj etiketi (`:2.0.0`) ürünün sürümüdür ve
-her yükseltmede artırılır; `:latest` **kullanılamaz**.
+Kafka Connect imajının adresi (`connect.buildImage`) küme içi registry'yi gösterir.
+`$INTERNAL_REGISTRY` başka bir registry ise bu satırı elle düzeltin. İmaj etiketi
+(`:2.0.0`) ürünün sürümüdür ve her yükseltmede artırılır; `:latest` kullanılamaz.
 
-**Ters giderse:** `ornek deger kalmadi` yerine satırlar basılıyorsa bir değişken boş
-kalmıştır (Adım 1'i tekrarlayın); basılan satırın `#` ile başlayıp başlamadığına da
-bakın. Denetim bilerek **yalnız ürün şablonundaki dört literal yer tutucuyu** arar
-(`apps.ocp.example.net`, `s3.example.com`, `ad.example.com`, `DC=example,DC=com`);
-`example.net` geçen gerçek bir kurum alan adınız varsa yanlış alarm vermez.
-Dosyaları bozduysanız `git checkout -- platform/values/site/` ile şablonlara dönüp
-baştan başlayın.
+**Ters giderse:** `ornek deger kalmadi` yerine dosya satırları yazılıyorsa bir değişken
+boştur; Adım 1'i tekrarlayın. Denetim yalnız şu dört örnek değeri arar:
+`apps.ocp.example.net`, `s3.example.com`, `ad.example.com`, `DC=example,DC=com`. Dosyaları
+bozduysanız `git checkout -- platform/values/site/` ile ilk hâline dönüp baştan başlayın.
 
-**S3 kök CA'sı ve S3 IP'leri.** Bu iki değer yukarıdaki `sed` komutunun kapsamında değildir;
-aşağıdaki komut ikisini de yazar. `$S3_CA_FILE` boşsa `caSecret` boş kalır (S3 sertifikası
-herkesçe bilinen bir CA'dandır). `$S3_EGRESS_CIDRS` virgülle ayrılmış bir listedir; boşsa
-liste boş kalır.
+**S3 kök CA'sı ve S3 IP adresleri.** Bu iki ayarı aşağıdaki komut yazar.
+`$S3_CA_FILE` boşsa `caSecret` boş kalır (S3 sertifikası herkesçe bilinen bir CA'dandır).
+`$S3_EGRESS_CIDRS` virgülle ayrılmış bir listedir; boşsa liste boş kalır.
 
 `[bastion]`
 
@@ -275,47 +283,38 @@ PY
 grep -nE "^  (caSecret|egressCidrs):" platform/values/site/glue.yaml
 ```
 
-**Beklenen çıktı** (örnek — S3'ü özel CA'lı ve tek IP'li bir kurulum):
+**Beklenen çıktı** (örnek: S3 sertifikası kurumsal CA'lı ve tek IP adresli bir kurulum):
 
 ```text
 16:  caSecret: "s3-ca"                       # S3 sertifikası ÖZEL CA ile imzalıysa ...
 17:  egressCidrs: ["10.20.30.40/32"]         # $S3_EGRESS_CIDRS — S3 veri IP'leri ...
 ```
 
-`caSecret` doluysa §5.14'te aynı adlı Secret'ı yaratmanız gerekir.
+`caSecret` doluysa Adım 5.14'te aynı adlı Secret'ı yaratırsınız.
 
 <a id="ad-alani-sabit"></a>
-### 4.2 Ad alanı adı üründe sabittir
+### 4.2 Ad alanının adı değiştirilmez
 
-Bu bölümde yapılacak bir iş yoktur; okuyup geçin.
+Bu adımda yapılacak bir iş yoktur; okuyup geçin.
 
-> **`$LAKEHOUSE_NS` = `lakehouse` sabittir — değiştirmeyin.** Ad alanı adı müşterinin
-> dokunmadığı ürün dosyalarının **içine yazılıdır**:
+> **`$LAKEHOUSE_NS` her zaman `lakehouse`'tur.** Bu ad, kurumun dokunmadığı ürün
+> dosyalarının içinde yazılıdır:
 >
-> - `platform/apps/*.yaml` — her Application'ın `destination.namespace` alanı
->   (`00-strimzi`, `00-spark-operator`, `00-superset-operator`, `00-keycloak-operator`,
->   `10-glue`, `15-custom`, `20-polaris`, `30-trino`, `30-jupyterhub`).
-> - `platform/values/jupyterhub.yaml` — not defterlerine verilen `POLARIS_URI` ve
->   `TRINO_HOST` değerleri (`polaris.lakehouse.svc`, `trino.lakehouse.svc`).
-> - `custom/examples/*` — örnek CR'lardaki `namespace: lakehouse` satırları.
-> - `test/e2e/*.sh` ve fixture manifest'leri (`NS=lakehouse`).
+> - `platform/apps/*.yaml` — her uygulamanın kurulacağı ad alanı;
+> - `platform/values/jupyterhub.yaml` — not defterlerinin Polaris ve Trino adresleri
+>   (`polaris.lakehouse.svc`, `trino.lakehouse.svc`);
+> - `custom/examples/*` — örnek dosyalardaki `namespace: lakehouse` satırları.
 >
-> Trino ve JupyterHub alt chart'ları nesnelerini `.Release.Namespace` ile, yani
-> `destination.namespace` ile kurar; glue chart'ı ise `metadata.namespace`'i kendi yazar.
-> `.env`'deki değeri tek başına değiştirirseniz kurulum **iki ad alanına bölünür**:
-> Trino, Polaris Secret'ını bulamaz; not defterleri hâlâ `polaris.lakehouse.svc`'ye bakar.
-> Kitaptaki komutlar `$LAKEHOUSE_NS` değişkenini kullanmayı sürdürür — değeri `lakehouse`'tur.
->
-> Kurumsal ad alanı standardınız başka bir ad gerektiriyorsa bu **ayrı bir ürün (kod)
-> görevidir**: yukarıdaki dosyaların parametreleştirilmesi, `glue` değerlerine yeni bir
-> anahtar ve e2e koşusu ister; site değerlerine `namespace:` satırı eklemek **yetmez**
-> ([90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md) §1).
+> `install/lakehouse.env`'deki değeri tek başına değiştirirseniz kurulum iki ad alanına
+> bölünür: Trino Polaris'in Secret'ını bulamaz, not defterleri yanlış adrese bakar.
+> Kurumunuzun ad alanı standardı başka bir ad gerektiriyorsa bu bir ürün değişikliğidir;
+> ürün ekibine başvurun. Kitaptaki komutlar `$LAKEHOUSE_NS` değişkenini kullanmayı
+> sürdürür; değeri `lakehouse`'tur.
 
 ### 4.3 Depolamada STS yoksa
 
-[20-on-kosullar](20-on-kosullar.md) madde 4'te depolama ekibine sorduğunuz sorunun cevabı
-"STS yok" ise geçici kimlik dağıtımı kapatılır.
-**STS varsa bu adımı hiç çalıştırmayın.**
+[20-on-kosullar](20-on-kosullar.md) madde 4'te depolama ekibinden "STS yok" yanıtını
+aldıysanız geçici kimlik dağıtımını kapatın. **STS varsa bu adımı atlayın.**
 
 `[bastion]`
 
@@ -329,20 +328,21 @@ mv platform/values/site/trino.new platform/values/site/trino.yaml
 grep -n "vendedCredentials\|vended-credentials" platform/values/site/*.yaml
 ```
 
-**Beklenen çıktı** (örnek — iki satır da `false`):
+**Beklenen çıktı** (örnek; iki satırda da `false`):
 
 ```text
 platform/values/site/glue.yaml:12:  vendedCredentials: false
 platform/values/site/trino.yaml:44:    iceberg.rest-catalog.vended-credentials-enabled=false
 ```
 
-**Ters giderse:** iki dosya farklı değer taşıyorsa `scripts/check-site.sh` Adım 4.5'te
-hata verir.
+**Ters giderse:** iki dosya farklı değer gösteriyorsa Adım 4.5'teki denetim hata verir;
+komutları tekrarlayın.
 
 ### 4.4 Polaris katalog tanımını düzenleyin
 
-`platform/polaris/setup.yaml` Polaris sunucusunun kendi katalog tanımıdır ve site
-dizininde değildir; depoda geliştirme kümesinin küme içi MinIO adresini taşır.
+`platform/polaris/setup.yaml` Polaris kataloğunun tanımıdır. `platform/values/site/`
+klasöründe değildir ve depoda örnek S3 adresleri taşır. Aşağıdaki komut onları kendi
+değerlerinizle değiştirir:
 
 `[bastion]`
 
@@ -355,9 +355,9 @@ mv platform/polaris/setup.new platform/polaris/setup.yaml
 grep -nE "endpoint|base_location|allowed_locations|region:" platform/polaris/setup.yaml
 ```
 
-**Beklenen çıktı** (örnek — `sed` **değiştirdikten sonraki** hâl; kendi `$S3_*`
-değerlerinizi görmelisiniz. Aşağıdaki satırlar `S3_BUCKET_DATA=kurum-veri`,
-`S3_REGION=eu-central-1`, `S3_ENDPOINT=https://s3.kurum.example.net` ile üretilmiştir):
+**Beklenen çıktı** (örnek: `S3_BUCKET_DATA=kurum-veri`, `S3_REGION=eu-central-1`,
+`S3_ENDPOINT=https://s3.kurum.example.net` değerleriyle; siz kendi değerlerinizi
+görmelisiniz):
 
 ```text
     default_base_location: s3://kurum-veri/
@@ -367,23 +367,19 @@ değerlerinizi görmelisiniz. Aşağıdaki satırlar `S3_BUCKET_DATA=kurum-veri`
     endpoint_internal: https://s3.kurum.example.net
 ```
 
-Çıktıda hâlâ `s3://lakehouse/`, `region: us-east-1` ya da `s3.example.com` görüyorsanız
-`sed` eşleşmemiştir: ilgili `$S3_*` değişkeni boştur (Adım 1) ya da dosya daha önce elle
-düzenlenmiştir. §4.1'in "örnek değer kalmasın" kuralı tam olarak bu satırlar içindir.
+STS yoksa (Adım 4.3) aynı bloğa `endpoint_internal` satırının altına, aynı girintiyle
+`sts_unavailable: true` satırını ekleyin.
 
-STS yoksa aynı katalog bloğuna `sts_unavailable: true` satırını da ekleyin
-(`endpoint_internal` satırının altına, aynı girinti ile).
-
-**Ters giderse:** `s3://` satırları hâlâ `lakehouse` diyorsa veri bucket'ınızın adı zaten
-`lakehouse`'tur, sorun yoktur. Girintiyi bozduysanız
+**Ters giderse:** çıktıda hâlâ `region: us-east-1` ya da `minio.lakehouse.svc`
+görüyorsanız ilgili `$S3_*` değişkeni boştur (Adım 1). `s3://lakehouse/` görüyorsanız ve
+veri bucket'ınızın adı gerçekten `lakehouse` ise sorun yoktur. Girintiyi bozduysanız
 `git checkout -- platform/polaris/setup.yaml` ile geri alın.
 
-### 4.5 Tutarlılığı denetleyin
+### 4.5 Ayarları denetleyin
 
-**Neden:** aynı değer (Keycloak adresi, S3 uç noktası, LDAP DN'leri) birden fazla dosyada
-tekrarlanır — ArgoCD'nin çok kaynaklı Application'larında değer dosyaları arasında
-şablonlama yoktur. Betik bu kopyaların birbirini tuttuğunu ve ürün satırlarının
-eksilmediğini denetler.
+Bazı ayarlar (Keycloak adresi, S3 adresi, AD adresleri) birden fazla dosyada geçer. Betik
+bu kopyaların birbirini tuttuğunu ve ürünün gerektirdiği satırların silinmediğini
+denetler.
 
 `[bastion]`
 
@@ -391,20 +387,19 @@ eksilmediğini denetler.
 scripts/check-site.sh
 ```
 
-**Beklenen çıktı** (kind kümesinde alınan gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 check-site: OK
 ```
 
 **Ters giderse:** her `HATA:` satırı hangi dosyada hangi değerin beklendiğini yazar;
-[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md) §5'teki kopya
-tablosundan hangi değerin kaynak olduğunu bulup düzeltin. `UYARI:` satırı Polaris
-dosyasının uç noktasının uyuşmadığını söyler — Adım 4.4'ü atlamışsınızdır;
-bu **uyarı** kurulumu durdurmaz ama Polaris yanlış depolamayı gösterir.
-`ModuleNotFoundError: yaml` → `pip3 install --user PyYAML`.
+düzeltip betiği tekrar çalıştırın. Hangi dosyadaki değerin asıl olduğunu
+[90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md) §5'teki tablo
+söyler. `UYARI:` satırı Polaris dosyasındaki adresin uyuşmadığını söyler; Adım 4.4'ü
+atlamışsınızdır. `ModuleNotFoundError: yaml` → `pip3 install --user PyYAML`.
 
-### 4.6 Git'e itin
+### 4.6 Git'e gönderin
 
 `[bastion]`
 
@@ -412,32 +407,44 @@ bu **uyarı** kurulumu durdurmaz ama Polaris yanlış depolamayı gösterir.
 git add platform/values/site platform/polaris/setup.yaml
 git commit -m "site: kurulum degerleri"
 git push origin main
+git show --stat HEAD | grep -c lakehouse.env
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek; commit kimlikleri sizde farklıdır):
 
 ```text
 [main 4f2a9c1] site: kurulum degerleri
  4 files changed, 31 insertions(+), 31 deletions(-)
 To ssh://git.kurum.example.net/veri/lakehouse.git
    1c18c86..4f2a9c1  main -> main
+0
 ```
 
-`tls.caBundle` şimdilik boştur; Adım 5.11'de doldurulup **ikinci kez** itilecektir.
+Son satırdaki `0`, parolaları taşıyan `install/lakehouse.env` dosyasının commit'e
+girmediğini gösterir. `tls.caBundle` ayarı şimdilik boştur; Adım 5.11'de doldurulup
+ikinci kez gönderilir.
 
-**Ters giderse:** `nothing to commit` → dosyalar değişmemiştir, Adım 4.1'i çalıştırmamış
-olabilirsiniz. `Updates were rejected` → uzak dalda başka bir değişiklik vardır,
-`git pull --rebase origin main` sonra tekrar itin. **`install/lakehouse.env` dosyasının
-commit'e girmediğini** `git show --stat HEAD` ile doğrulayın; dosya `.gitignore` içinde
-listelidir ama kontrol etmek ucuzdur.
+**Ters giderse:**
+
+- `nothing to commit`: dosyalar değişmemiştir; Adım 4.1'i çalıştırmamış olabilirsiniz.
+- `Updates were rejected`: depoda başka bir değişiklik vardır;
+  `git pull --rebase origin main` çalıştırıp `git push`'u tekrarlayın.
+- Son satır `0` değilse `install/lakehouse.env` commit'e girmiştir. Parolaları içeren
+  dosya artık depodadır: Git yöneticinizle birlikte geçmişten temizleyin ve dosyadaki
+  bütün parolaları değiştirin.
 
 ---
 
 ## 5. Ad alanı ve Secret'lar
 
-**Neden:** Secret'lar Git'e girmez; kurulumdan **önce** kümede bulunmalıdır. Tam liste,
-her Secret'ı hangi bileşenin okuduğu ve rotasyon yordamları
+Parolalar Git'e girmez; kurulum başlamadan önce kümede Secret olarak bulunmalıdır. Her
+Secret'ı hangi bileşenin okuduğu ve parolaların nasıl yenileneceği
 [90-referans/secret-listesi.md](90-referans/secret-listesi.md) dosyasındadır.
+
+Bu bölümde yaratılan her Secret'a `lakehouse.io/yonetim` etiketi eklenir. Etiketin değeri
+Secret'ın yaratıldığı adımı gösterir: örneğin `manual-30-kurulum-5.2`, bu belgenin 5.2.
+adımıdır. Secret silinirse o adımı tekrarlayarak yeniden yaratırsınız
+([değişiklik nasıl uygulanır](50-isletme/degisiklik-nasil-uygulanir.md) §7).
 
 Ad alanı [20-on-kosullar](20-on-kosullar.md) madde 5'te açıldı. Emin olmak için:
 
@@ -455,9 +462,13 @@ namespace/lakehouse configured
 Now using project "lakehouse" on server "https://api.ocp.example.net:6443".
 ```
 
-**Ters giderse:** `forbidden` → ad alanı açma yetkiniz yoktur, cluster-admin ile girin.
+**Ters giderse:** `forbidden` → ad alanı açma yetkiniz yoktur; cluster-admin yetkili bir
+hesapla girin.
 
-### 5.1 `connect-push` — yalnız doğrulama
+### 5.1 `connect-push` — yalnız kontrol
+
+Bu Secret [20-on-kosullar](20-on-kosullar.md) madde 5'te yaratıldı. Burada yalnız
+varlığını kontrol edin:
 
 `[bastion]`
 
@@ -471,9 +482,9 @@ oc -n "$LAKEHOUSE_NS" get secret connect-push -o go-template='{{.type}}{{"\n"}}'
 kubernetes.io/dockerconfigjson
 ```
 
-**Ters giderse:** `NotFound` → [20-on-kosullar](20-on-kosullar.md) madde 5'e dönün;
-Secret o bölümde yaratılır. Tip `Opaque` görünüyorsa Secret yanlış komutla
-yaratılmıştır: silip madde 5'teki `oc create secret docker-registry` komutunu tekrarlayın.
+**Ters giderse:** `NotFound` → [20-on-kosullar](20-on-kosullar.md) madde 5'e dönün. Tip
+`Opaque` görünüyorsa Secret yanlış komutla yaratılmıştır; silip madde 5'teki
+`oc create secret docker-registry` komutunu tekrarlayın.
 
 ### 5.2 `s3-creds` — veri S3 anahtarları
 
@@ -483,17 +494,19 @@ yaratılmıştır: silip madde 5'teki `oc create secret docker-registry` komutun
 oc -n "$LAKEHOUSE_NS" create secret generic s3-creds \
   --from-literal=AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" \
   --from-literal=AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY"
+oc -n "$LAKEHOUSE_NS" label secret s3-creds lakehouse.io/yonetim=manual-30-kurulum-5.2
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/s3-creds created
+secret/s3-creds labeled
 ```
 
-**Ters giderse:** `AlreadyExists` → `oc -n "$LAKEHOUSE_NS" delete secret s3-creds` sonra
-tekrarlayın. Anahtar **adları** sözleşmedir (`AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`): büyük/küçük harf dâhil birebir yazılmalıdır.
+**Ters giderse:** `AlreadyExists` → `oc -n "$LAKEHOUSE_NS" delete secret s3-creds` ile
+silip tekrarlayın. Anahtar adları (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+büyük/küçük harf dahil aynen yazılmalıdır.
 
 ### 5.3 `backup-s3-creds` — yedek S3 anahtarları
 
@@ -503,20 +516,22 @@ tekrarlayın. Anahtar **adları** sözleşmedir (`AWS_ACCESS_KEY_ID`,
 oc -n "$LAKEHOUSE_NS" create secret generic backup-s3-creds \
   --from-literal=AWS_ACCESS_KEY_ID="$S3_BACKUP_ACCESS_KEY" \
   --from-literal=AWS_SECRET_ACCESS_KEY="$S3_BACKUP_SECRET_KEY"
+oc -n "$LAKEHOUSE_NS" label secret backup-s3-creds lakehouse.io/yonetim=manual-30-kurulum-5.3
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/backup-s3-creds created
+secret/backup-s3-creds labeled
 ```
 
-**Ters giderse:** veri anahtarlarını buraya yazmayın: yedeklerin **ayrı** bir anahtar
-çiftiyle korunması tasarımın parçasıdır. Yanlış yazdıysanız Secret'ı silip tekrarlayın;
-aksi hâlde PostgreSQL yedekleri kurulumdan sonra sessizce başarısız olur ve hatayı ancak
-geri dönüş denemesinde görürsünüz.
+**Ters giderse:** buraya veri anahtarlarını yazmayın; yedekler kasıtlı olarak **ayrı**
+bir anahtar çiftiyle korunur. Anahtarları yanlış yazdıysanız Secret'ı silip tekrarlayın.
+Yanlış anahtarla veritabanı yedekleri sessizce başarısız olur; bunu Adım 7.1'deki yedek
+kontrolü gösterir.
 
-### 5.4 `polaris-root` — Polaris kök kimliği
+### 5.4 `polaris-root` — Polaris yönetici kimliği
 
 `[bastion]`
 
@@ -524,18 +539,21 @@ geri dönüş denemesinde görürsünüz.
 oc -n "$LAKEHOUSE_NS" create secret generic polaris-root \
   --from-literal=clientId=root \
   --from-literal=clientSecret="$(openssl rand -hex 24)"
+oc -n "$LAKEHOUSE_NS" label secret polaris-root lakehouse.io/yonetim=manual-30-kurulum-5.4
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/polaris-root created
+secret/polaris-root labeled
 ```
 
-**Ters giderse:** bu kimlik Polaris'in yönetim kimliğidir ve yalnız kurulum ile
-`scripts/polaris-setup.sh` tarafından kullanılır; kimseye dağıtılmaz. Kaybederseniz
-Secret'ı silip yeniden yaratmak **yetmez** (değer Polaris veritabanına ilk açılışta
-yazılır), veritabanını yeniden kurmak gerekir.
+Bu kimlik Polaris kataloğunun yönetici kimliğidir. Yalnız kurulum ve
+`scripts/polaris-setup.sh` kullanır; kimseye verilmez.
+
+**Ters giderse:** bu Secret'ı kurulumdan sonra silmeyin. Değer Polaris veritabanına ilk
+açılışta yazılır; Secret'ı yeniden yaratmak yetmez, veritabanını yeniden kurmak gerekir.
 
 ### 5.5 `keycloak-admin` — Keycloak yönetici hesabı
 
@@ -545,28 +563,28 @@ yazılır), veritabanını yeniden kurmak gerekir.
 oc -n "$LAKEHOUSE_NS" create secret generic keycloak-admin \
   --from-literal=username=admin \
   --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD:-$(openssl rand -hex 24)}"
+oc -n "$LAKEHOUSE_NS" label secret keycloak-admin lakehouse.io/yonetim=manual-30-kurulum-5.5
 oc -n "$LAKEHOUSE_NS" get secret keycloak-admin \
   -o jsonpath='{.data.password}' | base64 -d | head -c 8; echo " ... (ilk 8 karakter)"
 ```
 
-**Beklenen çıktı** (örnek — parolayı **şimdi** kurumun parola kasasına kaydedin):
+**Beklenen çıktı** (örnek; parolayı **şimdi** kurumun parola kasasına kaydedin):
 
 ```text
 secret/keycloak-admin created
+secret/keycloak-admin labeled
 9f3c1ab2 ... (ilk 8 karakter)
 ```
 
-**Ters giderse:** `KEYCLOAK_ADMIN_PASSWORD` boşsa parola üretilir ve yalnız Secret'ta
-kalır; tamamını okumak için son komuttaki `| head -c 8` kısmını kaldırın. Bu hesap
-gündelik kullanım için değildir — kullanıcılar AD'den gelir, yönetici hesabı yalnız
-Keycloak arayüzündeki bakım içindir.
+`KEYCLOAK_ADMIN_PASSWORD` boşsa parola üretilir ve yalnız Secret'ta durur. Tamamını
+görmek için son komuttan `| head -c 8` kısmını silin. Bu hesap günlük kullanım için
+değildir: kullanıcılar AD'den gelir, yönetici hesabı yalnız Keycloak bakımı içindir.
 
-### 5.6 `keycloak-clients` — client sırları ve AD bağlanma parolası
+### 5.6 `keycloak-clients` — uygulama sırları ve AD hesabının parolası
 
-**Realm içe aktarımından önce var olmalıdır:** `ldap-bind` anahtarı realm dosyasına
-yer tutucu olarak enjekte edilir ve `KeycloakRealmImport` mevcut bir realm'i
-**güncellemez**. Eksik başlarsanız AD federasyonu realm'e hiç girmez ve realm'i silip
-yeniden içe aktarmak gerekir.
+Bu Secret, Keycloak yapılandırması ilk kez yüklenmeden önce kümede olmalıdır. Keycloak
+yapılandırmayı yalnız bir kez yükler; eksik başlarsanız AD bağlantısı hiç kurulmaz ve
+yapılandırmanın silinip yeniden yüklenmesi gerekir (§8).
 
 `[bastion]`
 
@@ -576,24 +594,25 @@ oc -n "$LAKEHOUSE_NS" create secret generic keycloak-clients \
   --from-literal=superset="$(openssl rand -hex 24)" \
   --from-literal=jupyterhub="$(openssl rand -hex 24)" \
   --from-literal=ldap-bind="$LDAP_BIND_PASSWORD"
+oc -n "$LAKEHOUSE_NS" label secret keycloak-clients lakehouse.io/yonetim=manual-30-kurulum-5.6
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/keycloak-clients created
+secret/keycloak-clients labeled
 ```
 
-**Ters giderse:** dört anahtarın dördü de zorunludur; eksik anahtar realm içe aktarımını
-düşürür. `ldap-bind` değeri AD servis hesabının parolasıdır ve değer dosyalarına **asla**
-yazılmaz.
+**Ters giderse:** dört anahtarın dördü de gereklidir. `ldap-bind` AD servis hesabının
+parolasıdır; ayar dosyalarına asla yazılmaz.
 
 ### 5.7 `trino-service-accounts` — Superset ve Zeppelin'in Trino parolaları
 
-**Neden:** Superset ve Zeppelin, Trino'ya kullanıcı adına değil kendi servis hesaplarıyla
-bağlanır. Trino parolaları `password.db` adlı bir htpasswd dosyasından okur (bcrypt);
-Superset ve Zeppelin ise aynı parolanın **düz** hâline ihtiyaç duyar. İkisi aynı Secret'ta
-durur ve **aynı parolalardan** üretilmek zorundadır.
+Superset ve Zeppelin Trino'ya kullanıcının kimliğiyle değil, kendi servis hesaplarıyla
+bağlanır. Trino parolaları şifrelenmiş bir dosyadan (`password.db`) okur; Superset ve
+Zeppelin ise aynı parolaların düz hâline ihtiyaç duyar. İkisi aynı Secret'ta durur ve
+aynı parolalardan üretilmelidir.
 
 `[bastion]`
 
@@ -606,6 +625,8 @@ oc -n "$LAKEHOUSE_NS" create secret generic trino-service-accounts \
   --from-file=password.db=/tmp/password.db \
   --from-literal=superset="$SUPERSET_TRINO_PW" \
   --from-literal=zeppelin="$ZEPPELIN_TRINO_PW"
+oc -n "$LAKEHOUSE_NS" label secret trino-service-accounts \
+  lakehouse.io/yonetim=manual-30-kurulum-5.7
 shred -u /tmp/password.db
 ```
 
@@ -613,15 +634,15 @@ shred -u /tmp/password.db
 
 ```text
 secret/trino-service-accounts created
+secret/trino-service-accounts labeled
 ```
 
-`$ZEPPELIN_TRINO_PW` **bu terminal oturumunda kalmalıdır**: Adım 5.10'da yeniden
-kullanılır. Oturumu kapatırsanız Adım 5.7 ile 5.10'u birlikte tekrarlayın.
+`$ZEPPELIN_TRINO_PW` Adım 5.10'da yeniden kullanılır; terminali kapatmayın. Kapattıysanız
+Adım 5.7 ile 5.10'u birlikte tekrarlayın.
 
-**Ters giderse:** `htpasswd: command not found` → `httpd-tools` paketini kurun.
-Kurulumdan sonra Superset ya da Zeppelin Trino'ya `Access Denied` ile bağlanamıyorsa düz
-parolalar `password.db` içindekilerle uyuşmuyordur: bu adımı baştan çalıştırıp Adım
-5.10'u da tekrarlayın. `-C 10` bayrağı bcrypt maliyetini belirler; Trino en az 8 ister.
+**Ters giderse:** `htpasswd: command not found` → `httpd-tools` paketini kurun. Kurulumdan
+sonra Superset ya da Zeppelin Trino'ya `Access Denied` ile bağlanamıyorsa düz parolalar
+`password.db` ile uyuşmuyordur; bu adımı ve Adım 5.10'u baştan tekrarlayın.
 
 ### 5.8 `trino-shared-secret` ve `superset-secret`
 
@@ -632,6 +653,8 @@ oc -n "$LAKEHOUSE_NS" create secret generic trino-shared-secret \
   --from-literal=secret="$(openssl rand -hex 32)"
 oc -n "$LAKEHOUSE_NS" create secret generic superset-secret \
   --from-literal=secret-key="$(openssl rand -hex 32)"
+oc -n "$LAKEHOUSE_NS" label secret trino-shared-secret superset-secret \
+  lakehouse.io/yonetim=manual-30-kurulum-5.8
 ```
 
 **Beklenen çıktı:**
@@ -639,18 +662,20 @@ oc -n "$LAKEHOUSE_NS" create secret generic superset-secret \
 ```text
 secret/trino-shared-secret created
 secret/superset-secret created
+secret/trino-shared-secret labeled
+secret/superset-secret labeled
 ```
 
-**Ters giderse:** ilki Trino coordinator ile worker'lar arasındaki iç iletişimi imzalar
-(eksikse worker'lar kümeye katılamaz), ikincisi Superset'in oturum çerezlerini imzalar
-(sonradan değişirse açık oturumlar düşer). İkisi de yalnız küme içinde kalır.
+İlki Trino sunucularının kendi aralarındaki iletişimi imzalar; eksikse Trino işçileri
+koordinatöre katılamaz. İkincisi Superset oturumlarını imzalar; sonradan değişirse açık
+oturumlar kapanır. İkisi de yalnız küme içinde kullanılır.
 
 ### 5.9 `zeppelin-shiro` — Zeppelin'in AD girişi
 
-**Neden:** Zeppelin, Keycloak'ı **kullanmaz**; AD'ye doğrudan LDAPS ile bağlanır ve yetkiyi
-AD grup üyeliğinden okur. Şablon `examples/zeppelin/shiro-ad.ini` dosyasıdır; aşağıdaki
-komut beş satırını ve üç grup DN'ini değerlerinizle doldurur. AD parolası her karakteri
-içerebildiği için doldurma `sed` ile değil `python3` ile yapılır.
+Zeppelin Keycloak'ı kullanmaz; AD'ye doğrudan bağlanır ve yetkiyi AD grup üyeliğinden
+okur. Ayarların şablonu `examples/zeppelin/shiro-ad.ini` dosyasıdır. Aşağıdaki komut
+şablonu değerlerinizle doldurur. AD parolası her karakteri içerebildiği için doldurma
+`python3` ile yapılır.
 
 `[bastion]`
 
@@ -672,35 +697,38 @@ PY
 grep -c "DC=example,DC=com" /tmp/shiro.ini
 oc -n "$LAKEHOUSE_NS" create secret generic zeppelin-shiro \
   --from-file=shiro.ini=/tmp/shiro.ini
+oc -n "$LAKEHOUSE_NS" label secret zeppelin-shiro lakehouse.io/yonetim=manual-30-kurulum-5.9
 shred -u /tmp/shiro.ini
 ```
 
-**Beklenen çıktı** (ilk satır: şablonda örnek DN kalmadı):
+**Beklenen çıktı** (ilk satır: şablonda örnek değer kalmadı):
 
 ```text
 0
 secret/zeppelin-shiro created
+secret/zeppelin-shiro labeled
 ```
 
-Zeppelin, AD'ye Keycloak'ın kullandığı servis hesabıyla bağlanır, ama hesabın **DN'ini
-değil kısa adını** (`$LDAP_BIND_USER`, ör. `svc-lakehouse`) kullanır. Neden: Zeppelin
-`principalSuffix`'i (`$AD_UPN_SUFFIX`) servis hesabının adının da sonuna ekler; DN yazılırsa
-AD'ye `CN=...,DC=com@kurum.example.net` gibi geçersiz bir ad gider ve **hiç kimse** giriş
-yapamaz (`LDAP: error code 49 ... data 52e`). Ayrı bir hesap isteniyorsa geçici dosyadaki
-`systemUsername` (kısa ad) ve `systemPassword` satırlarını Secret'ı yaratmadan önce elle
-değiştirin.
+Zeppelin AD'ye Keycloak'ın kullandığı servis hesabıyla bağlanır, ama hesabın tam adresini
+(DN) değil **kısa adını** (`$LDAP_BIND_USER`, ör. `svc-lakehouse`) kullanır. Zeppelin
+`$AD_UPN_SUFFIX` değerini hesap adının sonuna ekler; DN yazılırsa geçersiz bir ad oluşur ve
+**hiç kimse** giriş yapamaz (`LDAP: error code 49 ... data 52e`). Ayrı bir servis hesabı
+kullanmak istiyorsanız Secret'ı yaratmadan önce geçici dosyadaki `systemUsername` ve
+`systemPassword` satırlarını elle değiştirin.
 
-**Ters giderse:** `KeyError` → ilgili `$LDAP_*` ya da `$AD_UPN_SUFFIX` değişkeni boştur
-(Adım 1). `grep -c` sıfırdan büyük bir sayı basıyorsa `$LDAP_GROUPS_DN` şablondakinden
-farklı bir biçimde yazılmıştır; dosyayı silmeden önce elle kontrol edin. Kurulumdan sonra
-Zeppelin girişi `PKIX path building failed` derse AD sertifikasının kök CA'sı güven
-deposunda yoktur — Adım 5.13.
+**Ters giderse:**
+
+- `KeyError`: ilgili `$LDAP_*` ya da `$AD_UPN_SUFFIX` değişkeni boştur (Adım 1).
+- `grep -c` sıfırdan büyük bir sayı yazıyorsa `$LDAP_GROUPS_DN` şablondaki biçimden
+  farklıdır; Secret'ı yaratmadan önce geçici dosyayı açıp grup adreslerine bakın.
+- Kurulumdan sonra Zeppelin girişi `PKIX path building failed` derse AD sertifikasının
+  kök CA'sı eksiktir; Adım 5.13.
 
 ### 5.10 `zeppelin-interpreter` — Zeppelin'in Trino bağlantısı
 
-**Neden:** `glue/files/zeppelin/interpreter.json` ürün içinde bir **şablondur**; üretimde
-beş yer tutucusu doldurulup düz JSON hâline getirilir. Zeppelin bu dosyayı yalnız ilk
-açılışta tohum olarak okur.
+Zeppelin'in Trino bağlantı ayarı ürün içinde bir şablondur
+(`glue/files/zeppelin/interpreter.json`). Aşağıdaki komut şablonu doldurur. Zeppelin bu
+dosyayı yalnız ilk açılışta okur.
 
 `[bastion]`
 
@@ -716,27 +744,28 @@ sed -e "s|{{ .url }}|$JDBC_BASE\&$JDBC_TRUST|" \
 python3 -c 'import json; json.load(open("/tmp/interpreter.json")); print("gecerli JSON")'
 oc -n "$LAKEHOUSE_NS" create secret generic zeppelin-interpreter \
   --from-file=interpreter.json=/tmp/interpreter.json
+oc -n "$LAKEHOUSE_NS" label secret zeppelin-interpreter \
+  lakehouse.io/yonetim=manual-30-kurulum-5.10
 shred -u /tmp/interpreter.json
 ```
 
-**Beklenen çıktı** (kind kümesinde doğrulanmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 gecerli JSON
 secret/zeppelin-interpreter created
+secret/zeppelin-interpreter labeled
 ```
 
-**Ters giderse:** `JSONDecodeError` → `$ZEPPELIN_TRINO_PW` boş kalmıştır (Adım 5.7'yi
-tekrarlayın). Dosyada kalan tek `{{applicationId}}` **Zeppelin'in kendi yer tutucusudur**,
-doldurulmaz.
+**Ters giderse:** `JSONDecodeError` → `$ZEPPELIN_TRINO_PW` boştur; Adım 5.7'yi tekrarlayın.
+Dosyada kalan tek `{{applicationId}}` Zeppelin'in kendi değişkenidir; doldurulmaz.
 
-### 5.11 `lakehouse-ca` — iç kök CA ve `tls.caBundle`
+### 5.11 `lakehouse-ca` — iç kök sertifika ve `tls.caBundle`
 
-**Neden:** Trino kendi TLS'ini sonlandırır; sunucu sertifikasını cert-manager,
-`Issuer/lakehouse-ca` üzerinden bu kök CA ile imzalar. Aynı kök, Superset ve Zeppelin
-pod'larında Trino'ya güvenmek için de kullanılır. Kök sertifikanın PEM içeriği ayrıca site
-değerlerine yazılır: dolu olduğunda Trino Route'u `passthrough` yerine `reencrypt` olur ve
-OpenShift router'ı geçerli bir sertifika sunar.
+Trino bağlantılarını kendisi şifreler. Trino'nun sertifikasını cert-manager bu kök
+sertifikayla imzalar. Aynı kök, Superset, Zeppelin ve not defterlerinin Trino'ya güvenmesi
+için de kullanılır. Kök sertifika ayrıca ayar dosyasına (`tls.caBundle`) yazılır; böylece
+OpenShift Trino'nun dış adresinde de geçerli bir sertifika sunar.
 
 `[bastion]`
 
@@ -748,6 +777,7 @@ openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
   -keyout /tmp/ca.key -out /tmp/ca.crt
 openssl x509 -in /tmp/ca.crt -noout -ext keyUsage
 oc -n "$LAKEHOUSE_NS" create secret tls lakehouse-ca --cert=/tmp/ca.crt --key=/tmp/ca.key
+oc -n "$LAKEHOUSE_NS" label secret lakehouse-ca lakehouse.io/yonetim=manual-30-kurulum-5.11
 python3 - <<'PY'
 import json, pathlib
 ca = pathlib.Path("/tmp/ca.crt").read_text()
@@ -763,31 +793,30 @@ cp /tmp/ca.crt ~/lakehouse-ca.crt
 shred -u /tmp/ca.key
 ```
 
-**Beklenen çıktı** (`openssl` ayrıca birkaç satır nokta basar; kind kümesinde
-doğrulanmış):
+**Beklenen çıktı** (`openssl` bunlardan önce birkaç satır nokta ve artı işareti yazar):
 
 ```text
 X509v3 Key Usage: critical
     Certificate Sign, CRL Sign
 secret/lakehouse-ca created
+secret/lakehouse-ca labeled
 -----BEGIN CERTIFICATE-----
 ```
 
-İki `-addext` satırını **atlamayın**: `Key Usage` satırı olmayan bir kök CA'yı güncel
-Python (3.13 ve sonrası, not defteri imajı) reddeder ve not defterlerinden Trino'ya bağlantı
-`CA cert does not include key usage extension` hatasıyla düşer (OpenShift provası,
-2026-11-08). Superset ve Zeppelin bu hatayı vermez; bu yüzden fark edilmesi geç olur.
+İki `-addext` satırını silmeyin. `Key Usage` bilgisi olmayan bir kök sertifikayı not
+defterlerindeki Python reddeder ve not defterleri Trino'ya
+`CA cert does not include key usage extension` hatasıyla bağlanamaz.
 
-`~/lakehouse-ca.crt` dosyasını **saklayın**: tarayıcıların ve JDBC istemcilerinin güven
-deposuna bu sertifika eklenir.
+`~/lakehouse-ca.crt` dosyasını saklayın: kullanıcıların tarayıcılarına ve JDBC
+istemcilerine bu sertifika eklenir.
 
-**Kurumsal PKI'nız varsa** kendi ara CA'nızın sertifika ve anahtarını aynı Secret'a koyun
-(`oc create secret tls lakehouse-ca --cert=ara-ca.crt --key=ara-ca.key`). Ara CA'nın
-sertifikasında `Key Usage: Certificate Sign` bulunmalıdır (yukarıdaki `openssl x509` komutuyla
-bakın); cert-manager
-onunla imzalar ve `tls.caBundle` yine **doğrulayıcı zincir** olur.
+**Kurumsal sertifika altyapınız varsa** kök yerine kendi ara CA'nızın sertifikasını ve
+anahtarını kullanabilirsiniz
+(`oc create secret tls lakehouse-ca --cert=ara-ca.crt --key=ara-ca.key`, ardından aynı
+`oc label` komutu). Ara CA sertifikasında `Key Usage: Certificate Sign` bulunmalıdır;
+yukarıdaki `openssl x509` komutuyla bakın.
 
-Değişikliği Git'e itin:
+Değişikliği Git'e gönderin:
 
 `[bastion]`
 
@@ -798,7 +827,7 @@ git commit -m "site: lakehouse-ca caBundle"
 git push origin main
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek; commit kimlikleri sizde farklıdır):
 
 ```text
 check-site: OK
@@ -809,16 +838,15 @@ To ssh://git.kurum.example.net/veri/lakehouse.git
 ```
 
 **Ters giderse:** `caBundle satiri bulunamadi` → dosyadaki `tls: {caBundle: ""}` satırı
-değiştirilmiştir; `git checkout -- platform/values/site/glue.yaml` ile şablona dönüp Adım
-4.1'den itibaren tekrarlayın. `caBundle` **boş bırakılırsa** kurulum yine çalışır ama
-Trino Route'u `passthrough` olur ve tarayıcıların kök CA'ya güvenmesi zorunlu hâle gelir.
+değişmiştir. `git checkout -- platform/values/site/glue.yaml` ile ilk hâline dönüp Adım
+4.1'den itibaren tekrarlayın. `caBundle` boş kalırsa kurulum yine çalışır, ama Trino'nun dış
+adresi bu kök sertifikayı sunar ve tarayıcıların ona güvenmesi gerekir.
 
-### 5.12 `jupyterhub-secrets` — oturum çerezi ve kimlik saklama anahtarları
+### 5.12 `jupyterhub-secrets` — oturum ve kimlik saklama anahtarları
 
-**Neden:** JupyterHub chart'ı bu iki değeri values içinde bulamazsa **her render'da
-yeniden üretir**; kurulumdan sonra yeniden üretilirse bütün kullanıcı çerezleri
-geçersizleşir ve saklanan kimlik bilgileri çözülemez. Anahtar **adları** chart'ın
-sözleşmesidir, harfi harfine yazılır.
+JupyterHub bu iki değeri bulamazsa her güncellemede yenisini üretir. Kurulumdan sonra
+değişirlerse bütün kullanıcı oturumları kapanır ve saklanan kimlik bilgileri okunamaz.
+Anahtar adları JupyterHub'ın beklediği adlardır; harfi harfine yazılır.
 
 `[bastion]`
 
@@ -826,75 +854,70 @@ sözleşmesidir, harfi harfine yazılır.
 oc -n "$LAKEHOUSE_NS" create secret generic jupyterhub-secrets \
   --from-literal=hub.config.JupyterHub.cookie_secret="$(openssl rand -hex 32)" \
   --from-literal=hub.config.CryptKeeper.keys="$(openssl rand -hex 32)"
+oc -n "$LAKEHOUSE_NS" label secret jupyterhub-secrets \
+  lakehouse.io/yonetim=manual-30-kurulum-5.12
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/jupyterhub-secrets created
+secret/jupyterhub-secrets labeled
 ```
 
-**Bu Secret'ta yalnız iki anahtar vardır.** Hub ile proxy arasındaki kimlik jetonu burada
-**değildir**: chart onu kendi ürettiği `hub` Secret'ına yazar, ArgoCD `ignoreDifferences`
-ile dondurur ve iki pod da oradan okur. Üçüncü bir anahtar eklemek hiçbir işe yaramaz.
-Jetonun döndürülmesi
+Bu Secret'ta yalnız iki anahtar vardır. Hub ile proxy arasındaki jetonu JupyterHub kendi
+`hub` Secret'ında üretir ve saklar; buraya eklenmez. O jetonun yenilenmesi
 [90-referans/secret-listesi.md](90-referans/secret-listesi.md) §4'tedir.
 
-**Ters giderse:** anahtar adlarında bir harf bile yanlışsa chart değeri bulamaz ve yine
-rastgele üretir; adları Adım 5.15'teki listeyle karşılaştırın.
+**Ters giderse:** anahtar adlarında bir harf bile yanlışsa JupyterHub değeri bulamaz ve
+yine kendisi üretir; adları Adım 5.15'teki listeyle karşılaştırın.
 
-### 5.13 `ad-ca` — AD kök CA'sı (koşullu)
+### 5.13 `ad-ca` — AD'nin kök sertifikası (koşullu)
 
-**Ne zaman gerekir:** AD sunucusunun sertifikasını imzalayan kök CA, konteyner imajlarının
-varsayılan güven deposunda yoksa Keycloak, Trino ve Zeppelin AD'ye LDAPS ile bağlanamaz
-(`PKIX path building failed`). Kurumsal (özel) bir CA kullanan her AD'de bu adım
-**zorunludur**; sertifika herkesçe bilinen bir CA'dan alınmışsa gerekmez.
-Kökü [20-on-kosullar](20-on-kosullar.md) madde 6'da `$LDAP_CA_FILE` olarak almıştınız.
+**Ne zaman gerekir:** AD sunucusunun sertifikası kurumun kendi CA'sıyla imzalıysa
+Keycloak, Trino ve Zeppelin AD'ye güvenli bağlanamaz (`PKIX path building failed`). Bu
+durumda bu adım **zorunludur**. Sertifika herkesçe bilinen bir CA'dan alınmışsa gerekmez.
+Kök sertifikayı [20-on-kosullar](20-on-kosullar.md) madde 6'da `$LDAP_CA_FILE` olarak
+almıştınız.
 
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" create secret generic ad-ca --from-file=ca.crt="$LDAP_CA_FILE"
+oc -n "$LAKEHOUSE_NS" label secret ad-ca lakehouse.io/yonetim=manual-30-kurulum-5.13
 ```
 
 **Beklenen çıktı:**
 
 ```text
 secret/ad-ca created
+secret/ad-ca labeled
 ```
 
-#### Bu Secret'ı kim okur
+**Bu Secret'ı kim okur.** Ürün bu Secret'ı üç bileşene kendiliğinden bağlar. Elle bir şey
+eklemeniz, özel imaj üretmeniz ya da çalışan bir konteynerin içini düzenlemeniz
+gerekmez.
 
-Chart bu Secret'ı **kendiliğinden** üç bileşene birden bağlar. Elle mount eklemeniz, özel
-konteyner imajı üretmeniz ya da çalışan bir konteynerin `cacerts` dosyasını düzenlemeniz
-**gerekmez ve yasaktır** (pod her döndüğünde kaybolur).
+| Bileşen | Ne için | Konteynerdeki yol |
+|---|---|---|
+| Keycloak | AD kullanıcılarını okumak | `/opt/keycloak/conf/truststores/` |
+| Trino | kullanıcıların AD gruplarını okumak | `/etc/trino/s3-truststore/truststore.p12` |
+| Zeppelin | AD ile giriş | `/truststore/ad-truststore.p12` |
 
-| Bileşen | Nasıl bağlanır | Konteynerdeki yol | Hangi dosya yapar |
-|---|---|---|---|
-| **Keycloak** — AD kullanıcı federasyonu (LDAPS) | Keycloak CR `spec.truststores`; operatör Secret'taki PEM'leri bu dizine bağlar, Keycloak onları **sistem güven deposuyla birleştirir** | `/opt/keycloak/conf/truststores/` | `glue/templates/keycloak.yaml` |
-| **Trino coordinator** — LDAP grup sağlayıcısı (AD grupları) | `s3-truststore` initContainer'ı JVM güven deposunu hazırlar ve AD kökünü `keytool` ile **ekler**; ldaps bağlantısı JVM deposunu kullanır | `/etc/trino/s3-truststore/truststore.p12` | `platform/values/trino-ldap.yaml` |
-| **Zeppelin** — Shiro `ActiveDirectoryGroupRealm` | `ad-truststore` initContainer'ı imajın **kendi** `cacerts` dosyasını kopyalar, kökü `keytool` ile ekler; sunucu ve yorumlayıcı JVM'leri `-Djavax.net.ssl.trustStore` ile bu kopyayı kullanır | `/truststore/ad-truststore.p12` | `glue/templates/zeppelin.yaml` |
+Üçünü birden açıp kapatan tek ayar `platform/values/site/glue.yaml` içindeki
+`keycloak.ldap.caSecret` ayarıdır (değeri `ad-ca`).
 
-Üçünü birden açıp kapatan **tek** ayar `platform/values/site/glue.yaml` içindeki
-`keycloak.ldap.caSecret`'tir (şablonda `ad-ca` yazılıdır).
+**Bu Secret'a ihtiyacınız yoksa** (AD sertifikası herkesçe bilinen bir CA'dan geliyorsa)
+`platform/values/site/glue.yaml` dosyasında `keycloak.ldap.caSecret: ""` yazın. Trino
+için ayrıca bir şey yapılmaz; Secret yoksa Trino onu atlar.
 
-**Bu Secret'a ihtiyacınız yoksa** (AD sertifikanız herkesçe bilinen bir CA'dan geliyorsa)
-tek satır değiştirin: `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret: ""`.
-Trino tarafında yapılacak bir şey yoktur: `platform/values/trino-ldap.yaml`'daki bağlama
-`optional: true`'dur, Secret yoksa initContainer içe aktarmayı atlar ve Trino yine açılır.
+> **Trino ayarlarına `ldap.ssl.truststore.path` satırı eklemeyin.** Bu satırla Trino
+> kullanıcıların AD gruplarını zaman zaman okuyamaz; analistler
+> `Access Denied: Cannot access catalog lakehouse` hatası alır. AD kök sertifikası bu
+> yüzden Trino'ya Java'nın güven deposu üzerinden verilir. `scripts/check-site.sh` bu
+> satırı görürse hata verir.
 
-> **Trino'ya `ldap.ssl.truststore.path` satırı EKLEMEYİN.** Trino 483'te bu satırın açtığı
-> SSL yolu aralıklı olarak `CommunicationException … SSLContext was not set` ile düşer;
-> kullanıcının AD grupları boş gelir ve analistler `Access Denied: Cannot access catalog
-> lakehouse` alır (OpenShift provasında kabul testi bu yüzden düştü). AD kökü bu yüzden
-> JVM güven deposundan verilir. `scripts/check-site.sh` satırı görürse durur.
-
-Zeppelin'de kopya alınmasının nedeni: yalnız AD kökünü içeren bir güven deposu JVM'in
-varsayılanını **ezer** ve Maven Central'dan inen Trino JDBC sürücüsü ile Keycloak/Trino
-TLS bağlantıları kırılır. Depo parolası (`changeit`) sır değildir: depo yalnız açık
-sertifika taşır.
-
-#### Doğrulama (Adım 6 bootstrap'tan **sonra** çalıştırın)
+#### Doğrulama (Adım 6'dan **sonra** çalıştırın)
 
 `[bastion]`
 
@@ -904,10 +927,8 @@ oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore
 oc -n "$LAKEHOUSE_NS" logs deploy/zeppelin -c ad-truststore --tail=1
 ```
 
-**Beklenen çıktı** (ilk ve son satır kind kümesinden, ortadaki üç satır OpenShift
-provasından alınmış gerçek çıktıdır; S3 özel CA kullanmıyorsanız ikinci satır
-`JDK varsayilan` olur. Geliştirme kümesi `platform/values/trino-ldap.yaml`'ı yüklemez,
-Trino'da bu initContainer yoktur; ikinci komut orada hata verir, bu beklenen durumdur):
+**Beklenen çıktı** (S3 sertifikanız kurumsal CA'lı değilse ikinci satır
+`JDK varsayilan` olur):
 
 ```text
 secret-ad-ca
@@ -917,10 +938,10 @@ AD CA eklendi
 147
 ```
 
-Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: imajın varsayılan kökleri
-**artı** sizin AD kökünüz; onlarca olması beklenir. `1` görürseniz depoda yalnız AD kökü vardır
-(kopyalama yapılmamış) ve bu, dış TLS bağlantılarını kırar. AD kökünün gerçekten içeride olduğunu
-görmek için:
+Son satır, Zeppelin'in güven deposundaki **toplam** sertifika sayısıdır: Java'nın
+varsayılan kökleri **ve** AD kökünüz. Onlarca olması beklenir. `1` görürseniz depoda yalnız
+AD kökü vardır; bu durumda Zeppelin'in internetteki adreslere TLS bağlantıları kırılır. AD
+kökünün depoda olduğunu görmek için:
 
 `[bastion]`
 
@@ -930,44 +951,47 @@ oc -n "$LAKEHOUSE_NS" exec deploy/zeppelin -c zeppelin -- \
   -storepass changeit | grep ad-ca
 ```
 
-**Beklenen çıktı** (tarih kurulum gününüzü gösterir):
+**Beklenen çıktı** (tarih, Zeppelin pod'unun son açıldığı gündür):
 
 ```text
-ad-ca, Sep 19, 2026, trustedCertEntry,
+ad-ca, Nov 11, 2026, trustedCertEntry,
 ```
 
-**Ters giderse:** `error reading ...: no such file` → `$LDAP_CA_FILE` yolu yanlıştır.
-Dosyanın gerçekten bir kök CA olduğunu [20-on-kosullar](20-on-kosullar.md) madde 6'daki
-`openssl x509 -noout -subject -issuer` komutuyla doğrulayın.
-Kurulumdan sonra herhangi bir bileşenin günlüğünde `PKIX path building failed` ya da
-`unable to find valid certification path to requested target` görürseniz: bu Secret ya
-eksiktir, ya **yanlış kökü** taşımaktadır, ya da ilgili bileşen onu okumamıştır —
-yukarıdaki "Doğrulama" başlığındaki komutları sırayla çalıştırın. Zeppelin'in
-`ad-truststore` initContainer'ı `Error` durumundaysa pod hiç açılmaz: `ca.crt` PEM
-değildir (`openssl x509 -inform der` ile çevirin).
-Uçtan uca LDAPS el sıkışması özel CA'lı bir AD ile OpenShift'te doğrulandı (Keycloak,
-Zeppelin ve Trino); geliştirme kümesinde AD yoktur, orada yalnız bağlama ve güven deposu
-üretimi doğrulanır.
+`changeit` bir parola değildir; Java güven depolarının herkesçe bilinen varsayılanıdır.
+Depoda yalnız açık sertifikalar vardır.
+
+**Ters giderse:**
+
+- `error reading ...: no such file`: `$LDAP_CA_FILE` yolu yanlıştır. Dosyanın bir kök
+  sertifika olduğunu [20-on-kosullar](20-on-kosullar.md) madde 6'daki
+  `openssl x509 -noout -subject -issuer` komutuyla kontrol edin.
+- Bir bileşenin günlüğünde `PKIX path building failed` ya da
+  `unable to find valid certification path to requested target`: Secret eksiktir, yanlış
+  kökü taşıyordur ya da bileşen onu okumamıştır. Yukarıdaki doğrulama komutlarını sırayla
+  çalıştırın.
+- Zeppelin pod'u açılmıyor ve `ad-truststore` adımı `Error` durumundaysa `ca.crt` PEM
+  biçiminde değildir; `openssl x509 -inform der -in ad-ca.cer -out ad-ca.pem` ile çevirip
+  Secret'ı yeniden yaratın.
 
 <a id="s3-ca"></a>
-### 5.14 `s3-ca` — S3'ün kök CA'sı (koşullu)
+### 5.14 `s3-ca` — S3'ün kök sertifikası (koşullu)
 
-**Ne zaman gerekir:** S3 sertifikası kurumun kendi CA'sıyla imzalıysa ya da self-signed ise
-(FlashBlade fabrikadan self-signed gelir). Yani `$S3_CA_FILE` doluysa ve §4.1'de
-`caSecret: "s3-ca"` yazıldıysa. Sertifika herkesçe bilinen bir CA'dan geliyorsa **bu adımı
-atlayın**.
+**Ne zaman gerekir:** S3 sertifikası kurumun kendi CA'sıyla imzalıysa ya da kendinden
+imzalıysa (bazı depolama cihazları fabrikadan böyle gelir). Yani `$S3_CA_FILE` doluysa ve
+Adım 4.1'de `caSecret: "s3-ca"` yazıldıysa. Sertifika herkesçe bilinen bir CA'dan
+geliyorsa **bu adımı atlayın**.
 
-**Ne yapar:** S3'e bağlanan her bileşen (yedekleme, Kafka Connect, Spark, Polaris, Trino, not
-defterleri) bu Secret'tan S3'ün CA'sını alır. Secret'ta iki dosya olur:
+**Ne yapar:** S3'e bağlanan her bileşen (yedekleme, Kafka Connect, Spark, Polaris, Trino,
+not defterleri) S3'ün kök sertifikasını bu Secret'tan alır. Secret'ta iki dosya vardır:
 
-- `ca.crt` — depolama ekibinin verdiği kök CA, olduğu gibi.
-- `truststore.p12` — Java'nın güvendiği bütün kökler **artı** bu CA. Java'lı bileşenler
-  (Connect, Spark, Polaris, Trino) bunu kullanır. Herkesçe bilinen kökler de içinde olduğu için
-  bu bileşenlerin internet erişimi (ör. Maven) bozulmaz.
+- `ca.crt` — depolama ekibinin verdiği kök sertifika, olduğu gibi;
+- `truststore.p12` — Java'nın güvendiği bütün kökler **ve** bu sertifika. Java ile
+  çalışan bileşenler bunu kullanır. Herkesçe bilinen kökler de içinde olduğu için bu
+  bileşenlerin internet bağlantıları bozulmaz.
 
-Dosyayı `keytool` üretir (Java ile gelir; RHEL/Fedora:
-`sudo dnf install -y java-21-openjdk-headless`).
-Aşağıdaki komutları **sırayla, aynı terminalde** çalıştırın:
+`truststore.p12` dosyasını Java ile gelen `keytool` aracı üretir (RHEL/Fedora:
+`sudo dnf install -y java-21-openjdk-headless`). Aşağıdaki komutları **sırayla, aynı
+terminalde** çalıştırın:
 
 `[bastion]`
 
@@ -983,11 +1007,12 @@ keytool -importcert -noprompt -alias s3-ca -file "$S3_CA_FILE" \
 keytool -list -keystore s3-truststore.p12 -storepass changeit | grep -E "contains|^s3-ca"
 oc -n "$LAKEHOUSE_NS" create secret generic s3-ca \
   --from-file=ca.crt="$S3_CA_FILE" --from-file=truststore.p12=s3-truststore.p12
+oc -n "$LAKEHOUSE_NS" label secret s3-ca lakehouse.io/yonetim=manual-30-kurulum-5.14
 rm -f s3-truststore.p12
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; sertifika adı, tarih ve sayılar
-sizde farklıdır — önemli olan `s3-ca, ... trustedCertEntry` satırıdır):
+**Beklenen çıktı** (sertifikanın adı, tarih ve sayılar sizde farklıdır; önemli olan
+`s3-ca, ... trustedCertEntry` satırıdır):
 
 ```text
 subject=CN=ingress-operator@1794001995
@@ -998,21 +1023,23 @@ Certificate was added to keystore
 Your keystore contains 111 entries
 s3-ca, 8 Kas 2026, trustedCertEntry,
 secret/s3-ca created
+secret/s3-ca labeled
 ```
 
-`changeit` bir parola değildir, Java güven depolarının herkesçe bilinen varsayılanıdır; depoda
-yalnız açık sertifikalar vardır.
+**Ters giderse:**
 
-**Ters giderse:** `keytool: command not found` → Java kurulu değildir (yukarıdaki `dnf`
-komutu). `java.home` boş geliyorsa `JHOME` değişkenini elle verin (ör.
-`JHOME=/usr/lib/jvm/jre`). `Keystore was tampered with, or password was incorrect` → kaynak
-deponun parolası farklıdır; birçok dağıtımda yine `changeit`'tir, değilse dağıtımınızın
-belgesine bakın. `openssl x509` komutu `unable to load certificate` derse dosya PEM değildir:
-`openssl x509 -inform der -in s3-ca.cer -out s3-ca.pem` ile çevirin. Secret'ı kurulumdan
-**sonra** yaratırsanız ya da değiştirirseniz bileşenleri yeniden başlatmanız gerekir
-([50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md)).
+- `keytool: command not found`: Java kurulu değildir; yukarıdaki `dnf` komutunu
+  çalıştırın.
+- `java.home` boş geliyorsa `JHOME` değişkenini elle verin (ör. `JHOME=/usr/lib/jvm/jre`).
+- `Keystore was tampered with, or password was incorrect`: Java'nın varsayılan güven
+  deposunun parolası farklıdır; çoğu dağıtımda `changeit`'tir, değilse dağıtımınızın
+  belgesine bakın.
+- `openssl x509` `unable to load certificate` diyorsa dosya PEM biçiminde değildir;
+  `openssl x509 -inform der -in s3-ca.cer -out s3-ca.pem` ile çevirin.
+- Secret'ı kurulumdan **sonra** yaratırsanız ya da değiştirirseniz bileşenleri yeniden
+  başlatmak gerekir ([50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md)).
 
-### 5.15 Hepsini birden doğrulayın
+### 5.15 Hepsini birden kontrol edin
 
 `[bastion]`
 
@@ -1026,8 +1053,7 @@ for s in connect-push s3-creds backup-s3-creds polaris-root keycloak-admin \
 done
 ```
 
-**Beklenen çıktı** (kind kümesinden alınmış gerçek çıktı; üretimde ilk satır
-`.dockerconfigjson` gösterir):
+**Beklenen çıktı:**
 
 ```text
 connect-push             .dockerconfigjson
@@ -1047,24 +1073,26 @@ ad-ca                    ca.crt
 s3-ca                    ca.crt truststore.p12
 ```
 
-Son iki satır **koşulludur**. `ad-ca`: AD sertifikanız konteynerlerin zaten güvendiği bir
-kökten geliyorsa §5.13'ü atlamış olursunuz ve burada `EKSIK` yazması normaldir; özel bir
-kurumsal CA kullanan AD'de ise **dolu olmalıdır**. `s3-ca`: `platform/values/site/glue.yaml`'da
-`caSecret: "s3-ca"` yazıyorsa **dolu olmalıdır** (§5.14); boşsa `EKSIK` normaldir.
+Son iki satır koşulludur:
 
-**Ters giderse:** `EKSIK` yazan her satır için ilgili alt adımı tekrarlayın. Bu tabloyu
-bootstrap'tan **önce** eksiksiz görmelisiniz: eksik bir Secret'la başlatılan kurulumda
-ilgili pod `CreateContainerConfigError` durumunda bekler (Secret sonradan yaratılınca
-kubelet kendiliğinden toparlar, ama tanı koymak zaman alır).
+- `ad-ca`: AD sertifikanız herkesçe bilinen bir CA'dan geliyorsa Adım 5.13'ü
+  atlamışsınızdır ve `EKSIK` yazması normaldir. Kurumsal CA kullanan bir AD'de dolu
+  olmalıdır.
+- `s3-ca`: `platform/values/site/glue.yaml` dosyasında `caSecret: "s3-ca"` yazıyorsa dolu
+  olmalıdır (Adım 5.14); boşsa `EKSIK` normaldir.
+
+**Ters giderse:** `EKSIK` yazan her zorunlu Secret için ilgili adımı tekrarlayın. Bu
+listeyi Adım 6'dan **önce** eksiksiz görmelisiniz; eksik bir Secret'la başlayan kurulumda
+ilgili pod `CreateContainerConfigError` durumunda bekler.
 
 ---
 
-## 6. Bootstrap
+## 6. Kurulumu başlatın
 
-**Neden:** `bootstrap/bootstrap.sh` ArgoCD'ye tek bir **kök Application** yazar; kök,
-`platform/apps/` altındaki bütün alt Application'ları üretir ve hepsinin depo adresini ve
-revizyonunu her uzlaşmada aynı değere sabitler. OpenShift'te ArgoCD'yi GitOps operatörü
-yönettiği için betik yukarı akış ArgoCD manifestini **uygulamaz**.
+`bootstrap/bootstrap.sh` ArgoCD'ye tek bir **kök uygulama** yazar. Kök uygulama
+`platform/apps/` klasöründeki bütün bileşen uygulamalarını yaratır ve hepsinin aynı Git
+deposunu ve aynı dalı okumasını sağlar. OpenShift'te ArgoCD'yi GitOps operatörü yönettiği
+için betik ArgoCD'yi ayrıca kurmaz.
 
 `[bastion]`
 
@@ -1085,21 +1113,21 @@ OK: ArgoCD v3.5.2 + lakehouse-root (env=prod, repo=...@main) uygulandı
 İzle: kubectl -n openshift-gitops get applications
 ```
 
-İlk satır **beklenen** satırdır: ArgoCD'yi operatör yönetir. Bu satır yazmıyorsa betik
-yukarı akış ArgoCD'sini kurmaya kalkmıştır — hemen durdurun ve
+İlk satır mutlaka görünmelidir: ArgoCD'yi operatör yönetir. Bu satır yoksa betik ArgoCD'yi
+kendisi kurmaya başlamıştır; hemen durdurun (`Ctrl-C`) ve
 [20-on-kosullar](20-on-kosullar.md) madde 2'ye dönün.
 
-Çıktıda ayrıca iki `Warning:` satırı görebilirsiniz (`missing the
+Çıktıda iki `Warning:` satırı da görebilirsiniz (`missing the
 kubectl.kubernetes.io/last-applied-configuration annotation` ve `prefer a domain-qualified
-finalizer name`); ikisi de zararsızdır. Son satırdaki `ArgoCD v3.5.2` ifadesi betiğin kendi
-sürüm sabitidir; OpenShift'te çalışan ArgoCD, GitOps operatörünün getirdiği sürümdür.
+finalizer name`); ikisi de zararsızdır. Son satırdaki `ArgoCD v3.5.2` betiğin kendi sürüm
+bilgisidir; OpenShift'te çalışan ArgoCD, GitOps operatörünün sürümüdür.
 
 `--revision main` yerine bir etiket ya da commit kimliği verebilirsiniz; ArgoCD o noktayı
 uygular ve orada kalır.
 
-**Ters giderse:** `bilinmeyen argüman` → bayrak adını yanlış yazdınız. `Unauthorized` →
-`oc login` oturumunuz düşmüştür. Kök Application `repository not accessible` derse Adım
-3'teki Secret'ın etiketi eksiktir.
+**Ters giderse:** `bilinmeyen argüman` → bir seçeneğin adı yanlış yazılmıştır.
+`Unauthorized` → `oc login` oturumunuz sona ermiştir. Kök uygulama
+`repository not accessible` diyorsa Adım 3.2'deki etiket eksiktir.
 
 ### 6.1 Uygulamaların ayağa kalkmasını izleyin
 
@@ -1109,52 +1137,60 @@ uygular ve orada kalır.
 watch -n 30 "oc -n $ARGOCD_NS get applications"
 ```
 
-**Beklenen çıktı** (örnek — 40–60 dakika sonra; `watch` ekranından `Ctrl-C` ile
-çıkılır):
+`watch` ekranı her 30 saniyede yenilenir; çıkmak için `Ctrl-C`.
+
+**Beklenen çıktı** (örnek; 40–60 dakika sonra, `trino` dışındaki uygulamalar hazır
+olduğunda):
 
 ```text
 NAME                SYNC STATUS   HEALTH STATUS
-lakehouse-root      Synced        Healthy
 cert-manager        Synced        Healthy
 cnpg                Synced        Healthy
 cnpg-barman         Synced        Healthy
+custom              Synced        Healthy
+glue                Synced        Healthy
+jupyterhub          Synced        Healthy
 keycloak-operator   Synced        Healthy
+lakehouse-root      Synced        Healthy
+polaris             Synced        Healthy
 spark-operator      Synced        Healthy
 strimzi             Synced        Healthy
 superset-operator   Synced        Healthy
-glue                Synced        Healthy
-custom              Synced        Healthy
-polaris             Synced        Healthy
-jupyterhub          Synced        Healthy
 trino               OutOfSync     Progressing
 ```
 
-**Süre beklentileri.** cert-manager ve operatörler 2–5 dakika; `glue` en ağır uygulamadır
-(Kafka Connect imajının kümede üretilmesi ~10 dakika, üç PostgreSQL kümesinin ilk kurulumu,
-Zeppelin ve not defteri imajlarının çekilmesi) ve 30–45 dakika sürebilir.
+**Ne kadar sürer:** cert-manager ve operatörler 2–5 dakikada hazır olur. `glue` en uzun
+sürendir (Kafka Connect imajının üretilmesi, üç PostgreSQL veritabanının kurulması,
+imajların indirilmesi): 30–45 dakika.
 
-**`trino` bu aşamada Healthy olamaz ve bu normaldir.** Trino pod'u `polaris-trino`
-Secret'ını bekler; o Secret Polaris kataloğu kurulurken yazılır (bir sonraki bölüm).
+**`trino` bu aşamada hazır olamaz; bu normaldir.** Trino, Polaris kataloğu kurulurken
+yaratılan `polaris-trino` Secret'ını bekler. Katalog bir sonraki bölümde kurulur; o zaman
+`trino` da `Synced Healthy` olur.
 
-**İzleme ve yedekleme uygulamaları listede yoktur.** `monitoring` ve `velero`
-Application'ları yalnız geliştirme kümesinde bulunur; OpenShift'te izlemeyi platformun
-kendi kullanıcı iş yükü izlemesi, ad alanı yedeğini OADP yapar.
+İzleme ve yedekleme için ayrı bir uygulama yoktur: OpenShift'in kendi izlemesi ve OADP
+kullanılır.
 
-**Ters giderse:** bir uygulama uzun süre `Progressing` kalıyorsa
-`oc -n "$ARGOCD_NS" get application ADI -o jsonpath='{.status.conditions}'` çıktısına ve
-`oc -n "$LAKEHOUSE_NS" get pods` listesine bakın. `ImagePullBackOff` → egress listesi
-kapalıdır ([20-on-kosullar](20-on-kosullar.md) madde 10). `CreateContainerConfigError` →
-bir Secret eksiktir (Adım 5.15). PVC'ler `Pending` kalıyorsa StorageClass yoktur (madde 3).
-Pod `ContainerCreating`'de kalıp olaylarında `does not contain driver` yazıyorsa pod depolama
-sürücüsü olmayan bir düğüme düşmüştür ([20-on-kosullar](20-on-kosullar.md) madde 3.1).
+**Ters giderse:** bir uygulama uzun süre `Progressing` kalıyorsa nedeni şu iki komutun
+çıktısındadır (`ADI` yerine uygulamanın adını yazın):
 
-İki ArgoCD durumu ilk kurulumda sık görülür:
+```bash
+oc -n "$ARGOCD_NS" get application ADI -o jsonpath='{.status.conditions}{"\n"}'
+oc -n "$LAKEHOUSE_NS" get pods
+```
 
-- **`SYNC STATUS` sütununda `Unknown`** ve koşulda `DeadlineExceeded` / `failed to generate
-  manifest`: ArgoCD chart'ı internetten (GitHub) indiremedi. Önce
-  [20-on-kosullar](20-on-kosullar.md) madde 10'daki erişimi doğrulayın; erişim varsa hata
-  geçicidir ve ArgoCD onu önbellekte tutar. Uygulamayı yeniletin (`ADI` yerine uygulamanın
-  adını yazın):
+| Ne görüyorsunuz | Neden |
+|---|---|
+| pod `ImagePullBackOff` | kümenin dış erişim izinleri eksiktir ([20-on-kosullar](20-on-kosullar.md) madde 10) |
+| pod `CreateContainerConfigError` | bir Secret eksiktir (Adım 5.15) |
+| PVC `Pending` | StorageClass yoktur ([20-on-kosullar](20-on-kosullar.md) madde 3) |
+| pod `ContainerCreating`'de kalıyor, olaylarda `does not contain driver` | pod depolama sürücüsü olmayan bir düğüme düşmüştür ([20-on-kosullar](20-on-kosullar.md) madde 3.1) |
+
+İlk kurulumda iki ArgoCD durumu sık görülür:
+
+- **`SYNC STATUS` sütununda `Unknown`**, koşullarda `DeadlineExceeded` ya da
+  `failed to generate manifest`: ArgoCD bileşenin paketini internetten indiremedi. Önce
+  [20-on-kosullar](20-on-kosullar.md) madde 10'daki erişimi kontrol edin. Erişim varsa
+  hata geçicidir; uygulamayı yenileyin:
 
   `[bastion]`
 
@@ -1162,9 +1198,9 @@ sürücüsü olmayan bir düğüme düşmüştür ([20-on-kosullar](20-on-kosull
   oc -n "$ARGOCD_NS" annotate application ADI argocd.argoproj.io/refresh=hard --overwrite
   ```
 
-- **Bir düzeltmeyi Git'e ittiniz ama uygulama hâlâ eski hatayı veriyor:** ArgoCD başarısız
-  bir sync'i, başladığı **eski** revizyonla yeniden denemeye devam eder. Süren işlemi
-  durdurun; otomatik sync yeni revizyonla yeniden başlar:
+- **Bir düzeltmeyi Git'e gönderdiniz ama uygulama hâlâ eski hatayı veriyor:** ArgoCD
+  başarısız bir uygulamayı, başladığı eski commit ile denemeye devam eder. Süren işlemi
+  durdurun; ArgoCD yeni commit ile yeniden başlar:
 
   `[bastion]`
 
@@ -1173,15 +1209,14 @@ sürücüsü olmayan bir düğüme düşmüştür ([20-on-kosullar](20-on-kosull
     -p '{"status":{"operationState":{"phase":"Terminating"}}}'
   ```
 
-Ayrıntılı belirti tablosu:
-[50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
+Bütün belirtiler: [50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
 
 ---
 
-## 7. Kurulumun doğrulanması
+## 7. Kurulumu doğrulayın
 
-Aşağıdaki zincir bileşenleri bağımlılık sırasıyla bekler. Her komut bir öncekinin
-tamamlanmasını şart koşar; ilki takılırsa sonrakileri denemeyin.
+Aşağıdaki komutlar bileşenleri birbirine bağımlı oldukları sırayla bekler. Biri takılırsa
+sonrakileri çalıştırmayın; önce takılanı çözün.
 
 ### 7.1 Kafka, Connect, veritabanları, Polaris, Keycloak
 
@@ -1196,35 +1231,36 @@ oc -n "$LAKEHOUSE_NS" wait keycloak/keycloak --for=condition=Ready --timeout=900
 oc -n "$LAKEHOUSE_NS" wait keycloakrealmimport/lakehouse-realm --for=condition=Done --timeout=600s
 ```
 
-Sıra `test/e2e/run.sh` ile aynıdır: her sürümde uçtan uca sınanan zincir budur.
-
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; üretimde `INSTANCES` değeri
-**2** olur — birincil artı yedek):
+**Beklenen çıktı** (`AGE` sütunu sizde farklıdır; her veritabanında 2 kopya çalışır):
 
 ```text
 kafka.kafka.strimzi.io/lakehouse condition met
 kafkaconnect.kafka.strimzi.io/connect condition met
-NAME          AGE   INSTANCES   READY   STATUS                     PRIMARY
-keycloak-db   22h   1           1       Cluster in healthy state   keycloak-db-1
-polaris-db    22h   1           1       Cluster in healthy state   polaris-db-1
-superset-db   22h   1           1       Cluster in healthy state   superset-db-1
+NAME          AGE     INSTANCES   READY   STATUS                     PRIMARY
+keycloak-db   3d4h    2           2       Cluster in healthy state   keycloak-db-1
+polaris-db    3d4h    2           2       Cluster in healthy state   polaris-db-1
+superset-db   3d4h    2           2       Cluster in healthy state   superset-db-1
 deployment "polaris" successfully rolled out
 keycloak.k8s.keycloak.org/keycloak condition met
 keycloakrealmimport.k8s.keycloak.org/lakehouse-realm condition met
 ```
 
-**Ters giderse:** `kafka` beklemede kalıyorsa broker pod'larının PVC'leri bağlanmamıştır.
-`kafkaconnect` en uzun süren adımdır: imaj üretimi
-`oc -n "$LAKEHOUSE_NS" get pods | grep connect-build` ile izlenir; `unauthorized` →
-`connect-push` jetonu geçersizdir. `keycloakrealmimport` `Done` olmuyorsa
-`oc -n "$LAKEHOUSE_NS" logs job/lakehouse-realm` çıktısında eksik yer tutucu arayın
-(Adım 5.6). Belirti tablosu:
-[50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
+**Ters giderse:**
+
+- `kafka` beklemede kalıyorsa Kafka pod'larının diskleri (PVC) bağlanmamıştır.
+- `kafkaconnect` en uzun süren adımdır, çünkü önce imajı üretilir. İlerlemeyi
+  `oc -n "$LAKEHOUSE_NS" get pods | grep connect-build` ile izleyin. `unauthorized` hatası
+  `connect-push` jetonunun geçersiz olduğunu gösterir.
+- `keycloakrealmimport` `Done` olmuyorsa
+  `oc -n "$LAKEHOUSE_NS" logs job/lakehouse-realm` çıktısına bakın; çoğu zaman Adım 5.6'daki
+  Secret eksiktir.
+
+Bütün belirtiler: [50-isletme/sorun-giderme.md](50-isletme/sorun-giderme.md) §3.
 
 **Yedekler gerçekten S3'e gidiyor mu?** `Cluster in healthy state` yalnız veritabanının
-çalıştığını söyler; yedeğin yazılıp yazılmadığını söylemez. S3'e ulaşılamıyorsa (yanlış
-anahtar, eksik CA) veritabanı sağlıklı görünür ama **hiç yedek alınmaz**. Bunu ayrıca
-denetleyin (ilk yedeğin yazılması birkaç dakika sürebilir):
+çalıştığını söyler. S3'e ulaşılamıyorsa (yanlış anahtar, eksik kök sertifika) veritabanı
+sağlıklı görünür ama hiç yedek alınmaz. Bunu ayrıca kontrol edin (ilk yedeğin yazılması
+birkaç dakika sürebilir):
 
 `[bastion]`
 
@@ -1235,7 +1271,7 @@ for c in polaris-db keycloak-db superset-db; do
 done
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 polaris-db   ContinuousArchivingSuccess
@@ -1243,12 +1279,18 @@ keycloak-db  ContinuousArchivingSuccess
 superset-db  ContinuousArchivingSuccess
 ```
 
-**Ters giderse:** `ContinuousArchivingFailing` görürseniz nedeni eklentinin günlüğündedir:
-`oc -n "$LAKEHOUSE_NS" logs polaris-db-1 -c plugin-barman-cloud --tail=50 | grep ERROR`.
-`SSL validation failed ... CERTIFICATE_VERIFY_FAILED` → S3'ün kök CA'sı verilmemiştir (§4.1
-`caSecret` ve §5.14). `AccessDenied` → `backup-s3-creds` anahtarı yedek bucket'ına yetkili
-değildir (§5.3). CA'yı ya da anahtarı sonradan düzelttiyseniz veritabanı pod'larının yeniden
-başlaması gerekir:
+**Ters giderse:** `ContinuousArchivingFailing` görürseniz nedenine bakın:
+
+```bash
+oc -n "$LAKEHOUSE_NS" logs polaris-db-1 -c plugin-barman-cloud --tail=50 | grep ERROR
+```
+
+- `SSL validation failed ... CERTIFICATE_VERIFY_FAILED`: S3'ün kök sertifikası eksiktir
+  (Adım 4.1 `caSecret` ve Adım 5.14).
+- `AccessDenied`: `backup-s3-creds` anahtarının yedek bucket'ına yetkisi yoktur (Adım 5.3).
+
+Kök sertifikayı ya da anahtarı sonradan düzelttiyseniz veritabanı pod'larını yeniden
+başlatın:
 
 `[bastion]`
 
@@ -1260,7 +1302,7 @@ for c in polaris-db keycloak-db superset-db; do
 done
 ```
 
-### 7.2 Hiçbir pod hata durumunda değil
+### 7.2 Hata durumunda pod kalmadı
 
 `[bastion]`
 
@@ -1269,7 +1311,7 @@ oc -n "$LAKEHOUSE_NS" get pods \
   --field-selector=status.phase!=Running,status.phase!=Succeeded
 ```
 
-**Beklenen çıktı** (örnek — Trino pod'ları dışında hiçbir şey kalmamalıdır):
+**Beklenen çıktı** (örnek; bu aşamada yalnız Trino pod'ları listelenmelidir):
 
 ```text
 NAME                                 READY   STATUS                       RESTARTS   AGE
@@ -1278,14 +1320,14 @@ trino-worker-5fd66b56b7-zcfxk        0/1     CreateContainerConfigError   0     
 trino-worker-5fd66b56b7-nxtz9        0/1     CreateContainerConfigError   0          12m
 ```
 
-Trino'nun coordinator'ı da worker'ları da Polaris kataloğu kurulana kadar bekler
+Trino pod'ları Polaris kataloğu kurulana kadar bekler
 ([40-kurulum-sonrasi](40-kurulum-sonrasi.md) §2).
 
 **Ters giderse:** listedeki her pod için `oc -n "$LAKEHOUSE_NS" describe pod ADI`
-çıktısının `Events` bölümüne bakın. Trino dışındaki bir pod `CreateContainerConfigError`
-veriyorsa Adım 5.15'ü tekrarlayın.
+çıktısının `Events` bölümüne bakın. Trino dışında bir pod `CreateContainerConfigError`
+gösteriyorsa Adım 5.15'i tekrarlayın.
 
-### 7.3 Route'lar ve dış erişim
+### 7.3 Dış adresler
 
 `[bastion]`
 
@@ -1298,40 +1340,46 @@ for r in keycloak superset jupyterhub zeppelin; do
 done
 ```
 
-Adres **kümeden** okunur, `$APPS_DOMAIN` ile elle kurulmaz: site değerlerinde
-`trino.hostname` gibi bir kurumsal ad ezmesi kullandıysanız döngü yine doğru adresi
-dener.
+Adresler kümeden okunur; `trino.hostname` gibi ayarlarla kurumsal bir ad verdiyseniz
+döngü yine doğru adresi dener.
 
-**Beklenen çıktı** (örnek — `200` ya da `302` "ayakta" demektir; oturum açma
-yönlendirmeleri `302` verir):
+**Beklenen çıktı** (alan adı sizinkidir. `200` ve `302` "çalışıyor" demektir; giriş
+sayfasına yönlendiren adresler `302` verir):
 
 ```text
-NAME         HOST/PORT                                    PORT    TERMINATION
-keycloak     keycloak-lakehouse.apps.ocp.example.net      http    edge
-polaris      polaris-lakehouse.apps.ocp.example.net       8181    edge
-superset     superset-lakehouse.apps.ocp.example.net      http    edge
-jupyterhub   jupyterhub-lakehouse.apps.ocp.example.net    http    edge
-zeppelin     zeppelin-lakehouse.apps.ocp.example.net      http    edge
-trino        trino-lakehouse.apps.ocp.example.net         https   reencrypt
-keycloak     keycloak-lakehouse.apps.ocp.example.net      302
-superset     superset-lakehouse.apps.ocp.example.net      200
-jupyterhub   jupyterhub-lakehouse.apps.ocp.example.net    302
-zeppelin     zeppelin-lakehouse.apps.ocp.example.net      200
+NAME                        HOST/PORT                                                          PATH   SERVICES                             PORT    TERMINATION   WILDCARD
+jupyterhub                  jupyterhub-lakehouse.apps.ocpphy.solusbilisim.com                         proxy-public                         http    edge          None
+keycloak                    keycloak-lakehouse.apps.ocpphy.solusbilisim.com                           keycloak-service                     http    edge          None
+lakehouse-dual-role-0       lakehouse-dual-role-0-lakehouse.apps.ocpphy.solusbilisim.com              lakehouse-dual-role-0                9094    passthrough   None
+lakehouse-dual-role-1       lakehouse-dual-role-1-lakehouse.apps.ocpphy.solusbilisim.com              lakehouse-dual-role-1                9094    passthrough   None
+lakehouse-dual-role-2       lakehouse-dual-role-2-lakehouse.apps.ocpphy.solusbilisim.com              lakehouse-dual-role-2                9094    passthrough   None
+lakehouse-kafka-bootstrap   lakehouse-kafka-bootstrap-lakehouse.apps.ocpphy.solusbilisim.com          lakehouse-kafka-external-bootstrap   9094    passthrough   None
+polaris                     polaris-lakehouse.apps.ocpphy.solusbilisim.com                            polaris                              8181    edge          None
+superset                    superset-lakehouse.apps.ocpphy.solusbilisim.com                           superset-web-server                  http    edge          None
+trino                       trino-lakehouse.apps.ocpphy.solusbilisim.com                              trino                                https   reencrypt     None
+zeppelin                    zeppelin-lakehouse.apps.ocpphy.solusbilisim.com                           zeppelin                             http    edge          None
+keycloak     keycloak-lakehouse.apps.ocpphy.solusbilisim.com 302
+superset     superset-lakehouse.apps.ocpphy.solusbilisim.com 302
+jupyterhub   jupyterhub-lakehouse.apps.ocpphy.solusbilisim.com 302
+zeppelin     zeppelin-lakehouse.apps.ocpphy.solusbilisim.com 200
 ```
 
-Trino Route'unun sonlandırması `tls.caBundle` doluysa `reencrypt`, boşsa `passthrough`
-olur. Trino'yu bu listede sınamayın: kimlik doğrulaması zorunlu olduğu için `401` döner,
-bu da beklenen davranıştır. `polaris` Route'u katalog API'sidir (kullanıcı arayüzü değil),
-adresi şablonda verilmez; OpenShift `polaris-$LAKEHOUSE_NS.$APPS_DOMAIN` olarak üretir ve
-döngüde denenmez.
+`lakehouse-kafka-bootstrap` ve `lakehouse-dual-role-*` satırları Kafka'nın dış
+adresleridir ve yalnız nginx günlükleri ya da JSON olay akışları açıksa görünür. Trino'nun
+adresi `tls.caBundle` doluysa `reencrypt`, boşsa `passthrough` olur. Trino'yu bu döngüde
+denemeyin: giriş zorunlu olduğu için `401` döner. `polaris` adresi katalog API'sidir,
+kullanıcı arayüzü değildir.
 
-**Ters giderse:** `NotFound` → glue henüz Route'ları yazmamıştır (Adım 6.1). `000` → DNS
-çözülmüyor ya da güvenlik duvarı kapalıdır ([20-on-kosullar](20-on-kosullar.md) madde 7);
-kurumsal ad ezmesi kullandıysanız o ad için CNAME kaydının açıldığını doğrulayın.
-`503` → Route arkasındaki pod henüz hazır değildir, birkaç dakika bekleyin.
-`curl: (60) SSL certificate problem` (döngüde `000` olarak görünür) → router sertifikası
-herkesçe bilinen bir CA'dan değildir; bu, yeni kurulmuş kümelerde olağandır. Router kümenin
-**varsayılan** sertifikasını kullanıyorsa CA'sını kümeden alıp döngüdeki `curl`'e verin:
+**Ters giderse:**
+
+| Ne görüyorsunuz | Neden |
+|---|---|
+| `NotFound` | `glue` uygulaması adresleri henüz yaratmamıştır (Adım 6.1) |
+| `000` | DNS çözülmüyor ya da güvenlik duvarı kapalı ([20-on-kosullar](20-on-kosullar.md) madde 7); kurumsal ad kullandıysanız DNS kaydını kontrol edin |
+| `503` | adresin arkasındaki pod henüz hazır değil; birkaç dakika bekleyin |
+| `000` ve öncesinde `curl: (60) SSL certificate problem` | OpenShift'in dış adres sertifikası herkesçe bilinen bir CA'dan değil (yeni kümelerde olağandır) |
+
+Son durumda OpenShift'in kendi kök sertifikasını alıp `curl`'e verin:
 
 `[bastion]`
 
@@ -1345,22 +1393,21 @@ for r in keycloak superset jupyterhub zeppelin; do
 done
 ```
 
-Router kurumsal bir sertifika kullanıyorsa `~/router-ca.crt` yerine kurumun kök CA'sını verin.
-Tarayıcılar aynı uyarıyı verir; kullanıcılar için kalıcı çözüm, router'a kurumsal sertifika
-takılmasıdır (platform ekibi). Ürünün kendi bileşenleri bu sertifikaya **ihtiyaç duymaz**:
-Keycloak'la sunucu tarafı konuşmaları küme içinden yapılır.
+OpenShift kurumsal bir sertifika kullanıyorsa `~/router-ca.crt` yerine kurumun kök
+sertifikasını verin. Tarayıcılar da aynı uyarıyı verir; kalıcı çözüm OpenShift'e kurumsal
+sertifika takılmasıdır (platform ekibinin işi). Ürünün bileşenleri bu sertifikaya ihtiyaç
+duymaz; birbirleriyle küme içinden konuşurlar.
 
 ---
 
-## Realm içeriğini sonradan değiştirmek
+## 8. Keycloak yapılandırmasını sonradan değiştirmek
 
-`KeycloakRealmImport` realm'i yalnız **yoksa** içe aktarır.
-`glue/templates/keycloak-realm.yaml` değişse bile çalışan realm'e dokunmaz: CR `Done`
-görünür, değişiklik uygulanmaz. Bu yüzden `keycloak-clients` Secret'ı ve AD ayarları
-kurulumdan **önce** doğru olmalıdır.
+Keycloak'ın yapılandırması (`lakehouse` realm'i) yalnız **ilk kurulumda**, realm yokken
+yüklenir. Ürün dosyası sonradan değişse bile çalışan realm değişmez. Bu yüzden
+`keycloak-clients` Secret'ı ve AD ayarları kurulumdan önce doğru olmalıdır.
 
-Yine de realm'i yenilemek gerekirse (**kullanıcıların Keycloak arayüzünde elle yaptığı her
-şey gider**; AD federasyonu varsa kullanıcılar tekrar akar):
+Realm'i yine de yeniden yüklemek gerekirse aşağıdaki komutları çalıştırın. **Keycloak
+arayüzünde elle yapılmış bütün değişiklikler silinir;** AD kullanıcıları yeniden okunur.
 
 `[bastion]`
 
@@ -1390,228 +1437,42 @@ application.argoproj.io/glue patched
 keycloakrealmimport.k8s.keycloak.org/lakehouse-realm condition met
 ```
 
-**`realm silindi` satırını mutlaka görün.** Görmüyorsanız realm silinmemiştir ve son komutun
-`condition met` demesi **yanıltıcıdır**: içe aktarma hiçbir şey yapmadan biter, eski realm
-yerinde kalır. `--config /tmp/kcadm.config` bayrağı OpenShift'te zorunludur; o olmadan
-`Failed to create config file: /.keycloak/kcadm.config` hatası alınır (pod rastgele bir
-kullanıcıyla çalışır ve ev dizinine yazamaz).
+**`realm silindi` satırını mutlaka görün.** Bu satır yoksa realm silinmemiştir ve son
+komutun `condition met` demesi yanıltıcıdır: yükleme hiçbir şey yapmadan biter, eski realm
+yerinde kalır.
 
-**Ters giderse:** `kcadm.sh` oturumu pod yeniden başlatıldığında kaybolur,
-`config credentials` komutunu tekrarlayın. Aynı kural Polaris kataloğu için de geçerlidir:
-`polaris setup apply` katalog özelliklerini yalnız katalog **yaratılırken** yazar, var
-olan bir katalogda `polaris catalogs update --set-property ...` gerekir. Kullanıcı ve
-yetki yönetiminin tamamı
-[50-isletme/kullanici-ve-yetki.md](50-isletme/kullanici-ve-yetki.md) sayfasındadır.
-
----
-
-## Lokal deneme (kind)
-
-Kurulumu üretim kümesinde yapmadan önce **aynı adımların** büyük bölümü bir dizüstünde
-kind kümesinde denenebilir. Geliştirme kümesi ArgoCD'siz "helm modunda" da kurulabilir;
-komutlar `oc` yerine `kubectl` kullanır.
-
-`[bastion]`
-
-```bash
-export KIND_EXPERIMENTAL_PROVIDER=podman
-test/e2e/kind.sh
-bootstrap/bootstrap.sh --env dev --mode helm
-```
-
-**Beklenen çıktı** (örnek — arada onlarca `helm upgrade` satırı akar; önemli olan bu iki
-satırdır. Taze bir dizüstü kümesinde imaj çekimleriyle birlikte 40 dakikayı bulur):
-
-```text
-OK: kind-lakehouse hazır
-OK: helm modunda kuruldu (env=dev)
-```
-
-**Ters giderse:** `command not found: kind` → kind ≥ 0.33 kurun (Podman 6 uyumu bu
-sürümle gelir). `helm upgrade` zaman aşımına uğrarsa imaj çekimi sürüyordur;
-`kubectl -n lakehouse get pods` ile bakıp komutu tekrarlayın — betik idempotenttir.
-Küme zaten ayaktaysa `test/e2e/kind.sh` onu **silmez**, var olan kümeyi kullanır.
-
-**Bu bölümün hangi adımları kind'da geçerlidir:**
-
-| Adım | kind'da | Not |
-|---|---|---|
-| 1 — değişkenler | **farklı** | `install/lakehouse.env` kind kurulumunda **yaratılmaz**; aşağıdaki "Değişkenler" kutusuna bakın |
-| 2–3 — Git kopyası ve ArgoCD depo kimliği | yalnız ArgoCD modunda | helm modunda ArgoCD yoktur |
-| 4 — site değerleri | **farklı** | helm modunda `platform/values/site/*` **hiç okunmaz**; aşağıdaki "Gün-2 değişikliği" kutusuna bakın |
-| 5 — Secret'lar | **atlanır** | `components.devSecrets: true` iken glue chart'ı sentetik Secret'ları kendisi üretir (`glue/templates/dev-secrets.yaml`). **Üretimde bu adımların hepsi elle yapılır.** |
-| 6 — bootstrap | `--env dev --mode helm` | ArgoCD yerine doğrudan `helm upgrade --install` |
-| 7 — doğrulama | aynı | aynı bekleme komutları çalışır |
-
-<a id="kind-degiskenler"></a>
-### Değişkenler (kind)
-
-Bütün işletme sayfaları `set -a; . install/lakehouse.env; set +a` ile başlar. Bu dosya
-**yalnız üretim kurulumunda** (Adım 1) yaratılır; `test/e2e/kind.sh` yaratmaz ve komut
-`install/lakehouse.env: no such file or directory` verir. Geliştirme kümesinde tek gereken
-iki değişkendir:
-
-`[bastion]`
-
-```bash
-export LAKEHOUSE_NS=lakehouse
-export APPS_DOMAIN=127.0.0.1.nip.io
-```
-
-`ARGOCD_NS` helm modunda **kullanılmaz**: `$ARGOCD_NS` geçen her komut (ArgoCD Application
-durumu, `annotate … refresh=hard`, `patch … syncPolicy`) bu kurulumda karşılıksızdır.
-`S3_*`, `LDAP_*`, `GIT_REPO_URL` değerlerinin de karşılığı yoktur — MinIO, sentetik
-Secret'lar ve yerel chart kullanılır. Kalıcı olsun isterseniz bu iki satırı
-`install/lakehouse.env` adıyla kendiniz yazabilirsiniz; dosya `.gitignore`'dadır.
-
-<a id="kind-gun2"></a>
-### Gün-2 değişikliği (kind / helm modu)
-
-**Bu kutu, helm modunda değişiklik uygulamanın tek doğru yoludur; bütün işletme sayfaları
-"commit + push → ArgoCD" adımında buraya gönderir.**
-
-Helm modunda glue release'i **yalnız** `platform/values/glue-dev.yaml` ile yüklenir
-(`helm -n "$LAKEHOUSE_NS" get values glue` ile görebilirsiniz). Bu yüzden
-`platform/values/site/glue.yaml` dosyasına yazdığınız bir anahtar kind'da **hiçbir etki
-yapmaz ve hata da vermez** — değişiklik sessizce yok sayılır.
-
-İşletme sayfalarının site dosyasına yazmanızı istediği anahtarları kind'da uygulamak
-için **aynı anahtarları** yerel bir ek değer dosyasına yazıp ikinci `-f` olarak verin.
-Dosyayı `kind-yerel.yaml` adıyla depo kökünde tutun; **commit edilmez** (`.gitignore`
-`*-yerel.yaml` kalıbını kapsamıyorsa `git add` etmemeye dikkat edin):
-
-`[bastion]`
-
-```bash
-cat > kind-yerel.yaml <<'YAML'
-sources:
-  - name: shop
-    type: postgres
-    tables: [public.orders, public.customers]
-YAML
-helm upgrade glue glue -n "$LAKEHOUSE_NS" \
-  -f platform/values/glue-dev.yaml -f kind-yerel.yaml
-```
-
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; başındaki
-`Warning: Please migrate to v2beta1` satırları **normaldir**, Helm 4'ün eski API
-sürümlerini kullanan alt chart'lar için yazdığı uyarıdır):
-
-```text
-Release "glue" has been upgraded. Happy Helming!
-NAME: glue
-NAMESPACE: lakehouse
-STATUS: deployed
-REVISION: 13
-```
-
-**Neyin karşılığı YOKTUR:** ArgoCD'nin kendiliğinden eşitlemesi, `prune`, `selfHeal` ve
-Application durumu. Yani (1) değişikliğiniz `helm upgrade` koşana kadar **uygulanmaz**,
-(2) kümede elle yaptığınız bir değişiklik geri alınmaz, (3)
-`oc -n "$ARGOCD_NS" get application glue` biçimindeki bütün doğrulama komutları
-çalışmaz — onların yerine `helm -n "$LAKEHOUSE_NS" history glue` ve
-`helm -n "$LAKEHOUSE_NS" get values glue` kullanılır. Geri alma da ArgoCD'ye değil
-`helm -n "$LAKEHOUSE_NS" rollback glue` komutuna (revizyon numarasıyla) dayanır.
-
-**`scripts/check-site.sh` uyarısı:** betik **yalnız** `platform/values/site/*` dosyalarını
-denetler. Helm modunda değişikliğiniz `kind-yerel.yaml`'da olduğu için betik ona **hiç
-bakmadan** `check-site: OK` basar — bu çıktı sizin değişikliğinizin kanıtı **değildir**.
-Kind'da denetim şudur:
-
-`[bastion]`
-
-```bash
-helm template glue glue -n "$LAKEHOUSE_NS" \
-  -f platform/values/glue-dev.yaml -f kind-yerel.yaml >/dev/null && echo "render OK"
-```
-
-<a id="kind-kaynak-db"></a>
-### Demo kaynaklara bağlanma (kind)
-
-İşletme sayfalarındaki `[kaynak DB]` etiketli komutlar kind'da demo kaynaklarda koşar:
-
-`[bastion]`
-
-```bash
-kubectl -n "$LAKEHOUSE_NS" exec -it demo-pg-1 -c postgres -- psql -U postgres -d shop
-kubectl -n "$LAKEHOUSE_NS" exec -it deploy/demo-mongo -- mongosh -u dbz -p dbz \
-  --authenticationDatabase admin crm
-```
-
-Demo `shop` veritabanında CDC rolünün adı `dbz`'dir (üretimde kendi kullanıcınız).
-
-<a id="kind-trino"></a>
-### Trino'ya komut satırından sorgu (kind ve üretim)
-
-İşletme sayfalarındaki doğrulama adımlarının çoğu JupyterHub not defteri hücresini
-kullanır; o hücre **tarayıcıdan OIDC** girişi ister ve geliştirme kümesinde çalışmaz
-([40-kurulum-sonrasi](40-kurulum-sonrasi.md) §5.3). Bastion'dan aynı sorguyu
-koordinatör pod'undaki Trino CLI ile çalıştırabilirsiniz — ayrıntı ve örnek çıktı:
-[90-referans/oc-hizli-basvuru.md](90-referans/oc-hizli-basvuru.md) §16.
-
-Bu bölümdeki "Beklenen çıktı" bloklarının bir kısmı doğrudan çalışan bir kind
-kümesinden alınmıştır: Adım 4.5 (`check-site: OK`), Adım 5.10 (`gecerli JSON`),
-Adım 5.15 (Secret anahtar listesi) ve Adım 7.1 (bekleme zinciri). OpenShift'e özgü çıktılar
-(`oc get routes`, ArgoCD Application tablosu, bootstrap günlüğü) "örnek" olarak
-işaretlenmiştir.
-
-Site değerlerinin gerçekten uygulandığını kurmadan da görebilirsiniz — chart'ı yalnız
-render edip host adlarına bakın:
-
-`[bastion]`
-
-```bash
-helm template glue ./glue -n "$LAKEHOUSE_NS" \
-  -f platform/values/glue.yaml -f platform/values/site/glue.yaml \
-  | grep -E "^  host: |termination:"
-```
-
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; alan adı kendi `$APPS_DOMAIN`
-değerinizle çıkar):
-
-```text
-  host: keycloak-lakehouse.apps.ocp.kurum.example.net
-    termination: edge
-  host: trino-lakehouse.apps.ocp.kurum.example.net
-    termination: reencrypt
-  host: superset-lakehouse.apps.ocp.kurum.example.net
-    termination: edge
-  host: jupyterhub-lakehouse.apps.ocp.kurum.example.net
-    termination: edge
-  host: zeppelin-lakehouse.apps.ocp.kurum.example.net
-    termination: edge
-```
-
-**Ters giderse:** `appsDomain ya da ... hostname verilmeli` hatası → `appsDomain` boştur
-(Adım 4.1). `termination: passthrough` görüyorsanız `tls.caBundle` boştur (Adım 5.11); bu
-bir hata değildir ama üretimde `reencrypt` tercih edilir.
+**Ters giderse:** `Failed to create config file` hatası `--config /tmp/kcadm.config`
+seçeneğinin eksik olduğunu gösterir. `kcadm.sh` oturumu Keycloak pod'u yeniden başladığında
+kapanır; `config credentials` komutunu tekrarlayın. Kullanıcı ve yetki yönetiminin
+tamamı [50-isletme/kullanici-ve-yetki.md](50-isletme/kullanici-ve-yetki.md) sayfasındadır.
 
 ---
 
 ## Kontrol listesi
 
-- [ ] `install/lakehouse.env` yüklendi ve `EKSIK:` satırı basılmadı.
+- [ ] `install/lakehouse.env` yüklendi ve `EKSIK:` satırı yazılmadı.
 - [ ] Depo kurumun Git sunucusuna kopyalandı; yerel kopyanın `origin` adresi oraya bakıyor.
 - [ ] `$ARGOCD_NS` ad alanında `lakehouse-repo` Secret'ı var ve
-      `argocd.argoproj.io/secret-type=repository` etiketi taşıyor.
+      `argocd.argoproj.io/secret-type=repository` etiketini taşıyor.
 - [ ] `platform/values/site/` altındaki üç dosyada örnek değer kalmadı;
-      `scripts/check-site.sh` hatasız ve uyarısız bitiyor.
-- [ ] `platform/polaris/setup.yaml` müşterinin S3 adresini ve veri bucket'ını gösteriyor.
-- [ ] Site değerleri ve `tls.caBundle` Git'e itildi.
-- [ ] Adım 5.15 tablosundaki 13 zorunlu Secret'ın hepsi anahtarlarıyla listeleniyor; AD
-      özel CA'lıysa `ad-ca`, S3 özel CA'lıysa `s3-ca` da listede.
-- [ ] `bootstrap/bootstrap.sh` "ArgoCD zaten kurulu" satırını bastı ve kök Application
-      yaratıldı.
-- [ ] `trino` dışındaki bütün Application'lar `Synced/Healthy`.
-- [ ] Adım 7.1 zincirindeki altı komut da hatasız bitti.
-- [ ] Route'lar `200`/`302` dönüyor.
+      `scripts/check-site.sh` `check-site: OK` yazıyor.
+- [ ] `platform/polaris/setup.yaml` kurumun S3 adresini ve veri bucket'ını gösteriyor.
+- [ ] Ayarlar ve `tls.caBundle` Git'e gönderildi.
+- [ ] Adım 5.15'teki 13 zorunlu Secret'ın hepsi anahtarlarıyla listeleniyor; AD kurumsal
+      CA'lıysa `ad-ca`, S3 kurumsal CA'lıysa `s3-ca` da listede.
+- [ ] `bootstrap/bootstrap.sh` "ArgoCD zaten kurulu" satırını yazdı ve kök uygulama yaratıldı.
+- [ ] `trino` dışındaki bütün uygulamalar `Synced Healthy`.
+- [ ] Adım 7.1'deki altı komut hatasız bitti ve üç veritabanı yedeği
+      `ContinuousArchivingSuccess` gösteriyor.
+- [ ] Dış adresler `200` ya da `302` dönüyor.
 - [ ] Keycloak yönetici parolası ve `~/lakehouse-ca.crt` kurumun kasasına alındı.
 
 ## Sonraki bölüm
 
-[40-kurulum-sonrasi.md](40-kurulum-sonrasi.md) — Polaris kataloğunun kurulması
-(`scripts/polaris-setup.sh`), Superset'e Trino bağlantısının içe aktarılması, AD
-kullanıcısıyla ilk giriş, izleme hedefleri ve kabul testi. Başvuru tabloları:
+[40-kurulum-sonrasi.md](40-kurulum-sonrasi.md) — Polaris kataloğunun kurulması, Superset'e
+Trino bağlantısının eklenmesi, AD kullanıcısıyla ilk giriş, izleme ve kabul testi.
+
+Başvuru tabloları:
 [90-referans/secret-listesi.md](90-referans/secret-listesi.md),
 [90-referans/values-anahtarlari.md](90-referans/values-anahtarlari.md),
 [90-referans/port-ve-servisler.md](90-referans/port-ve-servisler.md),

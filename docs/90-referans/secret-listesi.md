@@ -1,97 +1,110 @@
 # 90 — Secret listesi
 
-**Bu bölümde:** kurulumda kümede bulunması gereken **bütün** Kubernetes
-[Secret](../00-genel-bakis.md#4-kavramlar-sözlüğü) nesneleri: adı, içindeki anahtarlar,
-hangi bileşenin okuduğu, değerin nereden geldiği ve doğrulama komutu. Yaratma komutları
-bu sayfada değil, [30-kurulum](../30-kurulum.md) §5'tedir; bu sayfa başvuru tablosudur.
-**Süre:** okuma 10 dakika.
-**Gereken yetki:** `$LAKEHOUSE_NS` ad alanında yönetici (Secret okuma/yazma).
-**Nerede çalıştırılır:** `[bastion]`.
+Bu sayfa kümede bulunması gereken bütün `Secret` nesnelerinin başvuru tablosudur: adı,
+içindeki anahtarlar, kimin okuduğu, nereden geldiği ve silinirse ne olacağı. Secret'ları
+yaratan komutlar burada değil, tablolardaki belge adımlarındadır.
 
-Secret'lar **Git'e girmez**. Depoda yalnız *adları* ve hangi anahtarı taşıdıkları
-yazılıdır
-(`glue/values.yaml`, `platform/values/trino.yaml`, `platform/values/jupyterhub.yaml`);
-değerler kurulum sırasında komutla kümeye yazılır.
+**Ne kadar sürer:** okuma 10 dakika.
 
-> **Geliştirme kümesinde (kind) bu Secret'ların çoğu sahte olarak üretilir.**
-> `components.devSecrets: true` iken glue chart'ı `glue/templates/dev-secrets.yaml`
-> şablonuyla sentetik değerler yaratır. Üretimde bu anahtar `false`'tur ve chart hiçbir
-> şey üretmez: eksik Secret, pod'u `CreateContainerConfigError` durumunda bekletir.
+**Hangi yetkiler gerekir:** `$LAKEHOUSE_NS` ad alanında Secret okuma.
 
----
+**Komutlar nerede çalışır:** `[bastion]` — `oc` ile kümeye bağlı yönetim makinesi.
 
-## 1. Kurulumdan önce elle yaratılanlar
+Secret'lar **Git'e girmez**. Depoda yalnız adları yazılıdır; değerler kurulum sırasında
+komutla kümeye yazılır. Bir Secret'ın nereden geldiğini (Git, operatör ya da elle) şu
+betik söyler; ayrıntısı
+[değişiklik nasıl uygulanır](../50-isletme/degisiklik-nasil-uygulanir.md) §7'dedir:
 
-Sıra [30-kurulum](../30-kurulum.md) §5'teki adım sırasıdır. Hepsi `$LAKEHOUSE_NS` ad
-alanındadır.
+`[bastion]`
 
-| # | Secret | Anahtarlar | Kim okur | Değer nereden | Kurulum adımı |
-|---|---|---|---|---|---|
-| 1 | `connect-push` | `.dockerconfigjson` | Strimzi Kafka Connect build'i (`connect.buildPushSecret`) — imajı iç registry'ye iter | iç registry servis hesabı jetonu | [20-on-kosullar](../20-on-kosullar.md) madde 5'te yaratıldı; [30-kurulum](../30-kurulum.md) §5.1'de yalnız **doğrulanır** |
-| 2 | `s3-creds` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Iceberg sink (Kafka Connect) ve Spark işleri | `$S3_ACCESS_KEY` / `$S3_SECRET_KEY` (depolama ekibi) | [30-kurulum](../30-kurulum.md) §5.2 |
-| 3 | `backup-s3-creds` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | CloudNativePG Barman Cloud eklentisi (`backup.s3.secret`) — PostgreSQL yedekleri | `$S3_BACKUP_ACCESS_KEY` / `$S3_BACKUP_SECRET_KEY` (**ayrı** anahtar çifti) | [30-kurulum](../30-kurulum.md) §5.3 |
-| 4 | `polaris-root` | `clientId`, `clientSecret` | Polaris bootstrap Job'ı ve `scripts/polaris-setup.sh` (`polaris.rootCredentialSecret`) | kurulumda üretilir (`openssl rand -hex 24`) | [30-kurulum](../30-kurulum.md) §5.4 |
-| 5 | `keycloak-admin` | `username`, `password` | Keycloak CR `bootstrapAdmin` (`keycloak.adminSecret`) | `$KEYCLOAK_ADMIN_PASSWORD`; boşsa üretilir | [30-kurulum](../30-kurulum.md) §5.5 |
-| 6 | `keycloak-clients` | `trino`, `superset`, `jupyterhub`, `ldap-bind` | KeycloakRealmImport `spec.placeholders`; Trino `OIDC_CLIENT_SECRET` ve `LDAP_BIND_PASSWORD`; Superset `OIDC_CLIENT_SECRET`; JupyterHub `OAUTH_CLIENT_SECRET` | üç client sırrı üretilir; `ldap-bind` = `$LDAP_BIND_PASSWORD` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.6 |
-| 7 | `trino-service-accounts` | `password.db`, `superset`, `zeppelin` | Trino `auth.passwordAuthSecret` (htpasswd dosyası); Superset `TRINO_PASSWORD`; Zeppelin interpreter tohumu | kurulumda üretilir; `password.db` = `htpasswd -nbBC 10` çıktısı, düz kopyalar **aynı** parolalar | [30-kurulum](../30-kurulum.md) §5.7 |
-| 8 | `trino-shared-secret` | `secret` | Trino `internal-communication.shared-secret` (coordinator ↔ worker) | üretilir (`openssl rand -hex 32`) | [30-kurulum](../30-kurulum.md) §5.8 |
-| 9 | `superset-secret` | `secret-key` | Superset `spec.secretKeyFrom` → `SECRET_KEY` (oturum çerezi imzası) | üretilir (`openssl rand -hex 32`) | [30-kurulum](../30-kurulum.md) §5.8 |
-| 10 | `zeppelin-shiro` | `shiro.ini` | Zeppelin (konteyner içinde Shiro yapılandırması) — AD (LDAPS) girişi ve rol kapısı | `examples/zeppelin/shiro-ad.ini` şablonu AD değerleriyle doldurulur | [30-kurulum](../30-kurulum.md) §5.9 |
-| 11 | `zeppelin-interpreter` | `interpreter.json` | Zeppelin initContainer'ı (PVC `/data/conf` tohumu) — Trino JDBC bağlantısı | `glue/files/zeppelin/interpreter.json` şablonu; parola §5.7'deki `zeppelin` parolası | [30-kurulum](../30-kurulum.md) §5.10 |
-| 12 | `lakehouse-ca` | `tls.crt`, `tls.key` | cert-manager `Issuer/lakehouse-ca` (Trino sunucu sertifikasını imzalar); Superset ve Zeppelin pod'larında güven kökü | kurulumda üretilir (`openssl req -x509`) ya da kurumsal ara CA | [30-kurulum](../30-kurulum.md) §5.11 |
-| 13 | `jupyterhub-secrets` | `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub `hub.existingSecret` — oturum çerezi imzası ve `auth_state` şifrelemesi | üretilir (her biri `openssl rand -hex 32`) | [30-kurulum](../30-kurulum.md) §5.12 |
-| 14 | `ad-ca` | `ca.crt` | **Keycloak** (CR `spec.truststores` → `/opt/keycloak/conf/truststores`), **Trino coordinator** (initContainer JVM güven deposuna ekler; `ldap.ssl.truststore.path` kullanılmaz — Trino 483 hatası), **Zeppelin** (`ad-truststore` initContainer'ı cacerts kopyasına ekler) — üçü de AD'ye LDAPS ile bağlanır | `$LDAP_CA_FILE` (AD ekibi) | [30-kurulum](../30-kurulum.md) §5.13 (koşullu: AD sertifikası özel bir kökten geliyorsa **zorunlu**) |
-| 15 | `s3-ca` | `ca.crt`, `truststore.p12` | **CNPG yedekleri** (ObjectStore `endpointCA` → `ca.crt`), **Kafka Connect** sink ve **Spark** işleri (JVM `javax.net.ssl.trustStore` → `truststore.p12`; glue `s3.caSecret` ile bağlanır); **Polaris**, **Trino**, **not defterleri** (initContainer Secret'ı varsa kendiliğinden kullanır) — hepsi S3'e TLS ile bağlanır | `ca.crt` = `$S3_CA_FILE` (depolama ekibi); `truststore.p12` = JDK kökleri + bu CA (`keytool`, parola `changeit`) | [30-kurulum](../30-kurulum.md) §5.14 (koşullu: S3 sertifikası özel bir CA'dan ya da self-signed ise **zorunlu**) |
-
-**`jupyterhub-secrets` tam olarak iki anahtar içerir.** Hub ile proxy arasındaki
-`ConfigurableHTTPProxy.auth_token` **bu Secret'ta değildir** ve elle yaratılmaz: z2jh
-chart'ı onu kendi ürettiği `hub` Secret'ına yazar, hem hub hem proxy pod'u oradan okur.
-ArgoCD `ignoreDifferences` (`platform/apps/30-jupyterhub.yaml`) değeri re-sync'te dondurur.
-Buraya üçüncü bir anahtar koymak **ölü anahtar** olur ve yanıltıcı bir rotasyon yolu
-gösterir. Rotasyon yordamı §4'tedir.
+```bash
+scripts/nesne-kaynagi.sh --liste secret
+```
 
 ---
 
-## 2. Gün-2'de eklenenler
+## 1. Kurulumda elle yaratılanlar
 
-Bunlar kurulumda **yoktur**; ilk kaynak veritabanı bağlanırken ya da yedekleme açılırken
-yaratılır.
+Bu Secret'lar kurulum belgesindeki adımlarla yaratılır ve yaratıldıkları adımı taşıyan
+`lakehouse.io/yonetim` etiketiyle işaretlenir. Hepsi `$LAKEHOUSE_NS` ad alanındadır;
+`lakehouse-repo` ise `$ARGOCD_NS` ad alanındadır.
 
-| Secret | Anahtarlar | Kim okur | Değer nereden | Kılavuz |
+**Silinirse:** kimse geri getirmez. Tablodaki adım tekrarlanır (etiket komutu dahil).
+
+| Secret | Anahtarlar | Kim okur | Değer nereden | Etiket (`lakehouse.io/yonetim`) |
 |---|---|---|---|---|
-| kaynak adı + `-db` (örnek: `shop-db`, `crm-db`) | `username`, `password` | Debezium bağlayıcısı (adı `dbz-` ile başlayan KafkaConnector) | kaynak veritabanı yöneticisi (CDC yetkili hesap) | [50-isletme/yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) |
-| OADP bulut kimliği (`cloud-credentials`, ad alanı `openshift-adp`) | `cloud` | Velero/OADP | yedek S3 anahtar çifti | [50-isletme/yedek-ve-geri-donus.md](../50-isletme/yedek-ve-geri-donus.md) §7 |
+| `lakehouse-repo` (`$ARGOCD_NS`) | `type`, `url`, `sshPrivateKey` | ArgoCD — kurumun Git deposunu okur | kurulumda üretilen SSH anahtarı | `manual-30-kurulum-3.2` |
+| `connect-push` | `.dockerconfigjson` | Kafka Connect imajını iç registry'ye gönderen yapım | iç registry servis hesabının jetonu | `manual-20-on-kosullar-5` |
+| `s3-creds` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Kafka Connect ve Spark işleri | depolama ekibinin verdiği anahtar çifti | `manual-30-kurulum-5.2` |
+| `backup-s3-creds` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | PostgreSQL yedekleri | depolama ekibinin verdiği **ayrı** anahtar çifti | `manual-30-kurulum-5.3` |
+| `polaris-root` | `clientId`, `clientSecret` | Polaris kurulum işi ve `scripts/polaris-setup.sh` | kurulumda üretilir | `manual-30-kurulum-5.4` |
+| `keycloak-admin` | `username`, `password` | Keycloak yönetici hesabı | kurulumda belirlenir ya da üretilir | `manual-30-kurulum-5.5` |
+| `keycloak-clients` | `trino`, `superset`, `jupyterhub`, `ldap-bind` | Keycloak, Trino, Superset, JupyterHub | üç uygulama sırrı üretilir; `ldap-bind` AD ekibinin verdiği parola | `manual-30-kurulum-5.6` |
+| `trino-service-accounts` | `password.db`, `superset`, `zeppelin` | Trino, Superset, Zeppelin | kurulumda üretilir; `password.db` aynı parolaların karma (hash) hâlidir | `manual-30-kurulum-5.7` |
+| `trino-shared-secret` | `secret` | Trino sunucuları arası iletişim | kurulumda üretilir | `manual-30-kurulum-5.8` |
+| `superset-secret` | `secret-key` | Superset oturum imzası | kurulumda üretilir | `manual-30-kurulum-5.8` |
+| `zeppelin-shiro` | `shiro.ini` | Zeppelin — AD girişi ve rol kapısı | şablon AD değerleriyle doldurulur | `manual-30-kurulum-5.9` |
+| `zeppelin-interpreter` | `interpreter.json` | Zeppelin — Trino bağlantısı | şablon; parola `trino-service-accounts`'taki `zeppelin` parolası | `manual-30-kurulum-5.10` |
+| `lakehouse-ca` | `tls.crt`, `tls.key` | sertifika yöneticisi (Trino'nun iç sertifikasını imzalar); Superset ve Zeppelin | kurulumda üretilir ya da kurumsal ara CA | `manual-30-kurulum-5.11` |
+| `jupyterhub-secrets` | `hub.config.JupyterHub.cookie_secret`, `hub.config.CryptKeeper.keys` | JupyterHub — oturum imzası ve kimlik saklama | kurulumda üretilir | `manual-30-kurulum-5.12` |
+| `ad-ca` (koşullu) | `ca.crt` | Keycloak, Trino, Zeppelin — AD'ye LDAPS ile bağlanırken | AD ekibinin verdiği kök sertifika | `manual-30-kurulum-5.13` |
+| `s3-ca` (koşullu) | `ca.crt`, `truststore.p12` | PostgreSQL yedekleri, Kafka Connect, Spark, Polaris, Trino, not defterleri — S3'e TLS ile bağlanırken | depolama ekibinin verdiği kök sertifika | `manual-30-kurulum-5.14` |
 
-> Geliştirme kümesinde görülen `velero-s3-creds` Secret'ı **yalnız kind içindir**
-> (`platform/values/velero-dev.yaml`); üretimde Velero chart'ı kurulmaz, yerine OADP
-> operatörü ve onun kendi kimlik Secret'ı kullanılır.
+`ad-ca` yalnız AD'nin sertifikası kurumun kendi CA'sından geliyorsa gerekir. `s3-ca`
+yalnız S3'ün sertifikası kurumun kendi CA'sından geliyorsa ya da kendinden imzalıysa
+gerekir.
+
+**`jupyterhub-secrets` tam olarak iki anahtar içerir.** Hub ile proxy arasındaki jeton bu
+Secret'ta değildir: JupyterHub onu kendi `hub` Secret'ına yazar (§3). Buraya üçüncü bir
+anahtar eklemeyin.
 
 ---
 
-## 3. Ürünün kendi ürettikleri — elle yaratmayın
+## 2. Sonradan elle yaratılanlar
 
-Aşağıdakiler operatörler ya da betikler tarafından yazılır. Kurulumdan önce elle
-yaratılırsa çakışır; kurulumun başında eksik görünmeleri bir hata değildir.
+Bunlar kurulumda yoktur; katalog kurulurken ya da bir kaynak eklenirken yaratılır.
+
+| Secret | Anahtarlar | Kim okur | Kim yaratır | Etiket (`lakehouse.io/yonetim`) |
+|---|---|---|---|---|
+| `polaris-connect`, `polaris-spark`, `polaris-trino`, `polaris-notebooks` | `credential` | Kafka Connect, Spark, Trino, not defterleri — katalog kimlikleri | `scripts/polaris-setup.sh` ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2.2) | `manual-40-kurulum-sonrasi-2.2` |
+| kaynak adı + `-db` (ör. `erp-db`) | `username`, `password` | Debezium bağlayıcısı (adı `dbz-` ile başlar) | elle ([yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) §4) | `manual-yeni-kaynak-ve-pipeline-4` |
+| `cloud-credentials` (`openshift-adp` ad alanı) | `cloud` | OADP — ad alanı yedekleri | elle ([yedek-ve-geri-donus.md](../50-isletme/yedek-ve-geri-donus.md) §7) | — |
+
+`polaris-*` Secret'ları silinirse `scripts/polaris-setup.sh` tekrar çalıştırılır; betik
+eksik kimlikleri yeniden üretir ve etiketler.
+
+---
+
+## 3. Operatörlerin ürettikleri — elle yaratmayın
+
+Aşağıdakileri bir operatör ya da bir chart, Git'teki bir nesneden üretir. Elle yaratılırsa
+çakışır; silinirse yeniden üretilir.
 
 | Secret | Üreten | Ne zaman oluşur |
 |---|---|---|
-| `polaris-connect`, `polaris-spark`, `polaris-trino`, `polaris-notebooks` | `scripts/polaris-setup.sh` | Polaris kataloğu kurulurken ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
-| `polaris-db-app`, `keycloak-db-app`, `superset-db-app` ve bunların `-ca` / `-server` / `-replication` eşleri | CloudNativePG | PostgreSQL kümeleri açılırken |
-| `lakehouse-cluster-ca-cert`, `lakehouse-clients-ca-cert`, `connect`, `fluentbit`, `kafka-admin` | Strimzi (Kafka CA'ları ve KafkaUser'lar). `kafka-admin` Kafka'nın **yönetici** kimliğidir (superUsers): `scripts/kafka-cli.sh` onu okur; Secret'ı okuyabilen Kafka'da her şeyi yapabilir | Kafka ve Connect ayağa kalkarken |
-| `trino-tls` | cert-manager (`Issuer/lakehouse-ca` imzalar) | glue sync'inden sonra ~1 dakika |
-| `hub` | JupyterHub (z2jh) chart'ı | ilk JupyterHub sync'inde |
-| `keycloak-lakehouse-realm` | Keycloak operatörü | realm içe aktarımı tamamlanınca |
+| `connect`, `spark`, `fluentbit`, `kafka-admin`, `stream-` + akış adı | Strimzi — Kafka kullanıcılarının parolaları | Kafka kullanıcıları yaratılırken |
+| `lakehouse-cluster-ca-cert`, `lakehouse-clients-ca-cert` ve diğer `lakehouse-*` sertifikaları | Strimzi — Kafka'nın sertifikaları | Kafka açılırken |
+| `polaris-db-app`, `keycloak-db-app`, `superset-db-app` ve `-ca`, `-server`, `-replication` eşleri | CloudNativePG | PostgreSQL kümeleri açılırken |
+| `trino-tls` | sertifika yöneticisi (`lakehouse-ca` imzalar) | `glue` eşitlemesinden bir dakika kadar sonra |
+| `keycloak-lakehouse-realm` | Keycloak operatörü | realm içe aktarılınca |
+| `spark-operator-webhook-certs` | spark-operator | operatör açılırken |
+| `hub` | JupyterHub chart'ı (`jupyterhub` uygulaması) | ilk JupyterHub eşitlemesinde |
 
-**Polaris principal Secret'ları kurulumun sırasını belirler:** `trino` Application'ı
-`polaris-trino` Secret'ı yazılana kadar Healthy olamaz (pod
-`CreateContainerConfigError`'da bekler). Bu **normaldir** ve Polaris kataloğu
-kurulduğunda kendiliğinden düzelir.
+`nesne-kaynagi.sh` bunları `TÜREV` diye gösterir; `hub` ise ArgoCD'nin `jupyterhub`
+uygulamasından geldiği için `GIT` görünür.
+
+`kafka-admin`, Kafka'nın **yönetici** kimliğidir: `scripts/kafka-cli.sh` onu okur. Bu
+Secret'ı okuyabilen kişi Kafka'da her şeyi yapabilir.
+
+`stream-` ile başlayan Secret'lar bir JSON akışının üretici parolasıdır. Silinirse parola
+değişir ve üreticilere yeni parola verilir
+([json-akisi-ekleme.md](../50-isletme/json-akisi-ekleme.md) §5).
 
 ---
 
-## 4. Doğrulama ve rotasyon
+## 4. Doğrulama ve yenileme
 
-### Hepsi yerinde mi
+### 4.1 Hepsi yerinde mi
 
 `[bastion]`
 
@@ -105,9 +118,7 @@ for s in connect-push s3-creds backup-s3-creds polaris-root keycloak-admin \
 done
 ```
 
-**Beklenen çıktı** (kind kümesinden alınmış gerçek çıktı; üretimde `connect-push` de
-dolu olur ve `trino-service-accounts` içinde `e2e` **bulunmaz** — o hesap yalnız
-geliştirme kümesindedir):
+**Beklenen çıktı:**
 
 ```text
 connect-push             .dockerconfigjson
@@ -125,12 +136,33 @@ lakehouse-ca             tls.crt tls.key
 jupyterhub-secrets       hub.config.CryptKeeper.keys hub.config.JupyterHub.cookie_secret
 ```
 
-**Ters giderse:** `EKSIK` yazan her satır için 30-kurulum §5'teki ilgili adımı
-tekrarlayın. Anahtar adı listede olmayan bir Secret yanlış oluşturulmuştur: silip
-(`oc -n "$LAKEHOUSE_NS" delete secret ADI`) komutu baştan çalıştırın — anahtar adları
-sözleşmedir, bileşenler onları harfi harfine arar.
+**Ters giderse:**
 
-### Bir Secret'ın anahtarlarını tek tek görmek
+- `EKSIK` yazan satır için §1'deki belge adımını tekrarlayın.
+- Anahtar adları listeyle aynı değilse Secret yanlış yaratılmıştır. Bileşenler anahtarları
+  adıyla arar: Secret'ı silin ve belge adımını baştan uygulayın.
+
+### 4.2 Elle yaratılanların etiketi var mı
+
+`[bastion]`
+
+```bash
+oc -n "$LAKEHOUSE_NS" get secret -L lakehouse.io/yonetim | awk 'NR==1 || $NF ~ /^manual-/'
+```
+
+**Beklenen çıktı** (ilk satırlar; sütun genişliği ve `AGE` sizde farklıdır):
+
+```text
+NAME                                        TYPE                             DATA   AGE     YONETIM
+ad-ca                                       Opaque                           1      3d5h    manual-30-kurulum-5.13
+backup-s3-creds                             Opaque                           2      3d5h    manual-30-kurulum-5.3
+connect-push                                kubernetes.io/dockerconfigjson   1      3d5h    manual-20-on-kosullar-5
+```
+
+§1 ve §2'deki her Secret bu listede olmalıdır. Etiketi eksik olanı belgesindeki etiket
+komutuyla etiketleyin.
+
+### 4.3 Bir Secret'ın anahtarlarını görmek
 
 `[bastion]`
 
@@ -139,44 +171,46 @@ oc -n "$LAKEHOUSE_NS" get secret polaris-root \
   -o go-template='{{range $k,$v := .data}}{{$k}}{{"\n"}}{{end}}'
 ```
 
-**Beklenen çıktı** (kind kümesinden alınmış gerçek çıktı):
+**Beklenen çıktı:**
 
 ```text
 clientId
 clientSecret
 ```
 
-**Ters giderse:** `NotFound` → Secret hiç yaratılmamıştır. Komut değerleri **basmaz**;
-bir değeri görmeniz gerekiyorsa `-o jsonpath='{.data.clientId}' | base64 -d` ekleyin ve
-çıktıyı terminal geçmişinde bırakmayın.
+Komut değerleri göstermez, yalnız anahtar adlarını gösterir. Bir değeri görmeniz
+gerekiyorsa `-o jsonpath='{.data.clientId}' | base64 -d` kullanın ve çıktıyı terminal
+geçmişinde bırakmayın.
 
-### Rotasyon
+**Ters giderse:** `NotFound` → Secret hiç yaratılmamıştır (§1).
 
-| Secret | Nasıl döndürülür | Etkisi |
+### 4.4 Yenileme
+
+Bir Secret'ı yenilerken belge adımındaki **etiket komutunu da** çalıştırın; yeniden
+yaratılan Secret etiketsiz yaratılır.
+
+| Secret | Nasıl yenilenir | Etkisi |
 |---|---|---|
-| `s3-creds`, `backup-s3-creds` | Secret'ı silip yeniden yaratın, sonra `oc -n "$LAKEHOUSE_NS" rollout restart deploy/connect-connect` | Connect ve Spark işleri yeni anahtarı alır |
-| `keycloak-clients` | Secret'ı güncelleyin, ardından realm'i yeniden içe aktarın ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek") | client sırları realm'e placeholder olarak girer; realm içe aktarımı mevcut realm'i **güncellemez** |
-| `trino-service-accounts` | parolaları yeniden üretip Secret'ı yeniden yaratın; `zeppelin-interpreter`'ı da aynı parolayla yenileyin | Superset ve Zeppelin bağlantıları koparsa parolalar `password.db` ile uyuşmuyordur |
-| `trino-shared-secret`, `superset-secret` | yeniden yaratıp ilgili pod'ları döndürün | açık oturumlar düşer |
-| `jupyterhub-secrets` | yeniden yaratıp hub'ı döndürün | kullanıcı oturumları düşer, not defterlerindeki dosyalar etkilenmez |
-| JupyterHub hub ↔ proxy token'ı (`hub` Secret'ı) | `oc -n "$LAKEHOUSE_NS" delete secret hub` → jupyterhub Application'a `argocd.argoproj.io/refresh=hard` annotation'ı → sync | **Yalnız sync yetmez:** ArgoCD önbellekteki eski değeri geri yazar, hub ile proxy farklı token'da kalır ve `HTTP 403` verir |
-| `lakehouse-ca` | yeni CA üretip Secret'ı değiştirin, `tls.caBundle` değerini güncelleyip Git'e itin | bütün istemcilerin güven deposu yenilenmelidir; planlı kesinti isteyen tek rotasyon budur |
+| `s3-creds`, `backup-s3-creds` | Secret'ı silip belge adımıyla yeniden yaratın | Spark işleri bir sonraki koşuda; Kafka Connect ve yedekler pod'ları yeniden başlayınca yeni anahtarı kullanır |
+| `keycloak-clients` | Secret'ı güncelleyin, ardından realm'i yeniden içe aktarın ([30-kurulum](../30-kurulum.md) §8) | realm içe aktarımı var olan realm'i kendiliğinden güncellemez |
+| `trino-service-accounts` | parolaları yeniden üretip Secret'ı yeniden yaratın; `zeppelin-interpreter`'ı da aynı parolayla yenileyin | parolalar `password.db` ile uyuşmazsa Superset ve Zeppelin Trino'ya bağlanamaz |
+| `trino-shared-secret`, `superset-secret` | yeniden yaratıp ilgili pod'ları yeniden başlatın | açık oturumlar düşer |
+| `jupyterhub-secrets` | yeniden yaratıp hub'ı yeniden başlatın | kullanıcı oturumları düşer; not defterlerindeki dosyalar etkilenmez |
+| JupyterHub hub–proxy jetonu (`hub`) | [kullanici-ve-yetki.md](../50-isletme/kullanici-ve-yetki.md) §9'daki yordam | yalnız eşitlemek yetmez; yordam izlenmezse JupyterHub `403` verir |
+| `lakehouse-ca` | yeni CA üretip Secret'ı değiştirin, site değerlerindeki `tls.caBundle`'ı güncelleyip Git'e gönderin | bütün istemcilerin güven deposu yenilenir; planlı kesinti gerektiren tek yenilemedir |
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Yukarıdaki 13 zorunlu Secret'ın hepsi `oc get secret` çıktısında ve anahtar adları
-      listeyle birebir aynı.
-- [ ] `trino-service-accounts` içindeki düz parolalar `password.db` içindeki bcrypt
-      satırlarıyla **aynı** parolalardan üretildi.
-- [ ] `keycloak-clients` Secret'ı realm içe aktarılmadan **önce** vardı.
-- [ ] Üretim kümesinde `components.devSecrets` açılmadı (site değerlerinde bu anahtar hiç
-      yoktur; ürün varsayılanı `false`).
+- [ ] §4.1'deki 13 Secret'ın hepsi var ve anahtar adları listeyle aynı.
+- [ ] §4.2'de elle yaratılan her Secret'ın etiketi var.
+- [ ] `trino-service-accounts` içindeki parolalar `password.db` ile aynı parolalardan
+      üretildi.
+- [ ] `keycloak-clients` realm içe aktarılmadan **önce** vardı.
 - [ ] `install/lakehouse.env` dosyası kurulumdan sonra kasaya alındı ya da silindi.
 
 ## Sonraki bölüm
 
-[30-kurulum.md](../30-kurulum.md) — Secret'ların yaratma komutları ve kurulumun tamamı.
-Değer dosyalarındaki anahtarlar için
-[values-anahtarlari.md](values-anahtarlari.md).
+[30-kurulum.md](../30-kurulum.md) — Secret'ları yaratan komutlar. Ayar dosyalarındaki
+anahtarlar: [values-anahtarlari.md](values-anahtarlari.md).

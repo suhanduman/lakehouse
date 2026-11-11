@@ -1,20 +1,25 @@
 # Yükseltme
 
-**Bu bölümde:** bir bileşenin sürümünü yükseltmenin tek yolu — hangi dosyada hangi satırın
-değiştiği, bileşenlerin hangi **sırayla** yükseltildiği, Kafka'nın iki adımlı kuralı, Kafka
-Connect imajının etiket kuralı, Superset imajının müşteri aynasındaki yeri, Connect itme
-jetonunun yenilenmesi, birleştirme öncesi kapı (CI) ve geri alma yolları.
-**Süre:** tek bileşen için 30–60 dakika (Connect eklentileri ~10 dakikalık imaj yapımıyla
-birlikte daha uzun); CI kapısı 40–55 dakika.
-**Gereken yetki:** Git deposunda `main` dalına yazma; `$ARGOCD_NS` ve `$LAKEHOUSE_NS` ad
-alanlarında okuma. Kümede elle sürüm değiştirme yetkisi **gerekmez** ve istenmez.
-**Nerede çalıştırılır:** `[bastion]` — `git`, `oc` ve `helm` kurulu yönetim makinesi.
+Bu sayfa bir bileşenin sürümünü nasıl yükselteceğinizi anlatır: hangi dosyada hangi
+satır değişir, bileşenler hangi sırayla yükseltilir, Kafka neden iki adımda yükseltilir,
+Kafka Connect imajının etiketi neden değişmelidir ve bir yükseltme nasıl geri alınır.
 
-> **Kümede `helm upgrade` yoktur.** Yükseltme = **dosyada sürümü değiştir → commit → CI
-> yeşil → eşitleme**. Tek istisna ArgoCD'siz kurulmuş geliştirme kümeleridir; orada da aynı
-> sıra geçerlidir ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.3).
-> JupyterHub sürümü ya da not defteri imajı yükseltildiyse eşitlemeden sonra hub bir kez
-> yeniden başlatılır (aynı sayfa §5.2).
+**Ne kadar sürer:** tek bir bileşen için 30–60 dakika. Kafka Connect eklentileri
+değişiyorsa imaj yeniden üretildiği için 10 dakika daha. Ürünün otomatik testleri
+(CI) 40–55 dakika sürer.
+
+**Hangi yetkiler gerekir:** kurumun lakehouse Git deposunda `main` dalına yazma;
+`$ARGOCD_NS` ve `$LAKEHOUSE_NS` ad alanlarında okuma. Kümede elle değişiklik yetkisi
+gerekmez.
+
+**Komutlar nerede çalışır:** `[bastion]` — `git`, `oc` ve `helm` araçlarının kurulu
+olduğu, kümeye bağlı yönetim makinesi.
+
+> **Kümede `helm upgrade` çalıştırılmaz.** Yükseltme de her değişiklik gibi Git'ten
+> geçer: dosyada sürümü değiştirin, commit edip gönderin, ArgoCD kümeye uygular
+> ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)). JupyterHub sürümü ya da
+> not defteri imajı değiştiyse ArgoCD uygulamayı bitirdikten sonra hub'ı bir kez yeniden
+> başlatın (aynı sayfa §5.2).
 
 ---
 
@@ -28,31 +33,32 @@ set -a; . install/lakehouse.env; set +a
 echo "argocd=$ARGOCD_NS lakehouse=$LAKEHOUSE_NS"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 argocd=openshift-gitops lakehouse=lakehouse
 ```
 
-**Ters giderse:** boş satır görüyorsanız dosya yüklenmemiştir
-([30-kurulum](../30-kurulum.md) §1).
+**Ters giderse:** eşittir işaretlerinden sonrası boşsa `install/lakehouse.env` dosyası
+yüklenmemiştir ([30-kurulum](../30-kurulum.md) §1).
 
 ---
 
 ## 2. Başlamadan önce: beş kural
 
-1. **Tek değişiklik = tek bileşen.** (Kafka gibi iki adımlı olanlar hariç.) Karışık
-   yükseltmede hangi bileşenin kırdığı anlaşılamaz ve CI koşusu 40–55 dakika sürer.
-2. **Sıra: önce operatörler, sonra uygulamalar.** Operatörün yeni sürümü eski uygulama
-   tanımlarını okuyabilir; tersi garanti değildir.
-3. **Her yükseltmede sürüm listesi aynı değişiklikte güncellenir**
+1. **Her değişiklikte tek bir bileşen yükseltin.** Kafka gibi iki adımlı olanlar
+   dışında, birden fazla bileşeni aynı anda yükseltirseniz sorun çıktığında hangisinin
+   sorun çıkardığını anlayamazsınız.
+2. **Önce operatörler, sonra uygulamalar.** Yeni bir operatör eski uygulama
+   tanımlarını okuyabilir; tersi her zaman doğru değildir.
+3. **Sürüm listesini aynı değişiklikte güncelleyin**
    ([90-referans/surumler-ve-lisanslar.md](../90-referans/surumler-ve-lisanslar.md) §8).
-4. **Yedek durumu yeşil olmalı.** Üç veritabanında da sürekli arşivleme `True`, son yedek
-   `completed` ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §4).
-5. **Üreticinin sürüm notları okunur** — özellikle Kafka, PostgreSQL operatörü ve Superset
-   operatörü için.
+4. **Yedekler sağlıklı olmalı.** Üç veritabanında da sürekli arşivleme `True` olmalı
+   ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §4).
+5. **Üreticinin sürüm notlarını okuyun** — özellikle Kafka, PostgreSQL operatörü ve
+   Superset operatörü için.
 
-Yedek durumunu doğrulayın:
+Yedeklerin durumunu kontrol edin:
 
 `[bastion]`
 
@@ -61,64 +67,55 @@ oc -n "$LAKEHOUSE_NS" get cluster \
   -o custom-columns='DB:.metadata.name,ARSIV:.status.conditions[?(@.type=="ContinuousArchiving")].status'
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı; `demo-pg` yalnız geliştirme
-kümesinin örnek kaynağıdır):
+**Beklenen çıktı** (ürünün üç veritabanı; kümenizde başka PostgreSQL kümeleri varsa
+onlar da listelenir):
 
 ```text
 DB            ARSIV
-demo-pg       True
 keycloak-db   True
 polaris-db    True
 superset-db   True
 ```
 
-**Ters giderse:** bir satır `False` ise **yükseltmeyin**; önce arşivi düzeltin
-([sorun-giderme.md](sorun-giderme.md) §8).
+**Ters giderse:** bir satır `False` ise yükseltmeye başlamayın; önce arşivlemeyi
+düzeltin ([sorun-giderme.md](sorun-giderme.md) §8).
 
 ---
 
 ## 3. Sıra ve hangi dosya değişir
 
-| # | Bileşen | Değişecek dosya | Kümedeki etkisi |
+Bileşenleri bu tablodaki sırayla yükseltin:
+
+| # | Bileşen | Değişecek dosya | Kümede ne olur |
 |---|---|---|---|
 | 1 | cert-manager | `platform/apps/00-cert-manager.yaml` | Tanımlar güncellenir; sertifikalar yeniden imzalanmaz |
-| 2 | Kafka operatörü (Strimzi) | `platform/apps/00-strimzi.yaml` | Kafka ve Connect pod'larında sırayla yeniden başlatma |
-| 3 | **Kafka** (iki adım) | `glue/values.yaml` → `versions.kafka`, `versions.kafkaMetadata` | Broker ve Connect iki kez sırayla yeniden başlar (§4.2) |
-| 4 | PostgreSQL operatörü | `platform/apps/00-cnpg.yaml` | Veritabanı pod'larında sırayla yeniden başlatma |
+| 2 | Kafka operatörü (Strimzi) | `platform/apps/00-strimzi.yaml` | Kafka ve Connect pod'ları sırayla yeniden başlar |
+| 3 | **Kafka** (iki adım) | `glue/values.yaml` → `versions.kafka`, `versions.kafkaMetadata` | Broker'lar ve Connect iki kez sırayla yeniden başlar (§4.2) |
+| 4 | PostgreSQL operatörü | `platform/apps/00-cnpg.yaml` | Veritabanı pod'ları sırayla yeniden başlar |
 | 5 | PostgreSQL yedek eklentisi | `platform/apps/00-cnpg-barman.yaml` | Veritabanı pod'larındaki yardımcı kap yenilenir |
-| 6 | spark-operator | `platform/apps/00-spark-operator.yaml` | Koşan Spark işleri etkilenmez |
-| 7 | Keycloak operatörü + Keycloak | `platform/keycloak-operator/kustomization.yaml` | Operatör + Keycloak yeniden başlar; realm **içe aktarılmaz** (§4.6) |
-| 8 | Superset operatörü | `platform/apps/00-superset-operator.yaml` | Alan adları kırılabilir (§4.5) |
-| 9 | Connect eklentileri (Debezium, Iceberg, Hadoop) | `glue/values.yaml` → `versions.*` **+ `connect.buildImage` etiketi** | **Yeniden imaj yapımı** (~10 dakika) |
-| 10 | Polaris | `platform/apps/20-polaris.yaml` + `glue/values.yaml` → `versions.polarisAdminTool` | Polaris yeniden başlar; şema geçişi yönetim aracıyla yapılır |
-| 11 | Trino | `platform/values/trino.yaml` (`image.tag`) + `platform/apps/30-trino.yaml` (chart sürümü) | Koordinatör ve çalışanlar yeniden başlar |
-| 12 | Superset | `glue/values.yaml` → `superset.imageTag` | Şema geçiş işi yeniden koşar + web yeniden başlar |
-| 13 | JupyterHub + not defteri imajı | `platform/apps/30-jupyterhub.yaml`, `platform/values/jupyterhub.yaml` | Hub yeniden başlar; **koşan not defteri oturumları durur** |
+| 6 | spark-operator | `platform/apps/00-spark-operator.yaml` | Çalışmakta olan Spark işleri etkilenmez |
+| 7 | Keycloak operatörü ve Keycloak | `platform/keycloak-operator/kustomization.yaml` | Operatör ve Keycloak yeniden başlar; realm yeniden içe aktarılmaz (§4.6) |
+| 8 | Superset operatörü | `platform/apps/00-superset-operator.yaml` | Tanımdaki alan adları değişebilir (§4.5) |
+| 9 | Connect eklentileri (Debezium, Iceberg, Hadoop) | `glue/values.yaml` → `versions.*` **ve** `connect.buildImage` etiketi | Connect imajı yeniden üretilir (~10 dakika) |
+| 10 | Polaris | `platform/apps/20-polaris.yaml` ve `glue/values.yaml` → `versions.polarisAdminTool` | Polaris yeniden başlar; veritabanı şemasını yönetim aracı günceller |
+| 11 | Trino | `platform/values/trino.yaml` (`image.tag`) ve `platform/apps/30-trino.yaml` (chart sürümü) | Koordinatör ve işçiler yeniden başlar |
+| 12 | Superset | `glue/values.yaml` → `superset.imageTag` | Veritabanı şema işi yeniden çalışır, web sunucusu yeniden başlar |
+| 13 | JupyterHub ve not defteri imajı | `platform/apps/30-jupyterhub.yaml`, `platform/values/jupyterhub.yaml` | Hub yeniden başlar; **açık not defteri oturumları kapanır** |
 | 14 | Zeppelin | `glue/values.yaml` → `zeppelin.image` ve JDBC sürümü | Zeppelin yeniden başlar |
-| 15 | İzleme / yedek (geliştirme yığını) | `platform/apps/dev/*.yaml` | Yalnız geliştirme kümesi; üretimde karşılığı platform izlemesi ve OADP'dir |
 
-**Chart sürümleri iki yerde birden geçer.** Trino ve JupyterHub'ın chart sürümü hem
-`platform/apps/30-trino.yaml` / `platform/apps/30-jupyterhub.yaml` dosyasında hem de CI'ın
-render adımında yazılıdır (`.github/workflows/e2e.yaml`). Birini değiştirip diğerini
-unutursanız CI, kümede koşmayacak bir sürümü doğrular. **İkisini aynı değişiklikte
-güncelleyin.**
-
-**Geliştirme yığınının MinIO/`mc` imajları elle derlenir.** Yukarıdaki tablodaki hiçbir satır
-bu ikisini kapsamaz, çünkü üretimde kurulmazlar: MinIO yalnız kind/dev kümesinin S3'üdür.
-MinIO Inc. topluluk imajlarını geri çektiğinden `glue/templates/minio.yaml` artık bir kayıt
-defteri etiketini değil, **kaynaktan derlenmiş kendi AGPL-3.0 aynamızı** gösterir. MinIO ya da
-`mc` sürümünü yükseltmek, yeni etiketi şablona yazmadan önce o etiketi derleyip itmeyi
-gerektirir: `MINIO_TAG=... MC_TAG=... scripts/build-minio-mirror.sh`. Betik fork'ları etiketten
-klonlar, commit'i doğrular ve iki mimarili manifest listesini iter; yükümlülüklerin ayrıntısı
-[90-referans/surumler-ve-lisanslar.md §5](../90-referans/surumler-ve-lisanslar.md#minio-aynasi)
-içindedir. **Ayna itilmeden şablonu güncellerseniz** dev kümesi ve CI e2e koşusu
-`ImagePullBackOff` ile durur.
+**Trino ve JupyterHub chart sürümleri iki yerde yazılıdır:** uygulama dosyasında
+(`platform/apps/30-trino.yaml`, `platform/apps/30-jupyterhub.yaml`) ve ürünün otomatik
+testlerinde (`.github/workflows/e2e.yaml`). Birini değiştirip diğerini unutursanız
+testler kümede çalışmayacak bir sürümü sınar. İkisini aynı değişiklikte güncelleyin.
 
 ---
 
 ## 4. Adım adım
 
-### 4.1 Operatör chart'ı
+### 4.1 Operatörler
+
+Önce istediğiniz sürümün yayımlanmış olduğunu doğrulayın. Örnek PostgreSQL
+operatörü içindir:
 
 `[bastion]`
 
@@ -126,15 +123,15 @@ içindedir. **Ayna itilmeden şablonu güncellerseniz** dev kümesi ve CI e2e ko
 helm show chart cnpg/cloudnative-pg --version 0.30.0 | grep -E '^(version|appVersion)'
 ```
 
-**Beklenen çıktı** (örnek — istenen sürüm gerçekten yayımlanmışsa):
+**Beklenen çıktı** (örnek — sürüm yayımlanmışsa):
 
 ```text
 version: 0.30.0
 appVersion: 1.27.0
 ```
 
-Sürüm varsa ilgili dosyadaki `targetRevision` değiştirilir, commit + push edilir; eşitleme
-sonrası:
+Sürüm varsa ilgili dosyadaki `targetRevision` satırını değiştirin, commit edip
+gönderin. ArgoCD uyguladıktan sonra:
 
 `[bastion]`
 
@@ -146,21 +143,24 @@ oc -n cnpg-system get pods
 **Beklenen çıktı** (örnek): bütün uygulamalar `Synced Healthy`, yeni operatör pod'u
 `Running`.
 
-**Ters giderse:** `helm show chart` sürümü bulamazsa depo dizini eskidir
-(`helm repo update`).
+**Ters giderse:** `helm show chart` sürümü bulamazsa yerel chart listesi eskidir:
+`helm repo update` çalıştırıp tekrar deneyin.
 
-### 4.2 Kafka: **iki ayrı adım**
+### 4.2 Kafka: iki ayrı adım
 
-Kafka'nın **meta veri sürümü geri alınamaz**. Broker sürümüyle meta veri sürümü aynı
-değişiklikte yükseltilirse geri dönüş yolu kapanır. Bu yüzden iki ayrı değişiklik yapılır:
+Kafka'nın **meta veri sürümü geri alınamaz**. Broker sürümüyle meta veri sürümünü aynı
+değişiklikte yükseltirseniz geri dönüş yolu kapanır. Bu yüzden iki ayrı değişiklik
+yapılır.
 
-**Adım 1** — yalnız broker sürümü (`glue/values.yaml`):
+**Adım 1 — yalnız broker sürümü.** `glue/values.yaml` dosyasında:
 
 ```yaml
 versions:
-  kafka: "4.4.0"            # YENİ
-  kafkaMetadata: "4.3-IV0"  # ESKİ kalır
+  kafka: "4.4.0"            # yeni sürüm
+  kafkaMetadata: "4.3-IV0"  # eski değer kalır
 ```
+
+Commit edip gönderin. ArgoCD uyguladıktan sonra:
 
 `[bastion]`
 
@@ -170,38 +170,48 @@ oc -n "$LAKEHOUSE_NS" get pods -l strimzi.io/cluster=lakehouse
 oc -n "$LAKEHOUSE_NS" get kafkaconnect connect -o jsonpath='{.status.conditions}'
 ```
 
-**Beklenen çıktı** (örnek): Kafka ve Connect koşullarında `Ready` `True`; bütün broker
-pod'ları yeniden başlamış ve `Running`.
+**Beklenen çıktı** (örnek): Kafka ve Connect koşullarında `Ready` `True`; bütün
+broker pod'ları yeniden başlamış ve `Running`.
 
-**Adım 2** — ayrı bir değişiklikte meta veri sürümü (**geri alınamaz**):
+Kafka Connect'in sürümü de aynı `versions.kafka` değerinden gelir, bu yüzden bu adımda
+birlikte yükseltilir. Connect iki işçiyle çalışır; Strimzi işçileri tek tek yeniden
+başlatır ve yeniden başlayan işçinin görevleri birkaç saniye içinde diğer işçiye geçer.
+Veri akışı yalnız kısa bir süre duraksar.
+
+**Adım 2 — ayrı bir değişiklikte meta veri sürümü** (geri alınamaz):
 
 ```yaml
 versions:
   kafkaMetadata: "4.4-IV0"
 ```
 
-Adım 1'de sorun çıkarsa yalnız `versions.kafka` geri alınır; veri kaybı olmaz. Connect'in
-sürümü de aynı `versions.kafka` değerinden geldiği için Adım 1'de birlikte taşınır.
+Adım 1'de sorun çıkarsa yalnız `versions.kafka` geri alınır; veri kaybı olmaz.
 
-**Ters giderse:** broker'lar sırayla yeniden başlarken takılırsa ikinci adıma **geçmeyin**;
-`oc -n "$LAKEHOUSE_NS" get pods -l strimzi.io/cluster=lakehouse` hepsini `Running` gösterene
-kadar durun.
+**Ters giderse:** broker'lar yeniden başlarken takılırsa Adım 2'ye geçmeyin.
+`oc -n "$LAKEHOUSE_NS" get pods -l strimzi.io/cluster=lakehouse` bütün pod'ları
+`Running` gösterene kadar bekleyin.
 
-### 4.3 Kafka Connect: etiket değişmeden yeni eklenti yüklenmez
+### 4.3 Kafka Connect eklentileri: etiketi de değiştirin
 
-Connect imajının adresi Git'te **açıkça** verilir ve kimse onu kendiliğinden değiştirmez.
-Debezium/Iceberg/Hadoop sürümüyle birlikte **etiketi de** değiştirin:
+Kafka Connect imajı Debezium, Iceberg ve Hadoop eklentilerini içerir ve kümenin iç
+imaj deposunda tutulur. İmajın adresi Git'te yazılıdır. Eklenti sürümlerini
+değiştirdiğinizde imajın **etiketini de** değiştirin; aksi hâlde Strimzi imajı yeniden
+üretmez.
+
+`glue/values.yaml` dosyasında eklenti sürümleri:
 
 ```yaml
-# glue/values.yaml
 versions: {debezium: "3.7.0.Final", iceberg: "1.12.0"}
 ```
 
+`platform/values/site/glue.yaml` dosyasında imaj etiketi (örnekte `2.0.0` → `2.1.0`):
+
 ```yaml
-# platform/values/site/glue.yaml
 connect:
   buildImage: image-registry.openshift-image-registry.svc:5000/lakehouse/connect:2.1.0
 ```
+
+İkisini aynı commit'te gönderin. İmaj üretimi 10 dakika kadar sürer. Sonra:
 
 `[bastion]`
 
@@ -211,49 +221,59 @@ oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=50
 oc -n "$LAKEHOUSE_NS" get kafkaconnector
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — üçüncü komut, imaj yapımı
-bittikten sonra):
+**Beklenen çıktı** (örnek — üçüncü komut; kendi kaynaklarınızın bağlayıcıları
+listelenir, hepsinin `READY` sütunu `True`):
 
 ```text
 NAME         CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
-dbz-crm      connect   io.debezium.connector.mongodb.MongoDbConnector       1           True
-dbz-shop     connect   io.debezium.connector.postgresql.PostgresConnector   1           True
+dbz-erp      connect   io.debezium.connector.postgresql.PostgresConnector   1           True
+sink-erp     connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
 sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
-sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
 ```
 
-Iceberg sürümü hem sink'i hem Spark işlerini besler → Spark işlerinin bir sonraki koşusunda
-küme içi Maven önbelleği yeni sürümü Maven Central'dan (ya da kurum aynasından) bir kez
-indirir; o koşu her zamankinden ~1 dakika uzun sürer. Önbelleğin kaynağına bu sırada erişim
-olmalıdır ([sorun-giderme.md](sorun-giderme.md) §6.2).
+**Iceberg sürümü Spark işlerini de etkiler.** Spark işleri Iceberg kütüphanelerini küme
+içindeki Maven önbelleğinden alır. Sürüm değiştiğinde önbellek yeni sürümü bir sonraki
+koşuda bir kez indirir; o koşu her zamankinden 1 dakika kadar uzun sürer. Bu sırada
+önbelleğin kaynağına (Maven Central ya da kurumun Maven aynası) erişim olmalıdır
+([sorun-giderme.md](sorun-giderme.md) §6.2).
 
-**Ters giderse:** etiket değişmediyse Strimzi imajı yeniden üretmez ve yeni eklenti
-**sessizce** yüklenmez — bağlayıcılar eski sürümle koşmaya devam eder.
+**Ters giderse:** etiketi değiştirmediyseniz Strimzi imajı yeniden üretmez ve yeni
+eklentiler **sessizce** yüklenmez: bağlayıcılar eski sürümle çalışmaya devam eder.
+İmaj üretimi `unauthorized` ile düşüyorsa imajı gönderen hesabın jetonu dolmuştur (§6).
 
 ### 4.4 Polaris
 
-Chart sürümü ve yönetim aracı sürümü **birlikte** yükseltilir (şema geçişini yönetim aracı
-yapar). Önce Polaris veritabanının yedeğini doğrulayın (§2).
+Polaris'in chart sürümü ve yönetim aracının sürümü birlikte yükseltilir; veritabanı
+şemasını yönetim aracı günceller. Başlamadan önce Polaris veritabanının yedeğinin
+sağlıklı olduğunu kontrol edin (§2). ArgoCD uyguladıktan sonra:
 
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" rollout status deploy/polaris --timeout=600s
-oc -n "$LAKEHOUSE_NS" exec deploy/polaris -- curl -sf localhost:8182/q/health | head -c 200
-bash scripts/polaris-setup.sh --setup platform/polaris/setup.yaml
+oc -n "$LAKEHOUSE_NS" exec deploy/polaris -- curl -sf localhost:8182/q/health | head -3
+PATH="$PWD/.venv/bin:$PATH" scripts/polaris-setup.sh --ns "$LAKEHOUSE_NS"
 ```
 
-**Beklenen çıktı** (örnek — dağıtım tamamlandıktan sonra sağlık yanıtının başı):
+**Beklenen çıktı** (ilk iki komut):
 
 ```text
 deployment "polaris" successfully rolled out
-{"status":"UP","checks":[
+{
+    "status": "UP",
+    "checks": [
 ```
 
-Betik **yeniden koşmaya elverişlidir**: yalnız eksik nesneleri yaratır
-([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2).
+Üçüncü komut katalog kurulumunu yeniden uygular. Birden fazla çalıştırılabilir: yalnız
+eksik olanı yaratır, var olana dokunmaz ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md)
+§2).
+
+**Ters giderse:** `"status": "DOWN"` görürseniz Polaris veritabanına bağlanamıyordur;
+`oc -n "$LAKEHOUSE_NS" logs deploy/polaris --tail=50` ile hatayı görün.
 
 ### 4.5 Trino, Superset, JupyterHub, Zeppelin
+
+ArgoCD uyguladıktan sonra:
 
 `[bastion]`
 
@@ -265,19 +285,19 @@ oc -n "$LAKEHOUSE_NS" get pods -l component=singleuser-server
 oc -n "$LAKEHOUSE_NS" rollout status deploy/zeppelin --timeout=600s
 ```
 
-**Beklenen çıktı** (örnek): Trino ve Zeppelin dağıtımları tamamlandı, Superset `Running`,
-şema geçiş günlüğü hatasız.
+**Beklenen çıktı** (örnek): Trino ve Zeppelin `successfully rolled out`, Superset
+`Running`, şema işinin günlüğünde hata yok.
 
 Dikkat edilecekler:
 
-- **Trino:** chart sürümü ile imaj etiketi birlikte yükseltilir (değer dosyası chart
-  varsayılanını ezer).
-- **Superset:** imaj etiketi değişince şema geçiş işi yeniden koşar.
-- **JupyterHub:** koşan not defteri oturumları **durur** → kullanıcıları önceden uyarın.
-- **Zeppelin:** yeni JDBC sürücüsü ilk açılışta Maven'den iner (~1 dakika) ve diskte kalıcı
-  olur; kapalı ağda önceden konmalıdır.
-- **Superset operatörü:** alan adları sürümler arasında kırılabilir. Operatör
-  yükseltmesinden önce şemayı kümeden okuyun ve şablon testlerini koşturun:
+- **Trino:** chart sürümü ile imaj etiketini birlikte yükseltin.
+- **Superset:** imaj etiketi değişince veritabanı şema işi yeniden çalışır.
+- **JupyterHub:** açık not defteri oturumları kapanır; kullanıcıları önceden uyarın.
+- **Zeppelin:** yeni JDBC sürücüsü ilk açılışta indirilir (1 dakika kadar) ve diskte
+  kalır. Kapalı ağda sürücüye erişim önceden sağlanmalıdır.
+- **Superset operatörü:** tanımdaki alan adları sürümler arasında değişebilir.
+  Operatörü yükseltmeden önce kümedeki tanımı okuyun ve ürünün şablon testlerini
+  çalıştırın:
 
   `[bastion]`
 
@@ -287,13 +307,14 @@ Dikkat edilecekler:
   helm unittest glue
   ```
 
-**Superset imajının etiketi.** Üründe kullanılan etiket (`6.1.0-dev`) veritabanı ve kimlik
-sürücülerini içerdiği için seçilmiştir; düz sürüm etiketinde bu sürücüler **yoktur** ve kap
-içine sonradan kurulamaz. Etiket müşteri aynasında **taşınmaz** (sabit) olmalıdır: operatör
-sindirim (digest) değeri kabul etmez, yalnız `depo:etiket` alır — dolayısıyla etiketin sabit
-kalması aynanın sorumluluğudur
-([90-referans/pre-ship-kontrol-listesi.md](../90-referans/pre-ship-kontrol-listesi.md) madde
-4.3). Yükseltmeden önce sürücülerin yeni etikette de bulunduğunu doğrulayın:
+**Superset imajının etiketi.** Üründe kullanılan etiket (`6.1.0-dev`) veritabanı ve
+kimlik sürücülerini içerdiği için seçilmiştir; düz sürüm etiketinde bu sürücüler yoktur.
+Kurumun imaj aynasında bu etiket **sabit** kalmalıdır: operatör imajı yalnız
+`depo:etiket` biçiminde kabul eder, bu yüzden etiketin değişmemesi aynanın
+sorumluluğudur
+([90-referans/pre-ship-kontrol-listesi.md](../90-referans/pre-ship-kontrol-listesi.md)
+madde 4.3). Yeni bir etikete geçmeden önce sürücülerin o etikette de bulunduğunu
+doğrulayın:
 
 `[bastion]`
 
@@ -302,21 +323,21 @@ oc -n "$LAKEHOUSE_NS" exec deploy/superset-web-server -- \
   python -c "import psycopg2, trino, authlib; print('ok')"
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı:**
 
 ```text
 ok
 ```
 
-**Ters giderse:** `ModuleNotFoundError` alırsanız etiketi **değiştirmeyin**; o imajla
+**Ters giderse:** `ModuleNotFoundError` görürseniz o etikete geçmeyin; o imajla
 Superset'in Trino bağlantısı ve girişi çalışmaz.
 
-### 4.6 Keycloak: realm içe aktarımı var olan realm'i güncellemez
+### 4.6 Keycloak: realm yeniden içe aktarılmaz
 
-Keycloak'ın sürümünü yükseltmek realm'e dokunmaz. Realm **içeriği** değişecekse
-[30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek" bölümündeki
-sil-yeniden-içe-aktar yordamı uygulanır ve **kullanıcıların arayüzde elle yaptığı her şey
-gider**. AD federasyonu varsa kullanıcılar yeniden akar; yine de önce bir kopya alın:
+Keycloak'ın sürümünü yükseltmek realm'e dokunmaz. Realm'in **içeriği** değişecekse
+[30-kurulum](../30-kurulum.md) §8'deki yordam uygulanır; bu yordam realm'i silip
+yeniden içe aktarır ve kullanıcıların arayüzde elle yaptığı ayarlar kaybolur. AD
+kullanıcıları yeniden gelir, yine de önce kullanıcı listesinin bir kopyasını alın:
 
 `[bastion]`
 
@@ -325,43 +346,59 @@ oc -n "$LAKEHOUSE_NS" exec keycloak-0 -- \
   /opt/keycloak/bin/kcadm.sh get users -r lakehouse --config /tmp/kcadm.config > users.json
 ```
 
-**Ters giderse:** komut oturum hatası verirse önce yönetici oturumu açılmalıdır
-([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek"; oradaki
-`config credentials` komutu da aynı `--config /tmp/kcadm.config` bayrağını kullanır).
+**Ters giderse:** komut oturum hatası verirse önce yönetici oturumu açın
+([30-kurulum](../30-kurulum.md) §8; oradaki `config credentials` komutu da aynı
+`--config /tmp/kcadm.config` seçeneğini kullanır).
 
 ---
 
-## 5. Sürüm etiketine sabitleme
+## 5. Bir sürüm etiketine sabitlemek
 
-Uygulamalar varsayılan olarak `main` dalını izler. Bir sürüm etiketine sabitlemek
-isterseniz:
+Uygulamalar varsayılan olarak Git deposunun `main` dalını izler. Kümeyi belirli bir
+sürüm etiketine sabitlemek isterseniz önce etiketi yaratın:
 
 `[bastion]`
 
 ```bash
-git tag -a v2.1.0 -m "surum 2.1.0" && git push origin v2.1.0
-${EDITOR:-vi} platform/root-app.yaml       # targetRevision: main -> v2.1.0
-oc -n "$ARGOCD_NS" get applications -o wide
-oc -n "$ARGOCD_NS" get app glue -o jsonpath='{.status.sync.revision}{"\n"}'
+git tag -a v2.1.0 -m "sürüm 2.1.0"
+git push origin v2.1.0
 ```
 
-**Beklenen çıktı** (örnek — son komut, beklenen commit kimliği):
+Sonra `platform/root-app.yaml` dosyasını açın ve `targetRevision: main` satırını
+`targetRevision: v2.1.0` yapın:
+
+```bash
+vi platform/root-app.yaml
+git add platform/root-app.yaml
+git commit -m "küme v2.1.0 sürümüne sabitlendi"
+git push origin main
+```
+
+ArgoCD uyguladıktan sonra kümenin hangi commit'te olduğunu görün:
+
+```bash
+oc -n "$ARGOCD_NS" get applications -o wide
+oc -n "$ARGOCD_NS" get application glue -o jsonpath='{.status.sync.revision}{"\n"}'
+```
+
+**Beklenen çıktı** (örnek — son komut; etiketin gösterdiği commit kimliği):
 
 ```text
 9a13b7c1f4e2d5a8b3c6e9f0a1b2c3d4e5f60718
 ```
 
-**Ters giderse:** bir uygulama hâlâ `main` gösteriyorsa `platform/apps/*.yaml`
-dosyalarındaki `targetRevision` satırlarından biri atlanmıştır.
+**Ters giderse:** bir uygulama hâlâ `main`'i gösteriyorsa `platform/apps/` altındaki
+dosyalardan birinde `targetRevision` satırı değiştirilmemiştir.
 
 ---
 
-## 6. Connect itme jetonunun yenilenmesi
+## 6. Connect imajını gönderen hesabın jetonunu yenilemek
 
-Connect imajını iç kayıt defterine iten hesap **bir yıllık** bir jeton kullanır
-([20-on-kosullar](../20-on-kosullar.md) madde 5). Jeton dolduğunda **çalışan Connect
-etkilenmez**, ama yeni bir imaj yapımı `unauthorized` ile düşer — yani **yükseltme durur**.
-Bitiş tarihi kurumun takvimine yazılır ve jeton aynı komutlarla yenilenir:
+Kafka Connect imajını kümenin iç imaj deposuna gönderen hesap **bir yıllık** bir jeton
+kullanır ([20-on-kosullar](../20-on-kosullar.md) madde 5). Jetonun süresi dolduğunda
+çalışan Connect etkilenmez, ama yeni imaj üretimi `unauthorized` ile düşer: eklenti
+yükseltmesi yapılamaz. Bitiş tarihini kurumun takvimine yazın ve süre dolmadan şu
+komutlarla yenileyin:
 
 `[bastion]`
 
@@ -371,6 +408,7 @@ oc -n "$LAKEHOUSE_NS" delete secret connect-push
 oc -n "$LAKEHOUSE_NS" create secret docker-registry connect-push \
   --docker-server="$INTERNAL_REGISTRY" --docker-username=connect-build \
   --docker-password="$TOKEN"
+oc -n "$LAKEHOUSE_NS" label secret connect-push lakehouse.io/yonetim=manual-20-on-kosullar-5 --overwrite
 python3 -c 'import base64, json, sys, datetime
 t = sys.argv[1].split(".")[1]; t += "=" * (-len(t) % 4)
 print("jeton bitisi:", datetime.datetime.fromtimestamp(
@@ -378,70 +416,77 @@ print("jeton bitisi:", datetime.datetime.fromtimestamp(
 unset TOKEN
 ```
 
-**Beklenen çıktı** (örnek — son satırdaki tarih jetonun **gerçek** bitiş anıdır; küme daha
+**Beklenen çıktı** (örnek — son satırdaki tarih jetonun gerçek bitiş anıdır; küme daha
 kısa bir üst sınır uyguluyorsa süre kısalır):
 
 ```text
-secret "connect-push" deleted
+secret "connect-push" deleted from lakehouse namespace
 secret/connect-push created
+secret/connect-push labeled
 jeton bitisi: 2027-09-24 09:12:44+00:00
 ```
 
-**Ters giderse:** jeton yenilendikten sonra imaj yapımı hâlâ `unauthorized` veriyorsa
-`connect-build` hesabının itme rolü kaldırılmış olabilir
+Etiket, Secret'ın elle yaratıldığını ve yordamın hangi belgede olduğunu gösterir
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §7).
+
+**Ters giderse:** jeton yenilendikten sonra imaj üretimi hâlâ `unauthorized` veriyorsa
+`connect-build` hesabının gönderme yetkisi kaldırılmış olabilir
 ([20-on-kosullar](../20-on-kosullar.md) madde 5).
 
 ---
 
-## 7. Birleştirme öncesi kapı (CI)
+## 7. Göndermeden önce: testler
 
-Depoya yapılan her itişte `.github/workflows/e2e.yaml` iki iş koşturur:
+Ürünün Git deposuna yapılan her gönderimde otomatik testler (CI) iki iş çalıştırır:
 
-| İş | Ne doğrular |
+| İş | Ne sınar |
 |---|---|
-| `helm-unittest` | Şablon birim testleri, Spark iş kodunun sözdizimi ve birim testleri, belge kapısı, site tutarlılığı (`scripts/check-site.sh`), üretim ve geliştirme render'ları, Trino ve JupyterHub render'ları |
-| `e2e-kind` | Geçici bir kümede tam kurulum ve dokuz yolun tamamı |
+| `helm-unittest` | şablon testleri, Spark iş kodunun testleri, belge denetimi, site ayarlarının tutarlılığı, şablonların üretim ve geliştirme ayarlarıyla oluşturulması |
+| `e2e-kind` | geçici bir kümede kurulumun tamamı ve uçtan uca veri yolları |
 
-**Yalnız belge değiştiren itişlerde `e2e-kind` atlanır** (bir saatlik koşu hiçbir kod yolunu
-kanıtlamaz); belge kapısı zaten `helm-unittest` içindedir. Değişiklikte belge dışında tek bir
-dosya bile varsa uzun koşu çalışır.
+Yalnız belge değiştiren gönderimlerde `e2e-kind` atlanır. Belge dışında tek bir dosya
+bile değiştiyse iki iş de çalışır.
 
-Yerel ön kontrol — itmeden önce:
+Göndermeden önce aynı denetimlerin hızlı olanlarını kendi makinenizde çalıştırın:
 
 `[bastion]`
 
 ```bash
 helm unittest glue
-helm template glue -f platform/values/glue.yaml -f platform/values/site/glue.yaml >/dev/null
+helm template glue ./glue -f platform/values/glue.yaml -f platform/values/site/glue.yaml >/dev/null
 bash scripts/check-site.sh
 ```
 
-**Beklenen çıktı** (örnek — ilk komutun özet satırları; ikinci komut sessizdir):
+**Beklenen çıktı** (ilk komutun özet satırlarından ikisi; ikinci komut bir şey yazmaz;
+üçüncü `check-site: OK`):
 
 ```text
 Charts:      1 passed, 1 total
-Test Suites: 13 passed, 13 total
+Test Suites: 16 passed, 16 total
+check-site: OK
 ```
 
-Kurulu bir kümede yükseltme sonrası kabul kanıtı: `scripts/acceptance.sh`
-([90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md)).
+Yükseltilmiş bir kümede kabul testlerini yeniden çalıştırmak için:
+[90-referans/kabul-testleri.md](../90-referans/kabul-testleri.md).
 
-**Ters giderse:** `helm unittest` düşerse yükseltme bir şablon alanını kırmıştır; hata satırı
-hangi testin hangi alanı beklediğini söyler.
+**Ters giderse:** `helm unittest` bir testte düşerse yükseltme bir şablonu bozmuştur;
+hata satırı hangi testin hangi alanı beklediğini söyler.
 
 ---
 
 ## 8. Geri alma
 
-| Durum | Yol |
+| Durum | Ne yapılır |
 |---|---|
-| Chart ya da imaj sürümü kötü | `git revert` → push → eşitleme eski sürüme döner |
-| Eşitleme yarıda kaldı | Eşitlemeyi yeniden tetikleyin; hâlâ `Degraded` ise uygulamanın koşullarına bakın |
-| Kafka broker sürümü (adım 1) | Geri alınabilir (meta veri sürümü eski kaldığı sürece) |
-| Kafka meta veri sürümü (adım 2) | **GERİ ALINAMAZ** — dönüş yolu kümeyi yeniden kurup konuları kaynaklardan üretmektir ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §2.1) |
-| PostgreSQL şema geçişi bozuldu | Zaman noktasına dönüş: yükseltmeden önceki ana geri yükleme ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §5.2) |
-| Superset operatörü tanımı reddediyor | Operatörü geri alın (eski tanımla uyumlu kalır) |
-| Not defteri ya da disk kaybı | Disk geri yükleme ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §6.3) |
+| Chart ya da imaj sürümü sorunlu | `git revert` ile geri alın ve gönderin; ArgoCD eski sürüme döner |
+| ArgoCD uygulaması yarıda kaldı | Uygulamayı yeniden tetikleyin ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.1); hâlâ `Degraded` ise uygulamanın durumuna bakın |
+| Kafka broker sürümü (§4.2 Adım 1) | Geri alınabilir (meta veri sürümü eski kaldıkça) |
+| Kafka meta veri sürümü (§4.2 Adım 2) | **Geri alınamaz** — tek yol kümeyi yeniden kurup verileri kaynaklardan yeniden okumaktır ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §2.1) |
+| PostgreSQL şema güncellemesi bozuldu | Yükseltmeden önceki ana dönüş ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §5.2) |
+| Superset operatörü tanımı reddediyor | Operatörü eski sürüme geri alın |
+| Not defteri diski kayboldu | Disk geri yükleme ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §6.3) |
+
+Geri alma komutları:
 
 `[bastion]`
 
@@ -451,34 +496,33 @@ git revert --no-edit HEAD
 git push origin main
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (örnek — ilk satırlar):
 
 ```text
-[main 3c9f0a2] Revert "surum: trino 484"
+[main 3c9f0a2] Revert "sürüm: trino 484"
  2 files changed, 2 insertions(+), 2 deletions(-)
 ```
 
-Geri aldıktan sonra sürüm listesindeki satırı da eski değere döndürün — liste her zaman
-kümedeki gerçeği göstermelidir
+Geri aldıktan sonra sürüm listesindeki satırı da eski değere döndürün; liste her zaman
+kümedeki gerçek sürümleri göstermelidir
 ([90-referans/surumler-ve-lisanslar.md](../90-referans/surumler-ve-lisanslar.md) §8).
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Yedek durumu yeşil (üç veritabanında sürekli arşivleme `True`).
-- [ ] Tek bileşen yükseltiliyor; sıra tablosundaki yerine uyuldu.
-- [ ] Kafka'da broker sürümü ve meta veri sürümü **ayrı** değişikliklerde.
+- [ ] Yedekler sağlıklı (üç veritabanında sürekli arşivleme `True`).
+- [ ] Tek bir bileşen yükseltiliyor ve §3'teki sıraya uyuldu.
+- [ ] Kafka'da broker sürümü ve meta veri sürümü **ayrı** değişikliklerde yükseltildi.
 - [ ] Connect eklentisi değiştiyse `connect.buildImage` etiketi de değişti.
-- [ ] Trino/JupyterHub chart sürümü hem uygulama dosyasında hem CI render adımında
-      güncellendi.
+- [ ] Trino ya da JupyterHub chart sürümü hem uygulama dosyasında hem otomatik
+      testlerde güncellendi.
 - [ ] Sürüm listesi aynı değişiklikte güncellendi.
-- [ ] CI'ın iki işi de yeşil; ardından eşitleme `Synced Healthy`.
-- [ ] Yükseltmeden sonra kabul koşusu yapıldıysa zamanlanmış Spark işleri geri açıldı.
+- [ ] Otomatik testlerin iki işi de başarılı; ArgoCD `Synced Healthy` gösteriyor.
 
 ## Sonraki bölüm
 
-Yükseltme sonrası ilk bakılacak yer:
-[gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md). Alarm eşikleri:
-[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Hata belirtileri:
+Yükseltmeden sonra ilk bakılacak yer:
+[gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md). Alarmlar:
+[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Sorunlar:
 [sorun-giderme.md](sorun-giderme.md).

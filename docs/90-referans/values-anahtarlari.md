@@ -1,34 +1,38 @@
 # 90 — Değer anahtarları (site dosyaları)
 
-**Bu bölümde:** müşterinin düzenlediği **tek dizin** olan `platform/values/site/` altındaki
-üç dosyanın bütün anahtarları — anlamı, `install/lakehouse.env` karşılığı, örnek
-değeri ve zorunlu olup olmadığı. Ayrıca `platform/polaris/setup.yaml` dosyasında kurulumcunun
-değiştirdiği satırlar ve aynı değerin birden fazla dosyada tekrarlandığı yerler.
-**Süre:** okuma 15 dakika.
-**Gereken yetki:** yok (dosya düzenleme); değişikliği uygulamak için Git deposuna yazma.
-**Nerede çalıştırılır:** `[bastion]` — dosyalar depo kopyanızda düzenlenir, Git'e itilir,
-ArgoCD uygular.
+Bu sayfa kuruma özel ayarların tutulduğu `platform/values/site/` klasöründeki üç
+dosyanın bütün ayarlarını listeler: ne işe yaradığını, `install/lakehouse.env`
+dosyasındaki karşılığını, örnek değerini ve zorunlu olup olmadığını. Ayrıca kurulumda
+`platform/polaris/setup.yaml` dosyasında değiştirilen satırları ve aynı değerin birden
+fazla dosyada geçtiği yerleri gösterir.
 
-**Ürün varsayılanlarına dokunulmaz.** `platform/values/glue.yaml`,
-`platform/values/trino.yaml`, `platform/values/jupyterhub.yaml`,
-`platform/values/polaris.yaml` ve `glue/values.yaml` ürünle gelir ve her yükseltmede
-değişebilir. Müşteriye özel her değer yalnız `platform/values/site/` altındadır; ArgoCD
-site dosyasını ürün dosyasından **sonra** yükler, bu yüzden site değeri kazanır.
+**Ne kadar sürer:** okuma 15 dakika.
 
-Dosyaların doldurulması: [30-kurulum](../30-kurulum.md) §4. Tutarlılık denetimi:
-`scripts/check-site.sh`.
+**Hangi yetkiler gerekir:** dosyayı değiştirmek için kurumun Git deposuna yazma.
+
+**Komutlar nerede çalışır:** `[bastion]` — dosyalar depo kopyanızda düzenlenir, Git'e
+gönderilir, ArgoCD uygular
+([değişiklik nasıl uygulanır](../50-isletme/degisiklik-nasil-uygulanir.md)).
+
+**Ürün varsayılanlarına dokunmayın.** `platform/values/` klasöründeki diğer dosyalar ve
+`glue/values.yaml` ürünle gelir; her yükseltmede değişebilir. Kuruma özel her değer
+yalnız `platform/values/site/` altındadır. ArgoCD site dosyasını ürün dosyasından
+**sonra** okur, bu yüzden site dosyasındaki değer geçerli olur.
+
+Dosyaların ilk doldurulması: [30-kurulum](../30-kurulum.md) §4. Denetim:
+`bash scripts/check-site.sh`.
 
 ---
 
 ## 1. `platform/values/site/glue.yaml`
 
-Ürünün ana chart'ının (Kafka, Connect, Keycloak, Superset, Zeppelin, CNPG, yedek, TLS)
-müşteriye özel değerleri. **22 anahtar.**
+Ürünün ana bileşenlerinin (Kafka, Connect, Keycloak, Superset, Zeppelin, PostgreSQL,
+yedek, TLS) kuruma özel değerleri. Kurulumda doldurulan **22 anahtar** aşağıdadır.
 
 | Anahtar | Anlam | `.env` karşılığı | Örnek | Zorunlu mu |
 |---|---|---|---|---|
 | `appsDomain` | OpenShift uygulama alan adı; bütün Route adresleri bundan türetilir (bileşen adı + `-` + ad alanı + `.` + bu değer) | `$APPS_DOMAIN` | `apps.ocp.example.net` | **Evet** |
-| `argocdNamespace` | ArgoCD'nin koştuğu ad alanı; `allow-platform-namespaces` NetworkPolicy'sinin ArgoCD seçicisi bundan üretilir. Ürün varsayılanı `argocd` (upstream ArgoCD ve kind/CI bootstrap'ı); OpenShift GitOps operatörü `openshift-gitops` kullanır. Değer `$ARGOCD_NS` ile aynı değilse seçici hiçbir ad alanıyla eşleşmez. `scripts/check-site.sh` bu değeri kurulumun `$ARGOCD_NS`'i ile çapraz denetler | `$ARGOCD_NS` | `openshift-gitops` | **Evet** (OpenShift'te) |
+| `argocdNamespace` | ArgoCD'nin koştuğu ad alanı; `allow-platform-namespaces` NetworkPolicy'sinin ArgoCD seçicisi bundan üretilir. OpenShift GitOps `openshift-gitops` kullanır. Değer `$ARGOCD_NS` ile aynı değilse seçici hiçbir ad alanıyla eşleşmez. `scripts/check-site.sh` bu değeri kurulumun `$ARGOCD_NS`'i ile çapraz denetler | `$ARGOCD_NS` | `openshift-gitops` | **Evet** (OpenShift'te) |
 | `s3.endpoint` | Iceberg verisinin yazıldığı S3 uç noktası; istemciler (Iceberg sink, Spark) bunu kullanır. `https://` ile başlamak **zorundadır** | `$S3_ENDPOINT` | `https://s3.example.com` | **Evet** |
 | `s3.region` | S3 bölge adı; S3 uyumlu depolamalarda çoğu zaman anlamsızdır ama istemciler zorunlu tutar | `$S3_REGION` | `us-east-1` | Hayır (varsayılan `us-east-1`) |
 | `s3.vendedCredentials` | Polaris'in istemcilere geçici S3 kimliği dağıtması. Depolamada STS yoksa `false` yapın; o zaman istemciler `s3-creds` Secret'ını kullanır | — (depolama ekibine sorulur) | `true` | Hayır (varsayılan `true`) |
@@ -49,12 +53,14 @@ müşteriye özel değerleri. **22 anahtar.**
 | `backup.s3.bucket` | Yedek bucket'ı. Veri bucket'ından **AYRI** olmalıdır: geri yükleme hedefi ile kaynağı aynı olamaz | `$S3_BUCKET_BACKUP` | `lakehouse-backups` | **Evet** |
 | `backup.s3.region` | Yedek bucket'ının bölgesi | `$S3_REGION` | `us-east-1` | Hayır (varsayılan `us-east-1`) |
 | `tls.caBundle` | `lakehouse-ca` Secret'ındaki `tls.crt` dosyasının PEM içeriği. Doluysa Trino Route'u `reencrypt` olur (`destinationCACertificate`), boşsa `passthrough` | — (kurulumda üretilen CA) | `"-----BEGIN CERTIFICATE-----\n…"` | Hayır (önerilir) |
-| `sources` | Kaynak veritabanları listesi. Kurulumda **boş** kalır; ilk kaynak gün-2'de eklenir | — | `[]` | Kurulumda boş |
-| `pipelines` | Silver birleştirme tanımları. Kurulumda **boş** kalır | — | `[]` | Kurulumda boş |
+| `sources` | Kaynak veritabanları listesi. Kurulumda **boş** kalır; kaynaklar sonradan eklenir. Alanların tamamı (`initialLoad`, `state` dahil): [yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) §6 | — | `[]` | Kurulumda boş |
+| `pipelines` | Silver tabloları üretilecek Bronze tabloları. Kurulumda **boş** kalır. Alanlar: [yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) §7 | — | `[]` | Kurulumda boş |
 
 ### Bu dosyaya eklenebilen isteğe bağlı anahtarlar
 
-Şablonda yorum satırı olarak durur ya da hiç yoktur; gerekmedikçe eklemeyin.
+Şablonda yorum satırı olarak durur ya da hiç yoktur; gerekmedikçe eklemeyin. Dosyada
+aynı başlık (ör. `spark:`) zaten varsa yeni satırı o başlığın altına yazın; aynı başlığı
+ikinci kez açmayın.
 
 | Anahtar | Ne zaman eklenir | Örnek |
 |---|---|---|
@@ -62,8 +68,16 @@ müşteriye özel değerleri. **22 anahtar.**
 | `trino.hostname`, `superset.hostname`, `jupyterhub.hostname`, `zeppelin.hostname` | Bir bileşen için kurumsal DNS adı isteniyorsa (o ad için CNAME kaydı kümenin joker adına yönlendirilir) | `trino: {hostname: trino.kurum.example.net}` |
 | `keycloak.hostname` | Keycloak için kurumsal ad. **Çıplak host değil, TAM URL** yazılır; jetondaki `iss` değeri budur ve şemasız yazılırsa render hata verir | `keycloak: {hostname: https://sso.kurum.example.net}` |
 | `kafka.externalListener` ve `nginx.enabled` | nginx erişim günlüğü akışı kullanılacaksa (ikisi birlikte) | `true` |
-| `velero` | OADP operatörü kurulduktan **sonra** ad alanı yedeği açılacaksa | `velero: {enabled: true, namespace: openshift-adp}` |
-| `spark` | Veri hacmi büyüdüğünde büyük kademe kaynakları (ürün dosyasında yorumlu blok) | `spark: {shufflePartitions: 200}` |
+| `nginx.retentionDays` | nginx günlük tablosunda satırların kaç gün tutulacağı. Varsayılan `0` (süresiz); bakım işi eski satırları her gece siler | `nginx: {retentionDays: 90}` |
+| `streams` | Uygulama ve IoT cihazlarından JSON olay akışları. Alanlar: [json-akisi-ekleme.md](../50-isletme/json-akisi-ekleme.md) §3 | `streams: [{name: sensors, retentionDays: 365}]` |
+| `connect.replicas`, `connect.resources`, `connect.heap` | Kafka Connect işçi sayısı ve belleği. Varsayılan 2 işçi × 4 GiB, JVM yığını `2400m`. Yığın, bellek sınırının yaklaşık %60'ı olmalıdır; boyutlar [10-planlama](../10-planlama.md) §2.2'dedir | `connect: {resources: {requests: {cpu: 500m, memory: 6Gi}, limits: {memory: 6Gi}}, heap: 3600m}` |
+| `monitoring.silverMergeStaleSeconds` | `LakehouseSilverMergeStale` alarmının eşiği (saniye). Varsayılan `2700` (45 dakika) | `monitoring: {silverMergeStaleSeconds: 5400}` |
+| `monitoring.sinkLagThreshold` | `LakehouseSinkStalled` alarmının eşiği (bekleyen kayıt sayısı). Varsayılan `1000` | `monitoring: {sinkLagThreshold: 5000}` |
+| `monitoring.sparkRunMaxSeconds` | `LakehouseSparkRunTooLong` alarmının eşiği (saniye). Varsayılan `1800` | `monitoring: {sparkRunMaxSeconds: 3600}` |
+| `spark.maintenance` | Bakım işinin saklama süreleri. Varsayılan: snapshot'lar 7 gün (`snapshotDays`), yetim dosyalar 3 gün (`orphanDays`), Bronze satırları 30 gün (`bronzeTtlDays`) | `spark: {maintenance: {snapshotDays: 7, orphanDays: 3, bronzeTtlDays: 60}}` |
+| `spark.schedules` | Zamanlı işlerin çalışma saatleri (cron, UTC). Varsayılan: `silverMerge` 15 dakikada bir, `positionDeletes` saatte bir, `compact` 6 saatte bir, `expireOrphanTtl` her gece 03:30, `mongoBronze` 5 dakikada bir | `spark: {schedules: {silverMerge: "*/30 * * * *"}}` |
+| `velero` | OADP operatörü kurulduktan **sonra** ad alanı yedeği açılacaksa ([yedek-ve-geri-donus.md](../50-isletme/yedek-ve-geri-donus.md) §7) | `velero: {enabled: true, namespace: openshift-adp}` |
+| `spark.driver`, `spark.executor`, `spark.shufflePartitions` | Veri hacmi büyüdüğünde Spark işlerinin kaynakları ([10-planlama](../10-planlama.md) §2.2) | `spark: {shufflePartitions: 200}` |
 | `kafka.storageClass`, `kafka.storageSize` | Kafka diski varsayılandan (100 GiB) farklı olacaksa | `kafka: {storageSize: 500Gi}` |
 | `cnpg.polarisDb.instances`, `cnpg.keycloakDb.instances`, `cnpg.supersetDb.instances` | PostgreSQL kopya sayısı. Ürün varsayılanı üretimde **2** (birincil + yedek); tek düğümlü bir laboratuvarda 1'e çekilir | `cnpg: {polarisDb: {instances: 1}}` |
 | `cnpg.polarisDb.storageSize`, `cnpg.keycloakDb.storageSize`, `cnpg.supersetDb.storageSize` | PostgreSQL disk boyutu. Varsayılan **10Gi**; orta kademede 20Gi, büyükte 50Gi | `cnpg: {keycloakDb: {storageSize: 20Gi}}` |
@@ -132,7 +146,7 @@ geçmez ve router sertifikasına güvenmek gerekmez.
 | `ldap.url` | AD LDAPS adresi (glue dosyasındaki `keycloak.ldap.connectionUrl` ile **aynı**) | `$LDAP_URL` | `ldaps://ad.example.com:636` |
 | `ldap.admin-user` | Bağlanma DN'i (glue `keycloak.ldap.bindDn` ile **aynı**) | `$LDAP_BIND_DN` | `CN=svc-lakehouse,OU=Service,DC=example,DC=com` |
 | `ldap.user-base-dn` | Kullanıcı ağacı (glue `keycloak.ldap.usersDn` ile **aynı**) | `$LDAP_USERS_DN` | `OU=Users,DC=example,DC=com` |
-| `ldap.ssl.truststore.path` | **Bu satır yoktur ve eklenmez.** Trino 483'te bu satırın açtığı SSL yolu aralıklı `SSLContext was not set` hatası verir ve kullanıcının grupları boş gelir (OpenShift provası). AD kök CA'sı coordinator'ın JVM güven deposuna `platform/values/trino-ldap.yaml` initContainer'ıyla eklenir; `scripts/check-site.sh` satırı görürse durur | — | — |
+| `ldap.ssl.truststore.path` | **Bu satır yoktur ve eklenmez.** Bu Trino sürümünde satır, aralıklı `SSLContext was not set` hatasına ve kullanıcının gruplarının boş gelmesine yol açar. AD kök sertifikası Trino'nun Java güven deposuna ürünün kendi ayarıyla eklenir; `scripts/check-site.sh` satırı görürse durur | — | — |
 
 Bağlanma **parolası** değer dosyasında değildir: `keycloak-clients` Secret'ının
 `ldap-bind` anahtarı `LDAP_BIND_PASSWORD` ortam değişkeni olarak gelir
@@ -157,17 +171,11 @@ Diğer satırlar (`connector.name=iceberg`, `iceberg.catalog.type=rest`,
 `iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL`, `fs.s3.enabled=true`,
 `s3.path-style-access=true`) ürün satırlarıdır.
 
-> **`platform/values/trino-ldap.yaml` yalnız AD kök CA'sının bağlanmasını taşır.**
-> `group-provider.properties` bloğu **burada değildir** (çok satırlı string'ler birleşmez,
-> blok bütünüyle `platform/values/site/trino.yaml`'dan gelir); bu dosyada
-> `coordinator.additionalVolumes`
-> ile `ad-ca` Secret'ı coordinator'ın `s3-truststore` initContainer'ına bağlanır ve
-> `keytool` ile JVM güven deposuna eklenir — `optional: true` olduğu için Secret yoksa adım
-> atlanır, Trino yine açılır. Dosya ayrıca ArgoCD'nin
-> değer dosyası listesinde **prod işaretidir** (geliştirme kümesi bu listeyi başka bir
-> dosyayla değiştirir). **Silmeyin**; AD sertifikanız herkesçe bilinen bir CA'dan
-> geliyorsa dokunmanız gereken yer burası değil, `platform/values/site/glue.yaml` →
-> `keycloak.ldap.caSecret` satırıdır.
+> **`platform/values/trino-ldap.yaml` ürün dosyasıdır; silmeyin.** Bu dosya `ad-ca`
+> Secret'ını Trino'nun Java güven deposuna ekler. Secret yoksa adım atlanır, Trino yine
+> açılır. `group-provider.properties` bloğu bu dosyada değil, site dosyasındadır. AD
+> sertifikanız herkesçe bilinen bir CA'dan geliyorsa değiştireceğiniz yer
+> `platform/values/site/glue.yaml` → `keycloak.ldap.caSecret` satırıdır.
 
 ---
 
@@ -189,8 +197,10 @@ sabittir (`platform/values/jupyterhub.yaml`).
 
 ## 4. `platform/polaris/setup.yaml` — kurulumcunun değiştirdiği satırlar
 
-Bu dosya Polaris **sunucusunun** katalog tanımıdır ve `scripts/polaris-setup.sh`
-tarafından uygulanır; site dizininde değildir ama kurulumda düzenlenir.
+Bu dosya Polaris kataloğunun tanımıdır ve `scripts/polaris-setup.sh` ile uygulanır.
+Site klasöründe değildir ama kurulumda düzenlenir. Yeni bir kaynak ya da akış eklerken
+`namespaces:` listesine de satır eklenir
+([yeni-kaynak-ve-pipeline.md](../50-isletme/yeni-kaynak-ve-pipeline.md) §5).
 
 | Satır | Anlam | `.env` karşılığı | Örnek |
 |---|---|---|---|
@@ -202,8 +212,8 @@ tarafından uygulanır; site dizininde değildir ama kurulumda düzenlenir.
 | `sts_unavailable` | Depolamada STS **yoksa** eklenir; glue `s3.vendedCredentials: false` ile birlikte kullanılır | — | `true` |
 
 `scripts/check-site.sh` bu dosyadaki `endpoint` uyuşmazlığını **HATA değil UYARI** olarak
-raporlar (geliştirme kümesinde bilerek küme içi MinIO adresini taşır). Uyarıyı görüp
-geçmeyin: üretimde bu satırlar doldurulmazsa Polaris kataloğu yanlış depolamayı gösterir.
+gösterir. Uyarıyı görüp geçmeyin: bu satırlar doldurulmazsa Polaris kataloğu yanlış
+depolamayı gösterir.
 
 **Katalog `properties` yalnız katalog YARATILIRKEN yazılır.** `polaris setup apply` var
 olan bir katalogda `properties` bloğunu güncellemez; sonradan değiştirmek için
@@ -213,9 +223,9 @@ olan bir katalogda `properties` bloğunu güncellemez; sonradan değiştirmek i�
 
 ## 5. Aynı değerin birden fazla yerde olduğu noktalar
 
-ArgoCD çok kaynaklı Application'larda değer dosyaları arasında şablonlama yoktur;
-aşağıdaki kopyalar elle tutulur ve `scripts/check-site.sh` ile denetlenir. Birini
-değiştirirken **hepsini** değiştirin.
+Trino ve JupyterHub ayrı uygulamalardır ve glue dosyasındaki değerleri göremez. Bu yüzden
+aşağıdaki değerler birden fazla dosyada elle tutulur; `scripts/check-site.sh` hepsinin
+aynı olduğunu denetler. Birini değiştirirken **hepsini** değiştirin.
 
 | Tek doğru kaynak | Kopyası nerede | Denetleyen |
 |---|---|---|

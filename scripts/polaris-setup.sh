@@ -18,9 +18,11 @@ for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:8181/ && break; s
 polaris setup apply "$SETUP" > "$LOG" 2>&1 || { grep -v '^{"clientId"' "$LOG"; exit 1; }
 grep -v '^{"clientId"' "$LOG" || true
 # setup apply yeni principal'lar için {"clientId","clientSecret"} basar (yaratma sırasıyla); root rotate EDEMEZ -> hemen Secret'a yaz
-python3 - "$LOG" "$NS" <<'PY'
+python3 - "$LOG" "$NS" "$SETUP" <<'PY'
 import sys, re, json, subprocess
-log = open(sys.argv[1]).read(); ns = sys.argv[2]
+log = open(sys.argv[1]).read(); ns = sys.argv[2]; setup = sys.argv[3]
+# Elle yaratılan nesne etiketi (scripts/nesne-kaynagi.sh): Secret'ı belgenin hangi adımı yarattı
+ETIKET = "lakehouse.io/yonetim=manual-40-kurulum-sonrasi-2.2"
 names = re.findall(r"Creating principal: ([A-Za-z0-9_-]+)", log)
 creds = [json.loads(l) for l in log.splitlines() if l.startswith('{"clientId"')]
 assert len(names) == len(creds), f"principal/credential sayısı uyuşmuyor: {names} vs {len(creds)}"
@@ -31,4 +33,10 @@ for n, c in zip(names, creds):
     subprocess.run(["kubectl", "apply", "-f", "-"], input=manifest, check=True, text=True)
     print("Secret yazıldı:", f"polaris-{n}")
 if not names: print("Yeni principal yok (idempotent çalıştırma).")
+# setup.yaml'daki bütün principal'ların Secret'larını etiketle (yeni ya da önceki koşudan kalmış; idempotent)
+blok = re.search(r"^principals:\n((?:[ \t]+.*\n?)+)", open(setup).read(), re.M)
+for n in re.findall(r"^[ \t]+([A-Za-z0-9_-]+):", blok.group(1) if blok else "", re.M):
+    if subprocess.run(["kubectl", "-n", ns, "get", "secret", f"polaris-{n}"], capture_output=True).returncode == 0:
+        subprocess.run(["kubectl", "-n", ns, "label", "secret", f"polaris-{n}", ETIKET, "--overwrite"],
+                       check=True, capture_output=True)
 PY

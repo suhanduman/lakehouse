@@ -25,7 +25,7 @@ backup:
   enabled: true
   s3: {secret: backup-s3-creds}
   retentionPolicy: "30d"
-# Büyük tier (F0 S4): tablo/veri hacmi büyüdüğünde yorumu kaldır — küçük tier varsayılanları glue/values.yaml'da
+# Büyük kademe (docs/10-planlama.md §2): bu değerleri platform/values/site/glue.yaml dosyasına yazın
 #spark:
 #  driver:   {cores: 2, memory: 4g, memoryOverhead: 1g}
 #  executor: {instances: 2, cores: 2, memory: 4g, memoryOverhead: 1g}

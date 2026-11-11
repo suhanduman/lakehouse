@@ -1,14 +1,20 @@
 # Sorun giderme
 
-**Bu bölümde:** kurulumdan işletmeye kadar karşılaşılan belirtilerin tek listesi — önce
-bir **belirti tablosu**, sonra her belirtinin komut komut teşhisi ve çözümü. Altı alarmın
-her biri buradaki kendi bölümüne bağlanır: alarm bildiriminin içindeki `runbook`
-açıklaması doğrudan bu sayfanın ilgili başlığını gösterir.
-**Süre:** ilk bakış 2–5 dakika; kök nedene göre değişir.
-**Gereken yetki:** `$LAKEHOUSE_NS` ad alanında okuma; bazı çözümlerde aynı ad alanında
-`annotate`/`patch`/`delete pod` yetkisi. Kalıcı düzeltmeler her zaman Git üzerinden
-yapılır ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
-**Nerede çalıştırılır:** `[bastion]` — `oc login` ile kümeye girilmiş yönetim makinesi.
+Bu sayfa, kurulumdan günlük işletmeye kadar karşılaşılan sorunların tek listesidir. Önce
+bir **belirti tablosu** (§3) vardır; her satır sizi o belirtinin bölümüne götürür. Her
+bölümde sırayla **ne bakılır**, **ne yapılır** ve **ters giderse** ne olacağı yazar.
+
+Lakehouse'un altı alarmının her biri buradaki kendi bölümüne bağlıdır: alarm bildirimindeki
+`runbook` açıklaması doğrudan o başlığı gösterir.
+
+**Ne kadar sürer:** ilk bakış 2–5 dakika; çözüm süresi soruna göre değişir.
+
+**Hangi yetkiler gerekir:** `$LAKEHOUSE_NS` ad alanında okuma. Bazı çözümler aynı ad
+alanında `annotate`, `patch` ya da pod silme yetkisi ister. Kalıcı düzeltmeler her zaman
+Git üzerinden yapılır ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
+
+**Komutlar nerede çalışır:** `[bastion]` — `oc login` ile kümeye bağlı, Git deposunun
+bir kopyasının (`~/lakehouse`) bulunduğu yönetim makinesi.
 
 ---
 
@@ -22,20 +28,20 @@ set -a; . install/lakehouse.env; set +a
 echo "argocd=$ARGOCD_NS lakehouse=$LAKEHOUSE_NS"
 ```
 
-**Beklenen çıktı** (örnek — kendi değerlerinizle):
+**Beklenen çıktı** (kendi değerlerinizle):
 
 ```text
 argocd=openshift-gitops lakehouse=lakehouse
 ```
 
-**Ters giderse:** boş satır görüyorsanız dosya yüklenmemiştir
-([30-kurulum](../30-kurulum.md) §1).
+**Ters giderse:** eşittir işaretlerinden sonrası boşsa `install/lakehouse.env` dosyası
+yoktur ya da başka bir klasördesiniz ([30-kurulum](../30-kurulum.md) §1).
 
 ---
 
 ## 2. İlk bakılacaklar
 
-Belirti ne olursa olsun bu dört komut önce koşturulur; sorunların çoğu burada görünür.
+Belirti ne olursa olsun önce bu dört komutu çalıştırın; sorunların çoğu burada görünür.
 
 `[bastion]`
 
@@ -46,61 +52,63 @@ oc -n "$LAKEHOUSE_NS" get kafka,kafkaconnect,kafkaconnector,cluster,keycloak,sup
 oc -n "$LAKEHOUSE_NS" get events --sort-by=.lastTimestamp | tail -30
 ```
 
-**Beklenen çıktı** (örnek — sağlıklı kurulumda): bütün uygulamalar `Synced Healthy`,
-hiçbir pod `CrashLoopBackOff` / `CreateContainerConfigError` / `Pending` değil, bütün
-özel kaynakların `READY` sütunu `True`.
+**Beklenen çıktı** (sağlıklı bir kurulumda):
 
-**Ters giderse:** `applications` diye bir kaynak yoksa kurulum ArgoCD'siz "helm
-modundadır" ([30-kurulum](../30-kurulum.md) "Lokal deneme (kind)"); diğer üç komut aynen
-geçerlidir.
+- bütün uygulamalar `Synced Healthy`;
+- hiçbir pod `CrashLoopBackOff`, `CreateContainerConfigError` ya da `Pending` değil;
+- listelenen nesnelerin `READY` sütunu `True`.
+
+**Ters giderse:** `the server doesn't have a resource type "applications"` görürseniz
+`$ARGOCD_NS` değişkeni yanlış ad alanını gösteriyordur ya da OpenShift GitOps kurulu
+değildir ([20-on-kosullar](../20-on-kosullar.md) madde 2).
 
 ---
 
 ## 3. Belirti tablosu
 
-| Belirti | Nereye bakılır |
+| Ne görüyorsunuz | Nereye bakın |
 |---|---|
-| Alarm: `LakehouseConnectTaskFailed` | [§4.1 Connect görevi FAILED](#connect) |
-| Alarm: `LakehouseSinkStalled` | [§4.2 Iceberg sink lag'i büyüyor](#sink) |
-| Alarm: `LakehouseSilverMergeStale` | [§4.3 silver-merge eskidi](#silver-merge) |
-| Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlanmış Spark koşusu FAILED](#spark) |
-| Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark koşuları yavaşladı](#spark-duration) |
+| Alarm: `LakehouseConnectTaskFailed` | [§4.1 Connect görevi hata verdi](#connect) |
+| Alarm: `LakehouseSinkStalled` | [§4.2 Iceberg yazıcısı geride kalıyor](#sink) |
+| Alarm: `LakehouseSilverMergeStale` | [§4.3 Silver güncellenmiyor](#silver-merge) |
+| Alarm: `LakehouseSparkScheduledRunFailed` | [§4.4 Zamanlı Spark işi başarısız](#spark) |
+| Alarm: `LakehouseSparkRunTooLong` | [§4.5 Spark işleri yavaşladı](#spark-duration) |
 | Alarm: `LakehouseDlqRecords` | [§4.6 Hatalı kayıt konusuna kayıt düştü](#dlq) |
 | Connect pod'unun `RESTARTS` sayısı artıyor | [§4.1 Connect pod'u yeniden başlıyor](#connect-oom) |
 | Bağlayıcı `RUNNING` ama görev listesi boş | [§4.1 Görev listesi boş](#connect-gorev-yok) |
-| Silver güncellenmiyor, bakım işleri koşmuyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
-| Spark ya da Connect `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
+| Silver güncellenmiyor, bakım işleri çalışmıyor, hata da yok | [§6.1 Askıda kalan zamanlı iş](#ssa-suspend) |
+| Spark ya da Connect günlüğünde `403 The Access Key Id you provided does not exist` | [§5.1 Polaris / S3 403](#polaris-403) |
 | Spark işi `unresolved dependency` ya da Ivy hatası veriyor | [§6.2 Maven kütüphaneleri](#maven) |
-| Bronze tablo boş kalıyor, satır gelmiyor | [§6 Boru hattı](#boru-hatti) |
+| Bronze tablosu boş kalıyor, satır gelmiyor | [§6 Veri akışı](#boru-hatti) |
 | Karantina (`__quarantine`) tablosu doluyor | [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §3.3 ve §9.2 |
 | `nginx.dlq` konusunda kayıt birikiyor | [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §10 |
 | Silver tablosunda `SchemaConflict` | [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) |
 | `glue` uygulaması `OutOfSync` ya da `Degraded` kalıyor | [§5 Kurulum ve eşitleme](#kurulum) |
-| Connect `Build` uzun sürüyor ya da `unauthorized` veriyor | [§5 Kurulum ve eşitleme](#kurulum) |
-| Trino `401` ya da `Authentication failed` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
-| Not defterinden Trino'ya `CA cert does not include key usage extension` | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
-| Analist/kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse` (servis hesapları çalışıyor) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
+| Connect imaj yapımı uzun sürüyor ya da `unauthorized` veriyor | [§5 Kurulum ve eşitleme](#kurulum) |
+| Trino `401` ya da `Authentication failed` | [§7 Kullanıcı araçları](#kullanici-yuzu) |
+| Not defterinden Trino'ya `CA cert does not include key usage extension` | [§7 Kullanıcı araçları](#kullanici-yuzu) |
+| Analist ya da kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse` alıyor (Superset ve Zeppelin çalışıyor) | [§7 Kullanıcı araçları](#kullanici-yuzu) |
 | Trino `Access Denied` | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5 |
-| Superset `phase: Initializing`, şema geçiş görevi düşüyor | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
-| JupyterHub not defteri açılmıyor (spawn zaman aşımı) | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
-| Zeppelin `jdbc` yorumlayıcısı hazır değil | [§7 Kullanıcı yüzü](#kullanici-yuzu) |
-| Zeppelin girişi başarılı ama not defteri listesi 401 | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §3 |
-| Prometheus hedefi `down`, metrik yok | [§8 İzleme ve yedekler](#dr) |
-| CNPG `ContinuousArchiving=False` | [§8 İzleme ve yedekler](#dr) |
+| Superset açılmıyor (`phase: Initializing`) | [§7 Kullanıcı araçları](#kullanici-yuzu) |
+| JupyterHub not defteri açılmıyor (zaman aşımı) | [§7 Kullanıcı araçları](#kullanici-yuzu) |
+| Zeppelin `jdbc` yorumlayıcısı hazır değil | [§7 Kullanıcı araçları](#kullanici-yuzu) |
+| Zeppelin'e girişte not defteri listesi 401 veriyor | [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §3 |
+| İzleme hedefi `down`, metrik yok | [§8 İzleme ve yedekler](#dr) |
+| Veritabanı yedeği `ContinuousArchiving=False` | [§8 İzleme ve yedekler](#dr) |
 | Velero yedeği `PartiallyFailed` | [§8 İzleme ve yedekler](#dr) |
 | `oc get backup` yanlış nesneyi gösteriyor | [§8 İzleme ve yedekler](#dr) |
-| Pod öldü, günlüğüne artık bakılamıyor | [§9 Günlükler (Loki)](#loki) |
+| Pod silinmiş, günlüğüne artık bakılamıyor | [§9 Günlükler (Loki)](#loki) |
 
 ---
 
 ## 4. Alarmlar
 
-Kümede **tek** `PrometheusRule` vardır (`lakehouse`) ve içinde **beş** kural bulunur.
-Alarmların anlamı, eşiği ve nereden ayarlandığı
-[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) sayfasındadır; burada yalnız "ateşlendi, ne
-yapmalı" adımları vardır.
+Kümede tek bir alarm kural nesnesi (`PrometheusRule lakehouse`) ve içinde altı kural
+vardır. Alarmların anlamı, eşikleri ve nereden değiştirildikleri
+[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) sayfasındadır; burada yalnız "alarm geldi,
+ne yapmalı" adımları vardır.
 
-Kuralların o anki durumu:
+Kuralların o anki durumunu görmek için:
 
 `[bastion]`
 
@@ -111,28 +119,32 @@ curl -sSk -H "Authorization: Bearer $TOKEN" "https://$HOST/api/v1/rules" \
   | jq -r '.data.groups[] | select(.name=="lakehouse") | .rules[] | "\(.name)\t\(.health)\t\(.state)"'
 ```
 
-**Beklenen çıktı** (kind kümesindeki Prometheus'tan alınmış gerçek çıktı; OpenShift'te
-aynı satırlar thanos-querier üzerinden gelir):
+**Beklenen çıktı** (sağlıklı, alarmsız bir kurulumda; satırların sırası değişebilir):
 
 ```text
 LakehouseConnectTaskFailed	ok	inactive
-LakehouseSinkStalled	ok	inactive
-LakehouseSilverMergeStale	ok	inactive
-LakehouseSparkScheduledRunFailed	ok	inactive
-LakehouseSparkRunTooLong	ok	inactive
 LakehouseDlqRecords	ok	inactive
+LakehouseSilverMergeStale	ok	inactive
+LakehouseSinkStalled	ok	inactive
+LakehouseSparkRunTooLong	ok	inactive
+LakehouseSparkScheduledRunFailed	ok	inactive
 ```
 
-**Ters giderse:** `health` sütunu `err` ise kural ifadesi değerlendirilemiyordur (çoğu
-zaman metrik kaynağı eksiktir — [§8](#dr)). Liste boşsa kullanıcı iş yükü izlemesi kapalı
-ya da kural nesnesi kümede yoktur ([20-on-kosullar](../20-on-kosullar.md) madde 9.1).
+Üçüncü sütun alarm gelmişse `firing` olur.
+
+**Ters giderse:**
+
+- İkinci sütun `err` ise kural hesaplanamıyordur; çoğu zaman bir ölçüm kaynağı eksiktir
+  ([§8](#dr)).
+- Liste boşsa kullanıcı iş yükü izlemesi kapalıdır ya da kural nesnesi kümede yoktur
+  ([20-on-kosullar](../20-on-kosullar.md) madde 9.1).
 
 <a id="connect"></a>
-### 4.1 `LakehouseConnectTaskFailed` — Connect görevi FAILED
+### 4.1 `LakehouseConnectTaskFailed` — Connect görevi hata verdi
 
-`kafka_connect_connector_task_status{status="failed"} == 1`, 5 dakika, **critical**.
+Bir bağlayıcının görevi 5 dakikadır `FAILED` durumunda. Önem: **critical**.
 
-**Ne bak**
+**Ne bakılır**
 
 `[bastion]`
 
@@ -144,40 +156,43 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector "$CONNECTOR" \
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — ilk komut, sağlıklı hâl; alarm
-sırasında ilgili satırın `READY` sütunu `False` olur):
+**Beklenen çıktı** (ilk komut, sağlıklı hâl; alarm sırasında ilgili satırın `READY`
+sütunu `False` olur):
 
 ```text
-NAME         CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
-dbz-crm      connect   io.debezium.connector.mongodb.MongoDbConnector       1           True
-dbz-shop     connect   io.debezium.connector.postgresql.PostgresConnector   1           True
-sink-nginx   connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
-sink-shop    connect   org.apache.iceberg.connect.IcebergSinkConnector      1           True
+NAME              CLUSTER   CONNECTOR CLASS                                      MAX TASKS   READY
+dbz-crm           connect   io.debezium.connector.mongodb.MongoDbConnector       1           True
+dbz-erp           connect   io.debezium.connector.postgresql.PostgresConnector   1           True
+dbz-fin           connect   io.debezium.connector.sqlserver.SqlServerConnector   1           True
+dbz-ogr           connect   io.debezium.connector.sqlserver.SqlServerConnector   1           True
+dbz-shop          connect   io.debezium.connector.postgresql.PostgresConnector   1           True
 ```
 
-**Ne yap**
+İkinci komut görevin hata mesajını (`trace`) yazar; çözüm bu mesaja göre seçilir.
 
-- **Geçici hata** (kaynak veritabanı yeniden başladı, ağ koptu): görevi yeniden başlatın.
+**Ne yapılır**
+
+- **Geçici bir hata** (kaynak veritabanı yeniden başladı, ağ bir süre koptu): görevi
+  yeniden başlatın.
 
   `[bastion]`
 
   ```bash
-  oc -n "$LAKEHOUSE_NS" annotate kafkaconnector dbz-shop strimzi.io/restart=true
+  oc -n "$LAKEHOUSE_NS" annotate kafkaconnector "$CONNECTOR" strimzi.io/restart=true
   ```
 
-- **Kimlik ya da yetki hatası:** kaynağın Secret'ı (kaynak adı + `-db`; depodaki örnekte
-  `erp-db`) ve kaynak hazırlığı —
-  [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 3 (çoğaltma rolü,
-  publication, sinyal tablosu, CDC etkinleştirme) ile Adım 4 (Secret).
-- **Converter ya da SMT hatası:** hatalı kayıtlara katlanma açık olduğu için kayıt, kaynağın
-  konu önekiyle başlayan DLQ konusuna düşer (`shop` kaynağı için `shop.dlq`); oradan okuyun.
-- **Görev düştükten sonra tüketici konumu ileri kalmış olabilir** (veri boşluğu).
-  Bağlayıcıyı `spec.state: stopped` yapıp tüketici grubunun konumunu başa alın, sonra
-  `running` durumuna döndürün; grup adı `connect-` öneki + sink bağlayıcısının adıdır
-  (`connect-sink-shop`).
+- **Kimlik ya da yetki hatası:** kaynağın Secret'ını (kaynak adı + `-db`, ör. `erp-db`) ve
+  kaynak veritabanındaki hazırlığı kontrol edin:
+  [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 3 (CDC kullanıcısı,
+  publication, sinyal tablosu) ve Adım 4 (Secret).
+- **Dönüştürme hatası:** bozuk kayıt görevi durdurmaz, kaynağın hatalı kayıt konusuna
+  gider (`shop` kaynağı için `shop.dlq`); kaydı oradan okuyun ([§4.6](#dlq)).
+- **Görev uzun süre kapalı kaldıysa** Iceberg yazıcısının konumu ilerlemiş olabilir ve
+  arada kayıt atlanmış olabilir. Bu durumda kaynağı yeniden okutmak gerekir
+  ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) §6).
 
-**Ters giderse:** `trace` boşsa görev hiç başlamamıştır — Connect pod'unun günlüğüne bakın;
-imaj yapımı yarım kalmış olabilir ([§5](#kurulum)).
+**Ters giderse:** `trace` boşsa görev hiç başlamamıştır. Connect günlüğüne bakın; imaj
+yapımı yarım kalmış olabilir ([§5](#kurulum)).
 
 <a id="connect-oom"></a>
 #### Connect pod'u yeniden başlıyor (bellek yetmiyor)
@@ -192,17 +207,17 @@ oc -n "$LAKEHOUSE_NS" get pod -l strimzi.io/kind=KafkaConnect \
   -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[0].lastState.terminated.reason}{"\n"}{end}'
 ```
 
-**Beklenen çıktı** (bellek yetmediğinde; OpenShift provasında alınmış gerçek değer):
+**Beklenen çıktı** (bellek yetmediğinde):
 
 ```text
 connect-connect-0 OOMKilled
 ```
 
 `OOMKilled`, pod'un bellek sınırını aştığını gösterir. Bağlayıcı o sırada bir tablonun ilk
-okumasını yapıyorsa okuma baştan alınır; Bronze'a bazı kayıtlar iki kez yazılır (Silver
-bunları ayıklar). Belleği artırın: `platform/values/site/glue.yaml` dosyasına
-`connect.resources` ve `connect.heap` değerlerini ekleyin. Yığın (`heap`) sınırın yaklaşık
-%60'ı olmalıdır; örneğin 6 GiB için:
+okumasını yapıyorsa okuma baştan alınır ve Bronze'a bazı kayıtlar iki kez yazılır; Silver
+bunları ayıklar. Belleği artırın: `platform/values/site/glue.yaml` dosyasına
+`connect.resources` ve `connect.heap` ayarlarını ekleyin. Yığın (`heap`) sınırın yaklaşık
+%60'ı olmalıdır. Örneğin 6 GiB için:
 
 ```yaml
 connect:
@@ -218,7 +233,7 @@ connect:
 #### Bağlayıcı çalışıyor ama görev listesi boş
 
 Birden fazla Connect işçisi varken, işçilerden biri yeniden başladıktan sonra bir
-bağlayıcının durumu `RUNNING` görünür ama görev listesi boş kalabilir. Görev gerçekte başka
+bağlayıcının durumu `RUNNING` görünür ama görev listesi boş kalabilir. Görev aslında başka
 bir işçide çalışıyordur; işçilerden biri onun durum kaydını kaçırmıştır. Her işçiye ayrı
 ayrı sorun:
 
@@ -231,7 +246,7 @@ for p in $(oc -n "$LAKEHOUSE_NS" get pod -l strimzi.io/kind=KafkaConnect -o name
 done
 ```
 
-**Beklenen çıktı** (bu durumda; OpenShift provasında alınmış gerçek çıktı):
+**Beklenen çıktı** (bu durumda):
 
 ```text
 pod/connect-connect-0: []
@@ -253,63 +268,59 @@ oc -n "$LAKEHOUSE_NS" exec connect-connect-0 -- \
 ```
 
 <a id="sink"></a>
-### 4.2 `LakehouseSinkStalled` — Iceberg sink lag'i büyüyor
+### 4.2 `LakehouseSinkStalled` — Iceberg yazıcısı geride kalıyor
 
-`sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~"connect-sink-.*"})`
-eşiği aştı; 15 dakika, **warning**. Eşik: `monitoring.sinkLagThreshold` (varsayılan 1000).
+Bir Iceberg yazıcısının (sink) okumadığı kayıt sayısı 15 dakikadır eşiğin üstünde. Önem:
+**warning**. Eşik `monitoring.sinkLagThreshold` ayarındadır (varsayılan 1000).
 
-**Ne bak**
+**Ne bakılır**
 
 `[bastion]`
 
 ```bash
-scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop   # kafka-admin kimliğiyle, TLS 9093
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop
 oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{.status.connectorStatus.tasks[0]}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=200 | grep -i 'commit\|iceberg\|s3'
 ```
 
-**Önce `LAG` sütununa bakın — teşhisi o belirler:**
+Grup adı `connect-sink-` ve kaynağın adıdır. Önce birinci komutun **`LAG`** sütununa
+bakın; ne yapılacağını o belirler:
 
-| `LAG` | Anlamı | Ne yap |
+| `LAG` | Anlamı | Ne yapılır |
 |---|---|---|
-| `0` | Boru hattı **sağlıklı ve boşta**: tüketilecek yeni kayıt yok | Bir şey yapmayın; aşağıdaki nota bakın |
-| `> 0` ama her ölçümde **azalıyor** | Birikim eriyor | Bekleyin; kesinti sonrası normaldir |
-| `> 0` ve **sabit** (iki ölçüm arası değişmiyor) | Sink tüketiyor ama **commit edemiyor** | Aşağıdaki "Bronze tablosu var ama boş" akışı |
+| `0` | Her şey yolunda; okunacak yeni kayıt yok | Bir şey yapmayın |
+| sıfırdan büyük ama her bakışta **azalıyor** | Birikim eriyor | Bekleyin; bir kesintiden sonra normaldir |
+| sıfırdan büyük ve **sabit** | Yazıcı okuyor ama tabloya yazamıyor | Aşağıdaki "Bronze tablosu var ama boş" adımları |
 
-> **`committed to 0 table(s)` bir arıza belirtisi DEĞİLDİR.** Sink koordinatörü
-> `iceberg.control.commit.interval-ms` (geliştirmede 30 sn, üretimde 300 sn) periyoduyla
-> **her zaman** bir commit turu başlatır; o turda yazılacak yeni veri yoksa günlüğe
-> `Coordinator … completed commit …, committed to 0 table(s)` ve `Commit timeout reached`
-> satırlarını yazar. Boşta duran sağlıklı bir kurulumda bu satırlar **sürekli** akar.
-> Ölçüt satırın kendisi değil, **`LAG` ile birlikte** okunmasıdır.
+> **`committed to 0 table(s)` satırı hata değildir.** Yazıcı beş dakikada bir yazma turu
+> başlatır; o turda yeni kayıt yoksa günlüğe `committed to 0 table(s)` ve
+> `Commit timeout reached` yazar. Boşta duran sağlıklı bir kurulumda bu satırlar sürekli
+> görünür. Bu satırları her zaman `LAG` sütunuyla birlikte okuyun.
 
-**Ne yap**
+**Ne yapılır**
 
-- Görev `RUNNING` ama commit yoksa: katalog ya da S3 erişimi bozuktur →
+- Görev `RUNNING` ama tabloya yazılmıyorsa katalog ya da S3 erişimi bozuktur →
   [§5.1 Polaris / S3 403](#polaris-403).
-- Gerçek yük artışıysa kaynağın `sinkTasks` değeri ve `connect.replicas` artırılır (sink'in
-  commit aralığı üretimde 300 saniyedir, ilk birikme normaldir).
-- Uzun kesintiden sonraki birikimde lag'in **düştüğünü** doğrulamak yeter; azalıyorsa
-  beklenir.
-- `connect-sink-shop-coord` biçimindeki gruplar sink'in kendi denetim konusunu okur ve bu
-  kurala **dâhildir**; kalıcı `-coord` lag'i koordinatörün takıldığını gösterir →
-  bağlayıcıyı yeniden başlatın.
+- Gerçek bir yük artışıysa kaynağın `sinkTasks` değerini ve `connect.replicas` sayısını
+  artırın. Yazıcı beş dakikada bir yazdığı için kısa birikmeler normaldir.
+- Uzun bir kesintiden sonra `LAG`'in **azaldığını** görmek yeterlidir; bekleyin.
+- `-coord` ile biten grup (ör. `connect-sink-shop-coord`) yazıcının kendi denetim
+  konusudur. Bu grupta kalıcı birikme varsa yazıcının koordinatörü takılmıştır →
+  bağlayıcıyı yeniden başlatın ([§4.1](#connect)).
 
-**Ters giderse:** komut `lakehouse-dual-role-0` pod'unu bulamazsa pod adları farklıdır;
+**Ters giderse:** `kafka-cli.sh` broker pod'unu bulamazsa pod adları farklıdır;
 `oc -n "$LAKEHOUSE_NS" get pods -l strimzi.io/cluster=lakehouse` ile listeleyin.
 
 <a id="sink-bos-tablo"></a>
-#### Bronze tablosu var ama boş (`LAG` sabit, snapshot yok)
+#### Bronze tablosu var ama boş (`LAG` sabit)
 
 Belirti: yeni tablonun Bronze karşılığı **yaratılmış**, S3'te veri dosyaları bile var, ama
-`select count(*)` `0` döndürüyor ve tüketici gecikmesi küçük bir sayıda (ör. `2`) **donmuş**.
-Nedeni şudur: Iceberg sink tüketici offset'lerini **ancak Iceberg commit'i başarılı olursa**
-işler. Commit tabloyu kapsamadığı sürece offset ilerlemez — bu yüzden `LAG` sonsuza kadar
-aynı sayıda kalır ve yazılan parquet dosyaları hiçbir snapshot'a girmez.
+`select count(*)` `0` döndürüyor ve `LAG` küçük bir sayıda (ör. `2`) **donmuş**. Yazıcı
+okuma konumunu ancak tabloya yazma başarılı olursa ilerletir; yazma başarısız olduğu sürece
+`LAG` aynı kalır ve yazılan dosyalar tabloya bağlanmaz.
 
-`strimzi.io/restart=true` ve Connect pod'unu yeniden başlatmak bu durumu **çözmez**;
-sıradaki adımlar şunlardır — **sırayla**:
+Bağlayıcıyı ya da Connect pod'unu yeniden başlatmak bunu çözmez. Şu üç komutu çalıştırın:
 
 `[bastion]`
 
@@ -318,40 +329,42 @@ oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop \
   -o jsonpath='{range .status.connectorStatus.tasks[*]}{.state}{"\n"}{.trace}{"\n"}{end}'
 oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=500 \
   | grep -iE "NoSuchTable|Forbidden|403|AccessDenied|schema|Exception"
-scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop-coord   # kafka-admin kimliğiyle, TLS 9093
+scripts/kafka-cli.sh kafka-consumer-groups.sh --describe --group connect-sink-shop-coord
 ```
 
-**Beklenen çıktı:** birinci komut `RUNNING` ve **boş** bir `trace` verir (görev ayakta;
-hata görev düzeyinde değildir). İkinci komut **sessizse** sorun yetki/şema değil,
-koordinatörün commit turudur. Üçüncü komutun `LAG` sütunu sürekli büyüyorsa koordinatör
-denetim konusunu okuyamıyordur.
+**Beklenen çıktı:** birinci komut `RUNNING` ve boş bir hata mesajı verir. İkinci komut bir
+şey yazmazsa sorun yetki ya da şema değildir. Üçüncü komutun `LAG` sütunu sürekli
+büyüyorsa koordinatör takılmıştır.
 
-**Sıradaki adım — sebebe göre:**
+**Ne yapılır** — hangi komut ne gösterdiyse:
 
-- İkinci komut `NoSuchTableException` / `403` / `AccessDenied` bastıysa: sink'in Polaris
-  principal'ı **yeni Bronze ad alanında tablo yaratamıyordur** →
-  [§5.1 Polaris / S3 403](#polaris-403). En sık neden, kaynağın Bronze ad alanının
-  Polaris'te hiç açılmamış olmasıdır
+- İkinci komut `NoSuchTableException`, `403` ya da `AccessDenied` yazdıysa yazıcı yeni
+  Bronze ad alanında tablo yaratamıyordur → [§5.1](#polaris-403). En sık neden, kaynağın
+  Bronze ad alanının katalogda hiç açılmamış olmasıdır
   ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §5).
-- İkinci komut şema hatası bastıysa (`evolve-schema`): Bronze tablosu kaynağın yeni
-  kolonlarıyla uyuşmuyordur; tabloyu düşürüp sink'in yeniden yaratmasına izin verin
+- İkinci komut bir şema hatası yazdıysa Bronze tablosu kaynağın yeni kolonlarıyla
+  uyuşmuyordur. Tabloyu silin; yazıcı onu yeniden yaratır
   ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) §6.2).
-- Üçüncü komutun `-coord` lag'i büyüyorsa: koordinatör takılmıştır → Connect pod'unu
-  tamamen yeniden yaratın (`oc -n "$LAKEHOUSE_NS" delete pod connect-connect-0`) ve lag'i
-  yeniden ölçün.
-- Üçü de temizse ve `LAG` hâlâ sabitse: bu, **ürün düzeyinde açık bir kusurdur**. Kanıt
-  paketini (üç komutun çıktısı + `oc get kafkaconnector sink-shop -o yaml`) toplayıp
-  [pre-ship kontrol listesine](../90-referans/pre-ship-kontrol-listesi.md) yazın. Veriyi
-  kurtarmak için Bronze tablosunu düşürüp kaynağı yeniden snapshot'layın
+- Üçüncü komutta `LAG` büyüyorsa koordinatörün çalıştığı Connect pod'unu silin; Strimzi
+  onu yeniden açar. Sonra `LAG`'e tekrar bakın:
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" delete pod connect-connect-0
+  ```
+
+- Üçü de temizse ve `LAG` hâlâ sabitse üç komutun çıktısını ve
+  `oc -n "$LAKEHOUSE_NS" get kafkaconnector sink-shop -o yaml` çıktısını ürün ekibine
+  iletin. Veriyi kurtarmak için Bronze tablosunu silip kaynağı yeniden okutun
   ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) §6).
 
 <a id="silver-merge"></a>
-### 4.3 `LakehouseSilverMergeStale` — silver-merge eskidi
+### 4.3 `LakehouseSilverMergeStale` — Silver güncellenmiyor
 
-En son **başarılı** `silver-merge` koşusunun üzerinden eşikten uzun zaman geçti; 10 dakika,
-**warning**. Eşik `monitoring.silverMergeStaleSeconds` (üretimde 2700 saniye = 45 dakika).
+Silver tablolarını güncelleyen `silver-merge` işinin son başarılı çalışmasının üzerinden
+eşikten uzun zaman geçti. Önem: **warning**. Eşik `monitoring.silverMergeStaleSeconds`
+ayarındadır (varsayılan 2700 saniye = 45 dakika).
 
-**Ne bak**
+**Ne bakılır**
 
 `[bastion]`
 
@@ -361,103 +374,95 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication silver-merge \
 oc -n "$LAKEHOUSE_NS" get sparkapplication | grep silver-merge
 ```
 
-**Beklenen çıktı** (kind kümesinde alınmış gerçek çıktı — işler kabul koşusundan sonra
-askıda kaldığı için `suspend=true`. Sağlıklı kurulumda `suspend` **boş ya da `false`**
-olmalıdır: ürün bu alanı hiç yazmaz, taze kurulumda boş basar; `false` ancak elle geri
-açmadan sonra görünür. `sonKosu` da dolu olmalıdır):
+**Beklenen çıktı** (ilk satır, sağlıklı hâl):
 
 ```text
-suspend=true sonKosu=null sonraki=2026-09-19T03:00:00Z
+suspend=false sonKosu=2026-11-11T17:15:00Z sonraki=2026-11-11T17:30:00Z
 ```
 
-**Ne yap**
+`suspend` boş ya da `false` olmalı; `sonKosu` son 15 dakika içinde olmalıdır.
 
-- `suspend=true` ise iş askıya alınmıştır → [§6.1](#ssa-suspend). Gecikmiş bu alarmın
-  **en sık nedeni** budur. (Boş ya da `false` normaldir; ürün bu alanı hiç yazmaz.)
-- Son koşu `FAILED` ise → [§4.4](#spark).
-- Kural boş veride **ateşlenmez**: hiç `silver-merge-*` koşusu yoksa alarm gelmez. "Hiç
-  koşmuyor" durumu ayrı bakılır (`sonraki` alanı boşsa cron hesaplanmamıştır).
-- Kural, son başarılı koşunun sürücü pod'unun yaşına bakar. Koşular 24 saat sonra
-  kendiliğinden silinir; iş bir günden uzun durursa alarm bu yüzden **söner** — sorun
-  geçmiş sayılmaz, yukarıdaki komutla bakın.
+**Ne yapılır**
 
-**Ters giderse:** cron değiştirildiği hâlde `sonraki` alanı eski kalıyorsa zamanlayıcı
-yeniden hesaplamamıştır ([§6.1](#ssa-suspend) sonundaki not).
+- `suspend=true` ise iş askıya alınmıştır → [§6.1](#ssa-suspend). Bu alarmın en sık nedeni
+  budur.
+- Son çalışma `FAILED` ise → [§4.4](#spark).
+- Hiç `silver-merge` çalışması yoksa alarm gelmez. `sonraki` alanı boşsa iş hiç
+  zamanlanmamıştır.
+- Çalışmalar 24 saat sonra kendiliğinden silinir. İş bir günden uzun durursa alarm bu
+  yüzden kapanır; bu, sorunun geçtiği anlamına gelmez. Yukarıdaki komutla bakın.
+
+**Ters giderse:** zamanlama (`cron`) değiştirildiği hâlde `sonraki` alanı eski kalıyorsa
+[§6.1](#ssa-suspend) sonundaki nota bakın.
 
 <a id="spark"></a>
-### 4.4 `LakehouseSparkScheduledRunFailed` — zamanlanmış Spark koşusu FAILED
+### 4.4 `LakehouseSparkScheduledRunFailed` — zamanlı Spark işi başarısız
 
-Kural **yalnız ürünün kendi zamanlı işlerini** izler: `silver-merge`, `maint-` ile başlayan
-bakım işleri ve `mongo-bronze`. Kendi yazdığınız Spark uygulamaları bu alarma **girmez**
-([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md)). 1 dakika, **warning**.
+Ürünün kendi zamanlı işlerinden biri başarısız oldu: `silver-merge`, `maint-` ile başlayan
+bakım işleri ya da `mongo-bronze`. Önem: **warning**. Kendi yazdığınız Spark işleri bu
+alarma girmez ([yeni-spark-uygulamasi.md](yeni-spark-uygulamasi.md)).
 
-Alarm **iş başına bir tanedir**: aynı işin birden çok koşusu başarısız olsa da tek alarm
-gelir; özet işin adını ve başarısız koşu sayısını gösterir, örneğin
+Alarm **iş başına bir tanedir**: aynı işin birden çok çalışması başarısız olsa da tek
+alarm gelir. Özet satırı işin adını ve başarısız çalışma sayısını söyler, örneğin
 `Zamanlanmış Spark işi başarısız: maint-expire-orphan-ttl (1 koşu)`.
 
-Koşu sürücü pod'u **hiç açılmadan** düşerse (gönderim hatası; en sık nedeni Maven
-kütüphanesinin çözülememesidir, bkz. [§6.2](#maven)) özet iş adı yerine
-`gönderim hatası` yazar: `Zamanlanmış Spark işi başarısız: gönderim hatası (5 koşu)`. Bu
-sayı son bir saattekidir ve kendi Spark uygulamalarınızın gönderim hatalarını da içerir; bu
-tür alarm, hata yinelenmezse bir saat sonra kendiliğinden kapanır. Hangi koşuların
-düştüğünü ve hata iletisini görmek için:
+Bir çalışma Spark sürücü pod'u **hiç açılmadan** düşerse (gönderim hatası) özet satırında
+iş adı yerine `gönderim hatası` yazar, örneğin
+`Zamanlanmış Spark işi başarısız: gönderim hatası (5 koşu)`. En sık nedeni bir Maven
+kütüphanesinin indirilememesidir ([§6.2](#maven)). Bu sayı son bir saatin toplamıdır ve
+kendi Spark işlerinizin gönderim hatalarını da içerir; hata yinelenmezse alarm bir saat
+sonra kendiliğinden kapanır.
 
-`[bastion]`
-
-```bash
-oc -n "$LAKEHOUSE_NS" get sparkapplication | grep FAILED
-APP=silver-merge-1794398400001535062     # yukarıdaki listede FAILED görünen ad
-oc -n "$LAKEHOUSE_NS" get sparkapplication "$APP" \
-  -o jsonpath='{.status.applicationState.errorMessage}' | tail -5
-```
-
-**Ne bak**
+**Ne bakılır**
 
 `[bastion]`
 
 ```bash
 oc -n "$LAKEHOUSE_NS" get sparkapplication | grep -E 'NAME|FAILED'
-APP=silver-merge-1758700000        # yukarıdaki listede FAILED görünen ad
-oc -n "$LAKEHOUSE_NS" describe sparkapplication "$APP" | tail -30
+APP=silver-merge-1794398400001535062        # yukarıdaki listede FAILED görünen ad
+oc -n "$LAKEHOUSE_NS" get sparkapplication "$APP" \
+  -o jsonpath='{.status.applicationState.errorMessage}' | tail -5
 oc -n "$LAKEHOUSE_NS" logs "$APP-driver" --tail=200
 ```
 
-**Ne yap** — sık kökler:
+Hata mesajı çalışma nesnesindedir; sürücü pod'u açıldıysa günlüğü de ayrıca okunur. Gönderim
+hatasında sürücü pod'u yoktur ve son komut `NotFound` verir.
 
-| Belirti | Kök | Çözüm |
+**Ne yapılır** — sık nedenler:
+
+| Hata mesajında | Nedeni | Çözüm |
 |---|---|---|
-| `unresolved dependency` / Ivy hatası | Kütüphane önbellekte yok ve önbellek Maven Central'a (ya da kurum aynasına) erişemiyor | [§6.2 Maven kütüphaneleri](#maven) |
-| `SchemaConflict` (silver-merge) | Silver kolon tipi güvenli genişletilemiyor | Elle `ALTER TABLE` ya da yeni kolon ([mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md)) |
-| `KAFKA_JAAS` yok (mongo-bronze) | `spark` adlı Kafka kullanıcısı yalnız MongoDB kaynağı tanımlıyken oluşur | Kaynağı ekleyin ya da işi kapatın |
-| Bellek hatası / uzun çöp toplama (mongo-bronze, uzun kesinti sonrası) | Birikmiş kayıtlar sürücüye sığmıyor | Tek koşuluk `spark.driver.memory` artırın ya da Bronze tablosundaki Kafka konum özelliğini elle ilerletin (konum yalnız başarıda ilerler) |
-| Sürücü `CreateContainerConfigError` | `polaris-spark` Secret'ı yok | `scripts/polaris-setup.sh` koşmamıştır ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
-| Sürücü 20+ dakika `Pending` | Düğümde CPU/bellek isteği karşılanmıyor | `spark.driver.coreRequest` / `spark.executor.coreRequest`; düğüm kapasitesi |
-| `403 The Access Key Id you provided does not exist` | Geçici S3 kimliğinin süresi/önbelleği | [§5.1 Polaris / S3 403](#polaris-403) |
+| `unresolved dependency` ya da Ivy hatası | kütüphane önbellekte yok ve önbellek Maven Central'a (ya da kurum aynasına) erişemiyor | [§6.2 Maven kütüphaneleri](#maven) |
+| `SchemaConflict` (`silver-merge`) | Silver'daki bir kolonun tipi güvenle genişletilemiyor | [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md) |
+| `KAFKA_JAAS` yok (`mongo-bronze`) | `spark` Kafka kullanıcısı yalnız bir MongoDB kaynağı tanımlıyken vardır | MongoDB kaynağını ekleyin ya da işi kapatın |
+| bellek hatası (`mongo-bronze`, uzun bir kesintiden sonra) | birikmiş kayıtlar sürücü belleğine sığmıyor | `spark.driver.memory` değerini artırın |
+| sürücü `CreateContainerConfigError` | `polaris-spark` Secret'ı yok | katalog kurulum betiğini çalıştırın ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2) |
+| sürücü 20 dakikadan uzun `Pending` | düğümlerde yeterli CPU ya da bellek yok | `spark.driver.coreRequest`, `spark.executor.coreRequest`; düğüm kapasitesi |
+| `403 The Access Key Id you provided does not exist` | geçici S3 kimliğinin süresi | [§5.1 Polaris / S3 403](#polaris-403) |
 
-**Alarm, başarısız koşu silinene kadar açık kalır.** Ürün koşuları 24 saat sonra kendiliğinden
-siler; daha erken susturmak için, kök neden giderildikten sonra nesneyi silin (sürücü pod'u
-ve günlüğü de silinir — günlüğü önce alın):
+**Alarm, başarısız çalışma silinene kadar açık kalır.** Ürün çalışmaları 24 saat sonra
+kendiliğinden siler. Daha önce kapatmak için, nedeni giderdikten sonra çalışmayı silin.
+Sürücü pod'u ve günlüğü de silinir; gerekiyorsa günlüğü önce kaydedin:
 
 `[bastion]`
 
 ```bash
-oc -n "$LAKEHOUSE_NS" delete sparkapplication silver-merge-1758700000
+oc -n "$LAKEHOUSE_NS" delete sparkapplication "$APP"
 ```
 
-**Ters giderse:** sürücü pod'u çoktan silinmişse günlüğe yalnız Loki üzerinden bakılabilir
-([§9](#loki)).
+**Ters giderse:** sürücü pod'u çoktan silindiyse günlüğe yalnız Loki üzerinden
+bakılabilir ([§9](#loki)).
 
 <a id="spark-duration"></a>
-### 4.5 `LakehouseSparkRunTooLong` — Spark koşuları yavaşladı
+### 4.5 `LakehouseSparkRunTooLong` — Spark işleri yavaşladı
 
-Son 6 saatte tamamlanan Spark koşularının **ortalama** süresi eşiği aştı; 10 dakika,
-**warning**; eşik `monitoring.sparkRunMaxSeconds` (varsayılan 1800 saniye).
+Son 6 saatte biten Spark işlerinin **ortalama** süresi eşiği aştı. Önem: **warning**.
+Eşik `monitoring.sparkRunMaxSeconds` ayarındadır (varsayılan 1800 saniye).
 
-**Kural küme geneldir, tek bir işe ait değildir.** spark-operator'ün ölçüm yayını iş başına
-etiket üretmez; bu yüzden kural "son 6 saatteki bütün koşuların ortalaması" olarak
-yazılmıştır.
+Bu alarm tek bir işe değil, bütün işlerin ortalamasına bakar; çünkü Spark ölçümleri iş
+adını taşımaz.
 
-**Ne bak**
+**Ne bakılır**
 
 `[bastion]`
 
@@ -467,30 +472,31 @@ oc -n "$LAKEHOUSE_NS" logs -l spark-role=driver --tail=200 \
   | grep -E 'incremental|FALLBACK|full|MERGE_OK|MAINT_OK'
 ```
 
-**Ne yap**
+Birinci komut her çalışmanın başlangıç ve bitiş saatini verir; uzun sürenleri buradan
+bulursunuz.
 
-- `FALLBACK full` satırı görünüyorsa artımlı okuma penceresi kaçmıştır (uzun kesinti); bir
-  sonraki koşuda normale döner. Sürekli tekrar ediyorsa boru hattı tanımlarını ve bakım
-  işlerinin son koşularını inceleyin.
-- Veri büyüdüyse boyutlandırmayı yükseltin: `platform/values/site/glue.yaml` içindeki
-  `spark` bloğu ([10-planlama](../10-planlama.md) §2, büyük kademe).
-- Bakım işleri veri hacmiyle birlikte büyür; eşiği gerçekçi bir değere çekmek de meşru bir
+**Ne yapılır**
+
+- `FALLBACK full` satırı görünüyorsa `silver-merge` uzun bir kesintiden sonra tabloyu
+  baştan birleştirmiştir; bir sonraki çalışmada normale döner. Sürekli görünüyorsa
+  bakım işlerinin son çalışmalarına bakın.
+- Veri büyüdüyse Spark kaynaklarını artırın: `platform/values/site/glue.yaml` içindeki
+  `spark` bloğu ([10-planlama](../10-planlama.md) §2).
+- Bakım işleri veri hacmiyle birlikte uzar; eşiği gerçekçi bir değere çekmek de doğru bir
   çözümdür ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §4).
 
-**Ters giderse:** hiç koşu yokken kural **ateşlenmez** (ortalama hesaplanamaz); "hiç
-koşmuyor" durumu [§4.3](#silver-merge) ile bakılır.
-
----
+**Ters giderse:** hiç çalışma yokken bu alarm gelmez. "İşler hiç çalışmıyor" durumuna
+[§4.3](#silver-merge) ile bakın.
 
 <a id="dlq"></a>
 ### 4.6 `LakehouseDlqRecords` — hatalı kayıt konusuna kayıt düştü
 
-Bir sink'in işleyemediği kayıtlar (JSON olmayan, veri sözleşmesine uymayan) kaynağın ya da
-akışın hatalı kayıt konusuna (adı `.dlq` ile biter) gider ve **tabloya girmez**. Son bir saatte
-böyle bir kayıt geldiyse alarm konunun adıyla uyarır; 1 dakika, **warning**. Yeni kayıt
-gelmezse bir saat sonra kendiliğinden kapanır.
+Bir yazıcının işleyemediği kayıtlar (JSON olmayan ya da veri sözleşmesine uymayan) tabloya
+girmez; kaynağın ya da akışın hatalı kayıt konusuna (adı `.dlq` ile biter) gider. Son bir
+saatte böyle bir kayıt geldiyse alarm konunun adıyla uyarır. Önem: **warning**. Yeni kayıt
+gelmezse alarm bir saat sonra kendiliğinden kapanır.
 
-**Ne bak** — alarmdaki konuyu yazın (örnekte `sensors.dlq`):
+**Ne bakılır** — alarmdaki konunun adını yazın (örnekte `sensors.dlq`):
 
 `[bastion]`
 
@@ -500,8 +506,7 @@ scripts/kafka-cli.sh kafka-console-consumer.sh --topic sensors.dlq --from-beginn
   --max-messages 10 --timeout-ms 15000
 ```
 
-**Beklenen çıktı** (OpenShift provasından gerçek çıktı — ilk satır konudaki kayıt sayısı,
-ardından kayıtların kendisi):
+**Beklenen çıktı** (ilk satır konudaki kayıt sayısı, ardından kayıtların kendisi):
 
 ```text
 sensors.dlq:0:3
@@ -510,23 +515,27 @@ bu JSON değil
 {"device_id": "sensor-9", "room": "C-301", "temperature_c": "yine bozuk", "humidity_pct": 40}
 ```
 
-**Ne yap**
+**Ne yapılır**
 
-- **JSON akışı** (akış adı + `.dlq`, örneğin `sensors.dlq`): kaydı gönderen uygulama ya da
-  cihaz hatalı veri üretiyordur; kayıtları uygulama ekibine iletin. Alan tipi bilerek
-  değiştiyse veri sözleşmesini güncelleyin ([json-akisi-ekleme.md](json-akisi-ekleme.md) Adım 7).
+- **JSON akışı** (akış adı + `.dlq`, ör. `sensors.dlq`): kaydı gönderen uygulama ya da cihaz
+  hatalı veri üretiyordur; kayıtları uygulama ekibine iletin. Bir alanın tipi bilerek
+  değiştiyse veri sözleşmesini güncelleyin ([json-akisi-ekleme.md](json-akisi-ekleme.md)
+  Adım 7).
 - **nginx** (`nginx.dlq`): ajan JSON olmayan bir ileti göndermiştir; ajanın günlüğüne bakın
   ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) Adım 10.4).
-- **Veritabanı kaynağı** (kaynak adı + `.dlq`, örneğin `erp.dlq`): bağlayıcı olağan dışı
-  bir kayıt üretmiştir; kaydı ve Connect günlüğünü ([§4.1](#connect)) inceleyin.
+- **Veritabanı kaynağı** (kaynak adı + `.dlq`, ör. `erp.dlq`): bağlayıcı olağan dışı bir
+  kayıt üretmiştir; kaydı ve Connect günlüğünü ([§4.1](#connect)) inceleyin.
 
-Hatalı kayıt konusundaki kayıtlar konunun saklama süresi (7 gün) dolunca kendiliğinden
-silinir; elle temizlemek gerekmez.
+Hatalı kayıt konusundaki kayıtlar 7 gün sonra kendiliğinden silinir; elle temizlemek
+gerekmez.
+
+---
 
 <a id="kurulum"></a>
 ## 5. Kurulum ve eşitleme
 
-- **Connect imaj yapımı uzun ya da başarısız.** Yapım normalde ~10 dakika sürer.
+- **Connect imaj yapımı uzun sürüyor ya da başarısız.** Yapım normalde 10 dakika kadar
+  sürer. Günlüğe bakın:
 
   `[bastion]`
 
@@ -534,15 +543,12 @@ silinir; elle temizlemek gerekmez.
   oc -n "$LAKEHOUSE_NS" logs -l strimzi.io/kind=KafkaConnect --tail=100
   ```
 
-  `unauthorized` görüyorsanız `connect-push` Secret'ındaki jeton dolmuştur ya da yanlıştır
-  ([yukseltme.md](yukseltme.md) §6).
+  `unauthorized` görüyorsanız `connect-push` Secret'ındaki erişim anahtarının süresi
+  dolmuştur ya da anahtar yanlıştır ([yukseltme.md](yukseltme.md) §6).
 
-- **PVC eşitleme kilidi (yalnız ArgoCD yolunda).** `glue` uygulaması uzun süre
-  `OutOfSync/Progressing` kalır ve günlükte bir `PersistentVolumeClaim` için "sağlıklı
-  olmasını bekliyorum" satırı görünür. Neden: StorageClass diski **ilk tüketicide**
-  bağlıyorsa, diski bağlayacak pod sonraki dalgadadır → disk `Bound` olmaz → dalga
-  ilerlemez. Kural: geç dalgada tüketilen her disk, tüketicisiyle **aynı** dalgada
-  olmalıdır. Teşhis:
+- **`glue` uygulaması uzun süre `OutOfSync Progressing` kalıyor.** Bazı depolama
+  sınıfları diski ancak onu kullanacak pod açılınca bağlar. Disk ile pod'u farklı sırada
+  kuran bir değişiklik eşitlemeyi kilitleyebilir. Hangi nesnenin beklediğini görün:
 
   `[bastion]`
 
@@ -552,14 +558,16 @@ silinir; elle temizlemek gerekmez.
   oc -n "$LAKEHOUSE_NS" get pvc
   ```
 
-- **İmaj çekme süreleri (taze düğüm, ilk kurulum).** Zeppelin imajı ~2,7 GB, not defteri
-  imajı ~1,94 GB, Connect yapımı ~10 dakikadır; ilk kurulumda "pod sağlıklı ama dağıtım
-  zaman aşımına uğradı" görmek bu sınıftandır. Ürün bekleme sürelerini buna göre uzatır;
-  beklemek doğru davranıştır.
+  `Pending` kalan bir disk (`PersistentVolumeClaim`) görürseniz ürün ekibine iletin.
 
-- **`polaris-bootstrap` işi deneme hakkını tüketti.** Taze kümede PostgreSQL 4–5 dakikada
-  hazır olur; deneme hakkı bunun içindir. Tükenmişse işi silip eşitlemeyi tekrarlayın (iş
-  yeniden koşmaya elverişlidir).
+- **İlk kurulumda "pod sağlıklı ama zaman aşımı".** Zeppelin imajı 2,7 GB, not defteri
+  imajı yaklaşık 2 GB'tır ve Connect imajının yapımı 10 dakika kadar sürer. İlk kurulumda
+  bu süreler beklenir; ürün bekleme sürelerini buna göre ayarlar. Beklemek doğru
+  davranıştır.
+
+- **`polaris-bootstrap` işi deneme hakkını tüketti.** İlk kurulumda veritabanı 4–5 dakikada
+  hazır olur; işin deneme hakkı bunun içindir. Hakkı tükendiyse işi silip eşitlemeyi
+  tekrarlayın; iş yeniden çalıştırılabilir:
 
   `[bastion]`
 
@@ -568,23 +576,50 @@ silinir; elle temizlemek gerekmez.
   oc -n "$ARGOCD_NS" patch application glue --type merge -p '{"operation":{"sync":{}}}'
   ```
 
-- **Ağ politikaları.** Üretimde açıktır; listede olmayan bir ad alanından gelen istek
-  sessizce zaman aşımına uğrar. İzinli platform ad alanları
+- **Bir bağlantı zaman aşımına uğruyor.** Ürünün ağ politikaları yalnız izin verilen ad
+  alanlarından gelen isteklere izin verir; listede olmayan bir yerden gelen istek sessizce
+  zaman aşımına uğrar. İzin verilen ad alanları
   [90-referans/port-ve-servisler.md](../90-referans/port-ve-servisler.md) §5'tedir.
-  Bir bağlantı sorununun ağ politikasından mı geldiğini **ayırt etmek** için site
-  değerlerinde `networkPolicy.enabled: false` ile geçici olarak kapatılabilir; bu **yalnız
-  teşhis içindir**, üretimde açık kalır ve nedeni bulunur bulunmaz geri açılır
-  ([90-referans/pre-ship-kontrol-listesi.md](../90-referans/pre-ship-kontrol-listesi.md)
-  madde 1.7).
+  Sorunun ağ politikasından gelip gelmediğini anlamak için site ayarlarında
+  `networkPolicy.enabled: false` ile politikaları geçici olarak kapatabilirsiniz. Bu
+  **yalnız teşhis içindir**; neden bulunur bulunmaz politikaları geri açın.
 
-- **Polaris.** Sağlık ucu `:8182/q/health`, API `:8181`; kurulum günlüğü
-  `oc -n "$LAKEHOUSE_NS" logs job/polaris-bootstrap`.
+- **Sertifika yenilenmiyor.** Trino'nun iç sertifikasını (`trino-tls`) sertifika
+  yöneticisi (cert-manager) bitişinden önce kendiliğinden yeniler. Durumuna ve son yenileme
+  isteğine bakın:
+
+  `[bastion]`
+
+  ```bash
+  oc -n "$LAKEHOUSE_NS" get certificate trino-tls \
+    -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}{.status.notAfter} {.status.renewalTime}{"\n"}'
+  oc -n "$LAKEHOUSE_NS" get certificaterequest
+  ```
+
+  **Beklenen çıktı** (sağlıklı hâl; ilk satır `Ready=True`, ikinci satırda bitiş ve
+  yenileme tarihleri):
+
+  ```text
+  Ready=True Ready
+  2027-02-06T16:02:51Z 2027-01-22T16:02:51Z
+  NAME          APPROVED   DENIED   READY   ISSUER         REQUESTER                                         AGE
+  trino-tls-2   True                True    lakehouse-ca   system:serviceaccount:cert-manager:cert-manager   3d1h
+  ```
+
+  `Ready=False` görürseniz ikinci sözcük nedeni söyler. Yenileme isteği `READY` `False`
+  kalıyorsa sertifikayı imzalayan `lakehouse-ca` Secret'ı bozulmuş ya da süresi dolmuş
+  olabilir (§7, `lakehouse-ca` maddesi). Sertifika yöneticisinin kendi günlüğü:
+  `oc -n cert-manager logs deploy/cert-manager --tail=50`.
+
+- **Polaris'e bakmak.** Sağlık ucu `:8182/q/health`, API `:8181`. Katalog kurulum işinin
+  günlüğü: `oc -n "$LAKEHOUSE_NS" logs job/polaris-bootstrap`.
 
 - **Pod hiç oluşmuyor: `unable to validate against any security context constraint`.**
-  OpenShift, sabit bir kullanıcı numarası (UID) isteyen pod'ları reddeder. Ürünün değer
-  dosyaları bütün bileşenlerde bunu kapatır; bu hatayı görüyorsanız ya ürün dosyaları
+  OpenShift, sabit bir kullanıcı numarası (UID) isteyen pod'ları reddeder. Ürünün ayar
+  dosyaları bunu bütün bileşenlerde kapatır. Bu hatayı görüyorsanız ya ürün dosyaları
   (`platform/values/*.yaml`, `platform/apps/*.yaml`) değiştirilmiştir ya da sonradan
-  eklenen bir chart sabit UID istiyordur. Hangi değerin reddedildiğini olaylarda görürsünüz:
+  eklenen bir bileşen sabit UID istiyordur. Hangi değerin reddedildiğini olaylarda
+  görürsünüz:
 
   `[bastion]`
 
@@ -592,8 +627,8 @@ silinir; elle temizlemek gerekmez.
   oc get events -A --field-selector reason=FailedCreate | grep -i "security context"
   ```
 
-  `runAsUser: Invalid value: 1000: must be in the ranges` gibi bir satır, o chart'ın
-  `runAsUser`/`runAsGroup`/`fsGroup` değerinin `null` yapılması gerektiğini gösterir.
+  `runAsUser: Invalid value: 1000: must be in the ranges` gibi bir satır, o bileşenin
+  `runAsUser`, `runAsGroup` ya da `fsGroup` ayarının kaldırılması gerektiğini gösterir.
 
 <a id="polaris-403"></a>
 ### 5.1 Polaris / S3 403 (geçici kimlikler)
@@ -601,10 +636,11 @@ silinir; elle temizlemek gerekmez.
 Belirti: Spark ya da Connect günlüğünde
 `ForbiddenException: The Access Key Id you provided does not exist in our records` (403).
 
-- **Üretimde S3 tarafında geçici kimlik servisi yoksa bu sınıf hata hiç görülmez** — kimlik
-  doğrudan `s3-creds` Secret'ından gelir (`s3.vendedCredentials: false`).
-- Geçici kimlik dağıtımı açıkken kök neden, Polaris'in kimlik önbelleği ile kimliğin ömrü
-  arasındaki penceredir. Hızlı çözüm Polaris'i yeniden başlatmaktır:
+- S3 sisteminizde geçici kimlik servisi yoksa (`s3.vendedCredentials: false`) bu hata
+  görülmez; kimlik doğrudan `s3-creds` Secret'ından gelir.
+- Geçici kimlikler açıkken neden, Polaris'in kimlikleri önbellekte tuttuğu süre ile
+  kimliğin geçerlilik süresi arasındaki farktır. Hızlı çözüm Polaris'i yeniden
+  başlatmaktır:
 
   `[bastion]`
 
@@ -612,50 +648,52 @@ Belirti: Spark ya da Connect günlüğünde
   oc -n "$LAKEHOUSE_NS" rollout restart deploy/polaris
   ```
 
-- Kalıcı seçenek: `platform/values/site/glue.yaml` → `s3.vendedCredentials: false` ve
-  `platform/polaris/setup.yaml` içinde aynı kararın karşılığı
-  ([30-kurulum](../30-kurulum.md) §4.3).
-- **Karıştırmayın:** `DROP TABLE` sırasındaki "veriyle birlikte silme kapalı" 403'ü bir
-  katalog özelliği eksikliğidir, kimlik sorunu değildir
+- Kalıcı çözüm geçici kimlikleri kapatmaktır: `platform/values/site/glue.yaml` içinde
+  `s3.vendedCredentials: false` ve `platform/polaris/setup.yaml` içinde aynı ayarın
+  karşılığı ([30-kurulum](../30-kurulum.md) §4.3).
+- **Karıştırmayın:** tablo silerken alınan "veriyle birlikte silme kapalı" 403'ü bir
+  katalog ayarı eksikliğidir, kimlik sorunu değildir
   ([kaynak-veya-tablo-silme.md](kaynak-veya-tablo-silme.md) Adım 7).
 
 ---
 
 <a id="boru-hatti"></a>
-## 6. Boru hattı (Bronze / Silver / nginx)
+## 6. Veri akışı (Bronze / Silver / nginx)
 
-- **Bronze boş kalıyor:** bağlayıcı `READY True` mi, konu oluşmuş mu, sink görevinin `trace`
-  alanı ne diyor. İlk commit 5 dakikaya kadar sürebilir.
-- **`silver-merge` `SchemaConflict`:** Silver kolon tipi güvenli genişletilemiyor → elle
-  `ALTER TABLE` ya da yeni kolon.
-- **`mongo-bronze` `KAFKA_JAAS` yok:** `spark` adlı Kafka kullanıcısı yalnız MongoDB kaynağı
-  tanımlıyken oluşur.
-- **`mongo-bronze` bellek hatası:** uzun kesinti sonrası birikim sürücüye sığmıyor.
-- **Karantina tablosu doluyor:** MongoDB Bronze'unda bozuk zarf, anahtarsız ya da zaman
-  damgasız kayıtlar `__quarantine` tablosuna yazılır; `reason` sütunu nedeni söyler. Ayrıntı
-  ve temizleme: [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §3.3 ve §9.2.
-- **nginx:** `nginx.dlq` konusu doluysa zaman damgası dönüşümü başarısız olmuştur (ajanın
-  ayrıştırma ifadesi kurumun günlük biçimine uymuyordur) —
-  [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §10.
-- **DLQ gerçeği:** Iceberg sink hatalı kaydı DLQ'ya **yazmaz**; DLQ yalnız converter/SMT
-  hatalarını alır. Yazma hatası görevi durdurur — [§4.1](#connect) kuralının `critical`
-  olmasının nedeni budur.
+- **Bronze boş kalıyor:** bağlayıcının `READY` sütunu `True` mu, Kafka konusu oluşmuş mu,
+  yazıcı görevinin hata mesajı (`trace`) ne diyor? İlk yazma, bağlayıcı açıldıktan sonra
+  10–15 dakika sürebilir. Bronze tablosu var ama boşsa → [§4.2](#sink-bos-tablo).
+- **`silver-merge` `SchemaConflict` veriyor:** Silver'daki bir kolonun tipi güvenle
+  genişletilemiyor →
+  [mevcut-kaynaga-tablo-ekleme.md](mevcut-kaynaga-tablo-ekleme.md).
+- **`mongo-bronze` `KAFKA_JAAS` hatası:** `spark` Kafka kullanıcısı yalnız bir MongoDB
+  kaynağı tanımlıyken vardır.
+- **`mongo-bronze` bellek hatası:** uzun bir kesintiden sonra birikmiş kayıtlar sürücü
+  belleğine sığmıyor; `spark.driver.memory` değerini artırın.
+- **Karantina tablosu doluyor:** MongoDB Bronze'unda bozuk, anahtarsız ya da zaman
+  damgasız kayıtlar `__quarantine` tablosuna yazılır; `reason` sütunu nedeni söyler.
+  Ayrıntı ve temizleme: [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §3.3 ve
+  §9.2.
+- **`nginx.dlq` doluyor:** ajanın gönderdiği kayıt JSON değildir ya da zaman alanı
+  okunamıyordur; çoğunlukla ajanın günlük biçimi kurumun nginx biçimine uymuyordur
+  ([yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §10).
+- **Hatalı kayıt konusu her hatayı almaz:** yalnız dönüştürme aşamasındaki hatalı kayıtlar
+  `.dlq` konusuna gider. Tabloya yazma sırasında oluşan bir hata görevi durdurur; bu
+  yüzden [§4.1](#connect) alarmı `critical`'dır.
 
 <a id="ssa-suspend"></a>
 ### 6.1 Askıda kalan zamanlı Spark işi
 
-**Ne demek?** Silver güncellemesi (`silver-merge`), MongoDB aktarımı (`mongo-bronze`) ve üç
-bakım işi (`maint-...`) kümede **zamanlı Spark işi** olarak tanımlıdır; her biri kendi
-saatinde kendiliğinden koşar. Her işin bir **askı** anahtarı vardır (`spec.suspend`).
-Anahtar `true` olursa iş **hiç koşmaz**: hata vermez, pod açmaz, alarm da hemen gelmez.
-Veri sessizce eskir.
+Silver güncellemesi (`silver-merge`), MongoDB aktarımı (`mongo-bronze`) ve üç bakım işi
+(`maint-...`) kümede **zamanlı Spark işi** olarak tanımlıdır; her biri kendi saatinde
+kendiliğinden çalışır. Her işin bir **askı** ayarı vardır (`spec.suspend`). Ayar `true`
+olursa iş hiç çalışmaz: hata vermez, pod açmaz, alarm da hemen gelmez. Veri sessizce
+eskir.
 
-**Neden askıya alınır?** Kabul testi (`scripts/acceptance.sh`) bir işi o anda elle bir kez
-koşturmak için önce zamanlı hâlini askıya alır; çakışma olmasın diye. Betik bitince
-(başarılı ya da başarısız) hepsini **kendisi geri açar**. Ama betik yarıda **öldürülürse**
-(bilgisayar kapandı, bağlantı koptu, terminal kapatıldı) geri açma adımı çalışmaz ve işler
-askıda kalır. ArgoCD bunu **düzeltmez**: askı anahtarı Git'teki tanımda yer almadığı için
-ArgoCD bu farkı görmez.
+**Ne zaman olur?** Kabul testi (`scripts/acceptance.sh`) bir işi elle bir kez çalıştırmak
+için önce zamanlı hâlini askıya alır ve bitince geri açar. Betik yarıda kesilirse
+(bilgisayar kapandı, bağlantı koptu) geri açma adımı çalışmaz ve işler askıda kalır.
+ArgoCD bunu düzeltmez, çünkü askı ayarı Git'teki tanımda yoktur.
 
 **Kontrol:**
 
@@ -666,20 +704,23 @@ oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.suspend}{"\t"}{.status.lastRun}{"\n"}{end}'
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; sütunlar: ad, askı, son
-koşu). İkinci sütun **boş ya da `false`** olmalıdır; `true` gören satır askıdadır.
-`null` son koşu, işin henüz saatinin gelmediğini gösterir (örneğin günde bir koşan iş):
+**Beklenen çıktı** (sütunlar: ad, askı, son çalışma; kendi zamanlı işleriniz de listede
+görünür):
 
 ```text
-maint-compact	false	null
-maint-expire-orphan-ttl	false	null
-maint-position-deletes	false	2026-11-08T16:05:05Z
-mongo-bronze		2026-11-08T16:35:00Z
-silver-merge	false	2026-11-08T16:30:00Z
+gold-kabul	false	2026-11-11T16:50:00Z
+maint-compact	false	2026-11-11T12:00:00Z
+maint-expire-orphan-ttl	false	2026-11-11T03:30:00Z
+maint-position-deletes	false	2026-11-11T17:00:00Z
+mongo-bronze	false	2026-11-11T17:15:00Z
+silver-merge	false	2026-11-11T17:15:00Z
 ```
 
-**Geri açma:** aşağıdaki komut kümedeki **bütün** zamanlı işlerin askısını kaldırır (kendi
-eklediğiniz işler dahil; kabul testinin geçici `e2e-` işleri hariç):
+İkinci sütun boş ya da `false` olmalıdır; `true` olan satır askıdadır. Üçüncü sütun
+`null` ise işin saati henüz gelmemiştir (ör. günde bir çalışan bir iş).
+
+**Geri açma:** aşağıdaki komut bütün zamanlı işlerin askısını kaldırır (kendi işleriniz
+dahil; kabul testinin geçici `e2e-` işleri hariç):
 
 `[bastion]`
 
@@ -690,8 +731,7 @@ for s in $(oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication -o name); do
 done
 ```
 
-**Beklenen çıktı** (OpenShift provasında alınmış gerçek çıktı; her iş için bir satır.
-Zaten açık olan iş `(no change)` basar, bu da doğrudur):
+**Beklenen çıktı** (her iş için bir satır; zaten açık olan iş `(no change)` yazar):
 
 ```text
 scheduledsparkapplication.sparkoperator.k8s.io/maint-compact patched (no change)
@@ -701,22 +741,23 @@ scheduledsparkapplication.sparkoperator.k8s.io/mongo-bronze patched
 scheduledsparkapplication.sparkoperator.k8s.io/silver-merge patched (no change)
 ```
 
-Askıdan çıkan iş, kaçırdığı koşuyu **hemen** yapar (provada geri açmadan birkaç saniye
-sonra `silver-merge` koştu); bir sonraki saati beklemek gerekmez. Ardından kontrol
-komutunu tekrar çalıştırıp ikinci sütunun `false` olduğunu doğrulayın.
+Askıdan çıkan iş kaçırdığı çalışmayı birkaç saniye içinde yapar; bir sonraki saati
+beklemek gerekmez. Kontrol komutunu tekrar çalıştırıp ikinci sütunun `false` olduğunu
+doğrulayın.
 
-**Ters giderse:** cron değerini değiştirmek bir sonraki koşu zamanını yeniden hesaplatmaz;
-cron'u değiştirdikten sonra işin hemen koşması bekleniyorsa nesneyi silip yeniden yaratın
-(GitOps'ta: değişikliği itip eşitlemeyi zorlayın).
+**Ters giderse:** bir işin zamanlamasını (`cron`) değiştirmek bir sonraki çalışma
+zamanını hemen yeniden hesaplatmaz. İşin yeni saatine hemen geçmesini istiyorsanız
+değişikliği Git'e gönderin ve eşitlemeyi beklemeden uygulatın
+([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md) §5.1).
 
 <a id="maven"></a>
 ### 6.2 Maven kütüphaneleri (küme içi önbellek ve kurum aynası)
 
-Spark işleri her koşuda Iceberg ve Kafka kütüphanelerini **küme içindeki Maven önbelleğinden**
-(`maven-proxy` pod'u) alır. Önbellek bir kütüphaneyi Maven Central'dan yalnız ilk istendiğinde
-indirir ve diskinde saklar; sonraki koşular internete çıkmaz. İnternet erişimi kesilse de
-işler çalışmaya devam eder. Ürün yükseltmesinde Iceberg ya da Spark sürümü değişirse yeni
-sürüm, ilk koşuda bir kez indirilir; bunun için elle bir şey yapılmaz.
+Spark işleri her çalışmada Iceberg ve Kafka kütüphanelerini **küme içindeki Maven
+önbelleğinden** (`maven-proxy` pod'u) alır. Önbellek bir kütüphaneyi Maven Central'dan
+yalnız ilk istendiğinde indirir ve diskinde saklar; sonraki çalışmalar internete çıkmaz.
+İnternet erişimi kesilse de işler çalışmaya devam eder. Ürün yükseltmesinde Iceberg ya da
+Spark sürümü değişirse yeni sürüm ilk çalışmada bir kez indirilir; elle bir şey yapılmaz.
 
 Önbelleğin çalıştığını ve işlerin onu kullandığını görmek için:
 
@@ -729,12 +770,12 @@ DRIVER=$(oc -n "$LAKEHOUSE_NS" get pod -o name | grep -E 'silver-merge-[0-9]+-dr
 oc -n "$LAKEHOUSE_NS" logs "$DRIVER" | grep "in lakehouse-maven" | head -3
 ```
 
-**Beklenen çıktı** (örnek):
+**Beklenen çıktı** (pod adı, yaşı ve disk kullanımı sizde farklıdır):
 
 ```text
 NAME                           READY   STATUS    RESTARTS   AGE
-maven-proxy-646879d475-z4sm2   1/1     Running   0          2d
-186M	/app/data/repositories/releases
+maven-proxy-646879d475-z4sm2   1/1     Running   0          5h1m
+233M	/app/data/repositories/releases
 	found org.apache.iceberg#iceberg-spark-runtime-4.1_2.13;1.11.0 in lakehouse-maven
 	found org.apache.iceberg#iceberg-aws-bundle;1.11.0 in lakehouse-maven
 ```
@@ -747,15 +788,16 @@ mavenProxy:
   upstream: https://nexus.kurum.local/repository/maven-public
 ```
 
-Önbelleği hiç kullanmadan Spark işlerini doğrudan kurum aynasına bağlamak da mümkündür:
-`mavenProxy.enabled: false` ve `spark.ivySettingsXml` değerine aynanın `ivysettings.xml`
-içeriği ([90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) §1). Bu
-durumda kurum aynasına her koşuda erişilir. Kendi `ivysettings.xml` içeriğinize aşağıdaki
-çıktıdaki `<caches lockStrategy="artifact-lock-nio"/>` satırını da koyun: aynı anda başlayan
-Spark işleri ortak bir Ivy önbelleği kullanır ve bu satır olmadan bazıları `unresolved
-dependency` ile düşebilir.
+Önbelleği hiç kullanmadan Spark işlerini doğrudan kurum aynasına da bağlayabilirsiniz:
+`mavenProxy.enabled: false` yapın ve `spark.ivySettingsXml` ayarına aynanın
+`ivysettings.xml` içeriğini yazın
+([90-referans/values-anahtarlari.md](../90-referans/values-anahtarlari.md) §1). Bu
+durumda kurum aynasına her çalışmada erişilir. Kendi `ivysettings.xml` içeriğinize
+aşağıdaki çıktıdaki `<caches lockStrategy="artifact-lock-nio"/>` satırını da koyun: aynı
+anda başlayan Spark işleri ortak bir kütüphane klasörü kullanır ve bu satır olmadan
+bazıları `unresolved dependency` ile düşebilir.
 
-Her iki yolda da `glue`, Spark işlerinin okuduğu `spark-ivysettings` ConfigMap'ini üretir:
+İki yolda da ürün, Spark işlerinin okuduğu `spark-ivysettings` ConfigMap'ini üretir:
 
 `[bastion]`
 
@@ -777,10 +819,10 @@ oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings -o jsonpath='{.data.ivyset
 
 **Ters giderse:**
 
-- Spark koşusu sürücü pod'u hiç açılmadan `FAILED` oluyor ve koşunun hata iletisinde
-  `unresolved dependency` geçiyorsa istenen kütüphane önbellekte yoktur **ve** önbellek onu
-  kaynağından indirememiştir. Bu genellikle bir sürüm yükseltmesinden sonraki ilk koşuda ve
-  dış erişim kapalıyken olur. Hata iletisi koşu nesnesindedir:
+- **Spark işi sürücü pod'u açılmadan `FAILED` oluyor ve hata mesajında `unresolved
+  dependency` geçiyor.** İstenen kütüphane önbellekte yoktur ve önbellek onu
+  kaynağından indirememiştir. Bu çoğunlukla bir sürüm yükseltmesinden sonraki ilk
+  çalışmada, dış erişim kapalıyken olur. Hata mesajı çalışma nesnesindedir:
 
   `[bastion]`
 
@@ -791,7 +833,7 @@ oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings -o jsonpath='{.data.ivyset
     -o jsonpath='{.status.applicationState.errorMessage}' | grep unresolved
   ```
 
-  **Beklenen çıktı** (örnek — bu durumda):
+  **Beklenen çıktı** (bu durumda):
 
   ```text
   Exception in thread "main" java.lang.RuntimeException: [unresolved dependency: org.apache.iceberg#iceberg-core;1.10.0: not found]
@@ -806,39 +848,42 @@ oc -n "$LAKEHOUSE_NS" get configmap spark-ivysettings -o jsonpath='{.data.ivyset
     curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 https://repo1.maven.org/maven2/
   ```
 
-  `200` dışı bir değer (ör. `000`) erişim olmadığını gösterir: güvenlik duvarında Maven
+  `200` dışında bir değer (ör. `000`) erişim olmadığını gösterir. Güvenlik duvarında Maven
   Central'ı açın ya da `mavenProxy.upstream` ile kurum aynasını tanıtın. Erişim geldikten
-  sonraki ilk koşu kütüphaneyi indirir.
-- `maven-proxy` pod'u çalışmıyorsa (`Pending`, `CrashLoopBackOff`) Spark işleri de
+  sonraki ilk çalışma kütüphaneyi indirir.
+- **`maven-proxy` pod'u çalışmıyor** (`Pending`, `CrashLoopBackOff`): Spark işleri de
   kütüphanelerini alamaz. Pod'un olaylarına bakın:
-  `oc -n "$LAKEHOUSE_NS" describe pod -l app=maven-proxy | tail -20`. `Pending` genellikle
+  `oc -n "$LAKEHOUSE_NS" describe pod -l app=maven-proxy | tail -20`. `Pending` çoğunlukla
   diskin (`maven-proxy-data`) bağlanamadığını gösterir.
+- **`spark-ivysettings` ConfigMap'i yok:** hem önbellek hem kurum aynası kapalıdır ya da
+  eşitleme henüz bitmemiştir; `oc -n "$ARGOCD_NS" get application glue` ile bakın.
 
-Aynı sınıftan diğer dış erişim ihtiyaçları: Zeppelin'in Trino JDBC sürücüsünü indirmesi
-(Maven), JupyterHub'ın ek paket kurulumu ve dbt örneği (PyPI). Kapalı ağda iç PyPI aynası da
-gerekir ([20-on-kosullar](../20-on-kosullar.md) madde 10).
-
-**Ters giderse:** ConfigMap yoksa anahtar hâlâ boştur; eşitlemenin tamamlandığını
-doğrulayın.
+Aynı türden başka dış erişim ihtiyaçları da vardır: Zeppelin, Trino sürücüsünü ilk
+açılışta Maven Central'dan indirir; JupyterHub'da ek paket kurulumu ve dbt örneği PyPI'a
+çıkar. Kapalı ağda iç PyPI aynası da gerekir
+([20-on-kosullar](../20-on-kosullar.md) madde 10).
 
 ---
 
 <a id="kullanici-yuzu"></a>
-## 7. Kullanıcı yüzü (Trino, Superset, JupyterHub, Zeppelin)
+## 7. Kullanıcı araçları (Trino, Superset, JupyterHub, Zeppelin)
 
-- **Trino pod'u `CreateContainerConfigError`:** `polaris-trino` Secret'ı yok →
-  `scripts/polaris-setup.sh` koşmamıştır ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2).
-- **Trino `401` / `Authentication failed`:** 8080 portunda kimlik doğrulama **yoktur**
-  (yalnız iç trafik ve sağlık yoklaması); istemciler **8443 HTTPS** kullanmalı ve
-  `lakehouse-ca`'ya güvenmelidir. Jeton reddediliyorsa jetonun hedef kitlesinde `trino`
-  yoktur — realm'in `trino` istemcisindeki eşleyiciye bakın
-  ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
-- **Trino `Access Denied`:** erişim kuralları **ilk eşleşen kurala** bakar; kullanıcının
-  grubu görünmüyorsa grup sağlayıcısı devrede değildir —
-  [kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5.
-- **Superset `phase: Initializing`, şema geçiş görevi düşüyor:** geçiş işi veritabanı hazır
-  olmadan koşmuştur. Ürün bunu yüksek deneme sayısıyla karşılar; kalıcı düştüyse CR'ı
-  yeniden tetikleyin (`spec.lifecycle.migrate.trigger` değerini değiştirin). Teşhis:
+- **Trino pod'u `CreateContainerConfigError`:** `polaris-trino` Secret'ı yoktur; katalog
+  kurulum betiği çalıştırılmamıştır ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §2).
+
+- **Trino `401` ya da `Authentication failed`:** Trino'nun 8080 portu yalnız küme içi
+  trafik içindir ve kimlik sormaz. İstemciler **8443 (HTTPS)** portunu kullanmalı ve
+  `lakehouse-ca` sertifikasına güvenmelidir. Oturum jetonu reddediliyorsa jetonun hedefinde
+  `trino` yoktur; Keycloak'taki `trino` istemcisinin ayarına bakın
+  ([30-kurulum](../30-kurulum.md) §8).
+
+- **Trino `Access Denied`:** erişim kuralları yukarıdan aşağı okunur ve ilk eşleşen kural
+  geçerlidir. Kullanıcının grubu görünmüyorsa Trino AD gruplarını okuyamıyordur
+  ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5).
+
+- **Superset açılmıyor (`phase: Initializing`), veritabanı hazırlık işi düşüyor:** hazırlık
+  işi veritabanı açılmadan çalışmıştır. Ürün bunu yüksek deneme sayısıyla karşılar. Bakmak
+  için:
 
   `[bastion]`
 
@@ -847,8 +892,11 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" logs job/superset-migrate --tail=30
   ```
 
-- **`superset-migrate` artık pod'ları:** yeniden denemeler `Error`/`Completed` pod'ları
-  bırakır, zararsızdır. Temizlik:
+  İş kalıcı olarak düştüyse `Superset` nesnesinde `spec.lifecycle.migrate.trigger`
+  değerini değiştirerek yeniden tetikleyin.
+
+- **`superset-migrate` artığı pod'lar:** yeniden denemeler `Error` ya da `Completed`
+  durumunda pod'lar bırakır; zararsızdır. Temizlemek için:
 
   `[bastion]`
 
@@ -857,21 +905,25 @@ doğrulayın.
     --field-selector=status.phase!=Running
   ```
 
-- **JupyterHub not defteri açılmıyor (spawn zaman aşımı):** soğuk imaj çekimi ~4,5 dakika
-  sürer; ürünün bekleme süresi buna göre ayarlıdır. Not defteri yalnız Trino 8443 ve Polaris
-  8181 uçlarına ve dış ağa çıkabilir
+- **JupyterHub not defteri açılmıyor (zaman aşımı):** imaj ilk kez çekilirken 4–5 dakika
+  sürer; ürünün bekleme süresi buna göre ayarlıdır, bekleyin. Not defterleri yalnız Trino
+  (8443), Polaris (8181) ve dış ağa çıkabilir
   ([90-referans/port-ve-servisler.md](../90-referans/port-ve-servisler.md) §5).
-- **Zeppelin paragrafı "yorumlayıcı hazır değil, bağımlılıklar iniyor":** açılışta Trino JDBC
-  sürücüsü Maven'den iner (~1 dakika, sonra kalıcıdır) — bekleyin. Kapalı ağda bu adım
-  **başarısız** olur: sürücüyü diske koyup bağımlılığı yerel yapmak gerekir ([§6.2](#maven)).
+
+- **Zeppelin "yorumlayıcı hazır değil, bağımlılıklar iniyor":** Zeppelin ilk açılışta Trino
+  sürücüsünü Maven Central'dan indirir (1 dakika kadar; sonra diskte kalır). Bekleyin.
+  Kapalı ağda bu adım başarısız olur; sürücünün iç aynadan inmesi gerekir ([§6.2](#maven)).
+
 - **Zeppelin yorumlayıcı ayarı ya da parolası değişmiyor:** `zeppelin-interpreter` Secret'ı
-  yalnız bir **tohumdur**; diskte dosya varsa etkisizdir. Ayar arayüzden değiştirilir
+  yalnız ilk açılışta kullanılan bir başlangıç değeridir; diskte ayar dosyası varsa
+  etkisizdir. Ayarı Zeppelin arayüzünden değiştirin
   ([40-kurulum-sonrasi](../40-kurulum-sonrasi.md) §5.6).
-- **Zeppelin girişi başarılı ama not defteri listesi 401:** rol kapısı devrededir — kullanıcı
-  üç `lakehouse-*` grubunun hiçbirinde değildir
-  ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §3).
-- **Giriş döngüsü ("Sign in with Keycloak" aynı sayfaya döner):** uygulama, Keycloak'la
-  sunucu tarafında konuşamıyordur. Günlükte nedenine bakın:
+
+- **Zeppelin'e girişte not defteri listesi 401 veriyor:** kullanıcı üç `lakehouse-*`
+  grubunun hiçbirinde değildir ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §3).
+
+- **Giriş döngüsü ("Sign in with Keycloak" aynı sayfaya dönüyor):** uygulama Keycloak'la
+  konuşamıyordur. Günlükte nedenine bakın:
 
   `[bastion]`
 
@@ -879,19 +931,20 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" logs deploy/superset-web-server --tail=200 | grep -i "oauth"
   ```
 
-  `CERTIFICATE_VERIFY_FAILED` ve `keycloak-...apps...` adresi görüyorsanız uygulama Keycloak'a
-  **dış** adresten gidiyordur; üründe sunucu tarafı çağrılar küme içi adrese
-  (`keycloak-service.lakehouse.svc:8080`) gider. Keycloak CR'ında
+  `CERTIFICATE_VERIFY_FAILED` ile birlikte `keycloak-...apps...` adresi görüyorsanız
+  uygulama Keycloak'a dış adresten gitmeye çalışıyordur; ürün bu çağrıları küme içi adrese
+  (`keycloak-service.lakehouse.svc:8080`) yönlendirir. Keycloak nesnesinde
   `spec.hostname.backchannelDynamic: true` olduğunu ve site dosyalarının değiştirilmediğini
   doğrulayın (`scripts/check-site.sh`).
+
 - **Keycloak girişi `Invalid username or password`, Keycloak günlüğünde `User returned from
-  LDAP has null username`:** realm'in AD kullanıcı adı eşlemesi yoktur ya da eşlemeler AD
-  sağlayıcısına bağlı değildir. Ürünün realm tanımı bunu içerir; eski bir sürümle kurulduysa
-  realm'i yenileyin ([30-kurulum](../30-kurulum.md) "Realm içeriğini sonradan değiştirmek").
+  LDAP has null username`:** Keycloak'ta AD kullanıcı adı eşlemesi eksiktir. Ürünün realm
+  tanımı bu eşlemeyi içerir; realm'i yenileyin ([30-kurulum](../30-kurulum.md) §8).
+
 - **Zeppelin'e hiç kimse giremiyor, günlükte `LDAP: error code 49 ... data 52e`:** Zeppelin
   servis hesabıyla AD'ye bağlanamıyordur. En sık neden: `zeppelin-shiro` Secret'ında
-  `systemUsername` satırına **DN** yazılmıştır; kısa ad (sAMAccountName) olmalıdır
-  ([30-kurulum](../30-kurulum.md) §5.9). Satırı görmek için:
+  `systemUsername` satırına tam ad (DN) yazılmıştır; kısa kullanıcı adı (sAMAccountName)
+  olmalıdır ([30-kurulum](../30-kurulum.md) §5.9). Satırı görmek için:
 
   `[bastion]`
 
@@ -900,18 +953,20 @@ doğrulayın.
     | base64 -d | grep systemUsername
   ```
 
-  Düzeltmek için §5.9'u `LDAP_BIND_USER` doluyken yeniden çalıştırın (önce
-  `oc -n "$LAKEHOUSE_NS" delete secret zeppelin-shiro`), sonra
-  `oc -n "$LAKEHOUSE_NS" rollout restart deploy/zeppelin`.
+  Düzeltmek için önce `oc -n "$LAKEHOUSE_NS" delete secret zeppelin-shiro` ile Secret'ı
+  silin, [30-kurulum](../30-kurulum.md) §5.9'u `LDAP_BIND_USER` kısa adla doluyken tekrar
+  çalıştırın, sonra `oc -n "$LAKEHOUSE_NS" rollout restart deploy/zeppelin`.
+
 - **Not defterinden S3'e bağlanırken zaman aşımı (`TimeoutError`):** S3 iç ağdadır ve not
-  defterlerinin güvenlik politikası iç ağ adreslerini kapatır. `platform/values/site/glue.yaml`
-  içindeki `s3.egressCidrs` S3'ün veri IP'lerini içermelidir
-  ([30-kurulum](../30-kurulum.md) §4.1); politikanın kümede olduğunu doğrulayın:
+  defterlerinin ağ politikası iç ağ adreslerini kapatır. `platform/values/site/glue.yaml`
+  içindeki `s3.egressCidrs` ayarı S3'ün IP adreslerini içermelidir
+  ([30-kurulum](../30-kurulum.md) §4.1). Politikanın kümede olduğunu doğrulayın:
   `oc -n "$LAKEHOUSE_NS" get networkpolicy notebook-s3-egress -o yaml`.
-- **Analist ya da son kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse`
-  alıyor, Superset ve Zeppelin (servis hesapları) çalışıyor:** Trino kullanıcının AD
-  gruplarını okuyamıyordur; yetki kuralları gruplara bağlı olduğu için grupsuz kullanıcı
-  hiçbir şey göremez. Coordinator günlüğüne bakın:
+
+- **Analist ya da kullanıcı Trino'da `Access Denied: Cannot access catalog lakehouse`
+  alıyor, Superset ve Zeppelin çalışıyor:** Trino kullanıcının AD gruplarını
+  okuyamıyordur. Erişim kuralları gruplara bağlı olduğu için grupsuz kullanıcı hiçbir şey
+  göremez. Superset ve Zeppelin servis hesabıyla bağlandığı için etkilenmez. Bakmak için:
 
   `[bastion]`
 
@@ -921,18 +976,18 @@ doğrulayın.
   grep -n "ldap.ssl.truststore.path" platform/values/site/trino.yaml
   ```
 
-  Sayı `0`'dan büyükse ve ikinci komut bir satır gösteriyorsa site dosyanız eski bir
-  sürümden kalmıştır: Trino 483'te `ldap.ssl.truststore.path` satırının açtığı SSL yolu
-  aralıklı olarak düşer (OpenShift provasında görüldü). Satırı silin, commit edip itin;
-  AD kök CA'sı ürünün kendi değer dosyasıyla JVM güven deposuna eklenir
-  ([30-kurulum](../30-kurulum.md) §5.13). Coordinator yeniden açıldıktan sonra
+  Birinci komut `0`'dan büyük bir sayı veriyorsa ve ikinci komut bir satır gösteriyorsa
+  site dosyanızda `ldap.ssl.truststore.path` satırı vardır. Bu satırla Trino'nun AD
+  bağlantısı aralıklı olarak düşer. Satırı silin, değişikliği Git'e gönderin; AD kök
+  sertifikası Trino'ya ürünün kendi ayarıyla eklenir ([30-kurulum](../30-kurulum.md)
+  §5.13). Trino yeniden açıldıktan sonra
   `oc -n "$LAKEHOUSE_NS" logs deploy/trino-coordinator -c s3-truststore` çıktısında
   `AD CA eklendi` satırı görünmelidir. Günlükte başka bir LDAP hatası varsa (`PKIX`,
-  `Invalid credentials`) sorun AD kökü ya da bağlama hesabıdır.
+  `Invalid credentials`) sorun AD kök sertifikası ya da bağlanma hesabıdır.
 
 - **Not defterinden Trino'ya bağlanırken `CA cert does not include key usage extension`:**
-  `lakehouse-ca` kök sertifikası `Key Usage` uzantısı olmadan üretilmiştir (kılavuzun eski
-  sürümündeki komut). Güncel Python bu CA'yı kabul etmez. Bakmak için:
+  `lakehouse-ca` kök sertifikası `Key Usage` uzantısı olmadan üretilmiştir; güncel Python
+  bu sertifikayı kabul etmez. Bakmak için:
 
   `[bastion]`
 
@@ -941,23 +996,25 @@ doğrulayın.
     | base64 -d | openssl x509 -noout -ext keyUsage
   ```
 
-  Çıktı boşsa CA'yı yenileyin. Aşağıdaki adımlar bastion'da depo kökünde çalıştırılır;
-  kullanıcı oturumları birkaç dakika kesilir:
+  Çıktı boşsa sertifikayı yenileyin. Adımlar bastion'da, deponun kök klasöründe
+  çalıştırılır; kullanıcı oturumları birkaç dakika kesilir:
 
-  1. Yeni CA'yı [30-kurulum](../30-kurulum.md) §5.11'deki `openssl req` komutuyla üretin ve
-     Secret'ı değiştirin:
+  1. Yeni sertifikayı [30-kurulum](../30-kurulum.md) §5.11'deki `openssl req` komutuyla
+     üretin ve Secret'ı değiştirin:
 
      ```bash
      oc -n "$LAKEHOUSE_NS" create secret tls lakehouse-ca \
        --cert=/tmp/ca.crt --key=/tmp/ca.key --dry-run=client -o yaml | oc apply -f -
+     oc -n "$LAKEHOUSE_NS" label secret lakehouse-ca \
+       lakehouse.io/yonetim=manual-30-kurulum-5.11 --overwrite
      ```
 
-  2. Trino sunucu sertifikasını yeni CA ile yeniden imzalatın:
-     `oc -n "$LAKEHOUSE_NS" delete secret trino-tls`. Yaklaşık 20 saniye içinde
+  2. Trino'nun sunucu sertifikasını yeni kök sertifikayla yeniden imzalatın:
+     `oc -n "$LAKEHOUSE_NS" delete secret trino-tls`. 20 saniye kadar sonra
      `oc -n "$LAKEHOUSE_NS" get certificate trino-tls` `True` göstermelidir.
-  3. `platform/values/site/glue.yaml` içindeki `tls.caBundle` değerini yeni PEM'le
-     değiştirin (aynı dosyada `caBundle: "..."` satırının tamamı), commit edip itin.
-     ArgoCD Trino Route'unu günceller.
+  3. `platform/values/site/glue.yaml` içindeki `tls.caBundle` değerini yeni sertifikanın
+     içeriğiyle değiştirin (`caBundle: "..."` satırının tamamı) ve Git'e gönderin. ArgoCD
+     Trino adresinin ayarını günceller.
   4. Sertifikayı bellekte tutan bileşenleri yeniden başlatın:
 
      ```bash
@@ -965,16 +1022,17 @@ doğrulayın.
        deploy/trino-coordinator deploy/superset-web-server deploy/zeppelin
      ```
 
-     Not defterleri dosyayı her bağlantıda yeniden okur; yeniden başlatmak gerekmez.
-  5. Eski `~/lakehouse-ca.crt` dosyasını yenisiyle değiştirin, `shred -u /tmp/ca.key`.
+     Not defterleri sertifikayı her bağlantıda yeniden okur; yeniden başlatmak gerekmez.
+  5. Eski `~/lakehouse-ca.crt` dosyasını yenisiyle değiştirin ve özel anahtarı silin:
+     `shred -u /tmp/ca.key`.
 
 ---
 
 <a id="dr"></a>
 ## 8. İzleme ve yedekler
 
-- **Prometheus hedefi `down` ya da metrik yok.** Konsolda **Observe → Targets**, komut
-  satırında:
+- **İzleme hedefi `down` ya da metrik yok.** OpenShift konsolunda **Observe → Targets**
+  sayfasına bakın. Komut satırından:
 
   `[bastion]`
 
@@ -982,16 +1040,16 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" get podmonitor,servicemonitor,prometheusrule
   ```
 
-  İzleme kapsamı **bilerek dardır**: Kafka/Connect, tüketici gecikmesi, spark-operator ve
-  Polaris. Trino, Superset, JupyterHub ve Zeppelin için **uygulama metriği toplanmaz** — bu
-  hedeflerin listede olmaması hata değildir
+  İzleme kapsamı bilerek dardır: Kafka ve Connect, okunmayan kayıt sayısı (lag),
+  spark-operator ve Polaris. Trino, Superset, JupyterHub ve Zeppelin için uygulama ölçümü
+  toplanmaz; bu hedeflerin listede olmaması hata değildir
   ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §2).
 
-- **Alarm ateşleniyor ama bildirim gelmiyor.** Bildirimi platformun Alertmanager'ı gönderir;
-  yönlendirme tanımlı değilse kural ateşlenir ama hiçbir yere gitmez
-  ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §5).
+- **Alarm geliyor ama bildirim ulaşmıyor.** Bildirimi OpenShift'in Alertmanager'ı
+  gönderir; bildirim yönlendirmesi tanımlı değilse alarm kümede görünür ama kimseye
+  gitmez ([izleme-ve-alarmlar.md](izleme-ve-alarmlar.md) §5).
 
-- **CNPG `ContinuousArchiving=False`.**
+- **Veritabanı yedeği `ContinuousArchiving=False`.**
 
   `[bastion]`
 
@@ -1001,17 +1059,17 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" get objectstore lakehouse-backups -o yaml | head -30
   ```
 
-  Sık kökler: hedef bucket yok, `backup-s3-creds` yanlış ya da eksik, uç nokta yanlış, S3'ün
-  kök CA'sı verilmemiş (günlükte `SSL validation failed`), Barman eklentisinin dağıtımı
-  ayakta değil. Bucket yaratıldıktan sonra `ScheduledBackup` nesnelerini
-  silip yeniden yaratmak ilk yedeği hemen tetikler
+  Sık nedenler: yedek bucket'ı yok, `backup-s3-creds` Secret'ı yanlış ya da eksik, S3 adresi
+  yanlış, S3'ün kök sertifikası verilmemiş (günlükte `SSL validation failed`) ya da yedek
+  eklentisinin pod'u çalışmıyor. Bucket yaratıldıktan sonra `ScheduledBackup` nesnelerini
+  silip yeniden yaratmak ilk yedeği hemen başlatır
   ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §3).
 
-- **S3'e bağlanırken `CERTIFICATE_VERIFY_FAILED` ya da `PKIX path building failed`.** S3
-  sertifikası kurumun kendi CA'sıyla imzalıdır ya da self-signed'dır ve ürüne bu CA
-  verilmemiştir: `s3-ca` Secret'ını yaratın ve site değerine `s3.caSecret: "s3-ca"` yazın
-  ([30-kurulum](../30-kurulum.md) §4.1 ve §5.14). **Kurulumdan sonra** yaptıysanız bileşenler
-  CA'yı ancak yeniden başlayınca alır:
+- **S3'e bağlanırken `CERTIFICATE_VERIFY_FAILED` ya da `PKIX path building failed`.** S3'ün
+  sertifikası kurumun kendi kök sertifikasıyla imzalıdır ve bu kök sertifika ürüne
+  verilmemiştir. `s3-ca` Secret'ını yaratın ve site ayarına `s3.caSecret: "s3-ca"` yazın
+  ([30-kurulum](../30-kurulum.md) §4.1 ve §5.14). Bunu kurulumdan **sonra** yaptıysanız
+  bileşenler sertifikayı ancak yeniden başlayınca alır:
 
   `[bastion]`
 
@@ -1024,9 +1082,9 @@ doğrulayın.
   oc -n "$LAKEHOUSE_NS" rollout restart deploy/polaris deploy/trino-coordinator deploy/trino-worker
   ```
 
-  Kafka Connect, `s3.caSecret` değiştiğinde Strimzi tarafından kendiliğinden yeniden
-  başlatılır; Spark işleri her koşuda yeni pod açtığı için ek iş gerekmez. Açık not defterleri
-  kullanıcı oturumu kapatıp yeniden açınca yeni ayarı alır.
+  Kafka Connect, `s3.caSecret` değişince kendiliğinden yeniden başlar. Spark işleri her
+  çalışmada yeni pod açtığı için ek bir şey gerekmez. Açık not defterleri, kullanıcı
+  sunucusunu kapatıp yeniden açınca yeni ayarı alır.
 
 - **Velero yedeği `PartiallyFailed`.**
 
@@ -1037,30 +1095,31 @@ doğrulayın.
   oc -n openshift-adp logs deploy/velero --tail=100
   ```
 
-  Geliştirme kümesinde kısmi durum **beklenen** sonuçtur: kind'ın diskleri dosya sistemi
-  yedeğine girmez. Üretimde (CSI depolama) girer
+  Yedek adını `oc -n openshift-adp get backups.velero.io` ile bulun. Hata satırları hangi
+  nesnenin ya da diskin yedeklenemediğini söyler; diskler için depolama sınıfının anlık
+  görüntü (snapshot) desteğini kontrol edin
   ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §6).
 
-- **Yedekte hiç dosya sistemi yedeği yok:** dışlama listesinde `pods` varsa dosya sistemi
-  yedeği hiç tetiklenmez; `velero.excludedResources` içinde `pods` **olmamalıdır**.
+- **Yedekte hiç disk yedeği yok:** `velero.excludedResources` listesinde `pods` varsa
+  disk yedeği hiç başlamaz; bu listede `pods` **olmamalıdır**.
 
 - **`oc get backup` yanlış nesneyi gösteriyor.** Kümede hem PostgreSQL'in hem Velero'nun
-  `Backup` nesnesi vardır; kısa ad sessizce PostgreSQL'inkini seçer. Velero için **daima**
-  tam ad yazın: `backups.velero.io`. Yedeği silmek S3'ü temizlemez
-  ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §6.4).
+  `Backup` adlı nesnesi vardır; kısa ad sessizce PostgreSQL'inkini seçer. Velero için her
+  zaman tam adı yazın: `backups.velero.io`. Bir Velero yedeğini silmek S3'teki yedek
+  dosyalarını temizlemez ([yedek-ve-geri-donus.md](yedek-ve-geri-donus.md) §6.4).
 
 ---
 
 <a id="loki"></a>
 ## 9. Günlükler (Loki)
 
-Günlük toplama **platformun sorumluluğundadır**; bu ürün bir Loki dağıtımı içermez ve hiçbir
-bileşeniyle Loki'ye bağımlı değildir ([20-on-kosullar](../20-on-kosullar.md) madde 9.3).
+Günlüklerin toplanması OpenShift platformunun işidir; lakehouse kendi Loki'sini kurmaz ve
+Loki olmadan da çalışır ([20-on-kosullar](../20-on-kosullar.md) madde 9.3).
 
-OpenShift'te yol **OpenShift Logging + Loki Operator**'dür: `LokiStack` kurulur,
+OpenShift'te bunun yolu **OpenShift Logging + Loki Operator**'dür: `LokiStack` kurulur,
 `ClusterLogForwarder` ile toplama açılır ve günlükler konsolun **Observe → Logs**
-sekmesinden sorgulanır. Bu kurulumda yapılacak tek şey `$LAKEHOUSE_NS` ad alanının toplama
-kapsamında olduğunu doğrulamaktır:
+sayfasından sorgulanır. Lakehouse açısından yapılacak tek şey `$LAKEHOUSE_NS` ad alanının
+toplanan ad alanları arasında olduğunu doğrulamaktır:
 
 `[bastion]`
 
@@ -1068,10 +1127,10 @@ kapsamında olduğunu doğrulamaktır:
 oc -n openshift-logging get lokistack,clusterlogforwarder
 ```
 
-**Beklenen çıktı** (örnek — OpenShift'e özgü, **OpenShift'te doğrulanır**): `LokiStack`
-`Ready` ve `ClusterLogForwarder` girdisi `lakehouse` ad alanını kapsıyor.
+**Beklenen çıktı** (örnek): `LokiStack` `Ready` ve `ClusterLogForwarder` girdisi
+`lakehouse` ad alanını kapsıyor.
 
-Sık kullanılan sorgular (konsolun **Logs** sekmesine yapıştırılır):
+Sık kullanılan sorgular (konsolun **Logs** sayfasına yapıştırılır):
 
 ```text
 {namespace="lakehouse", pod=~"connect-connect-.*"} |= "ERROR"
@@ -1080,29 +1139,29 @@ Sık kullanılan sorgular (konsolun **Logs** sekmesine yapıştırılır):
 {namespace="lakehouse", container="plugin-barman-cloud"} |= "archive"
 ```
 
-Canlı sorunlarda `oc logs` her zaman en hızlı yoldur. Loki, **pod öldükten sonra** günlüğe
-bakmak ve zaman aralığı üzerinden ilişki kurmak için gereklidir — tek seferlik Spark sürücü
-pod'ları koşu bitince silinir.
+Canlı sorunlarda `oc logs` her zaman en hızlı yoldur. Loki, pod silindikten sonra
+günlüğüne bakmak ve farklı bileşenlerin günlüklerini aynı zaman aralığında karşılaştırmak
+için gereklidir; Spark sürücü pod'ları iş bitince silinir.
 
-**Ters giderse:** `the server doesn't have a resource type "lokistack"` → OpenShift Logging
-kurulu değildir. Bu bir hata değildir; günlükler `oc logs` ile okunur.
+**Ters giderse:** `the server doesn't have a resource type "lokistack"` görürseniz
+OpenShift Logging kurulu değildir. Bu bir hata değildir; günlükleri `oc logs` ile okuyun.
 
 ---
 
 ## Kontrol listesi
 
-- [ ] Belirti, §3 tablosunda bir satıra bağlandı.
-- [ ] §2'deki dört komut koşturuldu ve çıktısı kaydedildi.
-- [ ] Alarm ateşlendiyse ilgili bölümün "Ne bak" komutları koşturuldu.
-- [ ] Kök neden giderildikten sonra `FAILED` Spark nesneleri silindi (alarm ancak o zaman
-      düşer).
-- [ ] Kabul ya da e2e koşusundan sonra zamanlanmış işler geri açıldı (§6.1).
+- [ ] Belirti §3'teki tabloda bir satırla eşleşti.
+- [ ] §2'deki dört komut çalıştırıldı ve çıktıları kaydedildi.
+- [ ] Alarm geldiyse ilgili bölümün "Ne bakılır" komutları çalıştırıldı.
+- [ ] Neden giderildikten sonra `FAILED` Spark çalışmaları silindi (alarm ancak o zaman
+      kapanır).
+- [ ] Kabul testinden sonra zamanlı işlerin askıda olmadığı doğrulandı (§6.1).
 - [ ] Kalıcı düzeltme kümede değil, Git'te yapıldı
       ([değişiklik nasıl uygulanır](degisiklik-nasil-uygulanir.md)).
 
 ## Sonraki bölüm
 
-Alarm eşiklerinin anlamı ve nereden değiştirildiği:
-[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Her sabah ve her hafta koşturulacak sabit
+Alarm eşiklerinin anlamı ve nereden değiştirildikleri:
+[izleme-ve-alarmlar.md](izleme-ve-alarmlar.md). Her sabah ve her hafta yapılacak
 kontroller: [gunluk-haftalik-kontroller.md](gunluk-haftalik-kontroller.md). Yedek ve geri
 dönüş: [yedek-ve-geri-donus.md](yedek-ve-geri-donus.md).
