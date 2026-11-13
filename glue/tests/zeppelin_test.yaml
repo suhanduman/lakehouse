@@ -41,6 +41,22 @@ tests:
     documentIndex: 1
     asserts:
       - isNull: {path: 'spec.template.spec.securityContext'}
+  - it: openshift route address is an allowed origin (browser login)
+    template: zeppelin.yaml
+    set: {platform: openshift, route.enabled: true, appsDomain: apps.example.com}
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ZEPPELIN_ALLOWED_ORIGINS, value: "https://zeppelin-lakehouse.apps.example.com"}
+  - it: no allowed origins without a route
+    template: zeppelin.yaml
+    documentIndex: 1
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: {name: ZEPPELIN_ALLOWED_ORIGINS}
   - it: disabled renders nothing
     template: zeppelin.yaml
     set: {zeppelin.enabled: false}
