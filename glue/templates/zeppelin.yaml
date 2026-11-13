@@ -75,6 +75,12 @@ spec:
         # (kullanıcı kararı 2026-09-18) — Zeppelin ServiceMonitor kaldırıldı (glue monitoring.yaml).
         - {name: ZEPPELIN_MEM, value: {{ $z.mem | quote }}}
         - {name: ZEPPELIN_INTP_MEM, value: {{ $z.intpMem | quote }}}
+        {{- if and (eq (include "glue.isOpenShift" .) "true") .Values.route.enabled }}
+        # Zeppelin 0.12 tarayıcıdan gelen POST'ları (giriş formu dâhil) Origin'e göre süzer; izinli liste
+        # varsayılan olarak boştur ve yalnız pod adını/localhost'u kabul eder. Route adresi burada verilmezse
+        # tarayıcıdan giriş 403 alır ve arayüz bunu "username and password don't match" diye gösterir.
+        - {name: ZEPPELIN_ALLOWED_ORIGINS, value: {{ printf "https://%s" (include "glue.hostFor" (dict "name" "zeppelin" "ctx" $)) | quote }}}
+        {{- end }}
         {{- if .Values.keycloak.ldap.caSecret }}
         # Hem sunucu JVM'i (Shiro/AD girişi) hem yorumlayıcı JVM'leri AD kökünü içeren KOPYA depoyu kullanır.
         - {name: ZEPPELIN_JAVA_OPTS, value: "-Djavax.net.ssl.trustStore=/truststore/ad-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"}
