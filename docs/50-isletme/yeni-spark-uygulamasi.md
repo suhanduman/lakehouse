@@ -85,6 +85,8 @@ Depoda hazır duran örnekler:
 | `custom/examples/spark-tek-seferlik.yaml` | `SparkApplication` — tek seferlik koşu (uygulandığı anda çalışır) |
 | `custom/examples/spark-zamanli.yaml` | `ScheduledSparkApplication` — aynı iş, her gece (örnekte askıda: `suspend: true`) |
 | `custom/examples/dbt-cronjob.yaml` | Spark dışı örnek: dbt ile Gold tablosu üreten gecelik iş |
+| `custom/examples/gold_nginx.py` | nginx günlüğünden saatlik, IP ve sayfa bazında özet tablolar (`gold.nginx_*`); kurulumu [yeni-kaynak-ve-pipeline.md](yeni-kaynak-ve-pipeline.md) §10.6 |
+| `custom/examples/superset/web-trafigi-panosu.zip` | bu tabloların Superset panosu (**Web trafiği (nginx)**), arayüzden içe aktarılır |
 | `custom/examples/kustomization.yaml` | yukarıdakilerden hangilerinin uygulanacağı ve `.py` dosyasından ConfigMap üretimi |
 
 Klasörün kısa anlatımı: [custom/README.md](../../custom/README.md).

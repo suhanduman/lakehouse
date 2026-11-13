@@ -4,7 +4,7 @@ Bu sayfa, lakehouse'a yeni bir kaynak veritabanı (PostgreSQL, SQL Server ya da 
 bağlamayı baştan sona anlatır: kaynak veritabanında değişiklik yakalamanın (CDC)
 açılması, parolanın kümeye kaydedilmesi, katalog ad alanlarının açılması, ayar dosyasına
 kaynağın ve tabloların yazılması ve sonucun doğrulanması. Son bölüm, veritabanı olmayan
-nginx erişim günlüğü akışını anlatır.
+nginx erişim günlüğü akışını ve günlükten üretilen özet tabloları anlatır.
 
 **Ne kadar sürer:** kaynak veritabanının hazırlanması 30–60 dakika, küme tarafı 20
 dakika. İlk Bronze satırları 5–15 dakika içinde, ilk Silver tablosu bir sonraki
@@ -1266,6 +1266,141 @@ sunucudan gelen istek sayısı):
 değerleri aynıdır; birini değiştirip ajanı yeniden başlatın
 (`systemctl restart fluent-bit`).
 
+### 10.6 Özet tablolar ve Web trafiği panosu
+
+`nginx_raw.access_log` her isteğin ayrı bir satır olduğu ham günlüktür. Raporlama ve uzun
+dönem eğilim için ürünle hazır bir Gold işi ve bir Superset panosu gelir. İş saatte bir
+çalışır ve üç tablo üretir:
+
+| Tablo | Ne tutar |
+|---|---|
+| `gold.nginx_saatlik` | saat ve sunucu bazında istek sayısı, 2xx/3xx/4xx/5xx sayıları, tekil IP, aktarılan bayt, bot istekleri |
+| `gold.nginx_ip_gunluk` | gün ve IP bazında istek, 4xx/5xx, başarısız giriş (401), yasak (403), bulunamadı (404), farklı sayfa sayısı, ilk ve son görülme |
+| `gold.nginx_sayfa_gunluk` | gün ve sayfa bazında istek ve hata; adresteki sayılar `{id}` ile gruplanır (`/ogrenci/123` → `/ogrenci/{id}`) |
+
+Gün ve saat Türkiye saatiyledir. Tablolar güne göre bölümlenir; ilk koşu bütün geçmişi
+hesaplar, sonraki koşular son üç günü yeniden hesaplar.
+
+Buradaki "hata" HTTP durum kodudur: 4xx istemci hatası (yanlış parola 401, yetkisiz erişim
+403, olmayan sayfa 404), 5xx sunucu hatasıdır. nginx'in kendi uyarı ve hata kayıtları
+(`[warn]`, `[error]`) ayrı bir dosyada (`error.log`) tutulur ve bu tablolara girmez.
+
+**IP adresi kişisel veridir.** `gold.nginx_ip_gunluk` tablosunun `ip` kolonu, ham tablodaki
+`remote` kolonu gibi `lakehouse-users` grubuna maskeli (`x.x.x.x`) gösterilir; kural
+ürünün Trino kurallarında hazırdır. Kendi kurallarınızı `platform/values/site/trino.yaml`
+dosyasına yazdıysanız ([kullanici-ve-yetki.md](kullanici-ve-yetki.md) §5) şu satırı da
+oraya ekleyin:
+
+```json
+{"group": "lakehouse-users", "schema": "gold", "table": "nginx_ip_gunluk", "privileges": ["SELECT"],
+ "columns": [{"name": "ip", "mask": "'x.x.x.x'"}]},
+```
+
+**1) İşi `custom/` klasörüne koyun.** Kodu örnekler klasöründen kopyalayın ve zamanlı işin
+tanım dosyasını üretin (her saatin 5. dakikası):
+
+`[bastion]`
+
+```bash
+cd ~/lakehouse
+git pull
+cp custom/examples/gold_nginx.py custom/
+scripts/spark-is-tanimi.sh --ad gold-nginx --dosya gold_nginx.py --zaman "5 * * * *" > custom/gold-nginx.yaml
+vi custom/kustomization.yaml
+```
+
+Dosyada `resources:` ve `configMapGenerator:` satırlarını bulun. Liste boşsa
+(`resources: []`) satırı aşağıdaki blokla değiştirin; listede başka işler varsa yalnız
+`- gold-nginx.yaml` satırını `resources:` listesine, `- {name: gold-nginx, …}` satırını
+`configMapGenerator:` listesine ekleyin:
+
+```yaml
+resources:
+- gold-nginx.yaml
+configMapGenerator:
+- {name: gold-nginx, files: [gold_nginx.py], options: {disableNameSuffixHash: true}}
+```
+
+**2) Gönderin.**
+
+```bash
+git add custom/gold_nginx.py custom/gold-nginx.yaml custom/kustomization.yaml
+git commit -m "custom: nginx özet tabloları (gold-nginx)"
+git push origin main
+oc -n "$ARGOCD_NS" annotate application custom argocd.argoproj.io/refresh=normal --overwrite
+```
+
+Bir dakika sonra:
+
+```bash
+oc -n "$LAKEHOUSE_NS" get scheduledsparkapplication gold-nginx
+```
+
+**Beklenen çıktı:**
+
+```text
+NAME         SCHEDULE    TIMEZONE   SUSPEND   LAST RUN   LAST RUN NAME   AGE
+gold-nginx   5 * * * *                                                   40s
+```
+
+**3) İlk koşu.** İş saatin 5. dakikasında kendiliğinden çalışır. Beklemek istemezseniz
+aynı işi bir kez elle çalıştırın:
+
+```bash
+scripts/spark-is-tanimi.sh --ad gold-nginx-ilk --dosya gold_nginx.py --configmap gold-nginx > /tmp/gold-nginx-ilk.yaml
+oc apply -f /tmp/gold-nginx-ilk.yaml
+oc -n "$LAKEHOUSE_NS" get sparkapplication gold-nginx-ilk -w
+```
+
+Durum `COMPLETED` olunca Ctrl+C ile çıkın ve sonucu okuyun:
+
+```bash
+oc -n "$LAKEHOUSE_NS" logs gold-nginx-ilk-driver | grep GOLD_OK
+oc -n "$LAKEHOUSE_NS" delete sparkapplication gold-nginx-ilk
+```
+
+**Beklenen çıktı** (sayılar sizin trafiğinize göre değişir):
+
+```text
+GOLD_OK nginx_saatlik 340 satır (tüm geçmiş)
+GOLD_OK nginx_ip_gunluk 1241 satır (tüm geçmiş)
+GOLD_OK nginx_sayfa_gunluk 183 satır (tüm geçmiş)
+```
+
+**4) Panoyu içe aktarın.**
+
+1. Superset'e `lakehouse-admins` grubundaki bir AD hesabıyla girin.
+2. Üst menüden **Dashboards**'a gidin. Sağ üstteki içe aktarma simgesine (**Import
+   dashboards**) tıklayın.
+3. Deponuzdaki `custom/examples/superset/web-trafigi-panosu.zip` dosyasını seçin ve
+   **Import**'a basın. Superset `lakehouse` veritabanının üzerine yazmak isteyip
+   istemediğinizi sorarsa onaylayın; paketteki bağlantı ürünün kendi Trino bağlantısıdır.
+4. Listeden **Web trafiği (nginx)** panosunu açın.
+
+| Grafik | Ne gösterir |
+|---|---|
+| Web — toplam istek, Web — hata oranı | bütün dönemin istek sayısı ve 4xx + 5xx payı |
+| Web — saatlik istek, durum sınıfına göre | her saatin istekleri, 2xx/3xx/4xx/5xx olarak yığılmış |
+| Web — sunucu bazında saatlik istek | her nginx sunucusunun yükü |
+| Web — şüpheli IP'ler | en çok 4xx alan on IP: çok 404 alan genelde açık arayan bir tarama aracıdır, çok 401 alan parola denemesidir |
+| Web — en çok hata veren sayfalar | kırık bağlantılar ve hata veren uygulama sayfaları |
+
+Pano Superset'in servis hesabıyla sorgular; IP maskesi panoda değil, kullanıcının
+Trino'ya kendi kimliğiyle bağlandığı yerlerde uygulanır ([kullanici-ve-yetki.md](kullanici-ve-yetki.md)
+§7). Panoyu `lakehouse-users` grubuna açacaksanız şüpheli IP grafiğini panodan çıkarın ya
+da o grafiği yalnız yöneticilere gösterin.
+
+**Saklama.** Özet tablolar ham günlükten çok küçüktür ve süresiz tutulabilir. Ham tabloyu
+kurumun saklama kuralına göre sınırlamak (`nginx` girdisinde `retentionDays`, §10.4)
+özetleri etkilemez: silinen ham günlerin özetleri Gold'da kalır.
+
+**Ters giderse:**
+
+- `GOLD_OK` satırları yok, günlükte `Table does not exist: nginx_raw.access_log` var →
+  nginx akışı henüz veri yazmamıştır (§10.4).
+- Panoda grafikler boş → Gold tabloları henüz yoktur; ilk koşuyu bekleyin ya da 3. adımı
+  uygulayın.
+
 ---
 
 ## Kontrol listesi
@@ -1282,6 +1417,8 @@ değerleri aynıdır; birini değiştirip ajanı yeniden başlatın
       var ve satır sayısı kaynakla aynı.
 - [ ] (nginx kullanılıyorsa) Kafka dış adresi açık, ajan her sunucuda kendi
       `NGINX_SERVER_NAME` değeriyle çalışıyor, `sink-nginx` `READY True`.
+- [ ] (nginx özetleri isteniyorsa) `gold-nginx` işi `custom/` klasöründe, ilk koşu `GOLD_OK`
+      yazdı; **Web trafiği (nginx)** panosu içe aktarıldı (§10.6).
 
 ## Sonraki bölüm
 
