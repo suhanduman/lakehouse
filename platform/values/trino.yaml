@@ -68,6 +68,8 @@ accessControl:
           {"group": "lakehouse-users", "schema": "shop", "table": "orders", "privileges": ["SELECT"], "filter": "status <> 'shipped'"},
           {"group": "lakehouse-users", "schema": "nginx_raw", "table": "access_log", "privileges": ["SELECT"],
            "columns": [{"name": "remote", "mask": "'x.x.x.x'"}]},
+          {"group": "lakehouse-users", "schema": "gold", "table": "nginx_ip_gunluk", "privileges": ["SELECT"],
+           "columns": [{"name": "ip", "mask": "'x.x.x.x'"}]},
           {"group": "lakehouse-users", "privileges": ["SELECT"]},
           {"user": "superset|zeppelin|e2e", "privileges": ["SELECT"]},
           {"catalog": "system", "privileges": ["SELECT"]}

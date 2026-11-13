@@ -131,7 +131,8 @@ açmak için `platform/values/site/glue.yaml` dosyasında `nginx.enabled` ve
 ajan bağlanamaz;
 [50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md) §10).
 Tablo IP adresi içerdiği için `remote` kolonu `lakehouse-users` grubuna maskeli gösterilir;
-analistler adresin tamamını görür.
+analistler adresin tamamını görür. Saatlik, IP ve sayfa bazında özet tablolar ile hazır bir Superset panosu
+örnek olarak gelir ([50-isletme/yeni-kaynak-ve-pipeline.md](50-isletme/yeni-kaynak-ve-pipeline.md) §10.6).
 
 ### 3.4 Silver birleştirme ve bakım işleri
 
